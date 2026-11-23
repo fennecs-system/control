@@ -1,8 +1,8 @@
 //! Application operations shared by protocol and presentation adapters.
 //! Migrate one operation at a time; drivers retain global-state/persistence
 //! ownership until their atomic commit boundaries have been extracted.
-pub(crate) mod conversations;
 pub(crate) mod approval_resume;
+pub(crate) mod conversations;
 pub(crate) mod messages;
 pub(crate) mod runs;
 
@@ -26,5 +26,5 @@ pub trait MessageOps {
     ) -> std::io::Result<messages::MessageResult>;
 }
 
-pub(crate) mod room_wakes;
 pub(crate) mod room_notifications;
+pub(crate) mod room_wakes;

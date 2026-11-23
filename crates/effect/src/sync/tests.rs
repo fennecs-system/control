@@ -1,4 +1,3 @@
-
 use super::*;
 use std::{sync::atomic::AtomicUsize, thread, time::Duration};
 
@@ -225,9 +224,7 @@ fn no_lost_wakeups_under_contention() {
     assert_eq!(count, 8_000);
     assert_eq!(
         sum,
-        (0..4)
-            .map(|p| (0..2_000).map(|i| p * 10_000 + i).sum::<u64>())
-            .sum()
+        (0..4).map(|p| (0..2_000).map(|i| p * 10_000 + i).sum::<u64>()).sum()
     );
 
     for _ in 0..200 {

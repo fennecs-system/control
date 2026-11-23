@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
@@ -33,11 +32,7 @@ fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
         };
         state.previews.push(preview.clone());
         let result = checkpoint_launch(&mut state, &run_id, &preview, launched, stopping, |_| {
-            if save_ok {
-                Ok(())
-            } else {
-                Err(fail("disk full"))
-            }
+            if save_ok { Ok(()) } else { Err(fail("disk full")) }
         });
         let running = active && !stopping && save_ok && launched;
         assert_eq!(result.is_ok(), running);
@@ -68,9 +63,7 @@ fn preview_origin_gate_rejects_control_hosts_cookies_and_ambiguous_headers() {
 }
 #[test]
 fn previews_require_an_active_captured_project_and_reject_forged_mounts() {
-    assert!(
-        serde_json::from_value::<Input>(json!({"command":"true","port":8080,"mount":"/"})).is_err()
-    );
+    assert!(serde_json::from_value::<Input>(json!({"command":"true","port":8080,"mount":"/"})).is_err());
     let state = Arc::new(Mutex::new(State::default()));
     assert!(
         start(
@@ -166,10 +159,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     assert!(url.host_str().unwrap().ends_with(".localhost"));
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
-        .resolve(
-            url.host_str().unwrap(),
-            ([127, 0, 0, 1], url.port().unwrap()).into(),
-        )
+        .resolve(url.host_str().unwrap(), ([127, 0, 0, 1], url.port().unwrap()).into())
         .timeout(Duration::from_secs(2))
         .build()
         .unwrap();
@@ -193,13 +183,8 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
                 "-c",
                 "printf 'GET / HTTP/1.1\\r\\nHost: fixture\\r\\nConnection: close\\r\\n\\r\\n' | /tmp/control-port-forward 8080",
             ]);
-            let response = client
-                .get(url.clone())
-                .send()
-                .map(|r| (r.status(), r.text()));
-            panic!(
-                "Synthetic preview never became ready: logs={logs}; guest={guest:?}; response={response:?}"
-            );
+            let response = client.get(url.clone()).send().map(|r| (r.status(), r.text()));
+            panic!("Synthetic preview never became ready: logs={logs}; guest={guest:?}; response={response:?}");
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -250,9 +235,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     // Simulate the old process releasing its listener, then restore only
     // durable intent and the verified existing container into a fresh node.
     state.lock().unwrap().previews[0].status = "restoring".into();
-    state.lock().unwrap().previews[0]
-        .stopped
-        .store(true, Ordering::Relaxed);
+    state.lock().unwrap().previews[0].stopped.store(true, Ordering::Relaxed);
     let start = Instant::now();
     loop {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", url.port().unwrap())) {
@@ -301,9 +284,20 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
 #[test]
 fn preview_launch_vector_is_pinned() {
     use crate::engine::golden::{fill, pin_equivalent};
-    let mut arguments = control_isolation::Docker::detached_arguments(&container("control-ws-1-preview", "node-1", "sha256:img", control_isolation::User { uid: 501, gid: 20 }, "/golden/workspace", "cargo run")).unwrap();
+    let mut arguments = control_isolation::Docker::detached_arguments(&container(
+        "control-ws-1-preview",
+        "node-1",
+        "sha256:img",
+        control_isolation::User { uid: 501, gid: 20 },
+        "/golden/workspace",
+        "cargo run",
+    ))
+    .unwrap();
     // The wrapper embeds the port forwarder's source; pin its frame, not the source.
-    let wrapper = arguments.iter_mut().find(|word| word.starts_with("set -eu\nexec 2>&1\n")).unwrap();
+    let wrapper = arguments
+        .iter_mut()
+        .find(|word| word.starts_with("set -eu\nexec 2>&1\n"))
+        .unwrap();
     assert!(wrapper.contains(include_str!("../../tools/port-forward/main.rs")));
     *wrapper = wrapper.replace(include_str!("../../tools/port-forward/main.rs"), "{forwarder}");
     pin_equivalent(&arguments, &fill(GOLDEN, &[]));

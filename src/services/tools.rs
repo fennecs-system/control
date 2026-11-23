@@ -83,19 +83,29 @@ fn decode(name: &str, args: &Value) -> io::Result<ServiceCall> {
     let id = || args.get("service_id").and_then(Value::as_str).map(str::to_owned);
     let node = args.get("detail").and_then(Value::as_str) == Some("node");
     match name {
-        "control_service_start" => serde_json::from_value(args.clone()).map(ServiceCall::Start).map_err(io::Error::other),
+        "control_service_start" => serde_json::from_value(args.clone())
+            .map(ServiceCall::Start)
+            .map_err(io::Error::other),
         "control_service_status" => Ok(ServiceCall::Status(id(), node)),
         "control_service_attach" => Ok(ServiceCall::Attach(id(), node)),
         "control_service_stop" => Ok(ServiceCall::Stop(id())),
         "control_service_exec" => serde_json::from_value(args.clone())
             .map(ServiceCall::Exec)
-            .map_err(|error| io::Error::other(crate::worker_tools::fixes::shape("control_service_exec", error, r#"{"service_id":"svc-<id>","command":"<shell command>"}"#))),
+            .map_err(|error| {
+                io::Error::other(crate::worker_tools::fixes::shape(
+                    "control_service_exec",
+                    error,
+                    r#"{"service_id":"svc-<id>","command":"<shell command>"}"#,
+                ))
+            }),
         "control_service_exec_status" => serde_json::from_value(args.clone())
             .map(ServiceCall::ExecStatus)
             .map_err(|_| io::Error::other("Expected service_id, execution_id and optional wait_seconds")),
         "control_service_copy" => serde_json::from_value(args.clone())
             .map(ServiceCall::Copy)
-            .map_err(|_| io::Error::other("Expected service_id, from, to and optional timeout_seconds and wait_seconds")),
+            .map_err(|_| {
+                io::Error::other("Expected service_id, from, to and optional timeout_seconds and wait_seconds")
+            }),
         _ => Err(io::Error::other("Unknown service tool")),
     }
 }

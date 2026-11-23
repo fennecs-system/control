@@ -1,11 +1,11 @@
 //! Bounded node execution with deterministic per-conversation ownership.
 use crate::runtime::Runtime;
-use std::io;
 use control_core::scheduling::{self, AttemptStamp, Capacity, Phase};
+use std::io;
 
+pub use control_core::scheduling::MAX_PARALLEL;
 #[cfg(test)]
 pub use control_core::scheduling::MAX_PENDING;
-pub use control_core::scheduling::MAX_PARALLEL;
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
@@ -92,34 +92,49 @@ impl Default for Limits {
 impl Limits {
     fn validate(self) -> io::Result<Self> {
         if !(1..=MAX_PARALLEL).contains(&self.max_parallel_runs) {
+            return Err(io::Error::other("max_parallel_runs must be between 1 and 32"));
+        }
+        if !(1..=65536).contains(&self.max_agents_per_root) || !(1..=65536).contains(&self.max_pending_agent_intents) {
             return Err(io::Error::other(
-                "max_parallel_runs must be between 1 and 32",
+                "Agent root and pending-intent budgets must be positive integers up to 65536",
             ));
         }
-        if !(1..=65536).contains(&self.max_agents_per_root)
-            || !(1..=65536).contains(&self.max_pending_agent_intents) {
-            return Err(io::Error::other("Agent root and pending-intent budgets must be positive integers up to 65536"));
-        }
-        if self.max_advisors_per_root > 8 || !(2..=64).contains(&self.advisor_failure_streak) || !(4..=4096).contains(&self.advisor_stall_turns)
-            || !(2..=64).contains(&self.advisor_bottleneck_members) {
-            return Err(io::Error::other("max_advisors_per_root must be 0–8, advisor_failure_streak 2–64, advisor_stall_turns 4–4096 and advisor_bottleneck_members 2–64"));
+        if self.max_advisors_per_root > 8
+            || !(2..=64).contains(&self.advisor_failure_streak)
+            || !(4..=4096).contains(&self.advisor_stall_turns)
+            || !(2..=64).contains(&self.advisor_bottleneck_members)
+        {
+            return Err(io::Error::other(
+                "max_advisors_per_root must be 0–8, advisor_failure_streak 2–64, advisor_stall_turns 4–4096 and advisor_bottleneck_members 2–64",
+            ));
         }
         if self.bot_recovery_continues > 16 || !(30..=86_400).contains(&self.bot_recovery_recheck_seconds) {
-            return Err(io::Error::other("bot_recovery_continues must be 0–16 and bot_recovery_recheck_seconds 30–86400"));
+            return Err(io::Error::other(
+                "bot_recovery_continues must be 0–16 and bot_recovery_recheck_seconds 30–86400",
+            ));
         }
         if !(30..=86_400).contains(&self.steering_turn_seconds) || !(1..=1024).contains(&self.steering_exec_calls) {
-            return Err(io::Error::other("steering_turn_seconds must be 30–86400 and steering_exec_calls 1–1024"));
+            return Err(io::Error::other(
+                "steering_turn_seconds must be 30–86400 and steering_exec_calls 1–1024",
+            ));
         }
         if !(30..=86_400).contains(&self.peer_digest_seconds) || !(256..=16_384).contains(&self.observation_max_bytes) {
-            return Err(io::Error::other("peer_digest_seconds must be 30–86400 and observation_max_bytes 256–16384"));
+            return Err(io::Error::other(
+                "peer_digest_seconds must be 30–86400 and observation_max_bytes 256–16384",
+            ));
         }
         if !(16..=1024).contains(&self.local_agent_steps) {
             return Err(io::Error::other("local_agent_steps must be 16–1024"));
         }
-        if !(2..=1024).contains(&self.pathology_churn_commands) || !(2..=16).contains(&self.pathology_repeat_failures)
-            || !(2..=16).contains(&self.pathology_poll_commands) || !(10_000..=1_000_000_000).contains(&self.pathology_burn_tokens)
-            || self.operator_notices_per_hour > 60 {
-            return Err(io::Error::other("pathology_churn_commands must be 2–1024, pathology_repeat_failures and pathology_poll_commands 2–16, pathology_burn_tokens 10000–1000000000 and operator_notices_per_hour 0–60"));
+        if !(2..=1024).contains(&self.pathology_churn_commands)
+            || !(2..=16).contains(&self.pathology_repeat_failures)
+            || !(2..=16).contains(&self.pathology_poll_commands)
+            || !(10_000..=1_000_000_000).contains(&self.pathology_burn_tokens)
+            || self.operator_notices_per_hour > 60
+        {
+            return Err(io::Error::other(
+                "pathology_churn_commands must be 2–1024, pathology_repeat_failures and pathology_poll_commands 2–16, pathology_burn_tokens 10000–1000000000 and operator_notices_per_hour 0–60",
+            ));
         }
         Ok(self)
     }
@@ -132,21 +147,19 @@ pub fn load_limits() -> io::Result<Limits> {
         std::env::var_os("CONTROL_MAX_PARALLEL_RUNS"),
     )
 }
-fn load_limits_in(
-    path: &std::path::Path,
-    override_limit: Option<std::ffi::OsString>,
-) -> io::Result<Limits> {
+fn load_limits_in(path: &std::path::Path, override_limit: Option<std::ffi::OsString>) -> io::Result<Limits> {
     let mut limits = match crate::config::read_regular(path, 4096, true) {
-        Ok(bytes) => serde_json::from_slice::<Limits>(&bytes)
-            .map_err(|_| io::Error::other("Invalid execution.json"))?,
+        Ok(bytes) => {
+            serde_json::from_slice::<Limits>(&bytes).map_err(|_| io::Error::other("Invalid execution.json"))?
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Limits::default(),
         Err(error) => return Err(error),
     };
     if let Some(value) = override_limit {
-        limits.max_parallel_runs =
-            value.to_str().and_then(|s| s.parse().ok()).ok_or_else(|| {
-                io::Error::other("CONTROL_MAX_PARALLEL_RUNS must be an integer from 1 to 32")
-            })?;
+        limits.max_parallel_runs = value
+            .to_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| io::Error::other("CONTROL_MAX_PARALLEL_RUNS must be an integer from 1 to 32"))?;
     }
     limits.validate()
 }
@@ -157,23 +170,34 @@ pub(crate) fn phase(run: &crate::runtime::Run) -> Phase {
         "queued" => Phase::Queued,
         "running" => Phase::Running,
         "cancelling" => Phase::Cancelling,
-        "waiting" => Phase::Waiting {reserves_chat:run.delegation.is_some() || run.question.as_ref().is_some_and(|q|q.answer.is_none())},
+        "waiting" => Phase::Waiting {
+            reserves_chat: run.delegation.is_some() || run.question.as_ref().is_some_and(|q| q.answer.is_none()),
+        },
         _ => Phase::Inactive,
     }
 }
 #[inline]
 pub(crate) fn stamp(attempt: &crate::usage::Attempt) -> AttemptStamp<'_> {
-    AttemptStamp {workspace:attempt.workspace_id.as_deref(),started_unix:attempt.started_unix}
+    AttemptStamp {
+        workspace: attempt.workspace_id.as_deref(),
+        started_unix: attempt.started_unix,
+    }
 }
 #[inline]
 pub fn admit(runtime: &Runtime) -> Result<(), &'static str> {
-    if scheduling::has_capacity(runtime.runs.iter()) { Ok(()) }
-    else { Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.") }
+    if scheduling::has_capacity(runtime.runs.iter()) {
+        Ok(())
+    } else {
+        Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.")
+    }
 }
 /// Delegated and spawned agents and automatic bot turns run in the background
 /// lane, whatever their ancestry.
 fn background(run: &crate::runtime::Run) -> bool {
-    matches!(run.kind, crate::runtime::RunKind::BotWake | crate::runtime::RunKind::BotDecision) || run.persona.as_ref().is_some_and(|persona| persona.parent.is_some())
+    matches!(
+        run.kind,
+        crate::runtime::RunKind::BotWake | crate::runtime::RunKind::BotDecision
+    ) || run.persona.as_ref().is_some_and(|persona| persona.parent.is_some())
 }
 /// Only each chat's oldest queued turn is a candidate, keeping chat FIFO. Among
 /// candidates, conversation turns start before background agents, and background
@@ -188,32 +212,56 @@ pub(crate) fn next_in(state: &crate::State) -> Option<usize> {
     next_where(&state.runtime, |run| crate::bots::may_start(state, run))
 }
 fn next_where(runtime: &Runtime, permitted: impl Fn(&crate::runtime::Run) -> bool) -> Option<usize> {
-    let capacity=Capacity::new(runtime.execution.max_parallel_runs.min(MAX_PARALLEL))?;
+    let capacity = Capacity::new(runtime.execution.max_parallel_runs.min(MAX_PARALLEL))?;
     if runtime.paused.is_some() {
         return None;
     }
-    let mut heads=std::collections::HashMap::new();
-    for (index, run) in runtime.runs.iter().enumerate().filter(|(_, run)| run.status == "queued" && permitted(run)) {
-        if let Some(chat)=run.chat_id.as_deref() {
-            heads.entry(chat).and_modify(|head: &mut (u64, usize)| *head=(*head).min((run.queue_order, index))).or_insert((run.queue_order, index));
+    let mut heads = std::collections::HashMap::new();
+    for (index, run) in runtime
+        .runs
+        .iter()
+        .enumerate()
+        .filter(|(_, run)| run.status == "queued" && permitted(run))
+    {
+        if let Some(chat) = run.chat_id.as_deref() {
+            heads
+                .entry(chat)
+                .and_modify(|head: &mut (u64, usize)| *head = (*head).min((run.queue_order, index)))
+                .or_insert((run.queue_order, index));
         }
     }
-    let candidate=|index: usize, run: &crate::runtime::Run| run.status == "queued" && permitted(run)
-        && run.chat_id.as_deref().is_none_or(|chat| heads.get(chat).is_some_and(|head| head.1 == index));
-    let mut lanes=runtime.runs.iter().enumerate()
-        .map(|(index, run)| Lane {run, queued: candidate(index, run) && !background(run)})
+    let candidate = |index: usize, run: &crate::runtime::Run| {
+        run.status == "queued"
+            && permitted(run)
+            && run
+                .chat_id
+                .as_deref()
+                .is_none_or(|chat| heads.get(chat).is_some_and(|head| head.1 == index))
+    };
+    let mut lanes = runtime
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(index, run)| Lane {
+            run,
+            queued: candidate(index, run) && !background(run),
+        })
         .collect::<Vec<_>>();
-    if let Some(index)=scheduling::next(lanes.iter(),capacity,false) {
+    if let Some(index) = scheduling::next(lanes.iter(), capacity, false) {
         return Some(index);
     }
-    let busy=runtime.runs.iter().filter(|run| background(run) && scheduling::RunView::occupies_slot(*run)).count();
+    let busy = runtime
+        .runs
+        .iter()
+        .filter(|run| background(run) && scheduling::RunView::occupies_slot(*run))
+        .count();
     if busy + usize::from(capacity.slots() > 1) >= capacity.slots() {
         return None;
     }
     for (index, lane) in lanes.iter_mut().enumerate() {
-        lane.queued=candidate(index, lane.run) && background(lane.run);
+        lane.queued = candidate(index, lane.run) && background(lane.run);
     }
-    scheduling::next(lanes.iter(),capacity,false)
+    scheduling::next(lanes.iter(), capacity, false)
 }
 /// One lane's view of the ledger: other lanes' queued runs are hidden, while
 /// every run's slot and chat reservations still count.
@@ -223,30 +271,62 @@ struct Lane<'a> {
 }
 impl scheduling::RunView for Lane<'_> {
     fn phase(&self) -> Phase {
-        if self.run.status == "queued" && !self.queued { Phase::Inactive } else { phase(self.run) }
+        if self.run.status == "queued" && !self.queued {
+            Phase::Inactive
+        } else {
+            phase(self.run)
+        }
     }
-    fn chat(&self) -> Option<&str> { self.run.chat_id.as_deref() }
-    fn queue_order(&self) -> u64 { self.run.queue_order }
-    fn occupies_slot(&self) -> bool { scheduling::RunView::occupies_slot(self.run) }
-    fn is_queued(&self) -> bool { self.queued }
-    fn is_pending(&self) -> bool { scheduling::RunView::is_pending(self.run) }
-    fn reserves_chat(&self) -> bool { scheduling::RunView::reserves_chat(self.run) }
+    fn chat(&self) -> Option<&str> {
+        self.run.chat_id.as_deref()
+    }
+    fn queue_order(&self) -> u64 {
+        self.run.queue_order
+    }
+    fn occupies_slot(&self) -> bool {
+        scheduling::RunView::occupies_slot(self.run)
+    }
+    fn is_queued(&self) -> bool {
+        self.queued
+    }
+    fn is_pending(&self) -> bool {
+        scheduling::RunView::is_pending(self.run)
+    }
+    fn reserves_chat(&self) -> bool {
+        scheduling::RunView::reserves_chat(self.run)
+    }
 }
 impl scheduling::RunView for crate::runtime::Run {
     #[inline]
-    fn phase(&self) -> Phase { phase(self) }
+    fn phase(&self) -> Phase {
+        phase(self)
+    }
     #[inline]
-    fn chat(&self) -> Option<&str> { self.chat_id.as_deref() }
+    fn chat(&self) -> Option<&str> {
+        self.chat_id.as_deref()
+    }
     #[inline]
-    fn queue_order(&self) -> u64 { self.queue_order }
+    fn queue_order(&self) -> u64 {
+        self.queue_order
+    }
     #[inline]
-    fn occupies_slot(&self) -> bool { matches!(self.status.as_str(), "running"|"cancelling") }
+    fn occupies_slot(&self) -> bool {
+        matches!(self.status.as_str(), "running" | "cancelling")
+    }
     #[inline]
-    fn is_queued(&self) -> bool { self.status == "queued" }
+    fn is_queued(&self) -> bool {
+        self.status == "queued"
+    }
     #[inline]
-    fn is_pending(&self) -> bool { matches!(self.status.as_str(),"queued"|"running"|"cancelling"|"waiting") }
+    fn is_pending(&self) -> bool {
+        matches!(self.status.as_str(), "queued" | "running" | "cancelling" | "waiting")
+    }
     #[inline]
-    fn reserves_chat(&self) -> bool { self.occupies_slot() || (self.status=="waiting" && (self.delegation.is_some() || self.question.as_ref().is_some_and(|q|q.answer.is_none()))) }
+    fn reserves_chat(&self) -> bool {
+        self.occupies_slot()
+            || (self.status == "waiting"
+                && (self.delegation.is_some() || self.question.as_ref().is_some_and(|q| q.answer.is_none())))
+    }
 }
 
 #[cfg(test)]

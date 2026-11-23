@@ -18,9 +18,7 @@ pub fn effective(
     roles: &[Value],
     channel: &Value,
 ) -> Result<u128, &'static str> {
-    let assigned = member["roles"]
-        .as_array()
-        .ok_or("Missing bot role membership")?;
+    let assigned = member["roles"].as_array().ok_or("Missing bot role membership")?;
     let mut ids = HashSet::from([guild]);
     for id in assigned {
         ids.insert(id.as_str().ok_or("Invalid bot role ID")?);
@@ -46,12 +44,10 @@ pub fn effective(
         base = (base & !bits(&row["deny"])?) | bits(&row["allow"])?;
     }
     let (mut allow, mut deny) = (0, 0);
-    for row in overwrites.iter().filter(|r| {
-        r["type"].as_u64() == Some(0)
-            && r["id"]
-                .as_str()
-                .is_some_and(|id| id != guild && ids.contains(id))
-    }) {
+    for row in overwrites
+        .iter()
+        .filter(|r| r["type"].as_u64() == Some(0) && r["id"].as_str().is_some_and(|id| id != guild && ids.contains(id)))
+    {
         allow |= bits(&row["allow"])?;
         deny |= bits(&row["deny"])?;
     }

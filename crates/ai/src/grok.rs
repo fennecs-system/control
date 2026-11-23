@@ -29,7 +29,10 @@ pub struct Grok {
     model: Option<String>,
 }
 fn clean(text: &str, limit: usize) -> String {
-    text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').take(limit).collect()
+    text.chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .take(limit)
+        .collect()
 }
 /// Grok reports `input_tokens` uncached; Control's input includes cache reads
 /// and writes, with reads also shown as cached.
@@ -37,7 +40,11 @@ fn tokens(usage: &Value) -> Option<Tokens> {
     let (input, output) = (usage["input_tokens"].as_u64()?, usage["output_tokens"].as_u64()?);
     let cached = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
     let created = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
-    Some(Tokens { input_tokens: input.saturating_add(cached).saturating_add(created), cached_input_tokens: cached, output_tokens: output })
+    Some(Tokens {
+        input_tokens: input.saturating_add(cached).saturating_add(created),
+        cached_input_tokens: cached,
+        output_tokens: output,
+    })
 }
 /// A tool id may be namespaced (`ns:use_tool`); rules match its short name.
 fn short(name: &str) -> &str {
@@ -46,7 +53,10 @@ fn short(name: &str) -> &str {
 impl Grok {
     /// An agent turn, whose only tools are the MCP meta-tools.
     pub fn agent() -> Self {
-        Self { tools: true, ..Self::default() }
+        Self {
+            tools: true,
+            ..Self::default()
+        }
     }
     /// A bounded text request: any tool is unexpected.
     pub fn text() -> Self {
@@ -89,7 +99,11 @@ impl Grok {
         let input = &value["rawInput"];
         let name = input["tool_name"].as_str().unwrap_or(short(tool));
         let name = name.strip_prefix(SERVER).unwrap_or(name);
-        let name = if name == "control_call" { input["tool_input"]["tool"].as_str().unwrap_or(name) } else { name };
+        let name = if name == "control_call" {
+            input["tool_input"]["tool"].as_str().unwrap_or(name)
+        } else {
+            name
+        };
         let name = clean(name, 2000);
         if self.calls.iter().any(|(known, _)| known == id) {
             return;
@@ -98,7 +112,13 @@ impl Grok {
             self.calls.remove(0);
         }
         self.calls.push((id.to_owned(), name.clone()));
-        emit(Event::Activity(Activity { id: id.chars().take(100).collect(), kind: "mcp_tool_call".into(), text: name, output: String::new(), status: "in_progress".into() }));
+        emit(Event::Activity(Activity {
+            id: id.chars().take(100).collect(),
+            kind: "mcp_tool_call".into(),
+            text: name,
+            output: String::new(),
+            status: "in_progress".into(),
+        }));
     }
     fn tool_result(&mut self, value: &Value, emit: &mut dyn FnMut(Event)) {
         let status = match value["status"].as_str() {
@@ -107,16 +127,29 @@ impl Grok {
             _ => return,
         };
         let Some(id) = value["toolCallId"].as_str() else { return };
-        let Some(index) = self.calls.iter().position(|(known, _)| known == id) else { return };
+        let Some(index) = self.calls.iter().position(|(known, _)| known == id) else {
+            return;
+        };
         let name = self.calls.remove(index).1;
-        let parts: Vec<&str> = value["content"].as_array().into_iter().flatten().filter_map(|c| c["content"]["text"].as_str().or(c["text"].as_str())).collect();
+        let parts: Vec<&str> = value["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c["content"]["text"].as_str().or(c["text"].as_str()))
+            .collect();
         let output = match &value["rawOutput"] {
             _ if !parts.is_empty() => clean(&parts.join("\n"), 1000),
             Value::Null => String::new(),
             Value::String(text) => clean(text, 1000),
             other => clean(&other.to_string(), 1000),
         };
-        emit(Event::Activity(Activity { id: id.chars().take(100).collect(), kind: "mcp_tool_call".into(), text: name, output, status: status.into() }));
+        emit(Event::Activity(Activity {
+            id: id.chars().take(100).collect(),
+            kind: "mcp_tool_call".into(),
+            text: name,
+            output,
+            status: status.into(),
+        }));
     }
     fn end(&mut self, value: &Value, emit: &mut dyn FnMut(Event)) {
         if let Some(total) = tokens(&value["usage"]) {
@@ -131,8 +164,15 @@ impl Grok {
         let reply = self.flush(emit);
         match value["stopReason"].as_str() {
             _ if self.reply.is_some() || self.failure.is_some() => self.invalid = true,
-            Some("end_turn") => self.reply = Some(reply.map(|text| text.chars().take(16000).collect()).unwrap_or_default()),
-            reason => self.failure = Some(format!("Grok ended with {}", clean(reason.unwrap_or("no stop reason"), 40))),
+            Some("end_turn") => {
+                self.reply = Some(reply.map(|text| text.chars().take(16000).collect()).unwrap_or_default())
+            }
+            reason => {
+                self.failure = Some(format!(
+                    "Grok ended with {}",
+                    clean(reason.unwrap_or("no stop reason"), 40)
+                ))
+            }
         }
     }
 }
@@ -148,7 +188,13 @@ impl Decoder for Grok {
             Some("tool_call") => self.tool_call(value, emit),
             Some("tool_call_update") => self.tool_result(value, emit),
             Some("available_commands") => {
-                let unexpected = value["tools"].as_array().into_iter().flatten().filter_map(Value::as_str).find(|tool| !self.expected(tool)).map(str::to_owned);
+                let unexpected = value["tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .find(|tool| !self.expected(tool))
+                    .map(str::to_owned);
                 if let Some(tool) = unexpected {
                     self.reject(&tool, emit);
                 }
@@ -164,7 +210,10 @@ impl Decoder for Grok {
                     self.reported = Some(total);
                 }
                 let detail = clean(value["message"].as_str().unwrap_or(""), 300);
-                self.failure.get_or_insert(format!("Grok ended with an error{}{detail}", if detail.is_empty() { "" } else { ": " }));
+                self.failure.get_or_insert(format!(
+                    "Grok ended with an error{}{detail}",
+                    if detail.is_empty() { "" } else { ": " }
+                ));
             }
             Some("max_turns_reached") => {
                 self.failure.get_or_insert("Grok ended with max_turns_reached".into());
@@ -180,13 +229,23 @@ impl Decoder for Grok {
     fn usage(&self) -> Usage {
         let model = self.model.clone();
         match self.reported {
-            Some(total) => Usage { tokens: Some(total), complete: true, model },
-            None => Usage { tokens: self.responses, complete: false, model },
+            Some(total) => Usage {
+                tokens: Some(total),
+                complete: true,
+                model,
+            },
+            None => Usage {
+                tokens: self.responses,
+                complete: false,
+                model,
+            },
         }
     }
     fn finish(self) -> io::Result<Output> {
         if let Some(tool) = &self.unexpected {
-            return Err(io::Error::other(format!("Grok started with an unexpected tool ({tool}) and was stopped before doing work.")));
+            return Err(io::Error::other(format!(
+                "Grok started with an unexpected tool ({tool}) and was stopped before doing work."
+            )));
         }
         if let Some(failure) = &self.failure {
             return Err(io::Error::other(format!("{failure}.")));
@@ -194,8 +253,13 @@ impl Decoder for Grok {
         if self.invalid {
             return Err(io::Error::other("Grok returned an invalid event stream"));
         }
-        let text = self.reply.ok_or_else(|| io::Error::other("Grok did not return a final result; check login or usage limits"))?;
-        Ok(Output { text: Some(text), tokens: self.reported })
+        let text = self
+            .reply
+            .ok_or_else(|| io::Error::other("Grok did not return a final result; check login or usage limits"))?;
+        Ok(Output {
+            text: Some(text),
+            tokens: self.reported,
+        })
     }
 }
 #[cfg(test)]

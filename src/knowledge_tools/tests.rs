@@ -1,4 +1,3 @@
-
 use super::*;
 fn fixture() -> (State, String) {
     let mut state = State::default();
@@ -83,13 +82,7 @@ fn captured_documents_are_immutable_and_unselected_notes_are_not_readable() {
         "New live body"
     );
     assert_eq!(
-        read(
-            &state,
-            Some(run),
-            "control.knowledge.search",
-            &json!({"query":"live"})
-        )
-        .unwrap()["results"]
+        read(&state, Some(run), "control.knowledge.search", &json!({"query":"live"})).unwrap()["results"]
             .as_array()
             .unwrap()
             .len(),
@@ -101,41 +94,21 @@ fn proposal_checkpoint_retries_provenance_and_operator_admission() {
     let (mut state, id) = fixture();
     let args = input();
     assert!(
-        worker(
-            &mut state,
-            &id,
-            "control_knowledge_propose",
-            &args,
-            "request-1",
-            |_| Err(io::Error::other("full"))
-        )
+        worker(&mut state, &id, "control_knowledge_propose", &args, "request-1", |_| {
+            Err(io::Error::other("full"))
+        })
         .is_err()
     );
     assert!(state.collective.proposals.is_empty());
-    let value = worker(
-        &mut state,
-        &id,
-        "control_knowledge_propose",
-        &args,
-        "request-1",
-        |_| Ok(()),
-    )
+    let value = worker(&mut state, &id, "control_knowledge_propose", &args, "request-1", |_| {
+        Ok(())
+    })
     .unwrap();
     assert_eq!(value["status"], "pending");
-    assert!(
-        state
-            .documents
-            .iter()
-            .all(|doc| doc.body != "A useful fact")
-    );
-    worker(
-        &mut state,
-        &id,
-        "control_knowledge_propose",
-        &args,
-        "request-1",
-        |_| panic!("Retry must not persist twice"),
-    )
+    assert!(state.documents.iter().all(|doc| doc.body != "A useful fact"));
+    worker(&mut state, &id, "control_knowledge_propose", &args, "request-1", |_| {
+        panic!("Retry must not persist twice")
+    })
     .unwrap();
     assert_eq!(state.collective.proposals.len(), 1);
     let source = state.collective.proposals[0].source.as_ref().unwrap();
@@ -155,44 +128,20 @@ fn proposal_checkpoint_retries_provenance_and_operator_admission() {
         )
         .is_err()
     );
-    assert!(
-        read(
-            &state,
-            None,
-            "control.knowledge.read",
-            &json!({"id":"claim:0"})
-        )
-        .is_err()
-    );
-    let fields = [
-        ("id".into(), "0".into()),
-        ("decision".into(), "accepted".into()),
-    ]
-    .into_iter()
-    .collect();
-    assert!(
-        review_action(&mut state, "/review", &fields, |_| Err(io::Error::other(
-            "full"
-        )))
-        .is_err()
-    );
+    assert!(read(&state, None, "control.knowledge.read", &json!({"id":"claim:0"})).is_err());
+    let fields = [("id".into(), "0".into()), ("decision".into(), "accepted".into())]
+        .into_iter()
+        .collect();
+    assert!(review_action(&mut state, "/review", &fields, |_| Err(io::Error::other("full"))).is_err());
     assert_eq!(state.collective.proposals[0].status, "pending");
     review_action(&mut state, "/review", &fields, |_| Ok(())).unwrap();
     let serialized = serde_json::to_vec(&state).unwrap();
     let restored: State = serde_json::from_slice(&serialized).unwrap();
-    let accepted = read(
-        &restored,
-        None,
-        "control.knowledge.read",
-        &json!({"id":"claim:0"}),
-    )
-    .unwrap();
+    let accepted = read(&restored, None, "control.knowledge.read", &json!({"id":"claim:0"})).unwrap();
     assert_eq!(accepted["admitted"], true);
     assert_eq!(accepted["evidence"], "artifact:checked-result");
     assert_eq!(accepted["source"]["run"], id);
-    assert!(
-        crate::knowledge::render(&restored, "review", None).contains("artifact:checked-result")
-    );
+    assert!(crate::knowledge::render(&restored, "review", None).contains("artifact:checked-result"));
 }
 #[test]
 fn validation_bounds_and_authority_fail_closed() {
@@ -213,30 +162,10 @@ fn validation_bounds_and_authority_fail_closed() {
     }
     let mut args = input();
     args["claim"] = json!("x".repeat(281));
-    assert!(
-        worker(
-            &mut state,
-            &id,
-            "control_knowledge_propose",
-            &args,
-            "one",
-            |_| Ok(())
-        )
-        .is_err()
-    );
+    assert!(worker(&mut state, &id, "control_knowledge_propose", &args, "one", |_| Ok(())).is_err());
     args = input();
     args["chat"] = json!("another-chat");
-    assert!(
-        worker(
-            &mut state,
-            &id,
-            "control_knowledge_propose",
-            &args,
-            "one",
-            |_| Ok(())
-        )
-        .is_err()
-    );
+    assert!(worker(&mut state, &id, "control_knowledge_propose", &args, "one", |_| Ok(())).is_err());
     state.runtime.runs[0].actor = Actor::Unknown;
     assert!(
         worker(
@@ -283,10 +212,7 @@ fn local_proposals_require_operator_chat_and_are_retry_safe() {
 #[test]
 fn operator_mcp_routes_reads_and_advertises_all_knowledge_schemas() {
     let (mut state, _) = fixture();
-    let listed = crate::session_http::rpc(
-        &mut state,
-        &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
-    );
+    let listed = crate::session_http::rpc(&mut state, &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}));
     let names = listed["result"]["tools"]
         .as_array()
         .unwrap()
@@ -305,10 +231,7 @@ fn operator_mcp_routes_reads_and_advertises_all_knowledge_schemas() {
         &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control.knowledge.read","arguments":{"id":"document:selected"}}}),
     );
     assert_eq!(response["result"]["isError"], false);
-    assert_eq!(
-        response["result"]["structuredContent"]["data"]["body"],
-        "New live body"
-    );
+    assert_eq!(response["result"]["structuredContent"]["data"]["body"], "New live body");
 }
 #[test]
 fn multiword_search_is_order_independent_and_requires_every_term() {
@@ -321,13 +244,7 @@ fn multiword_search_is_order_independent_and_requires_every_term() {
         "  REPEATER   delay  ",
         "café repeater",
     ] {
-        let value = read(
-            &state,
-            None,
-            "control.knowledge.search",
-            &json!({"query":query}),
-        )
-        .unwrap();
+        let value = read(&state, None, "control.knowledge.search", &json!({"query":query})).unwrap();
         assert_eq!(value["results"].as_array().unwrap().len(), 1, "{query}");
         assert_eq!(value["results"][0]["id"], "document:selected");
     }
@@ -352,13 +269,7 @@ fn search_result_count_and_proposal_storage_are_bounded() {
             saved_at: None,
         });
     }
-    let results = read(
-        &state,
-        None,
-        "control.knowledge.search",
-        &json!({"query":"match"}),
-    )
-    .unwrap();
+    let results = read(&state, None, "control.knowledge.search", &json!({"query":"match"})).unwrap();
     assert_eq!(results["results"].as_array().unwrap().len(), 10);
     assert!(results.to_string().len() < 4000);
     for index in 0..MAX_PROPOSALS {
@@ -389,29 +300,78 @@ fn search_result_count_and_proposal_storage_are_bounded() {
 }
 #[test]
 fn a_proposal_is_an_operator_request_decided_only_through_review() {
-    use control_client::{channel, operator::{self, Command, Kind}};
+    use control_client::{
+        channel,
+        operator::{self, Command, Kind},
+    };
     let (mut state, id) = fixture();
     let chat = state.runtime.runs[0].chat_id.clone().unwrap();
-    worker(&mut state, &id, "control_knowledge_propose", &input(), "request-1", |_| Ok(())).unwrap();
+    worker(
+        &mut state,
+        &id,
+        "control_knowledge_propose",
+        &input(),
+        "request-1",
+        |_| Ok(()),
+    )
+    .unwrap();
     // Proposing pauses nothing: the worker's turn keeps running and asks no question.
     assert!(state.runtime.runs[0].status == "running" && state.runtime.runs[0].question.is_none());
     let groups = crate::chat::pending_requests(&state);
-    let group = groups.as_array().unwrap().iter().find(|g| g["chat_id"] == chat.as_str()).unwrap();
+    let group = groups
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["chat_id"] == chat.as_str())
+        .unwrap();
     let pending = operator::pending(group);
     let request = pending.iter().find(|p| p.kind == Kind::Knowledge).unwrap();
-    assert!(request.id == "claim:0" && request.body.contains("artifact:checked-result"), "{request:?}");
+    assert!(
+        request.id == "claim:0" && request.body.contains("artifact:checked-result"),
+        "{request:?}"
+    );
     // The TUI reads the chat view; Discord forwards it with older settings too.
-    assert_eq!(operator::pending(&crate::chat::detail(&state, &chat).unwrap())[0].kind, Kind::Knowledge);
-    assert!(channel::Settings { enabled: true, kinds: vec![Kind::Question], ..Default::default() }.forwards(&chat, Kind::Knowledge));
+    assert_eq!(
+        operator::pending(&crate::chat::detail(&state, &chat).unwrap())[0].kind,
+        Kind::Knowledge
+    );
+    assert!(
+        channel::Settings {
+            enabled: true,
+            kinds: vec![Kind::Question],
+            ..Default::default()
+        }
+        .forwards(&chat, Kind::Knowledge)
+    );
     let structured = channel::request::request(&channel::Settings::default(), "DM", "/dm", request, group);
-    assert_eq!(structured.actions.iter().map(|a| a.id).collect::<Vec<_>>(), ["allow", "deny", "open"]);
+    assert_eq!(
+        structured.actions.iter().map(|a| a.id).collect::<Vec<_>>(),
+        ["allow", "deny", "open"]
+    );
     assert_eq!(channel::request::reply(Kind::Knowledge, "allow"), Some("accept"));
-    assert_eq!(operator::reply(request, "accept").unwrap(), Command::Knowledge { id: "claim:0".into(), accept: true });
-    assert_eq!(operator::reply(request, "deny").unwrap(), operator::knowledge("/knowledge reject claim:0").unwrap());
+    assert_eq!(
+        operator::reply(request, "accept").unwrap(),
+        Command::Knowledge {
+            id: "claim:0".into(),
+            accept: true
+        }
+    );
+    assert_eq!(
+        operator::reply(request, "deny").unwrap(),
+        operator::knowledge("/knowledge reject claim:0").unwrap()
+    );
     // A reply posts the Knowledge → Review form, so both change one state.
     let review = |state: &mut State, body: &str| {
         let mut out = Vec::new();
-        assert!(crate::knowledge::handle(&mut out, state, "POST", "/review", &Default::default(), "general", body.as_bytes()));
+        assert!(crate::knowledge::handle(
+            &mut out,
+            state,
+            "POST",
+            "/review",
+            &Default::default(),
+            "general",
+            body.as_bytes()
+        ));
         String::from_utf8(out).unwrap()
     };
     assert!(review(&mut state, "id=0&decision=rejected&response=json").starts_with("HTTP/1.1 200"));
@@ -419,7 +379,10 @@ fn a_proposal_is_an_operator_request_decided_only_through_review() {
     assert!(crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
     // A stale or double decision is refused from either surface.
     let again = review(&mut state, "id=0&decision=accepted&response=json");
-    assert!(again.starts_with("HTTP/1.1 409") && again.contains("no longer pending"), "{again}");
+    assert!(
+        again.starts_with("HTTP/1.1 409") && again.contains("no longer pending"),
+        "{again}"
+    );
     assert!(review(&mut state, "id=0&decision=accepted").starts_with("HTTP/1.1 409"));
     assert_eq!(state.collective.proposals[0].status, "rejected");
 }

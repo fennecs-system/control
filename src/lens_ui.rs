@@ -1,6 +1,10 @@
 //! Browser defaults are preferences; each chat captures its own context.
 pub fn normalize(value: &str) -> &str {
-    if control_context::valid_id(value) { value } else { "none" }
+    if control_context::valid_id(value) {
+        value
+    } else {
+        "none"
+    }
 }
 pub fn title(value: &str) -> &str {
     match normalize(value) {
@@ -22,7 +26,11 @@ pub fn selected<'a>(library: &control_context::Library, header: &'a str, query: 
             .map(|(_, value)| normalize(value))
             .unwrap_or("none")
     });
-    if library.get(candidate).is_some() { candidate } else { "none" }
+    if library.get(candidate).is_some() {
+        candidate
+    } else {
+        "none"
+    }
 }
 pub fn cookie(value: &str) -> String {
     format!(

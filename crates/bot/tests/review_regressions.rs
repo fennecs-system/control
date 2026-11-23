@@ -1,86 +1,203 @@
-use control_bot::{BotId, Budget, ChatId, Definition, Effect, Event, Info, Reason, Restart, Source, Supervisor, Topic, TurnId};
+use control_bot::{
+    BotId, Budget, ChatId, Definition, Effect, Event, Info, Reason, Restart, Source, Supervisor, Topic, TurnId,
+};
 use control_effect::machine::{Machine, Now, Planned};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Exited;
 impl Info for Exited {
-    fn merge(&mut self, _: &Self) -> bool { true }
+    fn merge(&mut self, _: &Self) -> bool {
+        true
+    }
 }
 type S = Supervisor<Exited>;
 type E = Event<Exited>;
 
-fn room() -> Topic { Topic::new("room", "room") }
+fn room() -> Topic {
+    Topic::new("room", "room")
+}
 fn definition() -> Definition {
-    Definition { bot: BotId("bot".into()), chat: ChatId("chat-original".into()), sources:vec![Source::Topic(room())], budget:Budget{cooldown_ms:10, window_ms:100, turns_per_window:1}, restart: Restart::Permanent, defer_ms: None }
+    Definition {
+        bot: BotId("bot".into()),
+        chat: ChatId("chat-original".into()),
+        sources: vec![Source::Topic(room())],
+        budget: Budget {
+            cooldown_ms: 10,
+            window_ms: 100,
+            turns_per_window: 1,
+        },
+        restart: Restart::Permanent,
+        defer_ms: None,
+    }
 }
-fn message(cursor:u64) -> E { Event::Info{topic:room(), cursor, from:None, info:Exited} }
-fn turn(effects:&[Planned<BotId,Effect<Exited>>]) -> TurnId {
-    effects.iter().find_map(|planned|match planned.effect {Effect::RequestTurn{turn,..}=>Some(turn),_=>None}).expect("expected turn")
+fn message(cursor: u64) -> E {
+    Event::Info {
+        topic: room(),
+        cursor,
+        from: None,
+        info: Exited,
+    }
 }
-fn has_turn(effects:&[Planned<BotId,Effect<Exited>>]) -> bool { effects.iter().any(|planned|matches!(planned.effect,Effect::RequestTurn{..})) }
+fn turn(effects: &[Planned<BotId, Effect<Exited>>]) -> TurnId {
+    effects
+        .iter()
+        .find_map(|planned| match planned.effect {
+            Effect::RequestTurn { turn, .. } => Some(turn),
+            _ => None,
+        })
+        .expect("expected turn")
+}
+fn has_turn(effects: &[Planned<BotId, Effect<Exited>>]) -> bool {
+    effects
+        .iter()
+        .any(|planned| matches!(planned.effect, Effect::RequestTurn { .. }))
+}
 
 #[test]
 fn paused_timer_should_not_wake_an_idle_driver() {
-    let mut supervisor=S::default();
-    let mut def=definition();def.sources=vec![Source::Timer{every_ms:10}];
-    supervisor.step(Event::Define(def),Now(0));
-    supervisor.step(Event::Pause(BotId("bot".into())),Now(1));
-    assert_eq!(supervisor.next_deadline(Now(1)),None,"paused bot cannot emit a turn on Tick");
+    let mut supervisor = S::default();
+    let mut def = definition();
+    def.sources = vec![Source::Timer { every_ms: 10 }];
+    supervisor.step(Event::Define(def), Now(0));
+    supervisor.step(Event::Pause(BotId("bot".into())), Now(1));
+    assert_eq!(
+        supervisor.next_deadline(Now(1)),
+        None,
+        "paused bot cannot emit a turn on Tick"
+    );
 }
 
 #[test]
 fn temporary_window_edit_must_not_erase_turn_accounting() {
-    let mut supervisor=S::default();let original=definition();
-    supervisor.step(Event::Define(original.clone()),Now(0));
-    let first=turn(&supervisor.step(message(1),Now(0)));
-    supervisor.step(Event::TurnCompleted{bot:original.bot.clone(),turn:first},Now(1));
-    supervisor.step(message(2),Now(2));
-    let mut shorter=original.clone();shorter.budget.window_ms=1;
-    assert!(!has_turn(&supervisor.step(Event::Define(shorter),Now(3))));
-    assert!(!has_turn(&supervisor.step(Event::Define(original),Now(4))));
-    assert!(!has_turn(&supervisor.step(Event::Tick,Now(10))),"original one-turn/100ms budget still contains the turn at zero; no turns ran under edited policy");
+    let mut supervisor = S::default();
+    let original = definition();
+    supervisor.step(Event::Define(original.clone()), Now(0));
+    let first = turn(&supervisor.step(message(1), Now(0)));
+    supervisor.step(
+        Event::TurnCompleted {
+            bot: original.bot.clone(),
+            turn: first,
+        },
+        Now(1),
+    );
+    supervisor.step(message(2), Now(2));
+    let mut shorter = original.clone();
+    shorter.budget.window_ms = 1;
+    assert!(!has_turn(&supervisor.step(Event::Define(shorter), Now(3))));
+    assert!(!has_turn(&supervisor.step(Event::Define(original), Now(4))));
+    assert!(
+        !has_turn(&supervisor.step(Event::Tick, Now(10))),
+        "original one-turn/100ms budget still contains the turn at zero; no turns ran under edited policy"
+    );
 }
 
 #[test]
 fn own_outstanding_turn_posts_must_not_wake_a_moved_bot() {
-    let mut supervisor=S::default();let mut def=definition();def.budget.cooldown_ms=0;def.budget.turns_per_window=10;
-    supervisor.step(Event::Define(def.clone()),Now(0));
-    let first=turn(&supervisor.step(message(1),Now(1)));
-    def.chat=ChatId("chat-new".into());supervisor.step(Event::Define(def.clone()),Now(2));
-    supervisor.step(Event::Info{topic:room(),cursor:2,from:Some(ChatId("chat-original".into())),info:Exited},Now(3));
-    assert!(!has_turn(&supervisor.step(Event::TurnCompleted{bot:def.bot,turn:first},Now(4))),"only outstanding bot's own post arrived");
+    let mut supervisor = S::default();
+    let mut def = definition();
+    def.budget.cooldown_ms = 0;
+    def.budget.turns_per_window = 10;
+    supervisor.step(Event::Define(def.clone()), Now(0));
+    let first = turn(&supervisor.step(message(1), Now(1)));
+    def.chat = ChatId("chat-new".into());
+    supervisor.step(Event::Define(def.clone()), Now(2));
+    supervisor.step(
+        Event::Info {
+            topic: room(),
+            cursor: 2,
+            from: Some(ChatId("chat-original".into())),
+            info: Exited,
+        },
+        Now(3),
+    );
+    assert!(
+        !has_turn(&supervisor.step(
+            Event::TurnCompleted {
+                bot: def.bot,
+                turn: first
+            },
+            Now(4)
+        )),
+        "only outstanding bot's own post arrived"
+    );
 }
 
 #[test]
 fn overflow_must_not_silently_acknowledge_an_evicted_source() {
-    let mut supervisor=S::default();let mut def=definition();def.budget.cooldown_ms=0;def.budget.turns_per_window=10;
-    let service=|n|Topic::new("service",format!("svc-{n}"));
-    def.sources=(0..18).map(|n|Source::Topic(service(n))).collect();
-    supervisor.step(Event::Define(def.clone()),Now(0));
-    let observed=|n,cursor|Event::Info{topic:service(n),cursor,from:None,info:Exited};
-    let first=turn(&supervisor.step(observed(0,1),Now(1)));
-    for n in 1..18 {supervisor.step(observed(n,1),Now(2));}
-    let completed=supervisor.step(Event::TurnCompleted{bot:def.bot,turn:first},Now(3));
-    let known=completed.iter().find_map(|p|match &p.effect {Effect::RequestTurn{reasons,..}=>Some(reasons),_=>None}).unwrap();
-    assert!(known.iter().any(|r|matches!(r,Reason::Info{topic,..}if topic.name=="svc-1")),"svc-1 exit was silently evicted and its cursor prevents replay");
+    let mut supervisor = S::default();
+    let mut def = definition();
+    def.budget.cooldown_ms = 0;
+    def.budget.turns_per_window = 10;
+    let service = |n| Topic::new("service", format!("svc-{n}"));
+    def.sources = (0..18).map(|n| Source::Topic(service(n))).collect();
+    supervisor.step(Event::Define(def.clone()), Now(0));
+    let observed = |n, cursor| Event::Info {
+        topic: service(n),
+        cursor,
+        from: None,
+        info: Exited,
+    };
+    let first = turn(&supervisor.step(observed(0, 1), Now(1)));
+    for n in 1..18 {
+        supervisor.step(observed(n, 1), Now(2));
+    }
+    let completed = supervisor.step(
+        Event::TurnCompleted {
+            bot: def.bot,
+            turn: first,
+        },
+        Now(3),
+    );
+    let known = completed
+        .iter()
+        .find_map(|p| match &p.effect {
+            Effect::RequestTurn { reasons, .. } => Some(reasons),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        known
+            .iter()
+            .any(|r| matches!(r,Reason::Info{topic,..}if topic.name=="svc-1")),
+        "svc-1 exit was silently evicted and its cursor prevents replay"
+    );
 }
 
 #[test]
 fn consecutive_timer_only_turns_are_counted_until_an_event_arrives() {
     // Run AD: finished players kept taking recheck turns every two minutes.
     // The host doubles a recheck by this count.
-    let mut supervisor=S::default();let mut def=definition();def.budget=Budget{cooldown_ms:0,window_ms:100,turns_per_window:100};
-    let bot=def.bot.clone();
-    supervisor.step(Event::Define(def),Now(0));
-    let mut now=0;
-    for expected in [1,2,3,3] {
-        supervisor.step(Event::Wait{bot:bot.clone(),topics:vec![],until:Some(now+10)},Now(now));
-        now+=10;
-        let woke=turn(&supervisor.step(Event::Tick,Now(now)));
-        assert_eq!(supervisor.idle(&bot),expected,"a recheck alone woke it");
-        supervisor.step(Event::TurnCompleted{bot:bot.clone(),turn:woke},Now(now));
+    let mut supervisor = S::default();
+    let mut def = definition();
+    def.budget = Budget {
+        cooldown_ms: 0,
+        window_ms: 100,
+        turns_per_window: 100,
+    };
+    let bot = def.bot.clone();
+    supervisor.step(Event::Define(def), Now(0));
+    let mut now = 0;
+    for expected in [1, 2, 3, 3] {
+        supervisor.step(
+            Event::Wait {
+                bot: bot.clone(),
+                topics: vec![],
+                until: Some(now + 10),
+            },
+            Now(now),
+        );
+        now += 10;
+        let woke = turn(&supervisor.step(Event::Tick, Now(now)));
+        assert_eq!(supervisor.idle(&bot), expected, "a recheck alone woke it");
+        supervisor.step(
+            Event::TurnCompleted {
+                bot: bot.clone(),
+                turn: woke,
+            },
+            Now(now),
+        );
     }
-    let woke=turn(&supervisor.step(message(1),Now(now+1)));
-    assert_eq!(supervisor.idle(&bot),0,"an event resets the count");
-    supervisor.step(Event::TurnCompleted{bot,turn:woke},Now(now+2));
+    let woke = turn(&supervisor.step(message(1), Now(now + 1)));
+    assert_eq!(supervisor.idle(&bot), 0, "an event resets the count");
+    supervisor.step(Event::TurnCompleted { bot, turn: woke }, Now(now + 2));
 }

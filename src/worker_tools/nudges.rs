@@ -37,7 +37,11 @@ fn is_zero(value: &u32) -> bool {
 const DEADLINE_FLOOR_SECONDS: u64 = 90;
 const DEADLINE_SHARE_PERCENT: u64 = 15;
 /// Tools that run commands. Counting them is cheap and needs no job lookup.
-const EXECUTIONS: [&str; 3] = ["control_service_exec", "control_workspace_run", "control_workspace_start"];
+const EXECUTIONS: [&str; 3] = [
+    "control_service_exec",
+    "control_workspace_run",
+    "control_workspace_start",
+];
 /// Parent links followed from one chat; delegation depth is far smaller.
 const DEPTH: usize = 64;
 
@@ -52,13 +56,17 @@ pub(crate) const NOTES: &str = "Record your key findings (facts, diagnoses) and 
 /// How a turn without a handoff keeps findings through in-turn compaction.
 pub(crate) const MARKS: &str = "Write key facts on lines starting Finding: and choices on lines starting Decision:; Control keeps those lines when it summarizes older steps.";
 pub(crate) fn deadline_text(remaining: u64) -> String {
-    format!("{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn. {NOTES}")
+    format!(
+        "{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn. {NOTES}"
+    )
 }
 /// The once-per-turn note when a local turn first shortens its older tool
 /// results: without it a model re-reads the files it lost, which are shortened
 /// again, instead of writing down what it needs.
 pub(crate) fn elision_text(kept: usize) -> String {
-    format!("Control now shortens tool results older than your last {kept} steps to save context, and a file read again is shortened again. {MARKS}")
+    format!(
+        "Control now shortens tool results older than your last {kept} steps to save context, and a file read again is shortened again. {MARKS}"
+    )
 }
 /// What follows a turn that stops now. Only a persistent bot has a next turn:
 /// a chat that hands off without one simply ends, so the note must not promise
@@ -86,7 +94,9 @@ const UNSCHEDULED: &str = "this chat has no next turn: before you hand off, requ
 /// endpoints, where Control owns the transcript and measures its size).
 pub(crate) fn context_text(percent: u32, next: Next) -> String {
     match next {
-        Next::Turn => format!("Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn. {NOTES} {MARKS}"),
+        Next::Turn => format!(
+            "Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn. {NOTES} {MARKS}"
+        ),
         Next::Unscheduled => format!("Context {percent}% full and {UNSCHEDULED} {NOTES} {MARKS}"),
         Next::Report => format!("Context {percent}% full: finish with a brief final report soon. {MARKS}"),
     }
@@ -94,7 +104,9 @@ pub(crate) fn context_text(percent: u32, next: Next) -> String {
 /// The once-per-turn note when a local-model turn nears its model-step cap.
 pub(crate) fn steps_text(left: usize, next: Next) -> String {
     match next {
-        Next::Turn => format!("{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn. {NOTES}"),
+        Next::Turn => format!(
+            "{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn. {NOTES}"
+        ),
         Next::Unscheduled => format!("{left} model steps left in this turn and {UNSCHEDULED} {NOTES}"),
         Next::Report => format!("{left} model steps left in this turn: finish with a brief final report now."),
     }
@@ -107,27 +119,43 @@ pub(crate) fn steering_text(members: usize) -> String {
 /// through other members, that have a turn queued, running or waiting, or
 /// are approved persistent bots.
 pub(crate) fn steered(state: &State, chat: &str) -> usize {
-    let parents = state.chats.iter()
-        .filter_map(|session| session.parent_chat.as_deref().map(|parent| (session.id.as_str(), parent)))
+    let parents = state
+        .chats
+        .iter()
+        .filter_map(|session| {
+            session
+                .parent_chat
+                .as_deref()
+                .map(|parent| (session.id.as_str(), parent))
+        })
         .collect::<std::collections::HashMap<_, _>>();
     if !parents.values().any(|parent| *parent == chat) {
         return 0;
     }
-    let members = parents.keys().copied().filter(|member| {
-        let mut at = *member;
-        for _ in 0..DEPTH {
-            match parents.get(at) {
-                Some(&parent) if parent == chat => return true,
-                Some(&parent) => at = parent,
-                None => return false,
+    let members = parents
+        .keys()
+        .copied()
+        .filter(|member| {
+            let mut at = *member;
+            for _ in 0..DEPTH {
+                match parents.get(at) {
+                    Some(&parent) if parent == chat => return true,
+                    Some(&parent) => at = parent,
+                    None => return false,
+                }
             }
-        }
-        false
-    }).collect::<HashSet<_>>();
-    let mut active = members.iter().copied().filter(|member| crate::bots::continuation_enabled(state, member)).collect::<HashSet<_>>();
+            false
+        })
+        .collect::<HashSet<_>>();
+    let mut active = members
+        .iter()
+        .copied()
+        .filter(|member| crate::bots::continuation_enabled(state, member))
+        .collect::<HashSet<_>>();
     for run in &state.runtime.runs {
         if let Some(member) = run.chat_id.as_deref().filter(|member| members.contains(member))
-            && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling") {
+            && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
+        {
             active.insert(member);
         }
     }
@@ -137,12 +165,24 @@ pub(crate) fn steered(state: &State, chat: &str) -> usize {
 /// Notes for one tool call `tool` of the running attempt of `run_id` at Unix
 /// second `now`, recording which were sent. Nothing once a handoff is staged.
 pub(crate) fn notes(state: &mut State, run_id: &str, tool: &str, now: u64) -> Vec<String> {
-    let Some(index) = state.runtime.runs.iter().position(|run| run.id == run_id && run.status == "running") else {
+    let Some(index) = state
+        .runtime
+        .runs
+        .iter()
+        .position(|run| run.id == run_id && run.status == "running")
+    else {
         return Vec::new();
     };
     let run = &state.runtime.runs[index];
-    let Some(attempt) = run.attempts.last() else { return Vec::new() };
-    if attempt.turn_mailbox.as_ref().and_then(|mailbox| mailbox.accepted()).is_some() {
+    let Some(attempt) = run.attempts.last() else {
+        return Vec::new();
+    };
+    if attempt
+        .turn_mailbox
+        .as_ref()
+        .and_then(|mailbox| mailbox.accepted())
+        .is_some()
+    {
         return Vec::new();
     }
     let mut nudges = attempt.nudges.clone();

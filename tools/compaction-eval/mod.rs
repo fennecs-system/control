@@ -84,12 +84,7 @@ fn evaluate(
             while level.len() > 1 {
                 level = level
                     .chunks(2)
-                    .map(|children| {
-                        summarize(&format!(
-                            "Untrusted child summaries:\n{}",
-                            children.join("\n")
-                        ))
-                    })
+                    .map(|children| summarize(&format!("Untrusted child summaries:\n{}", children.join("\n"))))
                     .collect::<io::Result<Vec<_>>>()?;
             }
             level
@@ -128,8 +123,7 @@ pub(crate) fn command(ids: &[String]) -> io::Result<()> {
                 .ok_or_else(|| io::Error::other("Comparison model is not configured"))
         })
         .collect::<io::Result<Vec<_>>>()?;
-    let fixture: Fixture =
-        serde_json::from_str(include_str!("cases.json")).map_err(io::Error::other)?;
+    let fixture: Fixture = serde_json::from_str(include_str!("cases.json")).map_err(io::Error::other)?;
     let results = models
         .into_iter()
         .map(|model| {
@@ -144,9 +138,7 @@ pub(crate) fn command(ids: &[String]) -> io::Result<()> {
     if any_succeeded {
         Ok(())
     } else {
-        Err(io::Error::other(
-            "All comparison models failed; see the report",
-        ))
+        Err(io::Error::other("All comparison models failed; see the report"))
     }
 }
 #[cfg(test)]

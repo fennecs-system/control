@@ -1,12 +1,12 @@
 //! Scoped GitHub publication. The trusted broker consumes a private credential;
 //! models select immutable outputs, never a remote, token, host path or Git command.
 use crate::{
+    State,
     identity::{Action, Actor},
     usage::Attempt,
-    State,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
@@ -70,8 +70,7 @@ fn repository(value: &str) -> bool {
                 && *p != "."
                 && *p != ".."
                 && p.len() <= 100
-                && p.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
         })
 }
 fn branch(value: &str) -> bool {
@@ -89,8 +88,12 @@ fn branch(value: &str) -> bool {
         && !value.contains(' ')
 }
 fn read_private(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
-    crate::config::read_regular(path, usize::try_from(limit).map_err(|_| io::Error::other("Invalid file limit"))?, true)
-        .map_err(|_| io::Error::other("GitHub configuration and credentials must be bounded private regular files"))
+    crate::config::read_regular(
+        path,
+        usize::try_from(limit).map_err(|_| io::Error::other("Invalid file limit"))?,
+        true,
+    )
+    .map_err(|_| io::Error::other("GitHub configuration and credentials must be bounded private regular files"))
 }
 fn configuration() -> io::Result<Option<Configuration>> {
     let path = crate::config::directory()
@@ -125,13 +128,17 @@ fn validate_configuration(value: &Configuration) -> io::Result<()> {
         || credential.starts_with(&root)
         || credential.starts_with(crate::config::state_directory().map_err(io::Error::other)?)
     {
-        return Err(io::Error::other("GitHub source must match the authorized improvement root; credentials must be outside source and state"));
+        return Err(io::Error::other(
+            "GitHub source must match the authorized improvement root; credentials must be outside source and state",
+        ));
     }
     Ok(())
 }
 pub fn cli(args: &[String]) -> io::Result<()> {
     if args.first().map(String::as_str) != Some("configure") {
-        println!("control github configure --repository OWNER/REPO --token-file /private/path [--base main] [--allow-merge]\nBinds GitHub tools to the configured improvement source. Merge is disabled unless explicitly enabled. Credential contents are never displayed.");
+        println!(
+            "control github configure --repository OWNER/REPO --token-file /private/path [--base main] [--allow-merge]\nBinds GitHub tools to the configured improvement source. Merge is disabled unless explicitly enabled. Credential contents are never displayed."
+        );
         return Ok(());
     }
     let option = |name: &str| args.windows(2).find(|p| p[0] == name).map(|p| p[1].clone());
@@ -139,9 +146,8 @@ pub fn cli(args: &[String]) -> io::Result<()> {
         repository: option("--repository").ok_or_else(|| io::Error::other("Supply --repository OWNER/REPO"))?,
         source_root: crate::config::source_root()?,
         token_file: PathBuf::from(
-            option("--token-file").ok_or_else(|| {
-                io::Error::other("Supply --token-file with an absolute private credential path")
-            })?,
+            option("--token-file")
+                .ok_or_else(|| io::Error::other("Supply --token-file with an absolute private credential path"))?,
         ),
         base: option("--base").unwrap_or_else(|| "main".into()),
         allow_merge: args.iter().any(|arg| arg == "--allow-merge"),
@@ -149,8 +155,8 @@ pub fn cli(args: &[String]) -> io::Result<()> {
     validate_configuration(&value)?;
     // Metadata only during setup. Only the API adapter consumes the credential.
     use std::os::unix::fs::PermissionsExt;
-    let meta = fs::symlink_metadata(&value.token_file)
-        .map_err(|_| io::Error::other("Credential file is unavailable"))?;
+    let meta =
+        fs::symlink_metadata(&value.token_file).map_err(|_| io::Error::other("Credential file is unavailable"))?;
     if !meta.is_file() || meta.permissions().mode() & 0o077 != 0 || meta.len() > 4096 {
         return Err(io::Error::other(
             "Credential must be a private regular file, at most 4 KiB",
@@ -189,11 +195,7 @@ pub fn prepare(attempt: &mut Attempt, baseline: &Path) -> io::Result<()> {
             .ok_or_else(|| io::Error::other("Missing attempt identity"))?
     );
     let manifest = crate::artifacts::publish(baseline, &id)?;
-    let paths: Vec<_> = manifest
-        .files
-        .iter()
-        .map(|entry| entry.path.as_str())
-        .collect();
+    let paths: Vec<_> = manifest.files.iter().map(|entry| entry.path.as_str()).collect();
     let commit = verify_source(&config.source_root, &paths, |path| {
         crate::artifacts::read(&manifest, path)
     })?;
@@ -214,13 +216,7 @@ fn source_git(root: &Path, args: &[&str]) -> io::Result<Vec<u8>> {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-            "-C",
-        ])
+        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C"])
         .arg(root)
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -246,18 +242,13 @@ fn bounded_output(mut command: std::process::Command, limit: u64, timeout: Durat
         .ok_or_else(|| io::Error::other("Missing Git output"))?;
     let output = std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        reader
-            .take(limit + 1)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
+        reader.take(limit + 1).read_to_end(&mut bytes).map(|_| bytes)
     });
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait()? {
             Some(s) => break s,
-            None if started.elapsed() < timeout => {
-                std::thread::sleep(Duration::from_millis(10))
-            }
+            None if started.elapsed() < timeout => std::thread::sleep(Duration::from_millis(10)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -274,24 +265,17 @@ fn bounded_output(mut command: std::process::Command, limit: u64, timeout: Durat
     }
     Ok(bytes)
 }
-fn verify_source(
-    root: &Path,
-    paths: &[&str],
-    mut read: impl FnMut(&str) -> io::Result<Vec<u8>>,
-) -> io::Result<String> {
+fn verify_source(root: &Path, paths: &[&str], mut read: impl FnMut(&str) -> io::Result<Vec<u8>>) -> io::Result<String> {
     let head = source_git(root, &["rev-parse", "--verify", "HEAD"])?;
     let commit = std::str::from_utf8(&head).unwrap_or("").trim();
     if !sha(commit) {
         return Err(io::Error::other("Source must have a committed Git baseline"));
     }
     let clean = || -> io::Result<()> {
-        if !source_git(
-            root,
-            &["status", "--porcelain=v1", "--untracked-files=normal"],
-        )?
-        .is_empty()
-        {
-            return Err(io::Error::other("GitHub publication requires a clean committed source checkout; commit or move local changes, then start a fresh improvement"));
+        if !source_git(root, &["status", "--porcelain=v1", "--untracked-files=normal"])?.is_empty() {
+            return Err(io::Error::other(
+                "GitHub publication requires a clean committed source checkout; commit or move local changes, then start a fresh improvement",
+            ));
         }
         Ok(())
     };
@@ -299,8 +283,7 @@ fn verify_source(
     let listing = source_git(root, &["ls-tree", "-rz", "--full-tree", commit])?;
     let mut objects = BTreeMap::new();
     for record in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
-        let record =
-            std::str::from_utf8(record).map_err(|_| io::Error::other("Source Git paths must be UTF-8"))?;
+        let record = std::str::from_utf8(record).map_err(|_| io::Error::other("Source Git paths must be UTF-8"))?;
         let (metadata, path) = record
             .split_once('\t')
             .ok_or_else(|| io::Error::other("Invalid Git tree"))?;
@@ -314,11 +297,15 @@ fn verify_source(
     // the pinned Git object instead of silently trusting ignored dependencies.
     for path in paths {
         let Some((mode, kind, hash)) = objects.get(path) else {
-            return Err(io::Error::other("Source baseline contains an uncommitted or ignored input; commit it or exclude it before starting an improvement"));
+            return Err(io::Error::other(
+                "Source baseline contains an uncommitted or ignored input; commit it or exclude it before starting an improvement",
+            ));
         };
         let bytes = read(path)?;
         if !matches!(*mode, "100644" | "100755") || *kind != "blob" || git_blob(&bytes) != *hash {
-            return Err(io::Error::other("Source baseline differs from its committed Git objects; refresh the checkout and start a fresh improvement"));
+            return Err(io::Error::other(
+                "Source baseline differs from its committed Git objects; refresh the checkout and start a fresh improvement",
+            ));
         }
     }
     clean()?;
@@ -368,7 +355,15 @@ fn selected(state: &State, chat: &str, input: &Input) -> io::Result<(Attempt, Ac
     if crate::delegation::is_judge(run) {
         return Err(io::Error::other("Judge runs cannot publish improvements"));
     }
-    let attempt=run.attempts.last().filter(|a|a.status=="completed"&&!a.review_only&&a.github_source.is_some()&&a.artifact.is_some()).ok_or_else(||io::Error::other("This run has no captured GitHub source/checkpoint; configure GitHub and start a new improvement"))?;
+    let attempt = run
+        .attempts
+        .last()
+        .filter(|a| a.status == "completed" && !a.review_only && a.github_source.is_some() && a.artifact.is_some())
+        .ok_or_else(|| {
+            io::Error::other(
+                "This run has no captured GitHub source/checkpoint; configure GitHub and start a new improvement",
+            )
+        })?;
     Ok((attempt.clone(), run.actor.clone()))
 }
 #[derive(Clone)]
@@ -399,22 +394,15 @@ fn changes(source: &Source, artifact: &str) -> io::Result<Vec<Change>> {
         if result.len() >= 64 {
             return Err(io::Error::other("GitHub publication is limited to 64 changed files"));
         }
-        let old = old
-            .map(|_| crate::artifacts::read(&before, &path))
-            .transpose()?;
-        let new = new
-            .map(|_| crate::artifacts::read(&after, &path))
-            .transpose()?;
+        let old = old.map(|_| crate::artifacts::read(&before, &path)).transpose()?;
+        let new = new.map(|_| crate::artifacts::read(&after, &path)).transpose()?;
         bytes += new.as_ref().map_or(0, Vec::len);
         if bytes > 512 * 1024 {
             return Err(io::Error::other(
                 "GitHub publication exceeds the 512 KiB changed-content limit",
             ));
         }
-        if new
-            .as_ref()
-            .is_some_and(|b| std::str::from_utf8(b).is_err())
-        {
+        if new.as_ref().is_some_and(|b| std::str::from_utf8(b).is_err()) {
             return Err(io::Error::other("This publisher supports text changes only"));
         }
         result.push(Change { path, old, new });
@@ -428,12 +416,7 @@ fn git_blob(bytes: &[u8]) -> String {
     let mut context = ring::digest::Context::new(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY);
     context.update(format!("blob {}\0", bytes.len()).as_bytes());
     context.update(bytes);
-    context
-        .finish()
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    context.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 trait Api {
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> io::Result<Value>;
@@ -477,8 +460,8 @@ impl Api for Rest {
                 "GitHub request is outside the configured repository capability",
             ));
         }
-        let method = reqwest::Method::from_bytes(method.as_bytes())
-            .map_err(|_| io::Error::other("Invalid API method"))?;
+        let method =
+            reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| io::Error::other("Invalid API method"))?;
         let mut request = self
             .client
             .request(method, format!("https://api.github.com{path}"))
@@ -497,7 +480,10 @@ impl Api for Rest {
             return Ok(Value::Null);
         }
         if !status.is_success() {
-            return Err(io::Error::other(format!("GitHub rejected the request (HTTP {}); check permissions, branch rules and current remote state", status.as_u16())));
+            return Err(io::Error::other(format!(
+                "GitHub rejected the request (HTTP {}); check permissions, branch rules and current remote state",
+                status.as_u16()
+            )));
         }
         let mut bytes = Vec::new();
         response
@@ -549,11 +535,7 @@ fn object_sha(value: &Value, key: &str) -> io::Result<String> {
         .map(str::to_owned)
         .ok_or_else(|| io::Error::other("GitHub returned an invalid object identity"))
 }
-fn create_tree(
-    api: &impl Api,
-    publication: &Publication,
-    changes: &[Change],
-) -> io::Result<String> {
+fn create_tree(api: &impl Api, publication: &Publication, changes: &[Change]) -> io::Result<String> {
     let repo = &publication.repository;
     let commit = api.request(
         "GET",
@@ -565,18 +547,10 @@ fn create_tree(
     let mut entries = Vec::new();
     let mut trees = std::collections::HashMap::new();
     for change in changes {
-        let path = change
-            .path
-            .split('/')
-            .map(encoded)
-            .collect::<Vec<_>>()
-            .join("/");
+        let path = change.path.split('/').map(encoded).collect::<Vec<_>>().join("/");
         let old = api.request(
             "GET",
-            &request_path(
-                repo,
-                &format!("contents/{path}?ref={}", publication.base_commit),
-            ),
+            &request_path(repo, &format!("contents/{path}?ref={}", publication.base_commit)),
             None,
         )?;
         let old_sha = old["sha"].as_str();
@@ -598,7 +572,9 @@ fn create_tree(
             for (index, name) in components.iter().enumerate() {
                 if !trees.contains_key(&current) {
                     // Bound retained API responses even for changes spanning many directories.
-                    if trees.len() == 32 { trees.clear(); }
+                    if trees.len() == 32 {
+                        trees.clear();
+                    }
                     let listing = api.request("GET", &request_path(repo, &format!("git/trees/{current}")), None)?;
                     trees.insert(current.clone(), listing);
                 }
@@ -663,14 +639,20 @@ fn finish(
         None,
     )?;
     if base["object"]["sha"].as_str() != Some(&publication.base_commit) {
-        return Err(io::Error::other("Configured GitHub base differs from the captured source revision; refresh the clean source checkout from that base and start a fresh improvement"));
+        return Err(io::Error::other(
+            "Configured GitHub base differs from the captured source revision; refresh the clean source checkout from that base and start a fresh improvement",
+        ));
     }
     if publication.tree.is_none() {
         publication.tree = Some(create_tree(api, publication, changes)?);
         checkpoint(publication)?;
     }
     if publication.commit.is_none() {
-        let result=api.request("POST",&request_path(&publication.repository,"git/commits"),Some(json!({"message":publication.title,"tree":publication.tree,"parents":[publication.base_commit]})))?;
+        let result = api.request(
+            "POST",
+            &request_path(&publication.repository, "git/commits"),
+            Some(json!({"message":publication.title,"tree":publication.tree,"parents":[publication.base_commit]})),
+        )?;
         publication.commit = Some(object_sha(&result, "sha")?);
         checkpoint(publication)?;
     }
@@ -683,9 +665,7 @@ fn finish(
         api.request(
             "POST",
             &request_path(&publication.repository, "git/refs"),
-            Some(
-                json!({"ref":format!("refs/heads/{}",publication.branch),"sha":publication.commit}),
-            ),
+            Some(json!({"ref":format!("refs/heads/{}",publication.branch),"sha":publication.commit})),
         )?;
     } else if existing["object"]["sha"].as_str() != publication.commit.as_deref() {
         return Err(io::Error::other("Publication branch changed; it was not overwritten"));
@@ -716,9 +696,7 @@ fn finish(
     let parsed = reqwest::Url::parse(url).map_err(|_| io::Error::other("Invalid GitHub pull request URL"))?;
     if parsed.scheme() != "https"
         || parsed.host_str() != Some("github.com")
-        || !parsed
-            .path()
-            .starts_with(&format!("/{}/pull/", publication.repository))
+        || !parsed.path().starts_with(&format!("/{}/pull/", publication.repository))
     {
         return Err(io::Error::other("Invalid GitHub pull request destination"));
     }
@@ -747,9 +725,11 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
     let mut publication = {
         let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         selected(&state, chat, &input)?;
-        if let Some(existing) = state.github_publications.iter().find(|p| {
-            p.run == input.run_id && p.artifact == artifact && p.repository == config.repository
-        }) {
+        if let Some(existing) = state
+            .github_publications
+            .iter()
+            .find(|p| p.run == input.run_id && p.artifact == artifact && p.repository == config.repository)
+        {
             if existing.base != config.base || existing.base_commit != source.commit {
                 return Err(io::Error::other(
                     "GitHub base binding changed; inspect retained publication",
@@ -797,9 +777,7 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
             .github_publications
             .iter()
             .position(|p| {
-                p.run == publication.run
-                    && p.repository == publication.repository
-                    && p.artifact == publication.artifact
+                p.run == publication.run && p.repository == publication.repository && p.artifact == publication.artifact
             })
             .ok_or_else(|| io::Error::other("Publication intent missing"))?;
         let old = state.github_publications[index].clone();
@@ -824,7 +802,10 @@ static CONFIGURED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// UI availability only. Publication still revalidates configuration and authority.
 /// Called by supervision outside the global state lock, including after config changes.
 pub fn refresh_availability() {
-    CONFIGURED.store(configuration().ok().flatten().is_some(), std::sync::atomic::Ordering::Relaxed);
+    CONFIGURED.store(
+        configuration().ok().flatten().is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 pub fn panel(state: &State, chat: &str) -> String {
     let mut html = String::new();
@@ -852,21 +833,24 @@ pub fn panel(state: &State, chat: &str) -> String {
             && r.attempts
                 .last()
                 .is_some_and(|a| a.github_source.is_some() && a.artifact.is_some())
-    })
-        && !state
-            .github_publications
-            .iter()
-            .any(|p| p.run == run.id && p.url.is_some())
-        {
-            html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/dm/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(&run.id),crate::escape(&run.objective.chars().take(160).collect::<String>())));
-        }
+    }) && !state
+        .github_publications
+        .iter()
+        .any(|p| p.run == run.id && p.url.is_some())
+    {
+        html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/dm/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(&run.id),crate::escape(&run.objective.chars().take(160).collect::<String>())));
+    }
     html
 }
 /// The `/mcp` reply for `control_github_open_pr`; the caller frames it.
 pub(crate) fn mcp_open_pr(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     if id.is_null() || request["jsonrpc"] != "2.0" {
-        return control_mcp::error(&id, control_mcp::INVALID_REQUEST, "Publication requires an acknowledged JSON-RPC request");
+        return control_mcp::error(
+            &id,
+            control_mcp::INVALID_REQUEST,
+            "Publication requires an acknowledged JSON-RPC request",
+        );
     }
     let result = serde_json::from_value::<Input>(request["params"]["arguments"].clone())
         .map_err(|_| io::Error::other("Expected run_id, title and optional body"))
@@ -884,13 +868,7 @@ pub(crate) fn mcp_open_pr(shared: &Arc<Mutex<State>>, request: &Value) -> Value 
         });
     control_mcp::reply(&id, crate::toolbox::result(result))
 }
-pub fn http(
-    stream: &mut impl Write,
-    shared: &Arc<Mutex<State>>,
-    method: &str,
-    path: &str,
-    body: &[u8],
-) -> bool {
+pub fn http(stream: &mut impl Write, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
     let Some(chat) = path
         .strip_prefix("/dm/")
         .and_then(|s| s.strip_suffix("/github"))
@@ -914,11 +892,25 @@ pub fn http(
     };
     match result {
         Ok(_) => {
-            let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{chat}\r\n"), control_http::Policy::Restricted);
+            let _ = control_http::respond(
+                stream,
+                "303 See Other",
+                "text/plain",
+                b"",
+                &format!("Location: /dm/{chat}\r\n"),
+                control_http::Policy::Restricted,
+            );
         }
         Err(error) => {
             let body = crate::error_page(&error.to_string(), &format!("/dm/{chat}"));
-            let _ = control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::Restricted);
+            let _ = control_http::respond(
+                stream,
+                "400 Bad Request",
+                "text/html; charset=utf-8",
+                body.as_bytes(),
+                "",
+                control_http::Policy::Restricted,
+            );
         }
     }
     true

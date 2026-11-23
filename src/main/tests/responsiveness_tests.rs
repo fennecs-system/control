@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -10,10 +9,7 @@ fn page_assembly_preserves_literal_template_and_demo_text_in_documents() {
     };
     knowledge::migrate(&mut state);
     let page = render(&state, "editor", "engineering", "general");
-    assert!(
-        page.contains(text),
-        "Document text was rewritten by page assembly"
-    );
+    assert!(page.contains(text), "Document text was rewritten by page assembly");
     assert_eq!(state.documents[0].body, text);
 }
 
@@ -31,14 +27,10 @@ fn socket_writes_release_state_even_when_the_client_stalls_or_disconnects() {
         }
     }
     let state = Mutex::new(State::default());
-    state_response(
-        &mut DisconnectedClient(&state),
-        &state,
-        |response, state| {
-            state.runtime.notice = "committed".into();
-            session_http::handle(response, state, "GET", "/dms", "none", "", b"");
-        },
-    );
+    state_response(&mut DisconnectedClient(&state), &state, |response, state| {
+        state.runtime.notice = "committed".into();
+        session_http::handle(response, state, "GET", "/dms", "none", "", b"");
+    });
     assert_eq!(state.lock().unwrap().runtime.notice, "committed");
 }
 
@@ -51,27 +43,34 @@ fn legacy_session_view_redirects_to_the_canonical_chat_page() {
         location(&format!("view=session&channel={id}")),
         Some(format!("/dm/{id}"))
     );
-    assert_eq!(
-        location("view=session&channel=c-missing").as_deref(),
-        Some("/dms")
-    );
+    assert_eq!(location("view=session&channel=c-missing").as_deref(), Some("/dms"));
     assert_eq!(
         location("view=session&channel=..%2F..%2Ftools%0D%0ASet-Cookie%3A%20x").as_deref(),
         Some("/dms")
     );
     assert_eq!(location("view=session").as_deref(), Some("/dms"));
-    assert_eq!(location(&format!("view=runs&channel={id}")).as_deref(), Some("/bots/history?expand=1"), "run history is Bots / History with turns listed");
+    assert_eq!(
+        location(&format!("view=runs&channel={id}")).as_deref(),
+        Some("/bots/history?expand=1"),
+        "run history is Bots / History with turns listed"
+    );
     assert_eq!(location(&format!("view=agents&channel={id}")), None);
-    assert_eq!(location("view=lenses").as_deref(), Some("/dna"), "the gene library is the DNA page");
-    assert_eq!(location("").as_deref(), Some("/dms?new=1"), "the landing view is a new DM");
+    assert_eq!(
+        location("view=lenses").as_deref(),
+        Some("/dna"),
+        "the gene library is the DNA page"
+    );
+    assert_eq!(
+        location("").as_deref(),
+        Some("/dms?new=1"),
+        "the landing view is a new DM"
+    );
 }
 #[test]
 fn public_root_never_reflects_query_html_and_bodies_need_a_valid_length() {
     let state = State::default();
     for view in INTERNAL_VIEWS {
-        let query = fields(&format!(
-            "view={view}&channel=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
-        ));
+        let query = fields(&format!("view={view}&channel=%3Cscript%3Ealert(1)%3C%2Fscript%3E"));
         assert!(
             !public_render(&state, &query, "none").contains("<script>alert(1)"),
             "{view}"
@@ -81,10 +80,7 @@ fn public_root_never_reflects_query_html_and_bodies_need_a_valid_length() {
         body_length("POST / HTTP/1.1\r\nContent-Length: 12\r\n\r\n"),
         Body::Length(12)
     ));
-    assert!(matches!(
-        body_length("GET / HTTP/1.1\r\n\r\n"),
-        Body::Length(0)
-    ));
+    assert!(matches!(body_length("GET / HTTP/1.1\r\n\r\n"), Body::Length(0)));
     assert!(matches!(
         body_length("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"),
         Body::Chunked
@@ -95,10 +91,7 @@ fn public_root_never_reflects_query_html_and_bodies_need_a_valid_length() {
         "Content-Length: 1\r\nContent-Length: 2",
     ] {
         assert!(
-            matches!(
-                body_length(&format!("POST / HTTP/1.1\r\n{bad}\r\n\r\n")),
-                Body::Invalid
-            ),
+            matches!(body_length(&format!("POST / HTTP/1.1\r\n{bad}\r\n\r\n")), Body::Invalid),
             "{bad}"
         );
     }
@@ -131,7 +124,13 @@ fn encoded_maximum_chat_messages_fit_their_transport_limits() {
     );
     assert_eq!(fields(&form)["message"], text);
     // Legacy names are admitted like their new names so their 308 can carry the body.
-    for target in ["/dms", "/dms?new=1", "/dm/c-test/messages", "/chats", "/chat/c-test/messages"] {
+    for target in [
+        "/dms",
+        "/dms?new=1",
+        "/dm/c-test/messages",
+        "/chats",
+        "/chat/c-test/messages",
+    ] {
         assert!(form.len() < body_limit(target));
     }
     let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.chat.send","arguments":{"id":"c-test","message":text}}}).to_string();
@@ -164,16 +163,29 @@ const DARK_HEAD: &str = "<meta name='color-scheme' content='dark'><meta name='da
 fn assert_dark_head(page: &str, label: &str) {
     let page = page.replace('"', "'");
     let head = page.split_once("</head>").map_or(page.as_str(), |(head, _)| head);
-    let declared = head.find(DARK_HEAD).unwrap_or_else(|| panic!("{label}: no dark scheme declaration"));
+    let declared = head
+        .find(DARK_HEAD)
+        .unwrap_or_else(|| panic!("{label}: no dark scheme declaration"));
     for later in ["<link rel='stylesheet'", "<script", "<style"] {
-        assert!(head.find(later).is_none_or(|at| at > declared), "{label}: {later} precedes the dark scheme");
+        assert!(
+            head.find(later).is_none_or(|at| at > declared),
+            "{label}: {later} precedes the dark scheme"
+        );
     }
 }
 
 #[test]
 fn every_document_declares_its_dark_scheme_before_styles_load() {
     let state = State::default();
-    for query in ["", "view=rooms", "view=tools", "view=monitor", "view=providers", "view=agents", "view=nodes"] {
+    for query in [
+        "",
+        "view=rooms",
+        "view=tools",
+        "view=monitor",
+        "view=providers",
+        "view=agents",
+        "view=nodes",
+    ] {
         assert_dark_head(&public_page(&state, &fields(query), "none").0, query);
     }
     assert_dark_head(&error_page("x", "/"), "error page");

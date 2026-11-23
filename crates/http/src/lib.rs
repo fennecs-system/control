@@ -18,15 +18,29 @@ pub enum Policy {
 impl Policy {
     pub fn csp(self) -> &'static str {
         match self {
-            Self::Page => "default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-            Self::Embedded => "default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'",
-            Self::Chat => "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'",
-            Self::Client => "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-            Self::Restricted => "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-            Self::RestrictedEmbedded => "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'",
+            Self::Page => {
+                "default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+            }
+            Self::Embedded => {
+                "default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'"
+            }
+            Self::Chat => {
+                "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'"
+            }
+            Self::Client => {
+                "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+            }
+            Self::Restricted => {
+                "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+            }
+            Self::RestrictedEmbedded => {
+                "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'"
+            }
             Self::Access => "default-src 'none'; frame-ancestors 'none'",
             Self::Asset => "default-src 'none'; frame-ancestors 'self'",
-            Self::ToolWindow => "default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; frame-ancestors 'self'; form-action 'none'; base-uri 'none'",
+            Self::ToolWindow => {
+                "default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; frame-ancestors 'self'; form-action 'none'; base-uri 'none'"
+            }
         }
     }
 }
@@ -44,14 +58,8 @@ pub fn respond(
 ) -> io::Result<()> {
     let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "Invalid response headers");
     HeaderValue::from_str(status).map_err(|_| invalid())?;
-    let status = StatusCode::from_bytes(
-        status
-            .split_ascii_whitespace()
-            .next()
-            .unwrap_or("")
-            .as_bytes(),
-    )
-    .map_err(|_| invalid())?;
+    let status = StatusCode::from_bytes(status.split_ascii_whitespace().next().unwrap_or("").as_bytes())
+        .map_err(|_| invalid())?;
     let mime = HeaderValue::from_str(mime).map_err(|_| invalid())?;
     let mut headers = HeaderMap::new();
     for line in extra.split("\r\n").filter(|line| !line.is_empty()) {
@@ -71,10 +79,7 @@ pub fn respond(
         {
             return Err(invalid());
         }
-        headers.append(
-            name,
-            HeaderValue::from_str(value.trim()).map_err(|_| invalid())?,
-        );
+        headers.append(name, HeaderValue::from_str(value.trim()).map_err(|_| invalid())?);
     }
     if matches!(status.as_u16(), 204 | 304) && !body.is_empty() {
         return Err(invalid());
@@ -91,9 +96,7 @@ pub fn respond(
             body.len()
         ));
     }
-    head.push_str(
-        "Cache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n",
-    );
+    head.push_str("Cache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n");
     head.push_str(if policy == Policy::Access {
         "Referrer-Policy: no-referrer\r\n"
     } else {

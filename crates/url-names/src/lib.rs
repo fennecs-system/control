@@ -10,7 +10,11 @@
 
 /// Old first path segment and its current name. `/chat` alone was the POST
 /// alias for creating a DM, so it maps to the list that now accepts that POST.
-const RENAMES: [(&str, &str, &str); 3] = [("/chats", "/dms", "/dms"), ("/chat", "/dm", "/dms"), ("/lenses", "/dna", "/dna")];
+const RENAMES: [(&str, &str, &str); 3] = [
+    ("/chats", "/dms", "/dms"),
+    ("/chat", "/dm", "/dms"),
+    ("/lenses", "/dna", "/dna"),
+];
 
 /// Renamed pages under a DM: `/dm/ID/<old>` (or `/chat/ID/<old>`) moves to
 /// `/dm/ID/<new>`. Only the exact page is renamed; deeper routes keep theirs.
@@ -40,7 +44,10 @@ pub fn renamed(path: &str) -> Option<String> {
 }
 fn dm_page(path: &str) -> Option<String> {
     let (id, page) = path.strip_prefix("/dm/")?.split_once('/')?;
-    DM_PAGES.iter().find(|(old, _)| *old == page).map(|(_, new)| format!("/dm/{id}/{new}"))
+    DM_PAGES
+        .iter()
+        .find(|(old, _)| *old == page)
+        .map(|(_, new)| format!("/dm/{id}/{new}"))
 }
 
 /// The one History page (Bots / History): DMs with their turns.
@@ -63,11 +70,23 @@ pub fn history(path: &str, query: &str) -> Option<String> {
     let (_, filter, kept) = HISTORIES.iter().find(|(old, _, _)| *old == path)?;
     let pairs = query.split('&').filter(|pair| {
         pair.split_once('=').is_some_and(|(key, value)| {
-            kept.contains(&key) && !value.is_empty() && value.len() <= 100 && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            kept.contains(&key)
+                && !value.is_empty()
+                && value.len() <= 100
+                && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
         })
     });
-    let query = [*filter].into_iter().filter(|f| !f.is_empty()).chain(pairs).collect::<Vec<_>>().join("&");
-    Some(if query.is_empty() { HISTORY.to_owned() } else { format!("{HISTORY}?{query}") })
+    let query = [*filter]
+        .into_iter()
+        .filter(|f| !f.is_empty())
+        .chain(pairs)
+        .collect::<Vec<_>>()
+        .join("&");
+    Some(if query.is_empty() {
+        HISTORY.to_owned()
+    } else {
+        format!("{HISTORY}?{query}")
+    })
 }
 
 /// `(status, location)` for a request to a legacy path: `301 Moved
@@ -78,10 +97,18 @@ pub fn redirect(method: &str, path: &str, query: &str) -> Option<(&'static str, 
         Some(location) => location,
         None => {
             let location = renamed(path)?;
-            if query.is_empty() { location } else { format!("{location}?{query}") }
+            if query.is_empty() {
+                location
+            } else {
+                format!("{location}?{query}")
+            }
         }
     };
-    let status = if matches!(method, "GET" | "HEAD") { "301 Moved Permanently" } else { "308 Permanent Redirect" };
+    let status = if matches!(method, "GET" | "HEAD") {
+        "301 Moved Permanently"
+    } else {
+        "308 Permanent Redirect"
+    };
     Some((status, location))
 }
 

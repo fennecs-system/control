@@ -4,7 +4,12 @@
 //! stateless: nothing is stored and no host resource is touched.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{cmp::Ordering, collections::{BinaryHeap, HashMap}, io, time::{Duration, Instant}};
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, HashMap},
+    io,
+    time::{Duration, Instant},
+};
 
 const MAX_NODES: usize = 20_000;
 const MAX_EDGES: usize = 100_000;
@@ -134,11 +139,13 @@ struct GridSpec {
     moves: Option<u8>,
 }
 
-
 pub fn call(args: &Value) -> io::Result<Value> {
     let input = Input::deserialize(args).map_err(|error| io::Error::other(format!("Invalid search input: {error}")))?;
     let limits = Limits {
-        max_cost: input.max_cost.filter(|cost| cost.is_finite() && *cost >= 0.0).map_or(f64::INFINITY, |cost| cost + EPSILON),
+        max_cost: input
+            .max_cost
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+            .map_or(f64::INFINITY, |cost| cost + EPSILON),
         expansions: input.max_expansions.unwrap_or(MAX_EXPANSIONS).clamp(1, MAX_EXPANSIONS),
         deadline: DEADLINE,
     };
@@ -150,14 +157,21 @@ pub fn call(args: &Value) -> io::Result<Value> {
         return Err(io::Error::other(format!("Give goal or 1–{MAX_GOALS} goals.")));
     }
     match input.grid {
-        Some(_) if !input.nodes.is_empty() || !input.edges.is_empty() || !input.avoid_edges.is_empty() => Err(io::Error::other("Use either grid or nodes/edges, not both.")),
+        Some(_) if !input.nodes.is_empty() || !input.edges.is_empty() || !input.avoid_edges.is_empty() => {
+            Err(io::Error::other("Use either grid or nodes/edges, not both."))
+        }
         Some(ref spec) => {
             if !matches!(input.heuristic, Heuristic::Auto | Heuristic::None) {
-                return Err(io::Error::other("Grids choose their heuristic from moves; use heuristic auto or none."));
+                return Err(io::Error::other(
+                    "Grids choose their heuristic from moves; use heuristic auto or none.",
+                ));
             }
             let grid = Grid::new(spec, &input.avoid)?;
             let start = grid.cell(&input.start)?;
-            let goals = goals.into_iter().map(|goal| grid.cell(goal)).collect::<io::Result<Vec<_>>>()?;
+            let goals = goals
+                .into_iter()
+                .map(|goal| grid.cell(goal))
+                .collect::<io::Result<Vec<_>>>()?;
             let space = GridSpace::new(grid, &goals, input.heuristic == Heuristic::Auto);
             let label = space.label();
             let found = search(&space, start, &goals, &limits)?;
@@ -166,19 +180,36 @@ pub fn call(args: &Value) -> io::Result<Value> {
         None => {
             let graph = Graph::new(&input)?;
             let start = graph.index(&input.start)?;
-            let goals = goals.into_iter().map(|goal| graph.index(goal)).collect::<io::Result<Vec<_>>>()?;
+            let goals = goals
+                .into_iter()
+                .map(|goal| graph.index(goal))
+                .collect::<io::Result<Vec<_>>>()?;
             let space = graph.space(input.heuristic, &goals)?;
             let label = space.label;
             let consistent = space.consistent();
             let found = search(&space, start, &goals, &limits)?;
-            Ok(report(found, label, space.scale.filter(|scale| *scale < 1.0), consistent, |node| json!(space.graph.ids[node])))
+            Ok(report(
+                found,
+                label,
+                space.scale.filter(|scale| *scale < 1.0),
+                consistent,
+                |node| json!(space.graph.ids[node]),
+            ))
         }
     }
 }
-fn report(found: Found, heuristic: &str, scale: Option<f64>, consistent: Option<bool>, id: impl Fn(usize) -> Value) -> Value {
+fn report(
+    found: Found,
+    heuristic: &str,
+    scale: Option<f64>,
+    consistent: Option<bool>,
+    id: impl Fn(usize) -> Value,
+) -> Value {
     let algorithm = if heuristic == "none" { "dijkstra" } else { "astar" };
     let mut value = match found.path {
-        Some((cost, path)) => json!({"found":true,"cost":cost,"steps":path.len() - 1,"goal":id(*path.last().unwrap()),"path":path.into_iter().map(id).collect::<Vec<_>>()}),
+        Some((cost, path)) => {
+            json!({"found":true,"cost":cost,"steps":path.len() - 1,"goal":id(*path.last().unwrap()),"path":path.into_iter().map(id).collect::<Vec<_>>()})
+        }
         None => json!({"found":false,"reason":if found.pruned { "no path within max_cost" } else { "unreachable" }}),
     };
     value["expanded"] = json!(found.expanded);
@@ -250,7 +281,11 @@ fn search(space: &impl Space, start: usize, goals: &[usize], limits: &Limits) ->
     let mut successors = Vec::new();
     let (mut expanded, mut pruned) = (0u64, false);
     cost[start] = 0.0;
-    open.push(Open { f: space.estimate(start), g: 0.0, node: start as u32 });
+    open.push(Open {
+        f: space.estimate(start),
+        g: 0.0,
+        node: start as u32,
+    });
     while let Some(Open { g, node, .. }) = open.pop() {
         let node = node as usize;
         if g > cost[node] {
@@ -262,14 +297,24 @@ fn search(space: &impl Space, start: usize, goals: &[usize], limits: &Limits) ->
                 path.push(parent[*path.last().unwrap()] as usize);
             }
             path.reverse();
-            return Ok(Found { path: Some((g, path)), expanded, pruned });
+            return Ok(Found {
+                path: Some((g, path)),
+                expanded,
+                pruned,
+            });
         }
         expanded += 1;
         if expanded > limits.expansions {
-            return Err(io::Error::other(format!("Search stopped after {} expansions without reaching a goal; raise max_expansions (≤{MAX_EXPANSIONS}), add a heuristic or shrink the input.", limits.expansions)));
+            return Err(io::Error::other(format!(
+                "Search stopped after {} expansions without reaching a goal; raise max_expansions (≤{MAX_EXPANSIONS}), add a heuristic or shrink the input.",
+                limits.expansions
+            )));
         }
         if expanded.is_multiple_of(4096) && began.elapsed() > limits.deadline {
-            return Err(io::Error::other(format!("Search stopped at the {} s limit after {expanded} expansions without reaching a goal.", limits.deadline.as_secs())));
+            return Err(io::Error::other(format!(
+                "Search stopped at the {} s limit after {expanded} expansions without reaching a goal.",
+                limits.deadline.as_secs()
+            )));
         }
         successors.clear();
         space.successors(node, &mut successors);
@@ -284,10 +329,18 @@ fn search(space: &impl Space, start: usize, goals: &[usize], limits: &Limits) ->
             }
             cost[next] = through;
             parent[next] = node as u32;
-            open.push(Open { f: through + space.estimate(next), g: through, node: next as u32 });
+            open.push(Open {
+                f: through + space.estimate(next),
+                g: through,
+                node: next as u32,
+            });
         }
     }
-    Ok(Found { path: None, expanded, pruned })
+    Ok(Found {
+        path: None,
+        expanded,
+        pruned,
+    })
 }
 
 /// A graph in compressed sparse rows.
@@ -303,19 +356,38 @@ struct Graph {
 impl Graph {
     fn new(input: &Input) -> io::Result<Self> {
         if input.nodes.len() > MAX_NODES || input.edges.len() > MAX_EDGES {
-            return Err(io::Error::other(format!("Graphs are limited to {MAX_NODES} nodes and {MAX_EDGES} edges.")));
+            return Err(io::Error::other(format!(
+                "Graphs are limited to {MAX_NODES} nodes and {MAX_EDGES} edges."
+            )));
         }
-        let mut graph = Graph { ids: Vec::new(), index: HashMap::new(), at: Vec::new(), h: Vec::new(), offsets: Vec::new(), targets: Vec::new(), blocked: Vec::new() };
+        let mut graph = Graph {
+            ids: Vec::new(),
+            index: HashMap::new(),
+            at: Vec::new(),
+            h: Vec::new(),
+            offsets: Vec::new(),
+            targets: Vec::new(),
+            blocked: Vec::new(),
+        };
         for spec in &input.nodes {
             let (id, at, h) = match spec {
                 NodeSpec::Bare(id) => (id, None, None),
                 NodeSpec::Full(node) => (&node.id, node.at.clone(), node.h),
             };
-            if at.as_ref().is_some_and(|at| at.is_empty() || at.len() > 3 || at.iter().any(|x| !x.is_finite())) {
-                return Err(io::Error::other(format!("Node {} needs at as 1–3 finite coordinates.", id.key())));
+            if at
+                .as_ref()
+                .is_some_and(|at| at.is_empty() || at.len() > 3 || at.iter().any(|x| !x.is_finite()))
+            {
+                return Err(io::Error::other(format!(
+                    "Node {} needs at as 1–3 finite coordinates.",
+                    id.key()
+                )));
             }
             if h.is_some_and(|h| !h.is_finite() || h < 0.0) {
-                return Err(io::Error::other(format!("Node {} needs h as a non-negative number.", id.key())));
+                return Err(io::Error::other(format!(
+                    "Node {} needs h as a non-negative number.",
+                    id.key()
+                )));
             }
             let index = graph.intern(id)?;
             if graph.at[index].is_some() || graph.h[index].is_some() {
@@ -339,7 +411,11 @@ impl Graph {
                 EdgeSpec::Object(edge) => (&edge.from, &edge.to, edge.cost.unwrap_or(1.0)),
             };
             if !cost.is_finite() || cost < 0.0 {
-                return Err(io::Error::other(format!("Edge {}→{} needs a non-negative finite cost.", from.key(), to.key())));
+                return Err(io::Error::other(format!(
+                    "Edge {}→{} needs a non-negative finite cost.",
+                    from.key(),
+                    to.key()
+                )));
             }
             let (a, b) = (graph.intern(from)?, graph.intern(to)?);
             if !avoided.is_empty() && avoided.contains(&(from.key(), to.key())) {
@@ -388,11 +464,16 @@ impl Graph {
     }
     fn index(&self, value: &Value) -> io::Result<usize> {
         let key = id(value)?.key();
-        self.index.get(&key).copied().ok_or_else(|| io::Error::other(format!("Unknown node {key}.")))
+        self.index
+            .get(&key)
+            .copied()
+            .ok_or_else(|| io::Error::other(format!("Unknown node {key}.")))
     }
     fn edges(&self) -> impl Iterator<Item = (usize, usize, f64)> + '_ {
         (0..self.ids.len()).flat_map(move |from| {
-            self.targets[self.offsets[from] as usize..self.offsets[from + 1] as usize].iter().map(move |&(to, cost)| (from, to as usize, cost))
+            self.targets[self.offsets[from] as usize..self.offsets[from + 1] as usize]
+                .iter()
+                .map(move |&(to, cost)| (from, to as usize, cost))
         })
     }
     fn space(&self, heuristic: Heuristic, goals: &[usize]) -> io::Result<GraphSpace<'_>> {
@@ -406,19 +487,34 @@ impl Graph {
         if matches!(chosen, Heuristic::Euclidean | Heuristic::Manhattan) {
             let missing = self.at.iter().position(Option::is_none);
             if let Some(index) = missing {
-                return Err(io::Error::other(format!("A coordinate heuristic needs at on every node; {} has none.", self.ids[index].key())));
+                return Err(io::Error::other(format!(
+                    "A coordinate heuristic needs at on every node; {} has none.",
+                    self.ids[index].key()
+                )));
             }
             let dims = self.at[0].as_ref().map_or(0, Vec::len);
             if self.at.iter().flatten().any(|at| at.len() != dims) {
-                return Err(io::Error::other("Every node's at needs the same number of coordinates."));
+                return Err(io::Error::other(
+                    "Every node's at needs the same number of coordinates.",
+                ));
             }
         }
-        let mut space = GraphSpace { graph: self, label: "none", goals: goals.to_vec(), scale: None, metric: None };
+        let mut space = GraphSpace {
+            graph: self,
+            label: "none",
+            goals: goals.to_vec(),
+            scale: None,
+            metric: None,
+        };
         match chosen {
             Heuristic::None | Heuristic::Auto => {}
             Heuristic::Explicit => space.label = "explicit",
             Heuristic::Euclidean | Heuristic::Manhattan => {
-                let metric = if chosen == Heuristic::Euclidean { euclidean as Metric } else { manhattan };
+                let metric = if chosen == Heuristic::Euclidean {
+                    euclidean as Metric
+                } else {
+                    manhattan
+                };
                 // The largest factor that keeps the estimate a lower bound on
                 // every edge, so it stays consistent (and A* optimal).
                 let scale = self.edges().fold(1.0_f64, |scale, (from, to, cost)| {
@@ -428,7 +524,11 @@ impl Graph {
                 space.scale = Some(scale);
                 if scale > 0.0 {
                     space.metric = Some(metric);
-                    space.label = if chosen == Heuristic::Euclidean { "euclidean" } else { "manhattan" };
+                    space.label = if chosen == Heuristic::Euclidean {
+                        "euclidean"
+                    } else {
+                        "manhattan"
+                    };
                 }
             }
         }
@@ -458,7 +558,11 @@ impl GraphSpace<'_> {
     fn consistent(&self) -> Option<bool> {
         (self.label == "explicit").then(|| {
             let h = |node: usize| self.graph.h[node].unwrap_or(0.0);
-            self.goals.iter().all(|&goal| h(goal) == 0.0) && self.graph.edges().all(|(from, to, cost)| h(from) <= cost + h(to) + EPSILON)
+            self.goals.iter().all(|&goal| h(goal) == 0.0)
+                && self
+                    .graph
+                    .edges()
+                    .all(|(from, to, cost)| h(from) <= cost + h(to) + EPSILON)
         })
     }
 }
@@ -468,15 +572,23 @@ impl Space for GraphSpace<'_> {
     }
     fn successors(&self, node: usize, out: &mut Vec<(usize, f64)>) {
         let graph = self.graph;
-        out.extend(graph.targets[graph.offsets[node] as usize..graph.offsets[node + 1] as usize].iter()
-            .filter(|(to, _)| !graph.blocked[*to as usize]).map(|&(to, cost)| (to as usize, cost)));
+        out.extend(
+            graph.targets[graph.offsets[node] as usize..graph.offsets[node + 1] as usize]
+                .iter()
+                .filter(|(to, _)| !graph.blocked[*to as usize])
+                .map(|&(to, cost)| (to as usize, cost)),
+        );
     }
     fn estimate(&self, node: usize) -> f64 {
         match (self.label, self.metric) {
             ("explicit", _) => self.graph.h[node].unwrap_or(0.0),
             (_, Some(metric)) => {
                 let at = self.graph.at[node].as_deref().unwrap();
-                let nearest = self.goals.iter().map(|&goal| metric(at, self.graph.at[goal].as_deref().unwrap())).fold(f64::INFINITY, f64::min);
+                let nearest = self
+                    .goals
+                    .iter()
+                    .map(|&goal| metric(at, self.graph.at[goal].as_deref().unwrap()))
+                    .fold(f64::INFINITY, f64::min);
                 nearest * self.scale.unwrap_or(1.0)
             }
             _ => 0.0,
@@ -499,25 +611,44 @@ impl Grid {
             (None, None) => return Err(io::Error::other("A grid needs size or rows.")),
         };
         if !(2..=3).contains(&size.len()) || size.contains(&0) {
-            return Err(io::Error::other("Grid size is [width, height] or [width, height, depth], each at least 1."));
+            return Err(io::Error::other(
+                "Grid size is [width, height] or [width, height, depth], each at least 1.",
+            ));
         }
-        let cells = size.iter().try_fold(1usize, |cells, side| cells.checked_mul(*side)).filter(|cells| *cells <= MAX_CELLS)
+        let cells = size
+            .iter()
+            .try_fold(1usize, |cells, side| cells.checked_mul(*side))
+            .filter(|cells| *cells <= MAX_CELLS)
             .ok_or_else(|| io::Error::other(format!("Grids are limited to {MAX_CELLS} cells.")))?;
         let dims = size.len();
         let moves = spec.moves.unwrap_or(if dims == 2 { 4 } else { 6 });
         if !matches!((dims, moves), (2, 4 | 8) | (3, 6 | 26)) {
-            return Err(io::Error::other("moves is 4 or 8 for 2D grids and 6 or 26 for 3D grids."));
+            return Err(io::Error::other(
+                "moves is 4 or 8 for 2D grids and 6 or 26 for 3D grids.",
+            ));
         }
-        let mut grid = Grid { size: [size[0], size[1], size.get(2).copied().unwrap_or(1)], dims, cost: vec![1.0; cells], moves };
+        let mut grid = Grid {
+            size: [size[0], size[1], size.get(2).copied().unwrap_or(1)],
+            dims,
+            cost: vec![1.0; cells],
+            moves,
+        };
         if !spec.costs.is_empty() {
             if spec.costs.len() != cells || spec.costs.iter().any(|cost| !cost.is_finite() || *cost < 0.0) {
-                return Err(io::Error::other(format!("costs needs {cells} non-negative numbers, x fastest.")));
+                return Err(io::Error::other(format!(
+                    "costs needs {cells} non-negative numbers, x fastest."
+                )));
             }
             grid.cost.copy_from_slice(&spec.costs);
         }
         if !spec.rows.is_empty() {
-            if dims != 2 || spec.rows.len() != grid.size[1] || spec.rows.iter().any(|row| row.chars().count() != grid.size[0]) {
-                return Err(io::Error::other("rows describe a 2D grid: one string per y, each width characters long."));
+            if dims != 2
+                || spec.rows.len() != grid.size[1]
+                || spec.rows.iter().any(|row| row.chars().count() != grid.size[0])
+            {
+                return Err(io::Error::other(
+                    "rows describe a 2D grid: one string per y, each width characters long.",
+                ));
             }
             for (y, row) in spec.rows.iter().enumerate() {
                 for (x, c) in row.chars().enumerate() {
@@ -529,7 +660,12 @@ impl Grid {
                 }
             }
         }
-        let closed = spec.blocked.iter().map(|at| grid.locate(at)).chain(avoid.iter().map(|at| grid.cell(at))).collect::<io::Result<Vec<_>>>()?;
+        let closed = spec
+            .blocked
+            .iter()
+            .map(|at| grid.locate(at))
+            .chain(avoid.iter().map(|at| grid.cell(at)))
+            .collect::<io::Result<Vec<_>>>()?;
         for cell in closed {
             grid.cost[cell] = f64::INFINITY;
         }
@@ -538,12 +674,17 @@ impl Grid {
     fn locate(&self, at: &[i64]) -> io::Result<usize> {
         let inside = at.len() == self.dims && at.iter().zip(self.size).all(|(x, side)| (0..side as i64).contains(x));
         if !inside {
-            return Err(io::Error::other(format!("Cell {at:?} is outside the {}D grid {:?}.", self.dims, &self.size[..self.dims])));
+            return Err(io::Error::other(format!(
+                "Cell {at:?} is outside the {}D grid {:?}.",
+                self.dims,
+                &self.size[..self.dims]
+            )));
         }
         Ok(at[0] as usize + self.size[0] * (at[1] as usize + self.size[1] * at.get(2).copied().unwrap_or(0) as usize))
     }
     fn cell(&self, value: &Value) -> io::Result<usize> {
-        let at = Vec::<i64>::deserialize(value).map_err(|_| io::Error::other("Grid cells are [x, y] or [x, y, z] integer arrays."))?;
+        let at = Vec::<i64>::deserialize(value)
+            .map_err(|_| io::Error::other("Grid cells are [x, y] or [x, y, z] integer arrays."))?;
         self.locate(&at)
     }
     fn coords(&self, cell: usize) -> Vec<usize> {
@@ -583,21 +724,42 @@ impl GridSpace {
                         continue;
                     }
                     // Every proper, non-empty subset of the move's axes.
-                    let mut corners = (1..1_usize << 3).map(|mask| [0, 1, 2].map(|axis| if mask & (1 << axis) != 0 { delta[axis] } else { 0 }))
+                    let mut corners = (1..1_usize << 3)
+                        .map(|mask| [0, 1, 2].map(|axis| if mask & (1 << axis) != 0 { delta[axis] } else { 0 }))
                         .filter(|corner| *corner != [0; 3] && *corner != delta)
                         .collect::<Vec<_>>();
                     corners.sort_unstable();
                     corners.dedup();
-                    moves.push(Move { delta, length: (axes as f64).sqrt(), corners });
+                    moves.push(Move {
+                        delta,
+                        length: (axes as f64).sqrt(),
+                        corners,
+                    });
                 }
             }
         }
-        let floor = if estimate { grid.cost.iter().copied().filter(|cost| cost.is_finite()).fold(f64::INFINITY, f64::min) } else { 0.0 };
-        let goals = goals.iter().map(|&goal| {
-            let at = grid.coords(goal);
-            [at[0] as i64, at[1] as i64, at.get(2).copied().unwrap_or(0) as i64]
-        }).collect();
-        GridSpace { grid, moves, goals, floor: if floor.is_finite() { floor } else { 0.0 } }
+        let floor = if estimate {
+            grid.cost
+                .iter()
+                .copied()
+                .filter(|cost| cost.is_finite())
+                .fold(f64::INFINITY, f64::min)
+        } else {
+            0.0
+        };
+        let goals = goals
+            .iter()
+            .map(|&goal| {
+                let at = grid.coords(goal);
+                [at[0] as i64, at[1] as i64, at.get(2).copied().unwrap_or(0) as i64]
+            })
+            .collect();
+        GridSpace {
+            grid,
+            moves,
+            goals,
+            floor: if floor.is_finite() { floor } else { 0.0 },
+        }
     }
     fn label(&self) -> &'static str {
         match self.grid.moves {
@@ -625,7 +787,9 @@ impl Space for GridSpace {
         let at = self.at(node);
         for step in &self.moves {
             let shifted = |delta: [i64; 3]| [at[0] + delta[0], at[1] + delta[1], at[2] + delta[2]];
-            let Some(next) = self.open(shifted(step.delta)) else { continue };
+            let Some(next) = self.open(shifted(step.delta)) else {
+                continue;
+            };
             if step.corners.iter().all(|corner| self.open(shifted(*corner)).is_some()) {
                 out.push((next, self.grid.cost[next] * step.length));
             }
@@ -637,15 +801,19 @@ impl Space for GridSpace {
         }
         let at = self.at(node);
         let diagonal = matches!(self.grid.moves, 8 | 26);
-        let nearest = self.goals.iter().map(|goal| {
-            let mut d = [0, 1, 2].map(|axis| (at[axis] - goal[axis]).unsigned_abs() as f64);
-            if !diagonal {
-                return d.iter().sum();
-            }
-            // Octile distance: the longest axis plus diagonal savings.
-            d.sort_by(|a, b| b.total_cmp(a));
-            d[0] + (2f64.sqrt() - 1.0) * d[1] + (3f64.sqrt() - 2f64.sqrt()) * d[2]
-        }).fold(f64::INFINITY, f64::min);
+        let nearest = self
+            .goals
+            .iter()
+            .map(|goal| {
+                let mut d = [0, 1, 2].map(|axis| (at[axis] - goal[axis]).unsigned_abs() as f64);
+                if !diagonal {
+                    return d.iter().sum();
+                }
+                // Octile distance: the longest axis plus diagonal savings.
+                d.sort_by(|a, b| b.total_cmp(a));
+                d[0] + (2f64.sqrt() - 1.0) * d[1] + (3f64.sqrt() - 2f64.sqrt()) * d[2]
+            })
+            .fold(f64::INFINITY, f64::min);
         nearest * self.floor
     }
 }

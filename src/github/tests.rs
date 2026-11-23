@@ -1,4 +1,3 @@
-
 use super::*;
 use std::cell::RefCell;
 const BASE: &str = "1111111111111111111111111111111111111111";
@@ -23,9 +22,7 @@ impl Mock {
             fail: RefCell::new(None),
             old: b"old\n".to_vec(),
             base: BASE.into(),
-            tree_entries: vec![
-                json!({"path":"script.sh","sha":git_blob(b"old\n"),"mode":"100755"}),
-            ],
+            tree_entries: vec![json!({"path":"script.sh","sha":git_blob(b"old\n"),"mode":"100755"})],
         }
     }
 }
@@ -57,14 +54,10 @@ impl Api for Mock {
                 .as_ref()
                 .map_or(Value::Null, |sha| json!({"object":{"sha":sha}}))
         } else if method == "POST" && path.ends_with("git/refs") {
-            *self.reference.borrow_mut() =
-                body.as_ref().unwrap()["sha"].as_str().map(str::to_owned);
+            *self.reference.borrow_mut() = body.as_ref().unwrap()["sha"].as_str().map(str::to_owned);
             json!({"object":{"sha":COMMIT}})
         } else if method == "GET" && path.contains("pulls?") {
-            self.pull
-                .borrow()
-                .as_ref()
-                .map_or(json!([]), |p| json!([p]))
+            self.pull.borrow().as_ref().map_or(json!([]), |p| json!([p]))
         } else if method == "POST" && path.ends_with("pulls") {
             let value = json!({"html_url":"https://github.com/example/project/pull/7"});
             *self.pull.borrow_mut() = Some(value.clone());
@@ -138,38 +131,17 @@ fn tree_cache_reuses_listings_and_preserves_each_files_mode() {
 }
 #[test]
 fn github_objects_and_refs_are_scoped_and_unambiguous() {
-    for value in [
-        "x/y/z",
-        "../repo",
-        "x/..",
-        "https://github.com/x/y",
-        "x/y?token=bad",
-    ] {
+    for value in ["x/y/z", "../repo", "x/..", "https://github.com/x/y", "x/y?token=bad"] {
         assert!(!repository(value));
     }
-    for value in [
-        "main..other",
-        "/main",
-        "a/.hidden",
-        "main.lock",
-        "refs@{1}",
-        "main?x=y",
-    ] {
+    for value in ["main..other", "/main", "a/.hidden", "main.lock", "refs@{1}", "main?x=y"] {
         assert!(!branch(value));
     }
     assert!(repository("some-owner/a_repo"));
     assert!(branch("control/r-fixture"));
-    assert_eq!(
-        git_blob(b"test content\n"),
-        "d670460b4b4aece5915caf5c68d12f560a9fe3e4"
-    );
+    assert_eq!(git_blob(b"test content\n"), "d670460b4b4aece5915caf5c68d12f560a9fe3e4");
     assert_eq!(encoded("control/r?x"), "control%2Fr%3Fx");
-    assert!(
-        serde_json::from_value::<Input>(
-            json!({"run_id":"r-x","title":"x","repository":"other/repo"})
-        )
-        .is_err()
-    );
+    assert!(serde_json::from_value::<Input>(json!({"run_id":"r-x","title":"x","repository":"other/repo"})).is_err());
 }
 #[test]
 fn publication_preserves_mode_and_creates_only_a_draft_without_overwriting() {
@@ -244,12 +216,7 @@ fn changed_source_or_replaced_branch_is_never_overwritten() {
             .to_string()
             .contains("baseline differs")
     );
-    assert!(
-        api.requests
-            .borrow()
-            .iter()
-            .all(|(p, _)| p.starts_with("GET"))
-    );
+    assert!(api.requests.borrow().iter().all(|(p, _)| p.starts_with("GET")));
     let api = Mock::new();
     *api.reference.borrow_mut() = Some("5555555555555555555555555555555555555555".into());
     let mut publication = super::tests::publication();
@@ -296,11 +263,7 @@ fn cumulative_turn_keeps_original_source_without_recapturing_host() {
         github_source: Some(source.clone()),
         ..Default::default()
     };
-    prepare(
-        &mut attempt,
-        Path::new("/deliberately-unavailable-later-baseline"),
-    )
-    .unwrap();
+    prepare(&mut attempt, Path::new("/deliberately-unavailable-later-baseline")).unwrap();
     assert_eq!(attempt.github_source, Some(source));
 }
 #[test]
@@ -359,12 +322,9 @@ fn source_capture_rejects_dirty_untracked_ignored_and_stale_snapshot_inputs() {
     fs::remove_file(root.join("untracked.txt")).unwrap();
     fs::write(root.join("ignored.txt"), b"ignored dependency\n").unwrap();
     assert!(
-        source_git(
-            &root,
-            &["status", "--porcelain=v1", "--untracked-files=normal"]
-        )
-        .unwrap()
-        .is_empty()
+        source_git(&root, &["status", "--porcelain=v1", "--untracked-files=normal"])
+            .unwrap()
+            .is_empty()
     );
     assert!(
         verify_source(&root, &["file.txt", "ignored.txt"], read)
@@ -423,7 +383,8 @@ fn only_completed_same_chat_improvements_can_be_published() {
         role: crate::delegation::Role::Judge,
         root: "fixture".into(),
         depth: 1,
-        parent: Some("parent".into()), bundle: None
+        parent: Some("parent".into()),
+        bundle: None,
     });
     assert!(selected(&state, &chat, &input).is_err());
     state.runtime.runs[0].persona = None;
@@ -444,14 +405,32 @@ fn only_completed_same_chat_improvements_can_be_published() {
 fn source_git_output_is_bounded_by_time_and_size() {
     let shell = |script: &str| {
         let mut command = std::process::Command::new("sh");
-        command.args(["-c", script]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+        command
+            .args(["-c", script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
         command
     };
-    assert_eq!(bounded_output(shell("sleep 0.2; printf ok"), 16, Duration::from_secs(30)).unwrap(), b"ok");
+    assert_eq!(
+        bounded_output(shell("sleep 0.2; printf ok"), 16, Duration::from_secs(30)).unwrap(),
+        b"ok"
+    );
     let started = std::time::Instant::now();
-    assert_eq!(bounded_output(shell("exec sleep 30"), 16, Duration::from_millis(50)).unwrap_err().to_string(), "Source revision lookup timed out");
-    assert!(started.elapsed() < Duration::from_secs(20), "a hung process is killed at the bound");
-    assert!(bounded_output(shell("printf 0123456789abcdefXYZ"), 16, Duration::from_secs(30)).is_err(), "output over the size bound fails");
+    assert_eq!(
+        bounded_output(shell("exec sleep 30"), 16, Duration::from_millis(50))
+            .unwrap_err()
+            .to_string(),
+        "Source revision lookup timed out"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "a hung process is killed at the bound"
+    );
+    assert!(
+        bounded_output(shell("printf 0123456789abcdefXYZ"), 16, Duration::from_secs(30)).is_err(),
+        "output over the size bound fails"
+    );
 }
 /// Pins the `/mcp` envelopes of the three GitHub tools served before the
 /// state lock: unacknowledged mutations and reads fail as tool results, an
@@ -463,23 +442,55 @@ fn github_mcp_envelopes_are_pinned() {
         let mut output = Vec::new();
         let served = crate::mcp_http::handle(&mut output, &shared, "POST", "/mcp", "", body.to_string().as_bytes());
         let text = String::from_utf8(output).unwrap();
-        (served, text.split_once("\r\n\r\n").map(|(_, body)| serde_json::from_str::<Value>(body).unwrap()))
+        (
+            served,
+            text.split_once("\r\n\r\n")
+                .map(|(_, body)| serde_json::from_str::<Value>(body).unwrap()),
+        )
     };
-    let failure = |id: Value, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":text}],"isError":true}}));
+    let failure = |id: Value, text: &str| {
+        Some(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":text}],"isError":true}}))
+    };
     for (body, expected) in [
-        (json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control_github_write"}}), failure(Value::Null, "GitHub mutations require an acknowledged JSON-RPC request")),
-        (json!({"jsonrpc":"1.0","id":1,"method":"tools/call","params":{"name":"control_github_write"}}), failure(json!(1), "GitHub mutations require an acknowledged JSON-RPC request")),
-        (json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control_github_write","arguments":{}}}), failure(json!(2), "Expected chat_id and a typed GitHub operation")),
-        (json!({"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"control_github_read"}}), failure(Value::Null, "GitHub inspection requires an acknowledged JSON-RPC request")),
-        (json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"control_github_read","arguments":{}}}), failure(json!(3), "Expected chat_id and a bounded query")),
-        (json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control_github_open_pr"}}),
-            Some(json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Publication requires an acknowledged JSON-RPC request"}}))),
-        (json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"control_github_open_pr","arguments":{}}}), failure(json!(4), "Expected run_id, title and optional body")),
+        (
+            json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control_github_write"}}),
+            failure(Value::Null, "GitHub mutations require an acknowledged JSON-RPC request"),
+        ),
+        (
+            json!({"jsonrpc":"1.0","id":1,"method":"tools/call","params":{"name":"control_github_write"}}),
+            failure(json!(1), "GitHub mutations require an acknowledged JSON-RPC request"),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control_github_write","arguments":{}}}),
+            failure(json!(2), "Expected chat_id and a typed GitHub operation"),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"control_github_read"}}),
+            failure(
+                Value::Null,
+                "GitHub inspection requires an acknowledged JSON-RPC request",
+            ),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"control_github_read","arguments":{}}}),
+            failure(json!(3), "Expected chat_id and a bounded query"),
+        ),
+        (
+            json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control_github_open_pr"}}),
+            Some(
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Publication requires an acknowledged JSON-RPC request"}}),
+            ),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"control_github_open_pr","arguments":{}}}),
+            failure(json!(4), "Expected run_id, title and optional body"),
+        ),
     ] {
         assert_eq!(send(body.clone()), (true, expected), "{body}");
     }
     // Anything else reaches the operator MCP.
-    let (_, listed) = send(json!({"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"name":"control_github_write"}}));
+    let (_, listed) =
+        send(json!({"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"name":"control_github_write"}}));
     assert!(listed.unwrap()["result"]["tools"].is_array());
     let (_, chats) = send(json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"control.chats.list"}}));
     assert_eq!(chats.unwrap()["result"]["structuredContent"]["data"], json!([]));

@@ -12,12 +12,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 /// Waits until notified or the deadline passes. `None` means the deadline had
 /// already passed; callers re-check their predicate after every wake.
-fn wait_until<'a, T>(changed: &Condvar, guard: MutexGuard<'a, T>, deadline: Option<Instant>) -> Option<MutexGuard<'a, T>> {
+fn wait_until<'a, T>(
+    changed: &Condvar,
+    guard: MutexGuard<'a, T>,
+    deadline: Option<Instant>,
+) -> Option<MutexGuard<'a, T>> {
     match deadline {
         None => Some(changed.wait(guard).unwrap_or_else(PoisonError::into_inner)),
         Some(deadline) => {
             let now = Instant::now();
-            (now < deadline).then(|| changed.wait_timeout(guard, deadline - now).unwrap_or_else(PoisonError::into_inner).0)
+            (now < deadline).then(|| {
+                changed
+                    .wait_timeout(guard, deadline - now)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
+            })
         }
     }
 }
@@ -108,8 +117,15 @@ impl CancelToken {
             drop(lock(&node.signal));
             node.changed.notify_all();
             let listeners = std::mem::take(&mut *lock(&node.listeners));
-            listeners.iter().filter_map(Weak::upgrade).for_each(|listener| listener.wake());
-            pending.extend(std::mem::take(&mut *lock(&node.children)).iter().filter_map(Weak::upgrade));
+            listeners
+                .iter()
+                .filter_map(Weak::upgrade)
+                .for_each(|listener| listener.wake());
+            pending.extend(
+                std::mem::take(&mut *lock(&node.children))
+                    .iter()
+                    .filter_map(Weak::upgrade),
+            );
         }
     }
     pub fn wait(&self, deadline: Option<Instant>) -> Wait {
@@ -131,7 +147,10 @@ impl CancelToken {
             return None;
         }
         lock(&self.0.listeners).push(listener.clone());
-        Some(Registration { token: &self.0, listener })
+        Some(Registration {
+            token: &self.0,
+            listener,
+        })
     }
     #[cfg(test)]
     fn registrations(&self) -> usize {
@@ -186,7 +205,12 @@ pub struct Receiver<T>(Arc<Shared<T>>);
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     assert!(capacity > 0, "channel capacity must be positive");
     let shared = Arc::new(Shared {
-        queue: Mutex::new(Queue { items: VecDeque::with_capacity(capacity), capacity, senders: 1, receiving: true }),
+        queue: Mutex::new(Queue {
+            items: VecDeque::with_capacity(capacity),
+            capacity,
+            senders: 1,
+            receiving: true,
+        }),
         readable: Condvar::new(),
         writable: Condvar::new(),
     });
@@ -316,7 +340,10 @@ impl Wake for Changes {
 }
 impl Changes {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { generation: Mutex::new(0), changed: Condvar::new() })
+        Arc::new(Self {
+            generation: Mutex::new(0),
+            changed: Condvar::new(),
+        })
     }
     pub fn generation(&self) -> u64 {
         *lock(&self.generation)

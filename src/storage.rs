@@ -27,9 +27,7 @@ pub fn initialize() -> io::Result<()> {
     let directory = crate::config::state_directory().map_err(io::Error::other)?;
     fs::create_dir_all(&directory)?;
     if !fs::symlink_metadata(&directory)?.is_dir() {
-        return Err(io::Error::other(
-            "State directory must be a directory, not a symlink",
-        ));
+        return Err(io::Error::other("State directory must be a directory, not a symlink"));
     }
     #[cfg(unix)]
     {
@@ -150,22 +148,37 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
     }
     let identity: Identity = serde_json::from_slice(&data).map_err(io::Error::other)?;
     let mut log = FileJournal::open(&directory.join(LOG))?;
-    let lines = (0..log.len()).map(|i| log.read(i)).collect::<io::Result<Option<Vec<_>>>>()?.unwrap_or_default();
-    let found = identity.nonce.as_deref().and_then(|nonce| snapshot::patches(lines, nonce));
+    let lines = (0..log.len())
+        .map(|i| log.read(i))
+        .collect::<io::Result<Option<Vec<_>>>>()?
+        .unwrap_or_default();
+    let found = identity
+        .nonce
+        .as_deref()
+        .and_then(|nonce| snapshot::patches(lines, nonce));
     let ours = schema();
     if let Some((_, patches)) = &found {
         let committed = patches.len() as u64 + 1;
         if committed < log.len() {
-            eprintln!("state.log: dropping {} uncommitted line(s) after the last complete save", log.len() - committed);
+            eprintln!(
+                "state.log: dropping {} uncommitted line(s) after the last complete save",
+                log.len() - committed
+            );
             log.truncate(committed)?;
         }
         if !patches.is_empty() {
-            eprintln!("state.log: replaying {} save(s) made since the last compaction", patches.len());
+            eprintln!(
+                "state.log: replaying {} save(s) made since the last compaction",
+                patches.len()
+            );
         }
     }
     let clean = identity.schema == ours && found.as_ref().is_some_and(|(_, patches)| patches.is_empty());
     let (mut state, archived) = if clean || (found.is_none() && identity.schema == ours) {
-        (serde_json::from_slice(&data).map_err(io::Error::other)?, identity.archive)
+        (
+            serde_json::from_slice(&data).map_err(io::Error::other)?,
+            identity.archive,
+        )
     } else {
         let mut document: serde_json::Value = serde_json::from_slice(&data).map_err(io::Error::other)?;
         snapshot::identify(&mut document);
@@ -173,16 +186,36 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
         if let Some((written, patches)) = found {
             let route = lens::route(&written, &ours)?;
             for patch in patches {
-                snapshot::apply(&mut document, patch.into_iter().filter_map(|edit| lens::edit(&route, edit)).collect())?;
+                snapshot::apply(
+                    &mut document,
+                    patch.into_iter().filter_map(|edit| lens::edit(&route, edit)).collect(),
+                )?;
             }
         }
-        let archived = document.get("_archive").cloned().map(serde_json::from_value).transpose().map_err(io::Error::other)?.unwrap_or_default();
+        let archived = document
+            .get("_archive")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(io::Error::other)?
+            .unwrap_or_default();
         (serde_json::from_value(document).map_err(io::Error::other)?, archived)
     };
     // Archived runs come back beside the hot ones before anything reads runs.
     archive::load(directory, &mut state, &archived)?;
-    archives().lock().unwrap_or_else(PoisonError::into_inner).insert(directory.to_owned(), archived);
-    Ok((state, Some(Recovered { data, nonce: identity.nonce, log, clean })))
+    archives()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(directory.to_owned(), archived);
+    Ok((
+        state,
+        Some(Recovered {
+            data,
+            nonce: identity.nonce,
+            log,
+            clean,
+        }),
+    ))
 }
 
 /// Adopts the published snapshot as the diff base, so a clean restart writes
@@ -190,11 +223,31 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
 /// against it turns exactly that document into the next state, whether or not
 /// this build would have written the same bytes for it.
 fn adopt(directory: &Path, recovered: Recovered) -> bool {
-    let Recovered { data, nonce: Some(nonce), log, clean: true } = recovered else { return false };
+    let Recovered {
+        data,
+        nonce: Some(nonce),
+        log,
+        clean: true,
+    } = recovered
+    else {
+        return false;
+    };
     let schema = serde_json::to_value(schema()).expect("schemas serialize");
-    let Some(encoded) = snapshot::base(&data, &nonce, &schema) else { return false };
-    let log_bytes = (0..log.len()).filter_map(|i| log.read(i).ok().flatten()).map(|line| line.len() + 1).sum();
-    published().lock().unwrap_or_else(PoisonError::into_inner).insert(directory.to_owned(), Published { log, log_bytes, base: Some(encoded) });
+    let Some(encoded) = snapshot::base(&data, &nonce, &schema) else {
+        return false;
+    };
+    let log_bytes = (0..log.len())
+        .filter_map(|i| log.read(i).ok().flatten())
+        .map(|line| line.len() + 1)
+        .sum();
+    published().lock().unwrap_or_else(PoisonError::into_inner).insert(
+        directory.to_owned(),
+        Published {
+            log,
+            log_bytes,
+            base: Some(encoded),
+        },
+    );
     true
 }
 
@@ -216,30 +269,31 @@ fn interrupt_active(state: &mut State) -> bool {
         if ["running", "cancelling"].contains(&run.status.as_str()) {
             changed = true;
             run.status = "interrupted".into();
-            run.result =
-                "The control plane stopped during this run. Inspect the container before retrying."
-                    .into();
+            run.result = "The control plane stopped during this run. Inspect the container before retrying.".into();
             if let Some(attempt) = run.attempts.last_mut() {
                 attempt.status = "interrupted".into();
-                attempt.termination.get_or_insert(crate::attempt_control::Termination::Restarted);
+                attempt
+                    .termination
+                    .get_or_insert(crate::attempt_control::Termination::Restarted);
                 for activity in &mut attempt.activity {
-                    if activity.kind == "workspace" && activity.status == "in_progress" { activity.status = "interrupted".into(); }
+                    if activity.kind == "workspace" && activity.status == "in_progress" {
+                        activity.status = "interrupted".into();
+                    }
                 }
                 for job in &mut attempt.command_jobs {
-                    if ["preparing","running","stopping"].contains(&job.status.as_str()) {
-                        job.status="interrupted".into();
-                        if let Some(activity)=attempt.activity.iter_mut().find(|a|a.id==format!("job-{}",job.id)) {activity.status="interrupted".into();}
+                    if ["preparing", "running", "stopping"].contains(&job.status.as_str()) {
+                        job.status = "interrupted".into();
+                        if let Some(activity) = attempt.activity.iter_mut().find(|a| a.id == format!("job-{}", job.id))
+                        {
+                            activity.status = "interrupted".into();
+                        }
                     }
                 }
             }
             // A run a crash interrupted is finished: its text and activity leave
             // state for its journal like any other (on failure they stay).
             let _ = crate::history::archive_run(run);
-            if let Some(session) = state
-                .chats
-                .iter_mut()
-                .find(|c| Some(&c.id) == run.chat_id.as_ref())
-            {
+            if let Some(session) = state.chats.iter_mut().find(|c| Some(&c.id) == run.chat_id.as_ref()) {
                 session.revision = session.revision.saturating_add(1);
             }
         }
@@ -307,7 +361,10 @@ fn encode(state: &State, archive: &archive::Archive) -> serde_json::Result<Encod
     #[cfg(debug_assertions)]
     {
         let fresh = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(&saved)))?;
-        assert!(fresh == encoded.bytes(), "the cached state encoding differs from a fresh one");
+        assert!(
+            fresh == encoded.bytes(),
+            "the cached state encoding differs from a fresh one"
+        );
     }
     Ok(encoded)
 }
@@ -320,7 +377,12 @@ fn archives() -> &'static Mutex<HashMap<PathBuf, archive::Archive>> {
     ARCHIVES.get_or_init(Mutex::default)
 }
 fn archived(directory: &Path) -> archive::Archive {
-    archives().lock().unwrap_or_else(PoisonError::into_inner).get(directory).cloned().unwrap_or_default()
+    archives()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(directory)
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
@@ -339,8 +401,8 @@ fn archived(directory: &Path) -> archive::Archive {
 /// (`storage::archive`); the blocks are durable before this save, which
 /// commits them, references them.
 pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
-    let directory = crate::config::state_directory()
-        .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
+    let directory =
+        crate::config::state_directory().map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
     checkpoint_in(&directory, state)?;
     changes().bump();
     crate::live_updates::notify();
@@ -355,7 +417,10 @@ fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError>
         .and_then(|encoded| persist(&directory, encoded, false));
     match saved {
         Ok(()) => {
-            archives().lock().unwrap_or_else(PoisonError::into_inner).insert(directory, archive);
+            archives()
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(directory, archive);
             pending.commit();
         }
         Err(CheckpointError::NotReplaced(error)) => {
@@ -390,7 +455,11 @@ fn persist(directory: &Path, encoded: Encoded, compact: bool) -> Result<(), Chec
                 let poisoned = current.log.poisoned();
                 // The next save starts over from a compaction.
                 all.remove(directory);
-                return Err(if poisoned { CheckpointError::Unconfirmed(error) } else { CheckpointError::NotReplaced(error) });
+                return Err(if poisoned {
+                    CheckpointError::Unconfirmed(error)
+                } else {
+                    CheckpointError::NotReplaced(error)
+                });
             }
             current.log_bytes += line.len() + 1;
             current.base = Some(encoded);
@@ -411,7 +480,14 @@ fn persist(directory: &Path, encoded: Encoded, compact: bool) -> Result<(), Chec
             if let Ok(mut log) = log
                 && log.truncate(0).and_then(|()| log.append(&header)).is_ok()
             {
-                all.insert(directory.to_owned(), Published { log, log_bytes: header.len() + 1, base: Some(encoded) });
+                all.insert(
+                    directory.to_owned(),
+                    Published {
+                        log,
+                        log_bytes: header.len() + 1,
+                        base: Some(encoded),
+                    },
+                );
             }
             Ok(())
         }
@@ -463,15 +539,11 @@ fn confirm_checkpoint(
     for expected in data.chunks(buffer.len()) {
         file.read_exact(&mut buffer[..expected.len()])?;
         if &buffer[..expected.len()] != expected {
-            return Err(io::Error::other(
-                "Published checkpoint differs from the candidate",
-            ));
+            return Err(io::Error::other("Published checkpoint differs from the candidate"));
         }
     }
     if file.read(&mut buffer[..1])? != 0 {
-        return Err(io::Error::other(
-            "Published checkpoint differs from the candidate",
-        ));
+        return Err(io::Error::other("Published checkpoint differs from the candidate"));
     }
     file.sync_all()?;
     sync(directory)
@@ -503,9 +575,7 @@ fn write_checkpoint_with_sync(
         options.mode(0o600);
     }
     let temporary = directory.join("state.json.tmp");
-    let mut file = options
-        .open(&temporary)
-        .map_err(CheckpointError::NotReplaced)?;
+    let mut file = options.open(&temporary).map_err(CheckpointError::NotReplaced)?;
     file.write_all(data).map_err(CheckpointError::NotReplaced)?;
     file.sync_all().map_err(CheckpointError::NotReplaced)?;
     fs::rename(temporary, directory.join("state.json")).map_err(CheckpointError::Unconfirmed)?;

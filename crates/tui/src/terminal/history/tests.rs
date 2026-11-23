@@ -36,7 +36,15 @@ fn preview() {
                 .replace('&', "&amp;")
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
-            write!(html,"<rect x='{}' y='{}' width='9' height='18' fill='{bg}'/><text x='{}' y='{}' fill='{fg}'>{text}</text>",x*9,y*18,x*9,y*18+14).unwrap();
+            write!(
+                html,
+                "<rect x='{}' y='{}' width='9' height='18' fill='{bg}'/><text x='{}' y='{}' fill='{fg}'>{text}</text>",
+                x * 9,
+                y * 18,
+                x * 9,
+                y * 18 + 14
+            )
+            .unwrap();
         }
     }
     html.push_str("</svg></body>");
@@ -77,10 +85,7 @@ fn scroll_and_narrow_viewports_do_not_overwrite_unicode_or_leave_old_card_backgr
         let mut buffer = Buffer::empty(area);
         for scroll in [0, 1, 8] {
             History {
-                paragraph: Paragraph::new(Text::from(vec![
-                    user_line(Line::from("猫 café")),
-                    Line::from("reply"),
-                ])),
+                paragraph: Paragraph::new(Text::from(vec![user_line(Line::from("猫 café")), Line::from("reply")])),
                 scroll,
             }
             .render(area, &mut buffer);

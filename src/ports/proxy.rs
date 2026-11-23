@@ -31,7 +31,9 @@ const ENV: [(&str, &str); 6] = [
 
 /// The usage line appended to every approved target egress.
 pub(super) fn usage() -> String {
-    format!("exec and watch commands get HTTPS_PROXY/HTTP_PROXY={PROXY_URL}, so npm ci, pip, cargo, git and curl reach every approved host unchanged. Restart a watch that started before the approval.")
+    format!(
+        "exec and watch commands get HTTPS_PROXY/HTTP_PROXY={PROXY_URL}, so npm ci, pip, cargo, git and curl reach every approved host unchanged. Restart a watch that started before the approval."
+    )
 }
 
 /// Whether `service`'s current generation holds an approved target egress.
@@ -56,7 +58,14 @@ pub(crate) fn exports(state: &State, service: &Service) -> String {
     if pairs.is_empty() {
         return String::new();
     }
-    format!("export {}\n", pairs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" "))
+    format!(
+        "export {}\n",
+        pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
 }
 
 /// The exact service instance one proxy serves.
@@ -69,7 +78,12 @@ pub(super) struct Key {
 }
 impl Key {
     pub(super) fn of(port: &Port) -> Self {
-        Self { service: port.service.clone(), generation: port.generation, container: port.container.clone(), node: port.node.clone() }
+        Self {
+            service: port.service.clone(),
+            generation: port.generation,
+            container: port.container.clone(),
+            node: port.node.clone(),
+        }
     }
 }
 /// Live, authorized target egress grants of `key`.
@@ -84,7 +98,11 @@ fn grants<'a>(state: &'a State, key: &'a Key, time: u64) -> impl Iterator<Item =
 /// The live grant for exactly `host:port`, if any.
 fn grant(state: &State, key: &Key, host: &str, port: u16, time: u64) -> Option<Port> {
     grants(state, key, time)
-        .find(|p| p.target.as_ref().is_some_and(|t| t.port.get() == port && t.host.eq_ignore_ascii_case(host)))
+        .find(|p| {
+            p.target
+                .as_ref()
+                .is_some_and(|t| t.port.get() == port && t.host.eq_ignore_ascii_case(host))
+        })
         .cloned()
 }
 
@@ -97,7 +115,10 @@ struct Active {
 pub(super) struct Proxies(Vec<(Key, Active)>);
 impl Proxies {
     pub(super) fn sync(&mut self, shared: &Arc<Mutex<State>>, wanted: &[Key]) {
-        for (_, active) in self.0.extract_if(.., |(key, active)| !wanted.contains(key) || active.handle.is_finished()) {
+        for (_, active) in self
+            .0
+            .extract_if(.., |(key, active)| !wanted.contains(key) || active.handle.is_finished())
+        {
             active.cancel.store(true, Ordering::Release);
             let _ = active.handle.join();
         }
@@ -122,7 +143,9 @@ fn run(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>) {
     let alive = || {
         !cancel.load(Ordering::Acquire)
             && !crate::shutdown::requested()
-            && shared.lock().is_ok_and(|state| grants(&state, key, now()).next().is_some())
+            && shared
+                .lock()
+                .is_ok_and(|state| grants(&state, key, now()).next().is_some())
     };
     while alive() {
         let _ = listen(shared, key, cancel, &alive);
@@ -140,7 +163,11 @@ fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive
         let time = now();
         let ports = grants(&state, key, time).collect::<Vec<_>>();
         let first = ports.first().ok_or_else(|| io::Error::other("No approved egress"))?;
-        let expires = ports.iter().filter_map(|p| p.approval.as_ref().map(|a| a.expires)).max().unwrap_or(time);
+        let expires = ports
+            .iter()
+            .filter_map(|p| p.approval.as_ref().map(|a| a.expires))
+            .max()
+            .unwrap_or(time);
         (authorized(&state, first, time)?, expires)
     };
     let binding = crate::services::port_binding(crate::engine::isolation(), &service, &key.container)?;
@@ -214,7 +241,10 @@ fn authority(text: &str, default: Option<u16>) -> Result<(String, u16), String> 
         Some(port) => port.parse::<u16>().map_err(|_| "Invalid port")?,
         None => default.ok_or("CONNECT needs host:port")?,
     };
-    let endpoint = Endpoint { host: host.to_owned(), port: NonZeroU16::new(port).ok_or("Invalid port")? };
+    let endpoint = Endpoint {
+        host: host.to_owned(),
+        port: NonZeroU16::new(port).ok_or("Invalid port")?,
+    };
     endpoint.url().map_err(|e| e.to_string())?;
     Ok((endpoint.host, port))
 }
@@ -223,7 +253,8 @@ fn parse(head: &[u8]) -> Result<Request, String> {
     let text = text.strip_suffix("\r\n\r\n").ok_or("Malformed request")?;
     let (line, headers) = text.split_once("\r\n").unwrap_or((text, ""));
     let mut parts = line.split(' ');
-    let (Some(method), Some(target), Some(version), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+    let (Some(method), Some(target), Some(version), None) = (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return Err("Malformed request line".into());
     };
     if !version.starts_with("HTTP/1.") {
@@ -231,11 +262,16 @@ fn parse(head: &[u8]) -> Result<Request, String> {
     }
     if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port) = authority(target, None)?;
-        return Ok(Request { host, port, forward: None });
+        return Ok(Request {
+            host,
+            port,
+            forward: None,
+        });
     }
-    let scheme = target.get(..7).filter(|s| s.eq_ignore_ascii_case("http://")).ok_or(
-        "Send CONNECT host:port for HTTPS, or an absolute http:// URI; this is Control's egress proxy",
-    )?;
+    let scheme = target
+        .get(..7)
+        .filter(|s| s.eq_ignore_ascii_case("http://"))
+        .ok_or("Send CONNECT host:port for HTTPS, or an absolute http:// URI; this is Control's egress proxy")?;
     let rest = &target[scheme.len()..];
     let (authority_text, path) = rest.find('/').map_or((rest, "/"), |i| (&rest[..i], &rest[i..]));
     if authority_text.contains('@') {
@@ -243,21 +279,35 @@ fn parse(head: &[u8]) -> Result<Request, String> {
     }
     let (host, port) = authority(authority_text, Some(80))?;
     let mut forward = format!("{method} {path} {version}\r\n").into_bytes();
-    for header in headers.split("\r\n").filter(|h| !h.is_empty() && !h.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("proxy-"))) {
+    for header in headers
+        .split("\r\n")
+        .filter(|h| !h.is_empty() && !h.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("proxy-")))
+    {
         forward.extend_from_slice(header.as_bytes());
         forward.extend_from_slice(b"\r\n");
     }
     forward.extend_from_slice(b"\r\n");
-    Ok(Request { host, port, forward: Some(forward) })
+    Ok(Request {
+        host,
+        port,
+        forward: Some(forward),
+    })
 }
 fn respond(client: &mut TcpStream, status: &str, body: &str) -> io::Result<()> {
     client.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
 }
 fn denied(host: &str, port: u16) -> String {
-    format!("Control egress proxy: {host}:{port} is not an approved egress target for this service. Request an egress port for {host}:{port} with control_port_request (\"target\":{{\"host\":\"{host}\",\"port\":{port}}}) and wait for approval, then retry.\n")
+    format!(
+        "Control egress proxy: {host}:{port} is not an approved egress target for this service. Request an egress port for {host}:{port} with control_port_request (\"target\":{{\"host\":\"{host}\",\"port\":{port}}}) and wait for approval, then retry.\n"
+    )
 }
 /// Serves one proxy request read from `client`. Test seam: needs no relay.
-pub(super) fn handle(shared: &Arc<Mutex<State>>, key: &Key, cancel: &AtomicBool, mut client: TcpStream) -> io::Result<()> {
+pub(super) fn handle(
+    shared: &Arc<Mutex<State>>,
+    key: &Key,
+    cancel: &AtomicBool,
+    mut client: TcpStream,
+) -> io::Result<()> {
     client.set_read_timeout(Some(HEAD_TIMEOUT))?;
     let (head, rest) = read_head(&mut client)?;
     let request = match parse(&head) {
@@ -266,20 +316,37 @@ pub(super) fn handle(shared: &Arc<Mutex<State>>, key: &Key, cancel: &AtomicBool,
     };
     let Request { host, port, forward } = request;
     if forward.is_some() && port != 80 {
-        return respond(&mut client, "403 Forbidden", &format!("Control egress proxy relays plain HTTP only to port 80; use https:// (CONNECT) for {host}:{port}.\n"));
+        return respond(
+            &mut client,
+            "403 Forbidden",
+            &format!(
+                "Control egress proxy relays plain HTTP only to port 80; use https:// (CONNECT) for {host}:{port}.\n"
+            ),
+        );
     }
     let live = |grant: &Port| {
         !cancel.load(Ordering::Acquire)
             && !crate::shutdown::requested()
-            && shared.lock().is_ok_and(|state| authorized(&state, grant, now()).is_ok())
+            && shared
+                .lock()
+                .is_ok_and(|state| authorized(&state, grant, now()).is_ok())
     };
-    let grant = shared.lock().ok().and_then(|state| grant(&state, key, &host, port, now()));
+    let grant = shared
+        .lock()
+        .ok()
+        .and_then(|state| grant(&state, key, &host, port, now()));
     let Some((grant, target)) = grant.and_then(|g| g.approval.as_ref().and_then(|a| a.pinned).map(|t| (g, t))) else {
         return respond(&mut client, "403 Forbidden", &denied(&host, port));
     };
     let mut upstream = match TcpStream::connect_timeout(&target, Duration::from_secs(2)) {
         Ok(upstream) => upstream,
-        Err(error) => return respond(&mut client, "502 Bad Gateway", &format!("Control egress proxy could not connect to {host}:{port}: {error}\n")),
+        Err(error) => {
+            return respond(
+                &mut client,
+                "502 Bad Gateway",
+                &format!("Control egress proxy could not connect to {host}:{port}: {error}\n"),
+            );
+        }
     };
     if !live(&grant) {
         return respond(&mut client, "403 Forbidden", &denied(&host, port));
@@ -309,7 +376,10 @@ fn pump(client: TcpStream, upstream: TcpStream, live: impl Fn() -> bool) -> io::
             done.fetch_add(1, Ordering::AcqRel);
         })
     };
-    let tasks = [copy(client.try_clone()?, upstream.try_clone()?), copy(upstream.try_clone()?, client.try_clone()?)];
+    let tasks = [
+        copy(client.try_clone()?, upstream.try_clone()?),
+        copy(upstream.try_clone()?, client.try_clone()?),
+    ];
     while done.load(Ordering::Acquire) < 2 && live() {
         thread::sleep(Duration::from_millis(250));
     }

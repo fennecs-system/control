@@ -9,7 +9,9 @@ pub(super) struct Address<'a> {
 }
 impl<'a> Address<'a> {
     pub fn parse(value: &'a str) -> Option<Self> {
-        let (channel, thread) = value.split_once('/').map_or((value, None), |(channel, thread)| (channel, Some(thread)));
+        let (channel, thread) = value
+            .split_once('/')
+            .map_or((value, None), |(channel, thread)| (channel, Some(thread)));
         (super::NAMES.contains(&channel) && thread.is_none_or(crate::chat::valid_id))
             .then_some(Self { channel, thread })
     }
@@ -19,7 +21,11 @@ impl<'a> Address<'a> {
 /// explicit operator choice to collaborate there instead.
 pub(crate) fn for_task(room: &str, chat: &str) -> Result<String, &'static str> {
     let address = Address::parse(room).ok_or("Unknown room.")?;
-    Ok(if address.thread.is_some() { room.to_owned() } else { format!("{room}/{chat}") })
+    Ok(if address.thread.is_some() {
+        room.to_owned()
+    } else {
+        format!("{room}/{chat}")
+    })
 }
 
 /// Bare names are aliases inside the task's inherited thread. A model cannot
@@ -30,7 +36,11 @@ pub(super) fn for_worker(state: &State, chat: &str, room: &str) -> Result<String
     let mut current = chat;
     let mut inherited = None;
     for _ in 0..64 {
-        let session = state.chats.iter().find(|session| session.id == current).ok_or("Chat lineage is unavailable.")?;
+        let session = state
+            .chats
+            .iter()
+            .find(|session| session.id == current)
+            .ok_or("Chat lineage is unavailable.")?;
         inherited = inherited.or_else(|| session.room.as_deref().and_then(Address::parse));
         match session.parent_chat.as_deref() {
             Some(parent) => current = parent,
@@ -39,11 +49,13 @@ pub(super) fn for_worker(state: &State, chat: &str, room: &str) -> Result<String
                 if requested.thread.is_some_and(|value| value != thread) {
                     return Err("Room belongs to another task thread. Use a channel name in your own thread.");
                 }
-                return Ok(if requested.thread.is_none() && inherited.is_some_and(|address| address.thread.is_none()) {
-                    room.to_owned()
-                } else {
-                    format!("{}/{thread}", requested.channel)
-                });
+                return Ok(
+                    if requested.thread.is_none() && inherited.is_some_and(|address| address.thread.is_none()) {
+                        room.to_owned()
+                    } else {
+                        format!("{}/{thread}", requested.channel)
+                    },
+                );
             }
         }
     }
@@ -77,16 +89,27 @@ fn team<'a>(state: &'a State, chat: &str) -> Result<String, Option<&'a str>> {
         if let Some(room) = session.room.as_deref().filter(|room| Address::parse(room).is_some()) {
             return Ok(room.to_owned());
         }
-        let Some(parent) = session.parent_chat.as_deref() else { return Err(Some(session.id.as_str())) };
-        session = state.chats.iter().find(|candidate| candidate.id == parent && &candidate.actor == actor).ok_or(None)?;
+        let Some(parent) = session.parent_chat.as_deref() else {
+            return Err(Some(session.id.as_str()));
+        };
+        session = state
+            .chats
+            .iter()
+            .find(|candidate| candidate.id == parent && &candidate.actor == actor)
+            .ok_or(None)?;
     }
     Err(None)
 }
 
 pub(crate) fn names(state: &State) -> Vec<String> {
     let mut names = super::NAMES.map(str::to_owned).to_vec();
-    for room in state.chats.iter().rev().filter_map(|chat| chat.room.as_deref())
-        .chain(state.collective.posts.iter().rev().map(|post| post.room.as_str())) {
+    for room in state
+        .chats
+        .iter()
+        .rev()
+        .filter_map(|chat| chat.room.as_deref())
+        .chain(state.collective.posts.iter().rev().map(|post| post.room.as_str()))
+    {
         if Address::parse(room).is_some() && !names.iter().any(|name| name == room) {
             names.push(room.to_owned());
         }
@@ -95,7 +118,9 @@ pub(crate) fn names(state: &State) -> Vec<String> {
 }
 
 pub(super) fn label(state: &State, room: &str) -> String {
-    let Some(address) = Address::parse(room) else { return room.to_owned(); };
+    let Some(address) = Address::parse(room) else {
+        return room.to_owned();
+    };
     match address.thread {
         Some(thread) => {
             let title = crate::callsigns::name_or_id(&state.chats, thread);

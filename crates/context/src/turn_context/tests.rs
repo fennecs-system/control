@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn assembly_preserves_the_selected_chronology() {
@@ -39,14 +38,9 @@ fn required_instructions_survive_unicode_history_and_framing_counts() {
         },
     ];
     let value = compose("Policy\n", &sections, 130).unwrap();
-    assert!(
-        value.text.len() > 130,
-        "selected history has its own compaction policy"
-    );
+    assert!(value.text.len() > 130, "selected history has its own compaction policy");
     assert!(value.text.contains("Observe only.") && value.text.contains("Current event"));
-    assert!(
-        value.sections[0].included && value.sections[0].reference.as_ref().unwrap().run == "old"
-    );
+    assert!(value.sections[0].included && value.sections[0].reference.as_ref().unwrap().run == "old");
     assert!(value.text.contains(&old));
 }
 #[test]

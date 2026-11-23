@@ -1,9 +1,9 @@
 //! Durable design decisions. Asking yields execution; answering queues a fresh
 //! attempt from an immutable checkpoint, never grants additional authority.
 use crate::runtime::RunKind;
-use crate::{chat, identity, runtime, State};
+use crate::{State, chat, identity, runtime};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,17 +24,19 @@ pub(crate) fn parse_input(arguments: Value) -> Result<Input, &'static str> {
         options: Value,
         recommended: Value,
     }
-    let fields: Fields = serde_json::from_value(arguments).map_err(|_| {
-        "Design question arguments must be an object containing only question, options, and optional recommended."
-    })?;
+    let fields: Fields = serde_json::from_value(arguments).map_err(
+        |_| "Design question arguments must be an object containing only question, options, and optional recommended.",
+    )?;
     Ok(Input {
-        question: serde_json::from_value(fields.question)
-            .map_err(|_| "question must be a string.")?,
-        options: serde_json::from_value(fields.options)
-            .map_err(|_| "options must be an array of strings.")?,
-        recommended: if fields.recommended.is_null() { None } else {
-            Some(serde_json::from_value(fields.recommended)
-                .map_err(|_| "recommended must be a nonnegative zero-based integer, or omitted.")?)
+        question: serde_json::from_value(fields.question).map_err(|_| "question must be a string.")?,
+        options: serde_json::from_value(fields.options).map_err(|_| "options must be an array of strings.")?,
+        recommended: if fields.recommended.is_null() {
+            None
+        } else {
+            Some(
+                serde_json::from_value(fields.recommended)
+                    .map_err(|_| "recommended must be a nonnegative zero-based integer, or omitted.")?,
+            )
         },
     })
 }
@@ -45,12 +47,19 @@ fn validate_input(input: &Input) -> Result<(), &'static str> {
     if !(2..=4).contains(&input.options.len()) {
         return Err("options must contain 2–4 choices.");
     }
-    if input.options.iter().any(|option| option.trim().is_empty() || option.chars().count() > 200) {
+    if input
+        .options
+        .iter()
+        .any(|option| option.trim().is_empty() || option.chars().count() > 200)
+    {
         return Err("Each option must contain 1–200 characters and must not be blank.");
     }
-    if input.options.iter().enumerate().any(|(i, option)| {
-        input.options[..i].iter().any(|other| other.trim() == option.trim())
-    }) {
+    if input
+        .options
+        .iter()
+        .enumerate()
+        .any(|(i, option)| input.options[..i].iter().any(|other| other.trim() == option.trim()))
+    {
         return Err("options must be distinct after trimming whitespace.");
     }
     if input.recommended.is_some_and(|index| index >= input.options.len()) {
@@ -85,12 +94,13 @@ pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
             s.runtime.runs.iter().any(|r| {
                 r.id == id
                     && r.status == "running"
-                    && (crate::delegation::pausing(r) || r.question.as_ref().is_some_and(|q| {
-                        q.answer.is_none()
-                            && r.attempts
-                                .last()
-                                .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
-                    }))
+                    && (crate::delegation::pausing(r)
+                        || r.question.as_ref().is_some_and(|q| {
+                            q.answer.is_none()
+                                && r.attempts
+                                    .last()
+                                    .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
+                        }))
             })
         })
     })
@@ -106,12 +116,7 @@ fn ask_with_save(
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     validate_input(&input)?;
-    if nonce.is_empty()
-        || nonce.len() > 128
-        || !nonce
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
+    if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err("Invalid design request identity; retry the tool call.");
     }
     let index = state
@@ -137,15 +142,16 @@ fn ask_with_save(
         .and_then(|a| a.workspace_id.clone())
         .ok_or("No active attempt identity.")?;
     if let Some(q) = &run.question
-        && q.generation == generation {
-            return if q.nonce == nonce && q.input == input {
-                Ok(
-                    json!({"question_id":q.id,"status":"pausing","instruction":"Stop work. Control will resume this task when the user answers."}),
-                )
-            } else {
-                Err("This attempt already has a design question.")
-            };
-        }
+        && q.generation == generation
+    {
+        return if q.nonce == nonce && q.input == input {
+            Ok(
+                json!({"question_id":q.id,"status":"pausing","instruction":"Stop work. Control will resume this task when the user answers."}),
+            )
+        } else {
+            Err("This attempt already has a design question.")
+        };
+    }
     let id = question_id(&generation, nonce);
     let previous = state.runtime.runs[index].question.clone();
     let revision = state.chats[chat_index].revision;
@@ -168,10 +174,7 @@ fn ask_with_save(
     )
 }
 fn question_id(generation: &str, nonce: &str) -> String {
-    let digest = ring::digest::digest(
-        &ring::digest::SHA256,
-        format!("{generation}:{nonce}").as_bytes(),
-    );
+    let digest = ring::digest::digest(&ring::digest::SHA256, format!("{generation}:{nonce}").as_bytes());
     format!(
         "q-{}",
         digest
@@ -195,8 +198,15 @@ pub fn asked(run: &runtime::Run) -> bool {
 }
 /// The operator's root DM named [`DESK`], if one exists.
 pub fn desk(state: &State) -> Option<&str> {
-    state.chats.iter()
-        .find(|c| c.parent_chat.is_none() && c.actor == identity::Actor::LocalOperator && !c.improve_mode && c.name.as_deref() == Some(DESK))
+    state
+        .chats
+        .iter()
+        .find(|c| {
+            c.parent_chat.is_none()
+                && c.actor == identity::Actor::LocalOperator
+                && !c.improve_mode
+                && c.name.as_deref() == Some(DESK)
+        })
         .map(|c| c.id.as_str())
 }
 /// Records a question for the operator from the chat MCP caller, in `chat` or
@@ -207,7 +217,14 @@ pub fn desk(state: &State) -> Option<&str> {
 pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Result<Value, &'static str> {
     validate_input(&input)?;
     identity::authorize(&identity::Actor::LocalOperator, identity::Action::Task)?;
-    if state.runtime.runs.iter().filter(|r| asked(r) && r.status == "waiting").count() >= MAX_ASKED {
+    if state
+        .runtime
+        .runs
+        .iter()
+        .filter(|r| asked(r) && r.status == "waiting")
+        .count()
+        >= MAX_ASKED
+    {
         return Err("8 questions already wait for the operator; wait for their answers before asking more.");
     }
     crate::scheduler::admit(&state.runtime)?;
@@ -217,7 +234,12 @@ pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Resu
             if session.actor != identity::Actor::LocalOperator || session.improve_mode {
                 return Err("Ask only in the operator's own chat-mode DMs.");
             }
-            if state.runtime.runs.iter().any(|r| r.chat_id.as_deref() == Some(id) && crate::application::runs::status::active(&r.status)) {
+            if state
+                .runtime
+                .runs
+                .iter()
+                .any(|r| r.chat_id.as_deref() == Some(id) && crate::application::runs::status::active(&r.status))
+            {
                 return Err("That chat has a turn in progress or waiting; ask without id to use the Decisions DM.");
             }
             id.to_owned()
@@ -231,14 +253,40 @@ pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Resu
             }
         },
     };
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let run_id = format!("{stamp:x}-{}", state.runtime.runs.len());
-    let order = state.runtime.runs.iter().map(|r| r.queue_order).max().unwrap_or(0).saturating_add(1);
+    let order = state
+        .runtime
+        .runs
+        .iter()
+        .map(|r| r.queue_order)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
     let mut run = crate::application::runs::Submission {
-        objective: input.question.clone(), kind: RunKind::AgentMessage, source: ASKED.into(),
-        actor: identity::Actor::LocalOperator, action: identity::Action::Task,
-    }.into_run(run_id.clone(), order, state.runtime.backend, (state.runtime.backend == crate::backend::Backend::Local).then(|| state.runtime.configured_model()));
-    let question = Question { id: question_id(&run_id, ASKED), generation: run_id.clone(), nonce: ASKED.into(), input, answer: None, continuation: None };
+        objective: input.question.clone(),
+        kind: RunKind::AgentMessage,
+        source: ASKED.into(),
+        actor: identity::Actor::LocalOperator,
+        action: identity::Action::Task,
+    }
+    .into_run(
+        run_id.clone(),
+        order,
+        state.runtime.backend,
+        (state.runtime.backend == crate::backend::Backend::Local).then(|| state.runtime.configured_model()),
+    );
+    let question = Question {
+        id: question_id(&run_id, ASKED),
+        generation: run_id.clone(),
+        nonce: ASKED.into(),
+        input,
+        answer: None,
+        continuation: None,
+    };
     let id = question.id.clone();
     run.status = "waiting".into();
     run.chat_id = Some(chat_id.clone());
@@ -247,7 +295,10 @@ pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Resu
     state.runtime.runs.push(run);
     chat::touch(state, &chat_id);
     let session = state.chats.iter_mut().find(|c| c.id == chat_id).unwrap();
-    session.messages.push(chat::Message::notice("Decision requested by the chat MCP caller", Some(run_id)));
+    session.messages.push(chat::Message::notice(
+        "Decision requested by the chat MCP caller",
+        Some(run_id),
+    ));
     session.revision = session.revision.saturating_add(1);
     Ok(json!({"question_id":id,"chat_id":chat_id}))
 }
@@ -274,7 +325,9 @@ fn waiting_for<'a>(state: &'a State, chat_id: &str, question_id: Option<&str>) -
     state.runtime.runs.iter().find(|r| {
         r.chat_id.as_deref() == Some(chat_id)
             && r.status == "waiting"
-            && r.question.as_ref().is_some_and(|q| q.answer.is_none() && question_id.is_none_or(|id| id == q.id))
+            && r.question
+                .as_ref()
+                .is_some_and(|q| q.answer.is_none() && question_id.is_none_or(|id| id == q.id))
     })
 }
 pub fn waiting<'a>(state: &'a State, chat_id: &str) -> Option<&'a runtime::Run> {
@@ -285,28 +338,46 @@ pub fn waiting<'a>(state: &'a State, chat_id: &str) -> Option<&'a runtime::Run> 
 /// Control-recorded spawn lineage, always for the same actor; a persona root
 /// alone grants no access.
 pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
-    let Some(chat) = state.chats.iter().find(|chat| chat.id == chat_id) else { return vec![]; };
+    let Some(chat) = state.chats.iter().find(|chat| chat.id == chat_id) else {
+        return vec![];
+    };
     let mut visible = std::collections::HashSet::new();
-    for run in state.runtime.runs.iter().filter(|run|
-        run.chat_id.as_deref() == Some(chat_id) && run.actor == chat.actor
-    ) {
+    for run in state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| run.chat_id.as_deref() == Some(chat_id) && run.actor == chat.actor)
+    {
         visible.insert(run.id.as_str());
         if let Ok((_, children)) = crate::delegated_results::scope(state, run) {
             visible.extend(children);
         }
     }
-    state.runtime.runs.iter().filter(|run|
-        (visible.contains(run.id.as_str()) || run.chat_id.as_deref().is_some_and(|chat| crate::chat::within(state, chat, chat_id)))
-        && run.actor == chat.actor
-        && run.status == "waiting" && run.question.as_ref().is_some_and(|q| q.answer.is_none())
-    ).collect()
+    state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| {
+            (visible.contains(run.id.as_str())
+                || run
+                    .chat_id
+                    .as_deref()
+                    .is_some_and(|chat| crate::chat::within(state, chat, chat_id)))
+                && run.actor == chat.actor
+                && run.status == "waiting"
+                && run.question.as_ref().is_some_and(|q| q.answer.is_none())
+        })
+        .collect()
 }
 
 pub fn pending_json(state: &State, chat_id: &str) -> Vec<Value> {
-    pending(state, chat_id).into_iter().map(|run| {
-        let question = run.question.as_ref().unwrap();
-        json!({"run_id":run.id,"chat_id":run.chat_id,"question":question,"summary":summary(question)})
-    }).collect()
+    pending(state, chat_id)
+        .into_iter()
+        .map(|run| {
+            let question = run.question.as_ref().unwrap();
+            json!({"run_id":run.id,"chat_id":run.chat_id,"question":question,"summary":summary(question)})
+        })
+        .collect()
 }
 
 /// Changes when a question or a knowledge proposal is asked or decided, so
@@ -314,7 +385,7 @@ pub fn pending_json(state: &State, chat_id: &str) -> Vec<Value> {
 pub fn decision_revision(state: &State) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for run in state.runtime.runs.iter().filter(|run|run.question.is_some()) {
+    for run in state.runtime.runs.iter().filter(|run| run.question.is_some()) {
         (&run.id, &run.status, &run.question.as_ref().unwrap().answer).hash(&mut hash);
     }
     state.collective.proposals.iter().for_each(|p| p.status.hash(&mut hash));
@@ -322,9 +393,10 @@ pub fn decision_revision(state: &State) -> u64 {
 }
 
 pub fn answer_target<'a>(state: &'a State, chat_id: &'a str, question: &str) -> Result<&'a str, &'static str> {
-    pending(state, chat_id).into_iter()
-        .find(|run|run.question.as_ref().is_some_and(|q|q.id == question))
-        .and_then(|run|run.chat_id.as_deref())
+    pending(state, chat_id)
+        .into_iter()
+        .find(|run| run.question.as_ref().is_some_and(|q| q.id == question))
+        .and_then(|run| run.chat_id.as_deref())
         .ok_or("That design question is no longer pending or accessible from this chat.")
 }
 pub fn summary(question: &Question) -> String {
@@ -344,7 +416,10 @@ pub fn summary(question: &Question) -> String {
     if let Some(answer) = &question.answer {
         text.push_str(&format!("\n\nDecision: {answer}"));
     } else {
-        text.push_str(&format!("\n\nReply with a number or your own direction. For this question: /answer {} YOUR_ANSWER",question.id));
+        text.push_str(&format!(
+            "\n\nReply with a number or your own direction. For this question: /answer {} YOUR_ANSWER",
+            question.id
+        ));
     }
     text
 }
@@ -355,7 +430,9 @@ pub fn answer(
     text: &str,
     source: &str,
 ) -> Result<(), &'static str> {
-    let target = question_id.map(|question|answer_target(state, chat_id, question).map(str::to_owned)).transpose()?;
+    let target = question_id
+        .map(|question| answer_target(state, chat_id, question).map(str::to_owned))
+        .transpose()?;
     let chat_id = target.as_deref().unwrap_or(chat_id);
     let run = waiting_for(state, chat_id, question_id).ok_or(if question_id.is_some() {
         "That design question is no longer pending."
@@ -390,23 +467,33 @@ pub fn answer(
         run.status = "completed".into();
         *run.result = summary(run.question.as_ref().unwrap());
         let session = &mut state.chats[session_index];
-        session.messages.push(chat::Message { speaker: Default::default(), text: answer, run_id: None,
-            reply: format!("Decision recorded for {}.", run.question.as_ref().unwrap().id) });
+        session.messages.push(chat::Message {
+            speaker: Default::default(),
+            text: answer,
+            run_id: None,
+            reply: format!("Decision recorded for {}.", run.question.as_ref().unwrap().id),
+        });
         session.revision = session.revision.saturating_add(1);
         return Ok(());
     }
     let attempt = run
         .attempts
         .last()
-        .filter(|a| {
-            a.workspace_id.as_deref() == Some(&question.generation) && a.status == "waiting"
-        })
+        .filter(|a| a.workspace_id.as_deref() == Some(&question.generation) && a.status == "waiting")
         .ok_or("Paused attempt is unavailable.")?;
     let checkpoint = attempt
-        .project_checkpoint.as_ref().or(attempt.artifact.as_ref())
+        .project_checkpoint
+        .as_ref()
+        .or(attempt.artifact.as_ref())
         .cloned()
         .ok_or("The paused workspace has no verified checkpoint.")?;
-    if attempt.project.is_some() && state.chats[session_index].project.as_ref().and_then(|p|p.head.as_ref())!=attempt.project_base.as_ref() {
+    if attempt.project.is_some()
+        && state.chats[session_index]
+            .project
+            .as_ref()
+            .and_then(|p| p.head.as_ref())
+            != attempt.project_base.as_ref()
+    {
         return Err("The project changed; cancel this question and start a new turn.");
     }
     let current = if run.action == identity::Action::Improve {
@@ -422,12 +509,7 @@ pub fn answer(
     if current != baseline {
         return Err("The conversation workspace changed; cancel this question before continuing.");
     }
-    let index = state
-        .runtime
-        .runs
-        .iter()
-        .position(|r| r.id == run.id)
-        .unwrap();
+    let index = state.runtime.runs.iter().position(|r| r.id == run.id).unwrap();
     // Capture continuation inputs, not diagnostic histories or previous attempts.
     let actor = run.actor.clone();
     let action = run.action;
@@ -438,21 +520,25 @@ pub fn answer(
     let lenses = run.lenses.clone();
     let queue_order = run.queue_order;
     let resources = run.resource_grants.clone();
-    let objective = run.continuation.as_ref().map(|c|c.objective.clone()).unwrap_or_else(|| run.objective.to_string());
+    let objective = run
+        .continuation
+        .as_ref()
+        .map(|c| c.objective.clone())
+        .unwrap_or_else(|| run.objective.to_string());
     let continuation = Continuation {
-        project_base: attempt.project_base.clone(), checkpoint,
-        published_parent: baseline.clone(), objective, decision: question.input.clone(),
+        project_base: attempt.project_base.clone(),
+        checkpoint,
+        published_parent: baseline.clone(),
+        objective,
+        decision: question.input.clone(),
     };
     // Replacing the waiting run with its continuation keeps admission bounded.
     state.runtime.runs[index].status = "continued".into();
     let notice = state.runtime.notice.clone();
-    if let Err(error) = state.runtime.enqueue_for(
-        answer.clone(),
-        RunKind::DesignAnswer,
-        source,
-        actor,
-        action,
-    ) {
+    if let Err(error) = state
+        .runtime
+        .enqueue_for(answer.clone(), RunKind::DesignAnswer, source, actor, action)
+    {
         state.runtime.runs[index].status = "waiting".into();
         state.runtime.notice = notice;
         return Err(error);
@@ -471,10 +557,10 @@ pub fn answer(
     let question = state.runtime.runs[index].question.as_mut().unwrap();
     question.answer = Some(answer.clone());
     question.continuation = Some(next_id.clone());
-    *state.runtime.runs[index].result =
-        summary(state.runtime.runs[index].question.as_ref().unwrap());
+    *state.runtime.runs[index].result = summary(state.runtime.runs[index].question.as_ref().unwrap());
     let session = &mut state.chats[session_index];
-    session.messages.push(chat::Message { speaker: Default::default(),
+    session.messages.push(chat::Message {
+        speaker: Default::default(),
         text: answer,
         run_id: Some(next_id),
         reply: String::new(),
@@ -496,12 +582,7 @@ pub fn discord_chat(state: &State, incoming: &crate::discord::Incoming) -> Strin
                 .runtime
                 .runs
                 .iter()
-                .find(|r| {
-                    r.actor == actor
-                        && r.question
-                            .as_ref()
-                            .is_some_and(|q| q.id == id && q.answer.is_none())
-                })
+                .find(|r| r.actor == actor && r.question.as_ref().is_some_and(|q| q.id == id && q.answer.is_none()))
                 .and_then(|r| r.chat_id.clone())
         })
         .unwrap_or_else(|| crate::discord::chat_id(incoming.user_id, incoming.channel_id))

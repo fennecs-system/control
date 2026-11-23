@@ -1,4 +1,3 @@
-
 use super::*;
 fn active(state: &mut State, parent: Option<&str>) -> (String, String) {
     let chat = crate::chat::create(state);
@@ -19,7 +18,10 @@ fn room_call(state: &mut State, run: &str, tool: &str, args: Value, nonce: &str)
         &json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":tool,"arguments":args}}}),
         |_| Ok(()),
     );
-    assert!(response.get("error").is_none() && response["result"]["isError"] == false, "{response}");
+    assert!(
+        response.get("error").is_none() && response["result"]["isError"] == false,
+        "{response}"
+    );
     serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
@@ -68,17 +70,8 @@ fn task_threads_isolate_history_participants_and_inboxes_without_timers() {
     assert_eq!(view["room"], thread);
     assert_eq!(view["posts"].as_array().unwrap().len(), 2);
     assert_eq!(view["chats"].as_array().unwrap().len(), 2);
-    assert!(
-        !view.to_string().contains("unrelated plan")
-            && !view.to_string().contains("old shared history")
-    );
-    let listed = room_call(
-        &mut state,
-        &other_run,
-        "control_room_list",
-        json!({}),
-        "1-5",
-    );
+    assert!(!view.to_string().contains("unrelated plan") && !view.to_string().contains("old shared history"));
+    let listed = room_call(&mut state, &other_run, "control_room_list", json!({}), "1-5");
     assert_eq!(listed["rooms"][0]["posts"], 1);
     assert_eq!(listed["rooms"][0]["room"], format!("general/{other}"));
     let foreign = worker_rpc(
@@ -86,10 +79,7 @@ fn task_threads_isolate_history_participants_and_inboxes_without_timers() {
         &other_run,
         &json!({"nonce":"1-6","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_read","arguments":{"room":thread}}}}),
     );
-    assert!(
-        crate::toolbox::failure_text(&foreign).unwrap()
-            .contains("another task")
-    );
+    assert!(crate::toolbox::failure_text(&foreign).unwrap().contains("another task"));
     // An operator targets a thread explicitly; only that thread's inbox sees it.
     tool(
         &mut state,
@@ -97,40 +87,17 @@ fn task_threads_isolate_history_participants_and_inboxes_without_timers() {
         &json!({"room":thread,"message":"operator direction"}),
     )
     .unwrap();
-    let inbox = notifications::call(
-        &mut state,
-        &child_run,
-        "control_room_notifications",
-        &json!({}),
-    )
-    .unwrap();
-    assert!(
-        inbox.to_string().contains("our plan") && inbox.to_string().contains("operator direction")
-    );
+    let inbox = notifications::call(&mut state, &child_run, "control_room_notifications", &json!({})).unwrap();
+    assert!(inbox.to_string().contains("our plan") && inbox.to_string().contains("operator direction"));
     assert!(!inbox.to_string().contains("unrelated plan"));
-    let other_inbox = notifications::call(
-        &mut state,
-        &other_run,
-        "control_room_notifications",
-        &json!({}),
-    )
-    .unwrap();
+    let other_inbox = notifications::call(&mut state, &other_run, "control_room_notifications", &json!({})).unwrap();
     assert!(!other_inbox.to_string().contains("operator direction"));
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    assert_eq!(
-        address::for_worker(&restored, &child, "general").unwrap(),
-        thread
-    );
+    assert_eq!(address::for_worker(&restored, &child, "general").unwrap(), thread);
     let page = render(&restored, &thread);
-    assert!(
-        page.contains(&format!("name='channel' value='{thread}'"))
-            && page.contains("operator direction")
-    );
+    assert!(page.contains(&format!("name='channel' value='{thread}'")) && page.contains("operator direction"));
     assert!(!page.contains("unrelated plan") && !page.contains("old shared history"));
-    assert!(
-        page.contains("name='lens' value='none'"),
-        "thread IDs are not lens IDs"
-    );
+    assert!(page.contains("name='lens' value='none'"), "thread IDs are not lens IDs");
     // Isolate room-triggered wakes from the separate enable-bot bootstrap
     // for an attempt with an unpublished handoff.
     for run in &mut state.runtime.runs {
@@ -171,16 +138,8 @@ fn operator_selected_threads_are_inherited_and_legacy_links_stay_shared() {
         address::for_worker(&state, &child, "general").unwrap(),
         format!("general/{lead}")
     );
-    state
-        .chats
-        .iter_mut()
-        .find(|chat| chat.id == joiner)
-        .unwrap()
-        .room = Some("engineering".into());
-    assert_eq!(
-        address::for_worker(&state, &child, "general").unwrap(),
-        "general"
-    );
+    state.chats.iter_mut().find(|chat| chat.id == joiner).unwrap().room = Some("engineering".into());
+    assert_eq!(address::for_worker(&state, &child, "general").unwrap(), "general");
     for invalid in [
         "general/",
         "general/../../secret",
@@ -240,17 +199,11 @@ fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
     state.runtime.runs[0].status = "running".into();
     let run = state.runtime.runs[0].id.clone();
     let req = json!({"nonce":"123-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"engineering","actor":"architect","message":"<shared>"}}}});
-    assert_eq!(
-        worker_rpc(&mut state, &run, &req)["result"]["isError"],
-        false
-    );
+    assert_eq!(worker_rpc(&mut state, &run, &req)["result"]["isError"], false);
     worker_rpc(&mut state, &run, &req);
     assert_eq!(state.collective.posts.len(), 1);
     assert_eq!(
-        (
-            state.collective.posts[0].room.as_str(),
-            state.chats[0].room.as_deref()
-        ),
+        (state.collective.posts[0].room.as_str(), state.chats[0].room.as_deref()),
         ("engineering", Some("research"))
     );
     assert_eq!(
@@ -262,10 +215,17 @@ fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
     let forbidden =
         json!({"request":{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control.chat.send"}}});
     let denied = worker_rpc(&mut state, &run, &forbidden);
-    assert_eq!(crate::toolbox::failure_text(&denied), Some("Tool is not allowed for this worker."), "{denied}");
+    assert_eq!(
+        crate::toolbox::failure_text(&denied),
+        Some("Tool is not allowed for this worker."),
+        "{denied}"
+    );
     assert_eq!(denied["id"], 2);
     state.runtime.runs[0].status = "completed".into();
-    assert_eq!(crate::toolbox::failure_text(&worker_rpc(&mut state, &run, &req)), Some("Run is not active."));
+    assert_eq!(
+        crate::toolbox::failure_text(&worker_rpc(&mut state, &run, &req)),
+        Some("Run is not active.")
+    );
 }
 #[test]
 fn delivery_is_explicit_durable_and_cannot_be_changed_by_retry() {
@@ -295,7 +255,11 @@ fn delivery_is_explicit_durable_and_cannot_be_changed_by_retry() {
         &run,
         &json!({"nonce":"1-2","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"message":"Bad","delivery":"maybe"}}}}),
     );
-    assert_eq!(crate::toolbox::failure_text(&invalid), Some("Expected delivery=record or notify."), "{invalid}");
+    assert_eq!(
+        crate::toolbox::failure_text(&invalid),
+        Some("Expected delivery=record or notify."),
+        "{invalid}"
+    );
     assert_eq!(invalid["id"], 1);
     assert_eq!(state.collective.posts.len(), 1);
     let legacy = room_call(
@@ -306,10 +270,9 @@ fn delivery_is_explicit_durable_and_cannot_be_changed_by_retry() {
         "1-3",
     );
     assert_eq!(legacy["delivery"], "notify");
-    let old: Post = serde_json::from_value(
-        json!({"room":"general","text":"Old state","chat":null,"run":null,"key":"old"}),
-    )
-    .unwrap();
+    let old: Post =
+        serde_json::from_value(json!({"room":"general","text":"Old state","chat":null,"run":null,"key":"old"}))
+            .unwrap();
     assert_eq!(old.delivery, Delivery::Notify);
     tool(
         &mut state,
@@ -333,8 +296,7 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
     let run = state.runtime.runs[0].id.clone();
     let call = |name: &str, args: Value, nonce: &str| json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
     let text = |response: Value| {
-        serde_json::from_str::<Value>(response["result"]["content"][0]["text"].as_str().unwrap())
-            .unwrap()
+        serde_json::from_str::<Value>(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
     };
     let names = worker_rpc(
         &mut state,
@@ -354,29 +316,42 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
     ));
     let thread = format!("general/{id}");
     assert_eq!(
-        (
-            list["attached"].clone(),
-            list["rooms"].as_array().unwrap().len()
-        ),
+        (list["attached"].clone(), list["rooms"].as_array().unwrap().len()),
         (json!(thread), NAMES.len()),
         "an unlinked task defaults to its own #general thread"
     );
-    let empty = text(worker_rpc(&mut state, &run, &call("control_room_read", json!({}), "1-2")));
-    assert_eq!((&empty["room"], &empty["note"]), (&json!(thread), &json!("No posts, claims or linked chats in this room yet.")));
+    let empty = text(worker_rpc(
+        &mut state,
+        &run,
+        &call("control_room_read", json!({}), "1-2"),
+    ));
+    assert_eq!(
+        (&empty["room"], &empty["note"]),
+        (
+            &json!(thread),
+            &json!("No posts, claims or linked chats in this room yet.")
+        )
+    );
     assert_eq!(state.chats[0].room, None, "reading links nothing");
-    let unknown = worker_rpc(&mut state, &run, &call("control_room_read", json!({"room":"lobby"}), "1-3"));
-    assert_eq!(crate::toolbox::failure_text(&unknown), Some(format!("Unknown room lobby. This chat's team room is {thread}; omit room to use it.").as_str()));
+    let unknown = worker_rpc(
+        &mut state,
+        &run,
+        &call("control_room_read", json!({"room":"lobby"}), "1-3"),
+    );
+    assert_eq!(
+        crate::toolbox::failure_text(&unknown),
+        Some(format!("Unknown room lobby. This chat's team room is {thread}; omit room to use it.").as_str())
+    );
     let failed = checkpoint(
         &mut state,
         &run,
-        &call(
-            "control_room_post",
-            json!({"room":"general","message":"hi"}),
-            "1-4",
-        ),
+        &call("control_room_post", json!({"room":"general","message":"hi"}), "1-4"),
         |_| Err(std::io::Error::other("disk")),
     );
-    assert_eq!(crate::toolbox::failure_text(&failed), Some("Could not save room update. Try again."));
+    assert_eq!(
+        crate::toolbox::failure_text(&failed),
+        Some("Could not save room update. Try again.")
+    );
     assert_eq!(
         (state.chats[0].room.as_deref(), state.collective.posts.len()),
         (None, 0),
@@ -385,22 +360,14 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
     checkpoint(
         &mut state,
         &run,
-        &call(
-            "control_room_post",
-            json!({"room":"general","message":"hi"}),
-            "1-5",
-        ),
+        &call("control_room_post", json!({"room":"general","message":"hi"}), "1-5"),
         |_| Ok(()),
     );
     assert_eq!(state.chats[0].room.as_deref(), Some(thread.as_str()));
     checkpoint(
         &mut state,
         &run,
-        &call(
-            "control_room_post",
-            json!({"room":"research","message":"also"}),
-            "1-6",
-        ),
+        &call("control_room_post", json!({"room":"research","message":"also"}), "1-6"),
         |_| Ok(()),
     );
     assert_eq!(
@@ -429,17 +396,11 @@ fn a_bot_whose_chat_links_by_posting_hears_that_room() {
     let failed = checkpoint(&mut state, &run, &post, |_| Err(std::io::Error::other("disk")));
     assert!(crate::toolbox::failure_text(&failed).is_some(), "{failed}");
     assert!(
-        !crate::bots::status(&state, &id)
-            .unwrap()
-            .contains("research"),
+        !crate::bots::status(&state, &id).unwrap().contains("research"),
         "a failed save keeps the bot unchanged"
     );
     checkpoint(&mut state, &run, &post, |_| Ok(()));
-    assert!(
-        crate::bots::status(&state, &id)
-            .unwrap()
-            .contains("room #research")
-    );
+    assert!(crate::bots::status(&state, &id).unwrap().contains("room #research"));
     assert!(
         state.collective.room_watches.iter().any(|w| w.chat == id),
         "the bot reads replies from an inbox"
@@ -467,13 +428,21 @@ fn a_late_reply_cannot_remove_the_next_mailbox_request() {
     assert_eq!(take_request(&dir).unwrap(), first);
     fs::write(dir.join(".control-room-request"), next.to_string()).unwrap();
     reply(&dir, &json!({"nonce":"1","response":{"id":7,"result":{}}}));
-    assert_eq!(take_request(&dir).unwrap(), next, "a late reply must not discard a newer delivery, even if JSON-RPC IDs are reused");
+    assert_eq!(
+        take_request(&dir).unwrap(),
+        next,
+        "a late reply must not discard a newer delivery, even if JSON-RPC IDs are reused"
+    );
     assert!(take_request(&dir).is_err());
     fs::remove_dir_all(dir).unwrap();
 }
 
 fn room_failure(state: &mut State, run: &str, tool: &str, args: Value) -> String {
-    let response = worker_rpc(state, run, &json!({"nonce":"9-9","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":tool,"arguments":args}}}));
+    let response = worker_rpc(
+        state,
+        run,
+        &json!({"nonce":"9-9","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":tool,"arguments":args}}}),
+    );
     crate::toolbox::failure_text(&response).unwrap().to_owned()
 }
 
@@ -486,26 +455,91 @@ fn omitted_room_uses_the_team_room_and_unknown_names_point_to_it() {
     // A worker started before or without inheriting a link still finds its team.
     let (child, child_run) = active(&mut state, Some(&lead));
     assert_eq!(state.chats[1].room, None);
-    assert_eq!(room_call(&mut state, &child_run, "control_room_list", json!({}), "2-1")["attached"], team);
-    assert_eq!(room_call(&mut state, &child_run, "control_room_read", json!({}), "2-2")["room"], team);
+    assert_eq!(
+        room_call(&mut state, &child_run, "control_room_list", json!({}), "2-1")["attached"],
+        team
+    );
+    assert_eq!(
+        room_call(&mut state, &child_run, "control_room_read", json!({}), "2-2")["room"],
+        team
+    );
     // The prompt renders it as #research/<lead>; that spelling names it too.
-    assert_eq!(room_call(&mut state, &child_run, "control_room_read", json!({"room":format!("#{team}")}), "2-5")["room"], team);
-    assert_eq!(room_call(&mut state, &child_run, "control_room_read", json!({"room":"#research"}), "2-6")["room"], team);
-    let claim = room_call(&mut state, &child_run, "control_room_claim", json!({"key":"m1","action":"acquire"}), "2-3");
+    assert_eq!(
+        room_call(
+            &mut state,
+            &child_run,
+            "control_room_read",
+            json!({"room":format!("#{team}")}),
+            "2-5"
+        )["room"],
+        team
+    );
+    assert_eq!(
+        room_call(
+            &mut state,
+            &child_run,
+            "control_room_read",
+            json!({"room":"#research"}),
+            "2-6"
+        )["room"],
+        team
+    );
+    let claim = room_call(
+        &mut state,
+        &child_run,
+        "control_room_claim",
+        json!({"key":"m1","action":"acquire"}),
+        "2-3",
+    );
     assert_eq!(claim["applied"], true, "{claim}");
     assert_eq!(state.collective.claims[0].room, team);
     // A mistaken name fails visibly and names the team room instead of redirecting.
-    let error = room_failure(&mut state, &child_run, "control_room_post", json!({"room":"castle","message":"joined"}));
-    assert_eq!(error, format!("Unknown room castle. This chat's team room is {team}; omit room to use it."));
+    let error = room_failure(
+        &mut state,
+        &child_run,
+        "control_room_post",
+        json!({"room":"castle","message":"joined"}),
+    );
+    assert_eq!(
+        error,
+        format!("Unknown room castle. This chat's team room is {team}; omit room to use it.")
+    );
     assert!(state.collective.posts.is_empty() && state.chats[1].room.is_none());
-    let posted = room_call(&mut state, &child_run, "control_room_post", json!({"message":"joined"}), "2-4");
+    let posted = room_call(
+        &mut state,
+        &child_run,
+        "control_room_post",
+        json!({"message":"joined"}),
+        "2-4",
+    );
     assert_eq!(posted["room"], team);
-    assert_eq!(state.chats.iter().find(|chat| chat.id == child).unwrap().room.as_deref(), Some(team.as_str()), "posting links it to hear replies");
+    assert_eq!(
+        state
+            .chats
+            .iter()
+            .find(|chat| chat.id == child)
+            .unwrap()
+            .room
+            .as_deref(),
+        Some(team.as_str()),
+        "posting links it to hear replies"
+    );
     // Neither an unrelated task nor another actor's descendant inherits the link;
     // an unlinked task defaults to its own #general thread.
     let (other, other_run) = active(&mut state, None);
-    assert_eq!(room_call(&mut state, &other_run, "control_room_read", json!({}), "2-7")["room"], format!("general/{other}"));
-    assert_eq!(room_failure(&mut state, &other_run, "control_room_post", json!({"room":"castle","message":"x"})), format!("Unknown room castle. This chat's team room is general/{other}; omit room to use it."));
+    assert_eq!(
+        room_call(&mut state, &other_run, "control_room_read", json!({}), "2-7")["room"],
+        format!("general/{other}")
+    );
+    assert_eq!(
+        room_failure(
+            &mut state,
+            &other_run,
+            "control_room_post",
+            json!({"room":"castle","message":"x"})
+        ),
+        format!("Unknown room castle. This chat's team room is general/{other}; omit room to use it.")
+    );
     let (_, foreign_run) = active(&mut state, Some(&lead));
     state.chats[0].actor = crate::identity::Actor::Unknown;
     assert!(room_failure(&mut state, &foreign_run, "control_room_read", json!({})).contains("No room attached"));
@@ -518,15 +552,52 @@ fn an_unlinked_team_shares_its_general_thread_for_claim_read_and_post() {
     let (lead, lead_run) = active(&mut state, None);
     let (child, child_run) = active(&mut state, Some(&lead));
     let team = format!("general/{lead}");
-    let claim = room_call(&mut state, &lead_run, "control_room_claim", json!({"key":"server","action":"acquire"}), "4-1");
-    assert_eq!((claim["applied"].clone(), state.collective.claims[0].room.as_str()), (json!(true), team.as_str()), "{claim}");
-    assert_eq!(room_call(&mut state, &lead_run, "control_room_post", json!({"message":"backlog"}), "4-2")["room"], team);
-    assert_eq!(state.chats[0].room.as_deref(), Some(team.as_str()), "posting links the lead");
+    let claim = room_call(
+        &mut state,
+        &lead_run,
+        "control_room_claim",
+        json!({"key":"server","action":"acquire"}),
+        "4-1",
+    );
+    assert_eq!(
+        (claim["applied"].clone(), state.collective.claims[0].room.as_str()),
+        (json!(true), team.as_str()),
+        "{claim}"
+    );
+    assert_eq!(
+        room_call(
+            &mut state,
+            &lead_run,
+            "control_room_post",
+            json!({"message":"backlog"}),
+            "4-2"
+        )["room"],
+        team
+    );
+    assert_eq!(
+        state.chats[0].room.as_deref(),
+        Some(team.as_str()),
+        "posting links the lead"
+    );
     let read = room_call(&mut state, &child_run, "control_room_read", json!({}), "4-3");
-    assert_eq!((&read["room"], &read["posts"][0]["text"], &read["claims"][0]["key"]), (&json!(team), &json!("backlog"), &json!("server")));
+    assert_eq!(
+        (&read["room"], &read["posts"][0]["text"], &read["claims"][0]["key"]),
+        (&json!(team), &json!("backlog"), &json!("server"))
+    );
     let list = room_call(&mut state, &child_run, "control_room_list", json!({}), "4-4");
-    assert_eq!((&list["attached"], &list["rooms"][0]["posts"], &list["rooms"][0]["chats"]), (&json!(team), &json!(1), &json!(1)));
-    assert_eq!(state.chats.iter().find(|chat| chat.id == child).unwrap().room, None, "reading links nothing");
+    assert_eq!(
+        (
+            &list["attached"],
+            &list["rooms"][0]["posts"],
+            &list["rooms"][0]["chats"]
+        ),
+        (&json!(team), &json!(1), &json!(1))
+    );
+    assert_eq!(
+        state.chats.iter().find(|chat| chat.id == child).unwrap().room,
+        None,
+        "reading links nothing"
+    );
 }
 
 #[test]
@@ -539,13 +610,30 @@ fn an_advisor_does_not_post_through_its_inherited_team_room() {
     state.runtime.runs[0].status = "completed".into();
     let (advisor, run) = active(&mut state, Some(&lead));
     let session = state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap();
-    session.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None, bundle: None });
+    session.persona = Some(crate::delegation::Persona {
+        role: crate::delegation::Role::Judge,
+        root: "root".into(),
+        depth: 1,
+        parent: None,
+        bundle: None,
+    });
     crate::bots::command(&mut state, &advisor, "on").unwrap();
     assert!(state.bots.advises(&advisor));
     // The room tells members whom to ask, though the advisor is not linked to it.
-    assert_eq!(read(&state, &format!("general/{lead}"))["advisor"]["id"], advisor.as_str());
+    assert_eq!(
+        read(&state, &format!("general/{lead}"))["advisor"]["id"],
+        advisor.as_str()
+    );
     assert!(read(&state, "general/another")["advisor"].is_null());
-    assert!(room_failure(&mut state, &run, "control_room_post", json!({"message":"Build claim looks abandoned"})).contains("does not post to rooms"));
+    assert!(
+        room_failure(
+            &mut state,
+            &run,
+            "control_room_post",
+            json!({"message":"Build claim looks abandoned"})
+        )
+        .contains("does not post to rooms")
+    );
     assert!(state.collective.posts.is_empty());
     assert_eq!(state.chats[1].room, None, "a refused post links nothing");
 }
@@ -557,13 +645,22 @@ fn the_room_plan_follows_room_access_rules() {
     let team = format!("general/{lead}");
     state.chats[0].room = Some(team.clone());
     let (_, child_run) = active(&mut state, Some(&lead));
-    room_call(&mut state, &child_run, "control_room_claim", json!({"key":"axe","action":"acquire"}), "3-1");
+    room_call(
+        &mut state,
+        &child_run,
+        "control_room_claim",
+        json!({"key":"axe","action":"acquire"}),
+        "3-1",
+    );
     let plan = room_call(&mut state, &lead_run, "control_room_plan", json!({}), "3-2");
     assert_eq!((&plan["room"], &plan["critical_path"]), (&json!(team), &json!(["axe"])));
     assert!(state.collective.claim_seq == 1, "planning changes nothing");
     let (other, other_run) = active(&mut state, None);
     assert!(room_failure(&mut state, &other_run, "control_room_plan", json!({"room":team})).contains("another task"));
-    assert_eq!(room_call(&mut state, &other_run, "control_room_plan", json!({}), "3-3")["room"], format!("general/{other}"));
+    assert_eq!(
+        room_call(&mut state, &other_run, "control_room_plan", json!({}), "3-3")["room"],
+        format!("general/{other}")
+    );
 }
 /// Pins the room server's envelopes: method checks come before the run's
 /// authority, and every other refusal is -32602 outside tools/call.
@@ -572,25 +669,78 @@ fn room_envelopes_are_pinned() {
     let mut state = State::default();
     let request = |request: Value| json!({"nonce":"1","request":request});
     for (envelope, expected) in [
-        (request(json!({"jsonrpc":"2.0","method":"notifications/initialized"})), Value::Null),
-        (request(json!({"jsonrpc":"1.0","id":1,"method":"ping"})), json!({"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}})),
-        (request(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}})), json!({"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"tools/call requires params.name"}})),
-        (request(json!({"jsonrpc":"2.0","id":3,"method":"prompts/list"})), json!({"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Unsupported room method."}})),
-        (request(json!({"jsonrpc":"2.0","id":4,"method":"initialize"})), json!({"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Run is not active."}})),
-        (request(json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"control_room_list"}})),
-            json!({"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"Run is not active."}],"isError":true}})),
+        (
+            request(json!({"jsonrpc":"2.0","method":"notifications/initialized"})),
+            Value::Null,
+        ),
+        (
+            request(json!({"jsonrpc":"1.0","id":1,"method":"ping"})),
+            json!({"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}}),
+        ),
+        (
+            request(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}})),
+            json!({"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"tools/call requires params.name"}}),
+        ),
+        (
+            request(json!({"jsonrpc":"2.0","id":3,"method":"prompts/list"})),
+            json!({"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Unsupported room method."}}),
+        ),
+        (
+            request(json!({"jsonrpc":"2.0","id":4,"method":"initialize"})),
+            json!({"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Run is not active."}}),
+        ),
+        (
+            request(json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"control_room_list"}})),
+            json!({"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"Run is not active."}],"isError":true}}),
+        ),
     ] {
         assert_eq!(worker_rpc(&mut state, "missing", &envelope), expected, "{envelope}");
     }
     let (_, run) = active(&mut state, None);
-    let initialized = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":6,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})));
-    assert_eq!(initialized, json!({"jsonrpc":"2.0","id":6,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}}));
-    assert_eq!(worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":7,"method":"ping"}))), json!({"jsonrpc":"2.0","id":7,"result":{}}));
-    let listed = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":8,"method":"tools/list"})));
-    assert_eq!(listed, json!({"jsonrpc":"2.0","id":8,"result":{"tools":worker_definitions(false)}}));
-    let unknown = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"control_nope"}})));
-    assert_eq!(unknown, json!({"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"Tool is not allowed for this worker."}],"isError":true}}));
-    let listed = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"control_room_list"}})));
-    assert_eq!(listed["result"].as_object().unwrap().len(), 2, "room results carry no structuredContent: {listed}");
+    let initialized = worker_rpc(
+        &mut state,
+        &run,
+        &request(json!({"jsonrpc":"2.0","id":6,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})),
+    );
+    assert_eq!(
+        initialized,
+        json!({"jsonrpc":"2.0","id":6,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}})
+    );
+    assert_eq!(
+        worker_rpc(
+            &mut state,
+            &run,
+            &request(json!({"jsonrpc":"2.0","id":7,"method":"ping"}))
+        ),
+        json!({"jsonrpc":"2.0","id":7,"result":{}})
+    );
+    let listed = worker_rpc(
+        &mut state,
+        &run,
+        &request(json!({"jsonrpc":"2.0","id":8,"method":"tools/list"})),
+    );
+    assert_eq!(
+        listed,
+        json!({"jsonrpc":"2.0","id":8,"result":{"tools":worker_definitions(false)}})
+    );
+    let unknown = worker_rpc(
+        &mut state,
+        &run,
+        &request(json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"control_nope"}})),
+    );
+    assert_eq!(
+        unknown,
+        json!({"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"Tool is not allowed for this worker."}],"isError":true}})
+    );
+    let listed = worker_rpc(
+        &mut state,
+        &run,
+        &request(json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"control_room_list"}})),
+    );
+    assert_eq!(
+        listed["result"].as_object().unwrap().len(),
+        2,
+        "room results carry no structuredContent: {listed}"
+    );
     assert_eq!(listed["result"]["isError"], false);
 }

@@ -1,12 +1,7 @@
-
 use super::*;
 fn heading(entry: &control_context::Tool) -> String {
     match entry.href {
-        Some(href) => format!(
-            "<h3><a href='{}'>{} ↗</a></h3>",
-            escape(href),
-            escape(entry.title)
-        ),
+        Some(href) => format!("<h3><a href='{}'>{} ↗</a></h3>", escape(href), escape(entry.title)),
         None => format!("<h3>{}</h3>", escape(entry.title)),
     }
 }
@@ -18,18 +13,12 @@ fn every_operator_mcp_tool_is_discoverable_in_the_catalogue() {
         &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
     );
     let tools = listed["result"]["tools"].as_array().unwrap();
-    for definition in tools
-        .iter()
-        .chain(crate::mcp_stdio::local_definitions().iter())
-    {
+    for definition in tools.iter().chain(crate::mcp_stdio::local_definitions().iter()) {
         let name = definition["name"].as_str().unwrap();
-        let entry = control_context::tool_for_mcp(name)
-            .unwrap_or_else(|| panic!("Missing catalogue registration: {name}"));
+        let entry =
+            control_context::tool_for_mcp(name).unwrap_or_else(|| panic!("Missing catalogue registration: {name}"));
         let html = render(&state, name);
-        assert!(
-            html.contains(&heading(entry)),
-            "MCP name not searchable: {name}"
-        );
+        assert!(html.contains(&heading(entry)), "MCP name not searchable: {name}");
     }
     let html = render(&state, "");
     for entry in control_context::TOOLS.iter().filter(|tool| tool.available) {
@@ -40,17 +29,14 @@ fn every_operator_mcp_tool_is_discoverable_in_the_catalogue() {
 #[test]
 fn catalogue_search_resolves_live_composed_lenses_without_duplicate_lists() {
     let mut state = State::default();
-    state
-        .lens_library
-        .definitions
-        .push(control_context::Definition {
-            id: "test-tools".into(),
-            name: "Test".into(),
-            revision: 1,
-            includes: vec!["source-search".into()],
-            tools: vec!["rust.run".into(), "design.ask".into()],
-            ..Default::default()
-        });
+    state.lens_library.definitions.push(control_context::Definition {
+        id: "test-tools".into(),
+        name: "Test".into(),
+        revision: 1,
+        includes: vec!["source-search".into()],
+        tools: vec!["rust.run".into(), "design.ask".into()],
+        ..Default::default()
+    });
     let all = render(&state, "");
     assert_eq!(all.matches("href='/tools/browser'").count(), 1);
     assert!(!all.contains("<iframe"));
@@ -59,9 +45,7 @@ fn catalogue_search_resolves_live_composed_lenses_without_duplicate_lists() {
     assert!(all.contains("<h3><a href='/tools/services'>Persistent service ↗</a></h3>"));
     assert!(all.contains("<h3>Design decision</h3>"));
     assert!(render(&state, "control_design_ask").contains("<h3>Design decision</h3>"));
-    assert!(
-        render(&state, "lens:test-tools control_design_ask").contains("<h3>Design decision</h3>")
-    );
+    assert!(render(&state, "lens:test-tools control_design_ask").contains("<h3>Design decision</h3>"));
     let result = render(&state, "lens:test-tools rust");
     assert!(result.contains("href='/tools/rust'"));
     assert!(!result.contains("href='/tools/search'"));
@@ -77,15 +61,9 @@ fn catalogue_search_resolves_live_composed_lenses_without_duplicate_lists() {
         for (name, css) in [
             ("style.css", include_str!("../../assets/style.css")),
             ("workspace.css", include_str!("../../assets/workspace.css")),
-            (
-                "navigation.css",
-                include_str!("../../assets/navigation.css"),
-            ),
+            ("navigation.css", include_str!("../../assets/navigation.css")),
             ("runtime.css", include_str!("../../assets/runtime.css")),
-            (
-                "collective.css",
-                include_str!("../../assets/collective.css"),
-            ),
+            ("collective.css", include_str!("../../assets/collective.css")),
         ] {
             page = page
                 .replace(

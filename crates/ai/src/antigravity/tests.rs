@@ -31,9 +31,20 @@ fn the_documented_stream_gives_the_reply_the_message_and_the_result_totals() {
     assert!(output.text.unwrap().starts_with("Git rebase destructively"));
     assert!(!rejected);
     // Uncached input plus cache reads; reads also shown as cached.
-    let total = Tokens { input_tokens: 18531, cached_input_tokens: 8113, output_tokens: 589 };
+    let total = Tokens {
+        input_tokens: 18531,
+        cached_input_tokens: 8113,
+        output_tokens: 589,
+    };
     assert_eq!(output.tokens, Some(total));
-    assert_eq!(usage, Usage { tokens: Some(total), complete: true, model: None });
+    assert_eq!(
+        usage,
+        Usage {
+            tokens: Some(total),
+            complete: true,
+            model: None
+        }
+    );
     assert_eq!(seen.len(), 1);
     assert_eq!((seen[0].kind.as_str(), seen[0].status.as_str()), ("message", "running"));
 }
@@ -45,9 +56,25 @@ fn streamed_deltas_join_into_one_message_and_steps_sum_until_the_result() {
     let active = r#"{"event":"step_update","step_update":{"conversation_id":"9ec5","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"apple"}}"#;
     let done = r#"{"event":"step_update","step_update":{"conversation_id":"9ec5","step_index":2,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":1.169607627,"usage":{"input_tokens":30384,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":30388}}}"#;
     let (output, usage, seen, _) = run(Antigravity::agent(), &[USER, active, done]);
-    assert!(output.unwrap_err().to_string().starts_with("Antigravity did not return a final result"));
+    assert!(
+        output
+            .unwrap_err()
+            .to_string()
+            .starts_with("Antigravity did not return a final result")
+    );
     // No result: the step sum is a lower bound.
-    assert_eq!(usage, Usage { tokens: Some(Tokens { input_tokens: 30384, cached_input_tokens: 0, output_tokens: 4 }), complete: false, model: None });
+    assert_eq!(
+        usage,
+        Usage {
+            tokens: Some(Tokens {
+                input_tokens: 30384,
+                cached_input_tokens: 0,
+                output_tokens: 4
+            }),
+            complete: false,
+            model: None
+        }
+    );
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].text, "apple\n");
 }
@@ -64,19 +91,33 @@ fn control_tools_are_recorded_by_their_control_name() {
     let (output, usage, seen, rejected) = run(Antigravity::agent(), &[init, start, end, lazy, RESULT]);
     assert!(output.is_ok() && !rejected);
     assert_eq!(usage.model.as_deref(), Some("gemini-4-neon-medium"));
-    let shown: Vec<_> = seen.iter().map(|a| (a.id.as_str(), a.text.as_str(), a.output.as_str(), a.status.as_str())).collect();
-    assert_eq!(shown, [
-        ("antigravity-step-2", "control_room_read", "", "in_progress"),
-        ("antigravity-step-2", "control_room_read", "2 posts", "completed"),
-        ("antigravity-step-3", "control_turn_handoff", "handoff needs a summary", "failed"),
-    ]);
+    let shown: Vec<_> = seen
+        .iter()
+        .map(|a| (a.id.as_str(), a.text.as_str(), a.output.as_str(), a.status.as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("antigravity-step-2", "control_room_read", "", "in_progress"),
+            ("antigravity-step-2", "control_room_read", "2 posts", "completed"),
+            (
+                "antigravity-step-3",
+                "control_turn_handoff",
+                "handoff needs a summary",
+                "failed"
+            ),
+        ]
+    );
 }
 
 #[test]
 fn a_tool_outside_controls_stops_the_turn() {
     let (output, _, seen, rejected) = run(Antigravity::agent(), &[INIT, USER, SHELL, RESULT]);
     assert!(rejected && seen.is_empty());
-    assert_eq!(output.unwrap_err().to_string(), "Antigravity started with an unexpected tool (run_command) and was stopped before doing work.");
+    assert_eq!(
+        output.unwrap_err().to_string(),
+        "Antigravity started with an unexpected tool (run_command) and was stopped before doing work."
+    );
     // Another server's tools, and any tool at all in a text call.
     let other = r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{"ServerName":"github","ToolName":"create_issue"}}}}"#;
     let (_, _, _, rejected) = run(Antigravity::agent(), &[other, RESULT]);
@@ -88,7 +129,10 @@ fn a_tool_outside_controls_stops_the_turn() {
     let subagent = r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"tool","tool_name":"invoke_subagent","subagent_info":{"subagents":[{"type_name":"browser","role":"r","conversation_id":"x","log_uri":"","workspace_uris":[]}]}}}"#;
     let (output, _, _, rejected) = run(Antigravity::agent(), &[subagent, RESULT]);
     assert!(rejected);
-    assert_eq!(output.unwrap_err().to_string(), "Antigravity started with an unexpected tool (subagent) and was stopped before doing work.");
+    assert_eq!(
+        output.unwrap_err().to_string(),
+        "Antigravity started with an unexpected tool (subagent) and was stopped before doing work."
+    );
 }
 
 #[test]
@@ -99,15 +143,28 @@ fn a_refused_control_tool_fails_a_run_that_reports_success() {
     let (output, _, seen, rejected) = run(Antigravity::agent(), &[refused, RESULT]);
     assert!(!rejected);
     assert_eq!(seen[0].status, "failed");
-    assert_eq!(output.unwrap_err().to_string(), "Antigravity ended with a refused tool call (control_room_post): its permission rules did not allow a Control tool.");
+    assert_eq!(
+        output.unwrap_err().to_string(),
+        "Antigravity ended with a refused tool call (control_room_post): its permission rules did not allow a Control tool."
+    );
 }
 
 #[test]
 fn an_error_result_fails_with_its_first_line_and_the_reported_usage() {
     let line = format!(r#"{{"event":"result","result":{UNKNOWN_MODEL}}}"#);
     let (output, usage, _, _) = run(Antigravity::agent(), &[&line]);
-    assert_eq!(output.unwrap_err().to_string(), "Antigravity ended with ERROR: invalid model selection (--model \"does-not-exist-model\" --effort \"\"): model does-not-exist-model is not recognized as a known model or custom model in settings.");
-    assert_eq!(usage, Usage { tokens: Some(Tokens::default()), complete: true, model: None });
+    assert_eq!(
+        output.unwrap_err().to_string(),
+        "Antigravity ended with ERROR: invalid model selection (--model \"does-not-exist-model\" --effort \"\"): model does-not-exist-model is not recognized as a known model or custom model in settings."
+    );
+    assert_eq!(
+        usage,
+        Usage {
+            tokens: Some(Tokens::default()),
+            complete: true,
+            model: None
+        }
+    );
     // Documented terminal statuses other than SUCCESS are failures too.
     let waiting = r#"{"event":"result","result":{"status":"WAITING","response":"","num_turns":1}}"#;
     let (output, _, _, _) = run(Antigravity::agent(), &[waiting]);
@@ -124,7 +181,11 @@ fn malformed_or_unknown_shapes_fail_closed() {
         r#"{"event":"step_update","step_update":{"state":"DONE","step_type":"tool","tool_info":{}}}"#,
     ] {
         let (output, _, _, _) = run(Antigravity::agent(), &[bad, RESULT]);
-        assert_eq!(output.unwrap_err().to_string(), "Antigravity returned an invalid event stream", "{bad}");
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Antigravity returned an invalid event stream",
+            "{bad}"
+        );
     }
     // Two results for one prompt are not one turn.
     let (output, _, _, _) = run(Antigravity::agent(), &[RESULT, RESULT]);
@@ -139,7 +200,10 @@ fn endings_the_pinned_cli_printed_in_its_container_fail_with_their_cause() {
     // Recorded from agy 1.5.14 in the Nix image: no login, then an invalid API key.
     let unauthenticated = r#"{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}"#;
     let (output, _, _, _) = run(Antigravity::text(), &[unauthenticated]);
-    assert_eq!(output.unwrap_err().to_string(), "Antigravity ended with ERROR: authentication failed or timed out.");
+    assert_eq!(
+        output.unwrap_err().to_string(),
+        "Antigravity ended with ERROR: authentication failed or timed out."
+    );
     let init = r#"{"event":"init","conversation_id":"fc5f","init":{"model":"gemini-4-neon-medium","cwd":"/workspace","tools":["ask_permission","call_mcp_tool","run_command"],"permission_mode":"always-proceed"}}"#;
     let error_step = r#"{"event":"step_update","step_update":{"conversation_id":"fc5f","step_index":1,"state":"DONE","step_type":"error_message"}}"#;
     let rejected_key = r#"{"event":"result","result":{"conversation_id":"fc5f","status":"ERROR","response":"","error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT","duration_seconds":0,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}"#;

@@ -1,4 +1,3 @@
-
 use super::*;
 fn handoff(processed: &[&str]) -> Handoff {
     Handoff {
@@ -28,16 +27,12 @@ fn page(after: u64, through: u64) -> Delivery {
 fn empty_source_positions_cannot_acknowledge_unseen_data() {
     let mut mailbox = Mailbox::default();
     mailbox.deliver("empty".into(), page(0, 0)).unwrap();
-    mailbox
-        .stage("draft".into(), handoff(&["empty"]), 0)
-        .unwrap();
+    mailbox.stage("draft".into(), handoff(&["empty"]), 0).unwrap();
     let state = mailbox.publication(None, "r", "g", "cp", |_| true).unwrap().unwrap();
     assert_eq!(state.processed[0].through(), 0);
     let mut unseen = Mailbox::default();
     unseen.deliver("empty".into(), page(10, 10)).unwrap();
-    unseen
-        .stage("draft".into(), handoff(&["empty"]), 0)
-        .unwrap();
+    unseen.stage("draft".into(), handoff(&["empty"]), 0).unwrap();
     assert!(unseen.publication(None, "r", "g", "cp", |_| true).is_err());
 }
 #[test]
@@ -89,11 +84,7 @@ fn read_is_not_processing_and_failed_staging_leaves_no_acknowledgement() {
         None
     );
     let before = mailbox.clone();
-    assert!(
-        mailbox
-            .stage("handoff".into(), handoff(&["unseen"]), 0)
-            .is_err()
-    );
+    assert!(mailbox.stage("handoff".into(), handoff(&["unseen"]), 0).is_err());
     assert_eq!(mailbox, before);
 }
 #[test]
@@ -146,9 +137,7 @@ fn same_payload_replays_do_not_revert_a_newer_correction() {
     mailbox.stage("first".into(), handoff(&[]), 0).unwrap();
     let mut correction = handoff(&[]);
     correction.disposition = Disposition::Done;
-    mailbox
-        .stage("second".into(), correction.clone(), 0)
-        .unwrap();
+    mailbox.stage("second".into(), correction.clone(), 0).unwrap();
     mailbox.stage("first".into(), handoff(&[]), 0).unwrap();
     assert_eq!(mailbox.accepted(), Some(&correction));
 }
@@ -197,20 +186,13 @@ fn retired_sources_no_longer_exhaust_the_budget() {
     let mut mailbox = Mailbox::default();
     mailbox.baseline.push(watch("w-next", 0, 0));
     mailbox.stage("h".into(), later(&[]), 3).unwrap();
-    assert!(
-        mailbox
-            .publication(Some(&previous), "r", "g", "cp", |_| true)
-            .is_err()
-    );
+    assert!(mailbox.publication(Some(&previous), "r", "g", "cp", |_| true).is_err());
     let state = mailbox
         .publication(Some(&previous), "r", "g", "cp", retired)
         .unwrap()
         .unwrap();
     assert_eq!(state.revision, 4);
-    assert_eq!(
-        state.processed,
-        vec![watch("w-live", 0, 5), watch("w-next", 0, 0)]
-    );
+    assert_eq!(state.processed, vec![watch("w-live", 0, 5), watch("w-next", 0, 0)]);
 }
 #[test]
 fn a_live_watch_keeps_its_watermark_and_cannot_skip_unseen_events() {
@@ -231,11 +213,7 @@ fn a_live_watch_keeps_its_watermark_and_cannot_skip_unseen_events() {
         .deliver("skip".into(), watch_page(watch("w-live", 7, 9)))
         .unwrap();
     skipping.stage("h".into(), later(&["skip"]), 3).unwrap();
-    assert!(
-        skipping
-            .publication(Some(&previous), "r", "g", "cp", retired)
-            .is_err()
-    );
+    assert!(skipping.publication(Some(&previous), "r", "g", "cp", retired).is_err());
 }
 #[test]
 fn a_receipt_for_a_source_retired_mid_attempt_still_publishes() {
@@ -259,7 +237,10 @@ fn applicable_receipts_keep_contiguous_ranges_and_explain_the_rest() {
     mailbox.deliver("a".into(), page(0, 2)).unwrap();
     mailbox.deliver("b".into(), page(2, 4)).unwrap();
     mailbox.deliver("late".into(), page(6, 8)).unwrap();
-    let gap = Delivery { gap: true, ..page(4, 6) };
+    let gap = Delivery {
+        gap: true,
+        ..page(4, 6)
+    };
     mailbox.deliver("gap".into(), gap).unwrap();
     let all: Vec<String> = ["b", "a", "a", "late", "gap", "unknown"].map(String::from).into();
     let (kept, dropped) = mailbox.applicable(None, &all, &[]).unwrap();

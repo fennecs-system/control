@@ -31,6 +31,10 @@ with direnv, `direnv allow` loads it through `.envrc`.
 
 ```sh
 nix develop    # or: hosting/dev-env.sh
+cargo fmt --all --check
+cargo fmt --check --manifest-path web/Cargo.toml
+cargo fmt --check --manifest-path tools/code-metrics/Cargo.toml
+rustfmt --check tools/*/main.rs
 cargo test --locked --workspace
 cargo test --locked --manifest-path web/Cargo.toml
 cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -42,6 +46,11 @@ trunk build --release --locked
 cd ..
 cargo build --release --locked --bins
 ```
+
+Formatting follows `rustfmt.toml` (width 120, edition 2024); run `cargo fmt --all`,
+the two `--manifest-path` variants and `rustfmt tools/*/main.rs` to fix it. The
+one-off reformat is listed in `.git-blame-ignore-revs`; to skip it in blame, run
+`git config blame.ignoreRevsFile .git-blame-ignore-revs` once.
 
 Tests never use the operator's node. In test builds (`cfg(test)`, and the
 `control-config` `test-isolation` feature that the root crate's self

@@ -3,15 +3,17 @@
 //! log from its cursor into a local spool, and the bot adapter offers new lines
 //! and exits to the owning chat's bot. Control never speaks the watched
 //! program's protocol; anything that prints lines is a source.
-mod ops;
 pub(crate) mod delivery;
+mod ops;
 mod policy;
 pub(crate) mod salience;
 mod tools;
+use crate::{
+    State,
+    watch_frame::{Event, Frame},
+};
 pub use policy::WakePolicy;
 pub use salience::Salience;
-pub use tools::{Tools, WatchCall};
-use crate::{State, watch_frame::{Event, Frame}};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -19,9 +21,13 @@ use std::{
     io::{self, BufRead, Read, Write},
     path::PathBuf,
     process::Child,
-    sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
+pub use tools::{Tools, WatchCall};
 
 /// Watches per chat; each service runner also caps its own at eight.
 pub(crate) const MAX_WATCHES: usize = 8;
@@ -59,7 +65,9 @@ impl Notifications {
     fn wake(&mut self, seq: u64, preview: String) {
         self.pending = self.pending.saturating_add(1);
         self.through = self.through.max(seq);
-        if self.recent.len() == 5 { self.recent.remove(0); }
+        if self.recent.len() == 5 {
+            self.recent.remove(0);
+        }
         self.recent.push(preview);
     }
 }
@@ -108,19 +116,34 @@ pub struct Watch {
     pub recent: Vec<String>,
 }
 impl Watch {
-    pub(crate) fn pending_notifications(&self) -> u64 { self.notifications.as_ref().map_or(0, |notifications| notifications.pending) }
+    pub(crate) fn pending_notifications(&self) -> u64 {
+        self.notifications
+            .as_ref()
+            .map_or(0, |notifications| notifications.pending)
+    }
     /// Notifications a salience debounce holds; they may still wake later.
-    pub(crate) fn held_notifications(&self) -> usize { self.salience.as_ref().map_or(0, |salience| salience.holding()) }
+    pub(crate) fn held_notifications(&self) -> usize {
+        self.salience.as_ref().map_or(0, |salience| salience.holding())
+    }
     /// Wakes with held notifications whose quiet period ended by `now`.
     pub(crate) fn release(&mut self, now: u64) -> bool {
-        let Some(salience) = self.salience.as_deref_mut().filter(|s| s.holding() > 0) else { return false };
+        let Some(salience) = self.salience.as_deref_mut().filter(|s| s.holding() > 0) else {
+            return false;
+        };
         let mut woke = false;
         let notifications = self.notifications.get_or_insert_with(Default::default);
-        salience.release(now, |seq, preview| { woke = true; notifications.wake(seq, preview.into()); });
+        salience.release(now, |seq, preview| {
+            woke = true;
+            notifications.wake(seq, preview.into());
+        });
         woke
     }
     pub(crate) fn active(&self) -> bool {
-        !self.stopped && !self.last_exit.as_ref().is_some_and(|exit| exit.gave_up || (!self.permanent && exit.seq >= self.line_seq))
+        !self.stopped
+            && !self
+                .last_exit
+                .as_ref()
+                .is_some_and(|exit| exit.gave_up || (!self.permanent && exit.seq >= self.line_seq))
     }
     /// What a start or stop returns: the summary without the provenance and
     /// service generation the caller already holds (status still shows them).
@@ -139,14 +162,23 @@ impl Watch {
     pub(crate) fn observe_for_test(&mut self, seq: u64, exit: Option<i32>) {
         let event = match exit {
             None => Event::Line(b"line".to_vec()),
-            Some(code) => Event::Exit { code: Some(code), signal: None, restarts: 0, gave_up: false },
+            Some(code) => Event::Exit {
+                code: Some(code),
+                signal: None,
+                restarts: 0,
+                gave_up: false,
+            },
         };
         self.observe(&Frame { seq, event });
     }
     /// Records a spooled frame; returns false for a replay.
     pub(crate) fn observe(&mut self, frame: &Frame) -> bool {
         // Only filters read the clock; unfiltered delivery stays clock-free.
-        let now = if self.salience.is_some() { crate::bots::now_ms() } else { 0 };
+        let now = if self.salience.is_some() {
+            crate::bots::now_ms()
+        } else {
+            0
+        };
         self.observe_at(frame, now)
     }
     pub(crate) fn observe_at(&mut self, frame: &Frame, now: u64) -> bool {
@@ -154,7 +186,10 @@ impl Watch {
             return false;
         }
         if frame.seq > self.seen.saturating_add(1) {
-            let gap = self.gap.get_or_insert(Gap { after: self.seen, through: frame.seq - 1 });
+            let gap = self.gap.get_or_insert(Gap {
+                after: self.seen,
+                through: frame.seq - 1,
+            });
             gap.through = frame.seq - 1;
         }
         self.seen = frame.seq;
@@ -167,18 +202,36 @@ impl Watch {
                     if self.recent.len() == 5 {
                         self.recent.remove(0);
                     }
-                    self.recent.push(String::from_utf8_lossy(line).chars().take(200).collect());
+                    self.recent
+                        .push(String::from_utf8_lossy(line).chars().take(200).collect());
                 }
             }
             Event::Notification(payload) => {
                 // A hold that fell due before this event wakes first, in order.
                 self.release(now);
-                if self.salience.as_deref_mut().is_none_or(|salience| salience.admits(frame.seq, payload, now)) {
-                    self.notifications.get_or_insert_with(Default::default).wake(frame.seq, String::from_utf8_lossy(payload).chars().take(200).collect());
+                if self
+                    .salience
+                    .as_deref_mut()
+                    .is_none_or(|salience| salience.admits(frame.seq, payload, now))
+                {
+                    self.notifications
+                        .get_or_insert_with(Default::default)
+                        .wake(frame.seq, String::from_utf8_lossy(payload).chars().take(200).collect());
                 }
             }
-            Event::Exit { code, signal, restarts, gave_up } => {
-                let exit = Exit { seq: frame.seq, code: *code, signal: *signal, restarts: *restarts, gave_up: *gave_up };
+            Event::Exit {
+                code,
+                signal,
+                restarts,
+                gave_up,
+            } => {
+                let exit = Exit {
+                    seq: frame.seq,
+                    code: *code,
+                    signal: *signal,
+                    restarts: *restarts,
+                    gave_up: *gave_up,
+                };
                 self.last_exit = Some(exit.clone());
                 if self.exits.len() < 16 {
                     self.exits.push(exit);
@@ -227,13 +280,15 @@ fn select_page(all: Vec<(Frame, bool)>, after: u64, maximum: u64, logs: bool, li
     let mut events = Vec::new();
     let mut cursor = after;
     let mut gap = false;
-    for (frame, truncated) in all.into_iter().filter(|(frame,_)|frame.seq <= maximum) {
+    for (frame, truncated) in all.into_iter().filter(|(frame, _)| frame.seq <= maximum) {
         gap |= frame.seq > cursor.saturating_add(1);
         cursor = frame.seq;
         if logs || !matches!(frame.event, Event::Line(_)) {
             gap |= truncated;
             events.push((frame, truncated));
-            if events.len() == limit { return Page { events, cursor, gap }; }
+            if events.len() == limit {
+                return Page { events, cursor, gap };
+            }
         }
     }
     gap |= cursor < maximum;
@@ -247,7 +302,12 @@ fn read_frames(path: &std::path::Path, after: u64, limit: usize) -> Vec<(Frame, 
         if file.read_to_end(&mut bytes).is_err() {
             continue;
         }
-        frames.extend(bytes.split(|&b| b == b'\n').filter_map(Frame::decode).filter(|(frame, _)| frame.seq > after));
+        frames.extend(
+            bytes
+                .split(|&b| b == b'\n')
+                .filter_map(Frame::decode)
+                .filter(|(frame, _)| frame.seq > after),
+        );
     }
     frames.sort_by_key(|(frame, _)| frame.seq);
     frames.dedup_by_key(|(frame, _)| frame.seq);
@@ -256,7 +316,9 @@ fn read_frames(path: &std::path::Path, after: u64, limit: usize) -> Vec<(Frame, 
 }
 #[cfg(test)]
 fn source_gap(frames: &[(Frame, bool)], after: u64, seen: u64, limit: usize) -> bool {
-    if frames.is_empty() { return seen > after; }
+    if frames.is_empty() {
+        return seen > after;
+    }
     let mut previous = after;
     let missing = frames.iter().any(|(frame, _)| {
         let gap = frame.seq > previous.saturating_add(1);
@@ -280,9 +342,19 @@ fn followers() -> &'static Mutex<HashMap<String, Follower>> {
 pub(crate) fn reconcile(shared: &Arc<Mutex<State>>) {
     let wanted = {
         let Ok(state) = shared.lock() else { return };
-        state.watches.iter().filter(|watch| watch.active())
-            .filter(|watch| state.services.iter().any(|service| service.resource.id.as_str() == watch.service && service.resource.generation.get() == watch.generation && service.resource.phase.container().is_some()))
-            .map(|watch| watch.id.clone()).collect::<Vec<_>>()
+        state
+            .watches
+            .iter()
+            .filter(|watch| watch.active())
+            .filter(|watch| {
+                state.services.iter().any(|service| {
+                    service.resource.id.as_str() == watch.service
+                        && service.resource.generation.get() == watch.generation
+                        && service.resource.phase.container().is_some()
+                })
+            })
+            .map(|watch| watch.id.clone())
+            .collect::<Vec<_>>()
     };
     let Ok(mut running) = followers().lock() else { return };
     running.retain(|id, follower| {
@@ -301,9 +373,21 @@ pub(crate) fn reconcile(shared: &Arc<Mutex<State>>) {
         if running.contains_key(&id) {
             continue;
         }
-        let follower = Follower { cancel: Arc::new(AtomicBool::new(false)), child: Arc::new(Mutex::new(None)) };
-        let (cancel, child, state, watch) = (follower.cancel.clone(), follower.child.clone(), shared.clone(), id.clone());
-        if std::thread::Builder::new().name(format!("watch-{id}")).spawn(move || follow(&state, &watch, &cancel, &child)).is_ok() {
+        let follower = Follower {
+            cancel: Arc::new(AtomicBool::new(false)),
+            child: Arc::new(Mutex::new(None)),
+        };
+        let (cancel, child, state, watch) = (
+            follower.cancel.clone(),
+            follower.child.clone(),
+            shared.clone(),
+            id.clone(),
+        );
+        if std::thread::Builder::new()
+            .name(format!("watch-{id}"))
+            .spawn(move || follow(&state, &watch, &cancel, &child))
+            .is_ok()
+        {
             running.insert(id, follower);
         }
     }
@@ -333,7 +417,10 @@ fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mute
     while !cancel.load(Ordering::Relaxed) {
         let target = shared.lock().ok().and_then(|state| {
             let watch = state.watches.iter().find(|watch| watch.id == id && watch.active())?;
-            let service = state.services.iter().find(|service| service.resource.id.as_str() == watch.service)?;
+            let service = state
+                .services
+                .iter()
+                .find(|service| service.resource.id.as_str() == watch.service)?;
             Some((service.binding_snapshot(), watch.seen))
         });
         let Some((service, seen)) = target else { break };
@@ -342,11 +429,23 @@ fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mute
             let tail = control_isolation::ExecSpec {
                 container,
                 user: Some(user),
-                argv: ["control-service-runner", "tail", id, &seen.to_string()].map(str::to_owned).to_vec(),
+                argv: ["control-service-runner", "tail", id, &seen.to_string()]
+                    .map(str::to_owned)
+                    .to_vec(),
                 ..Default::default()
             };
-            let mut child = isolation.exec(&tail, control_isolation::Streams::new(control_isolation::Stream::Null, control_isolation::Stream::Piped, control_isolation::Stream::Null))?;
-            let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Missing watch output"))?;
+            let mut child = isolation.exec(
+                &tail,
+                control_isolation::Streams::new(
+                    control_isolation::Stream::Null,
+                    control_isolation::Stream::Piped,
+                    control_isolation::Stream::Null,
+                ),
+            )?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| io::Error::other("Missing watch output"))?;
             *slot.lock().map_err(|_| io::Error::other("Follower unavailable"))? = Some(child);
             // A cancel that raced the spawn found no child to kill.
             if cancel.load(Ordering::Relaxed) {
@@ -357,13 +456,23 @@ fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mute
             let mut any = false;
             loop {
                 line.clear();
-                let read = (&mut reader).take(crate::watch_frame::MAX_FRAME as u64 + 2).read_until(b'\n', &mut line)?;
+                let read = (&mut reader)
+                    .take(crate::watch_frame::MAX_FRAME as u64 + 2)
+                    .read_until(b'\n', &mut line)?;
                 if read == 0 || cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 let frame_bytes = line.strip_suffix(b"\n").unwrap_or(&line);
-                let Some((frame, _)) = Frame::decode(frame_bytes) else { continue };
-                let fresh = shared.lock().ok().and_then(|state| state.watches.iter().find(|watch| watch.id == id).map(|watch| frame.seq > watch.seen));
+                let Some((frame, _)) = Frame::decode(frame_bytes) else {
+                    continue;
+                };
+                let fresh = shared.lock().ok().and_then(|state| {
+                    state
+                        .watches
+                        .iter()
+                        .find(|watch| watch.id == id)
+                        .map(|watch| frame.seq > watch.seen)
+                });
                 match fresh {
                     None => break,
                     Some(false) => continue,
@@ -372,7 +481,9 @@ fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mute
                 // Spool before advancing the cursor, so a failed write is retried from it.
                 append(id, frame_bytes)?;
                 let Ok(mut state) = shared.lock() else { break };
-                let Some(watch) = state.watches.iter_mut().find(|watch| watch.id == id) else { break };
+                let Some(watch) = state.watches.iter_mut().find(|watch| watch.id == id) else {
+                    break;
+                };
                 if watch.observe(&frame) {
                     drop(state);
                     crate::storage::changes().bump();

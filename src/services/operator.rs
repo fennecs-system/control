@@ -7,10 +7,17 @@ use super::*;
 /// The chat and, with `team`, every chat spawned from it. The named chat must
 /// exist and be visible to its actor.
 fn chats(state: &State, id: &str, team: bool) -> io::Result<Vec<String>> {
-    let session = state.chats.iter().find(|session| session.id == id).ok_or_else(|| fail("Chat not found."))?;
+    let session = state
+        .chats
+        .iter()
+        .find(|session| session.id == id)
+        .ok_or_else(|| fail("Chat not found."))?;
     identity::authorize(&session.actor, Action::Task).map_err(fail)?;
     Ok(if team {
-        crate::chat::subtree(state, [id]).into_iter().map(str::to_owned).collect()
+        crate::chat::subtree(state, [id])
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     } else {
         vec![id.to_owned()]
     })
@@ -29,12 +36,21 @@ pub(crate) fn list(state: &State, id: &str, team: bool) -> io::Result<Value> {
 /// `service` when named. Each stop is the services page's own transition and
 /// persists before the supervisor stops the container; ports bound to a
 /// service lose authorization with it. Already-stopping services are no-ops.
-pub(crate) fn stop(state: &mut State, id: &str, team: bool, service: Option<&str>, save: impl Fn(&State) -> io::Result<()>) -> io::Result<Value> {
+pub(crate) fn stop(
+    state: &mut State,
+    id: &str,
+    team: bool,
+    service: Option<&str>,
+    save: impl Fn(&State) -> io::Result<()>,
+) -> io::Result<Value> {
     let chats = chats(state, id, team)?;
-    let chosen = state.services.iter()
+    let chosen = state
+        .services
+        .iter()
         .filter(|s| s.live() && chats.iter().any(|chat| chat == s.resource.owner.chat.as_str()))
         .filter(|s| service.is_none_or(|wanted| s.resource.id.as_str() == wanted))
-        .map(|s| s.resource.id.as_str().to_owned()).collect::<Vec<_>>();
+        .map(|s| s.resource.id.as_str().to_owned())
+        .collect::<Vec<_>>();
     if chosen.is_empty() && service.is_some() {
         return Err(fail("No live service with that ID in this chat."));
     }

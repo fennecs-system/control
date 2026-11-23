@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::runtime::RunKind;
 use crate::{
@@ -73,7 +72,7 @@ pub(crate) fn fixture() -> State {
     });
     parent.delegation = Some(Delegation {
         input: Task {
-            model:None,
+            model: None,
             objective: "Implement child task".into(),
             role: Role::Worker,
         },
@@ -94,7 +93,8 @@ pub(crate) fn fixture() -> State {
         role: Role::Worker,
         root: "parent".into(),
         depth: 1,
-        parent: Some("parent".into()), bundle: None
+        parent: Some("parent".into()),
+        bundle: None,
     });
     child.attempts = vec![Attempt {
         workspace_id: Some("child-attempt-1".into()),
@@ -113,7 +113,8 @@ pub(crate) fn fixture() -> State {
         role: Role::Worker,
         root: "parent".into(),
         depth: 0,
-        parent: None, bundle: None
+        parent: None,
+        bundle: None,
     });
     s.runtime.runs.push(child);
     s.runtime.runs.push(resumed);
@@ -159,11 +160,7 @@ fn file_pages_are_stable_sorted_and_include_modified_added_and_deleted_entries()
     let s = fixture();
     store.publish(
         "parent-attempt-1",
-        &[
-            ("changed.rs", b"before"),
-            ("deleted.rs", b"gone"),
-            ("same.rs", b"same"),
-        ],
+        &[("changed.rs", b"before"), ("deleted.rs", b"gone"), ("same.rs", b"same")],
     );
     let mut owned = (0..130)
         .map(|i| (format!("new/{i:03}.rs"), format!("fn f{i}() {{}}")))
@@ -205,10 +202,7 @@ fn file_pages_are_stable_sorted_and_include_modified_added_and_deleted_entries()
         ("same.rs", "unchanged"),
         ("new/000.rs", "added"),
     ] {
-        assert_eq!(
-            entries.iter().find(|e| e["path"] == path).unwrap()["change"],
-            change
-        );
+        assert_eq!(entries.iter().find(|e| e["path"] == path).unwrap()["change"], change);
     }
     assert!(
         store
@@ -233,27 +227,13 @@ fn actor_root_actual_delegation_and_artifact_identity_are_required() {
     let mut s = fixture();
     s.runtime.runs[1].attempts[0].artifact = Some("other-chat-artifact".into());
     assert!(prepare(&s, "resumed", json!({"child":"child","section":"files"})).is_err());
-    assert!(
-        prepare(
-            &fixture(),
-            "resumed",
-            json!({"child":"parent","section":"summary"})
-        )
-        .is_err()
-    );
+    assert!(prepare(&fixture(), "resumed", json!({"child":"parent","section":"summary"})).is_err());
     s.runtime.runs[1].attempts[0].workspace_id = Some("other-chat-artifact".into());
     assert!(prepare(&s, "resumed", json!({"child":"child","section":"files"})).is_err());
     let mut s = fixture();
     s.runtime.runs[0].delegation.as_mut().unwrap().generation = "forged-source".into();
     assert!(prepare(&s, "resumed", json!({"child":"child","section":"summary"})).is_err());
-    assert!(
-        prepare(
-            &fixture(),
-            "resumed",
-            json!({"child":"resumed","section":"summary"})
-        )
-        .is_err()
-    );
+    assert!(prepare(&fixture(), "resumed", json!({"child":"resumed","section":"summary"})).is_err());
 }
 #[test]
 fn sibling_and_unrelated_same_actor_chats_do_not_gain_access() {
@@ -266,14 +246,7 @@ fn sibling_and_unrelated_same_actor_chats_do_not_gain_access() {
     sibling.chat_id = Some(sibling_chat);
     s.runtime.runs.push(sibling);
     assert!(prepare(&s, "sibling", json!({"child":"child","section":"files"})).is_err());
-    assert!(
-        prepare(
-            &s,
-            "resumed",
-            json!({"child":"sibling","section":"summary"})
-        )
-        .is_err()
-    );
+    assert!(prepare(&s, "resumed", json!({"child":"sibling","section":"summary"})).is_err());
     let mut unrelated = s.runtime.runs[2].clone();
     unrelated.id = "unrelated".into();
     unrelated.persona = None;
@@ -304,10 +277,7 @@ fn live_failed_and_missing_artifacts_never_fall_back_to_workspaces() {
 fn paths_limits_hash_changes_and_binary_files_fail_closed() {
     let store = Store::new();
     let s = fixture();
-    store.publish(
-        "child-attempt-1",
-        &[("safe.rs", b"original"), ("binary", b"\0binary")],
-    );
+    store.publish("child-attempt-1", &[("safe.rs", b"original"), ("binary", b"\0binary")]);
     fs::write(
         store.0.join("source-child-attempt-1/safe.rs"),
         b"live workspace changed",
@@ -315,10 +285,7 @@ fn paths_limits_hash_changes_and_binary_files_fail_closed() {
     .unwrap();
     assert_eq!(
         store
-            .read(
-                &s,
-                json!({"child":"child","section":"file","path":"safe.rs"})
-            )
+            .read(&s, json!({"child":"child","section":"file","path":"safe.rs"}))
             .unwrap()["file"]["text"],
         "original"
     );
@@ -354,17 +321,10 @@ fn paths_limits_hash_changes_and_binary_files_fail_closed() {
             )
             .is_err()
     );
-    fs::write(
-        store.0.join("artifacts/child-attempt-1/files/safe.rs"),
-        b"modified",
-    )
-    .unwrap();
+    fs::write(store.0.join("artifacts/child-attempt-1/files/safe.rs"), b"modified").unwrap();
     assert!(
         store
-            .read(
-                &s,
-                json!({"child":"child","section":"file","path":"safe.rs"})
-            )
+            .read(&s, json!({"child":"child","section":"file","path":"safe.rs"}))
             .is_err()
     );
 }
@@ -372,10 +332,7 @@ fn paths_limits_hash_changes_and_binary_files_fail_closed() {
 fn child_continuations_are_followed_but_forged_cross_chat_chains_are_denied() {
     let store = Store::new();
     let mut s = fixture();
-    store.publish(
-        "child-continuation-attempt-1",
-        &[("final.rs", b"final child text")],
-    );
+    store.publish("child-continuation-attempt-1", &[("final.rs", b"final child text")]);
     let mut next = s.runtime.runs[1].clone();
     next.id = "child-continuation".into();
     next.attempts[0].workspace_id = Some("child-continuation-attempt-1".into());
@@ -387,10 +344,7 @@ fn child_continuations_are_followed_but_forged_cross_chat_chains_are_denied() {
     s.runtime.runs[1].delegation = Some(d);
     s.runtime.runs.push(next);
     let value = store
-        .read(
-            &s,
-            json!({"child":"child","section":"file","path":"final.rs"}),
-        )
+        .read(&s, json!({"child":"child","section":"file","path":"final.rs"}))
         .unwrap();
     assert_eq!(value["run"], "child-continuation");
     assert_eq!(value["file"]["text"], "final child text");

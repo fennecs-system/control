@@ -16,7 +16,12 @@ pub struct Message {
 impl Message {
     /// A Control notice recorded without a run, such as operator decisions.
     pub fn notice(text: impl Into<String>, run_id: Option<String>) -> Self {
-        Self { text: text.into(), run_id, reply: String::new(), speaker: MessageSpeaker::Control }
+        Self {
+            text: text.into(),
+            run_id,
+            reply: String::new(),
+            speaker: MessageSpeaker::Control,
+        }
     }
     /// Who speaks for this message. The answering run's kind decides when it
     /// exists; otherwise the recorded speaker, and finally decision notes stored
@@ -38,13 +43,15 @@ impl Message {
     fn legacy_notice(&self) -> bool {
         self.run_id.is_none()
             && super::approval_resume::HEADINGS.iter().any(|heading| {
-                self.text.strip_prefix(heading).is_some_and(|rest| rest.starts_with('\n'))
+                self.text
+                    .strip_prefix(heading)
+                    .is_some_and(|rest| rest.starts_with('\n'))
             })
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
-    #[serde(default, skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<crate::providers::Model>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuity: Option<Box<crate::turn_context::Managed>>,

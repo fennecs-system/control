@@ -8,10 +8,7 @@ fn profile_checkpoint_load() {
     assert!(std::env::var_os("CONTROL_CONFIG_DIR").is_some());
     let directory = crate::config::state_directory().unwrap();
     fs::create_dir_all(&directory).unwrap();
-    assert!(
-        !directory.join("state.json").exists(),
-        "use a fresh scratch directory"
-    );
+    assert!(!directory.join("state.json").exists(), "use a fresh scratch directory");
     save(&State::initial()).unwrap();
     black_box(load().unwrap());
     let bytes = fs::metadata(directory.join("state.json")).unwrap().len();
@@ -39,7 +36,12 @@ fn swarm_step(state: &mut State, step: usize, chats: &[usize], active: &mut Vec<
     match step % 20 {
         0..=6 => {
             let chat = &mut state.chats[chats[step % chats.len()]];
-            chat.messages.push(crate::chat::Message { speaker: Default::default(), text: filler(400), run_id: None, reply: String::new() });
+            chat.messages.push(crate::chat::Message {
+                speaker: Default::default(),
+                text: filler(400),
+                run_id: None,
+                reply: String::new(),
+            });
             chat.revision += 1;
         }
         7..=11 if !state.watches.is_empty() => {
@@ -51,7 +53,9 @@ fn swarm_step(state: &mut State, step: usize, chats: &[usize], active: &mut Vec<
             state.runtime.enqueue(filler(300), RunKind::Task, "benchmark");
             let index = state.runtime.runs.len() - 1;
             state.runtime.runs[index].status = "running".into();
-            state.runtime.runs[index].attempts.push(crate::usage::Attempt::default());
+            state.runtime.runs[index]
+                .attempts
+                .push(crate::usage::Attempt::default());
             active.push(index);
         }
         18..=19 if active.len() > 6 => {
@@ -61,13 +65,17 @@ fn swarm_step(state: &mut State, step: usize, chats: &[usize], active: &mut Vec<
         }
         _ => {
             let run = &mut state.runtime.runs[active[step % active.len()]];
-            run.attempts.last_mut().expect("benchmark runs have an attempt").activity.push(crate::usage::Activity {
-                id: format!("tool-{step}"),
-                kind: "tool".into(),
-                text: filler(120),
-                output: filler(600),
-                status: "completed".into(),
-            });
+            run.attempts
+                .last_mut()
+                .expect("benchmark runs have an attempt")
+                .activity
+                .push(crate::usage::Activity {
+                    id: format!("tool-{step}"),
+                    kind: "tool".into(),
+                    text: filler(120),
+                    output: filler(600),
+                    status: "completed".into(),
+                });
         }
     }
 }
@@ -85,13 +93,21 @@ fn profile_swarm_hour() {
     use std::{hint::black_box, time::Instant};
     let source = std::env::var("CONTROL_PROFILE_STATE").expect("a copy of a state.json");
     let root = PathBuf::from(std::env::var("CONTROL_PROFILE_DIR").expect("a scratch directory"));
-    let saves: usize = std::env::var("CONTROL_PROFILE_SAVES").ok().and_then(|v| v.parse().ok()).unwrap_or(2000);
-    let modes = std::env::var("CONTROL_PROFILE_MODE").map_or(vec!["before".to_owned(), "after".to_owned()], |mode| vec![mode]);
+    let saves: usize = std::env::var("CONTROL_PROFILE_SAVES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2000);
+    let modes =
+        std::env::var("CONTROL_PROFILE_MODE").map_or(vec!["before".to_owned(), "after".to_owned()], |mode| vec![mode]);
     let data = fs::read(source).unwrap();
     let start = Instant::now();
     let initial: State = serde_json::from_slice(&data).unwrap();
-    println!("{}", serde_json::json!({"case": "monolithic_parse", "state_bytes": data.len(), "ms": start.elapsed().as_secs_f64() * 1e3}));
-    let (mut plain, mut ranged, mut cached, mut compared, mut indexed) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    println!(
+        "{}",
+        serde_json::json!({"case": "monolithic_parse", "state_bytes": data.len(), "ms": start.elapsed().as_secs_f64() * 1e3})
+    );
+    let (mut plain, mut ranged, mut cached, mut compared, mut indexed) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let base = crate::history::persisting(|| snapshot::encode(&initial)).unwrap();
     let fresh = |f: &dyn Fn()| crate::history::uncached(|| crate::history::persisting(f));
     for _ in 0..21 {
@@ -111,7 +127,10 @@ fn profile_swarm_hour() {
         black_box(snapshot::diff(&base, &encoded));
         compared.push(start.elapsed().as_nanos());
     }
-    println!("{}", serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "encode_cached": quantiles(&mut cached), "index_bytes": quantiles(&mut indexed), "diff_unchanged": quantiles(&mut compared)}));
+    println!(
+        "{}",
+        serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "encode_cached": quantiles(&mut cached), "index_bytes": quantiles(&mut indexed), "diff_unchanged": quantiles(&mut compared)})
+    );
     let mut by_size: Vec<usize> = (0..initial.chats.len()).collect();
     by_size.sort_by_key(|&i| std::cmp::Reverse(initial.chats[i].messages.len()));
     let chats = &by_size[..6.min(by_size.len())];
@@ -127,7 +146,12 @@ fn profile_swarm_hour() {
         let encode = |state: &State| encode(state, &archived(&directory)).unwrap();
         persist(&directory, encode(&state), true).unwrap();
         let blocks = || -> std::collections::HashMap<PathBuf, u64> {
-            fs::read_dir(directory.join("history/runs")).into_iter().flatten().flatten().map(|e| (e.path(), e.metadata().map_or(0, |m| m.len()))).collect()
+            fs::read_dir(directory.join("history/runs"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| (e.path(), e.metadata().map_or(0, |m| m.len())))
+                .collect()
         };
         if mode != "before" {
             // The first save fills the run cache, the second moves finished runs to blocks.
@@ -135,8 +159,11 @@ fn profile_swarm_hour() {
             checkpoint_in(&directory, &state).unwrap();
             checkpoint_in(&directory, &state).unwrap();
             let archived_runs = state.runtime.runs.iter().filter(|run| run.archived()).count();
-            println!("{}", serde_json::json!({"case": "archive_migration", "ms": start.elapsed().as_secs_f64() * 1e3, "archived_runs": archived_runs, "hot_runs": state.runtime.runs.len() - archived_runs,
-                "block_bytes": blocks().values().sum::<u64>(), "blocks": blocks().len(), "snapshot_bytes": fs::metadata(directory.join("state.json")).unwrap().len()}));
+            println!(
+                "{}",
+                serde_json::json!({"case": "archive_migration", "ms": start.elapsed().as_secs_f64() * 1e3, "archived_runs": archived_runs, "hot_runs": state.runtime.runs.len() - archived_runs,
+                "block_bytes": blocks().values().sum::<u64>(), "blocks": blocks().len(), "snapshot_bytes": fs::metadata(directory.join("state.json")).unwrap().len()})
+            );
             persist(&directory, encode(&state), true).unwrap();
         }
         let (mut written, mut latencies, mut compactions) = (0u64, Vec::new(), 0);
@@ -148,7 +175,9 @@ fn profile_swarm_hour() {
             let start = Instant::now();
             if mode == "before" {
                 // The old path: a fresh serialization (no cached runs) and a full rewrite.
-                let bytes = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(black_box(&state)))).unwrap();
+                let bytes =
+                    crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(black_box(&state))))
+                        .unwrap();
                 write_checkpoint(&directory, &bytes).unwrap();
                 written += bytes.len() as u64;
             } else {
@@ -156,7 +185,11 @@ fn profile_swarm_hour() {
             }
             latencies.push(start.elapsed().as_nanos());
             if mode != "before" {
-                written += blocks().iter().filter(|(path, _)| !known.contains_key(*path)).map(|(_, size)| size).sum::<u64>();
+                written += blocks()
+                    .iter()
+                    .filter(|(path, _)| !known.contains_key(*path))
+                    .map(|(_, size)| size)
+                    .sum::<u64>();
                 let after = log_length();
                 if after >= before {
                     written += after - before;
@@ -166,10 +199,13 @@ fn profile_swarm_hour() {
                 }
             }
         }
-        println!("{}", serde_json::json!({
-            "case": "swarm_hour", "mode": mode, "saves": saves, "final_state_bytes": crate::history::persisting(|| serde_json::to_vec(&state)).unwrap().len(),
-            "bytes_written": written, "bytes_per_save": written / saves as u64, "compactions": compactions, "save": quantiles(&mut latencies),
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "case": "swarm_hour", "mode": mode, "saves": saves, "final_state_bytes": crate::history::persisting(|| serde_json::to_vec(&state)).unwrap().len(),
+                "bytes_written": written, "bytes_per_save": written / saves as u64, "compactions": compactions, "save": quantiles(&mut latencies),
+            })
+        );
         if mode == "before" {
             continue;
         }
@@ -182,10 +218,17 @@ fn profile_swarm_hour() {
             let adopted = adopt(&directory, recovered.unwrap());
             (loaded, adopted, start.elapsed().as_secs_f64() * 1e3)
         };
-        let lines = fs::read(directory.join(LOG)).unwrap().iter().filter(|&&b| b == b'\n').count();
+        let lines = fs::read(directory.join(LOG))
+            .unwrap()
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
         let (loaded, adopted, ms) = reload();
         assert!(!adopted && crate::history::persisting(|| serde_json::to_value(&loaded).unwrap()) == expected);
-        println!("{}", serde_json::json!({"case": "cold_load_replay", "log_lines": lines, "log_bytes": log_length(), "ms": ms}));
+        println!(
+            "{}",
+            serde_json::json!({"case": "cold_load_replay", "log_lines": lines, "log_bytes": log_length(), "ms": ms})
+        );
         // A clean restart (after shutdown compaction) adopts without writing.
         persist(&directory, encode(&state), true).unwrap();
         let (_, adopted, ms) = reload();
@@ -198,7 +241,10 @@ fn profile_swarm_hour() {
         let mut log = fs::OpenOptions::new().append(true).open(directory.join(LOG)).unwrap();
         std::io::Write::write_all(&mut log, br#"[["a",["chats",0,"messages"],0,0,[{"text":"torn"#).unwrap();
         let (loaded, _, ms) = reload();
-        assert_eq!(crate::history::persisting(|| serde_json::to_value(&loaded).unwrap()), expected);
+        assert_eq!(
+            crate::history::persisting(|| serde_json::to_value(&loaded).unwrap()),
+            expected
+        );
         println!("{}", serde_json::json!({"case": "crash_recovery_torn_tail", "ms": ms}));
         published().lock().unwrap().remove(&directory);
     }

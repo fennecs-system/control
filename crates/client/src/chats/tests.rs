@@ -4,12 +4,21 @@ use serde_json::json;
 #[test]
 fn persona_commands_list_select_and_clear() {
     assert_eq!(navigation("/personas"), Some(Navigation::Personas));
-    assert_eq!(navigation("/persona"), Some(Navigation::Personas), "a bare /persona lists");
+    assert_eq!(
+        navigation("/persona"),
+        Some(Navigation::Personas),
+        "a bare /persona lists"
+    );
     assert_eq!(navigation("/persona  lead "), Some(Navigation::Persona("lead".into())));
     assert_eq!(navigation("/persona none"), Some(Navigation::Persona("none".into())));
     assert_eq!(navigation("/personality x"), None);
-    let list = persona_list(&json!([{"id":"worker","name":"Worker","revision":2,"lenses":["swarm"],"standing":{"sees":"team","steers":"team","answers_to":"lead","acts":"full"}}]));
-    assert!(list.contains("worker · Worker · v2 · DNA swarm · sees team · steers team · answers to lead"), "{list}");
+    let list = persona_list(
+        &json!([{"id":"worker","name":"Worker","revision":2,"lenses":["swarm"],"standing":{"sees":"team","steers":"team","answers_to":"lead","acts":"full"}}]),
+    );
+    assert!(
+        list.contains("worker · Worker · v2 · DNA swarm · sees team · steers team · answers to lead"),
+        "{list}"
+    );
 }
 
 #[test]
@@ -21,8 +30,15 @@ fn navigation_is_the_same_vocabulary_as_the_tui() {
     assert_eq!(navigation("/resume a b"), None);
     assert_eq!(navigation("/steer go left"), None);
     assert_eq!(navigation("resume c-1"), None);
-    assert_eq!(navigation("/rename  Farm lead "), Some(Navigation::Rename("Farm lead".into())));
-    assert_eq!(navigation("/rename"), Some(Navigation::Rename(String::new())), "the server answers with usage");
+    assert_eq!(
+        navigation("/rename  Farm lead "),
+        Some(Navigation::Rename("Farm lead".into()))
+    );
+    assert_eq!(
+        navigation("/rename"),
+        Some(Navigation::Rename(String::new())),
+        "the server answers with usage"
+    );
     assert_eq!(navigation("/renamed x"), None);
 }
 
@@ -38,7 +54,10 @@ fn recent_chats_sort_by_activity_and_list_their_resume_commands() {
     assert_eq!(entries[1].revision, &json!(7));
     let recent = recent(&entries, 2);
     assert_eq!(recent.iter().map(|e| e.id).collect::<Vec<_>>(), ["c-lead", "c-helper"]);
-    assert_eq!(resume_list(&recent), "Swarm lead\n  /resume c-lead\n\nHelper\n  /resume c-helper");
+    assert_eq!(
+        resume_list(&recent),
+        "Swarm lead\n  /resume c-lead\n\nHelper\n  /resume c-helper"
+    );
     assert!(super::entries(&[]).is_empty());
 }
 
@@ -52,19 +71,35 @@ fn finished_replies_are_delivered_in_order_once() {
         {"status":"completed","reply":"later"}
     ]});
     let (replies, next) = replies(&detail, 0);
-    assert_eq!(replies.iter().map(|r| (r.index, r.text)).collect::<Vec<_>>(), [(0, "first"), (2, "second")]);
-    assert_eq!(next, 3, "stops at the running message so later replies keep their order");
+    assert_eq!(
+        replies.iter().map(|r| (r.index, r.text)).collect::<Vec<_>>(),
+        [(0, "first"), (2, "second")]
+    );
+    assert_eq!(
+        next, 3,
+        "stops at the running message so later replies keep their order"
+    );
     let (again, same) = super::replies(&detail, next);
     assert!(again.is_empty() && same == 3);
     let waiting = json!({"messages":[{"status":"waiting","reply":"question"}]});
-    assert_eq!(super::replies(&waiting, 0).1, 0, "a waiting question is an operator request, not a reply");
+    assert_eq!(
+        super::replies(&waiting, 0).1,
+        0,
+        "a waiting question is an operator request, not a reply"
+    );
     assert_eq!(super::replies(&detail, 99).1, 5, "a shorter history clamps the cursor");
 }
 
 #[test]
 fn use_takes_the_tuis_lens_list() {
-    assert_eq!(navigation("/use engineering evidence"), Some(Navigation::Use(Some(vec!["engineering".into(), "evidence".into()]))));
-    assert_eq!(navigation("/use a,b , c"), Some(Navigation::Use(Some(vec!["a".into(), "b".into(), "c".into()]))));
+    assert_eq!(
+        navigation("/use engineering evidence"),
+        Some(Navigation::Use(Some(vec!["engineering".into(), "evidence".into()])))
+    );
+    assert_eq!(
+        navigation("/use a,b , c"),
+        Some(Navigation::Use(Some(vec!["a".into(), "b".into(), "c".into()])))
+    );
     assert_eq!(navigation("/use none"), Some(Navigation::Use(Some(vec![]))));
     assert_eq!(navigation("/use  "), Some(Navigation::Use(None)));
     assert_eq!(lenses(""), None);
@@ -87,7 +122,10 @@ fn the_shared_use_grammar_parses_lists_clears_and_ignores_empty_selections() {
     }
     assert_eq!(navigation("/use none"), Some(Navigation::Use(Some(vec![]))));
     let library = |id: &str| matches!(id, "alpha" | "beta" | "gamma");
-    assert_eq!(unknown(&lenses(" zeta alpha typo, zeta").unwrap(), library), vec!["zeta", "typo"]);
+    assert_eq!(
+        unknown(&lenses(" zeta alpha typo, zeta").unwrap(), library),
+        vec!["zeta", "typo"]
+    );
     assert!(unknown(&lenses(" alpha,beta").unwrap(), library).is_empty());
 }
 

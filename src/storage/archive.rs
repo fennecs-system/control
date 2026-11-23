@@ -72,16 +72,36 @@ pub(crate) fn candidates(state: &State) -> Vec<usize> {
     let runs = &state.runtime.runs;
     let recent = runs.len().saturating_sub(RECENT);
     let movable = |index: usize, run: &Run| {
-        index < recent && !run.archived() && run.saved().is_some() && status::finished(&run.status) && !status::resumable(&run.status)
+        index < recent
+            && !run.archived()
+            && run.saved().is_some()
+            && status::finished(&run.status)
+            && !status::resumable(&run.status)
     };
     // Runs that stay hot keep the runs they point at hot too.
     let mut referenced = HashSet::new();
-    for (_, run) in runs.iter().enumerate().filter(|(index, run)| !run.archived() && !movable(*index, run)) {
-        referenced.extend(run.persona.iter().flat_map(|p| std::iter::once(&p.root).chain(&p.parent)));
-        referenced.extend(run.delegation.iter().flat_map(|d| d.child.iter().chain(&d.continuation)));
+    for (_, run) in runs
+        .iter()
+        .enumerate()
+        .filter(|(index, run)| !run.archived() && !movable(*index, run))
+    {
+        referenced.extend(
+            run.persona
+                .iter()
+                .flat_map(|p| std::iter::once(&p.root).chain(&p.parent)),
+        );
+        referenced.extend(
+            run.delegation
+                .iter()
+                .flat_map(|d| d.child.iter().chain(&d.continuation)),
+        );
         referenced.extend(run.spawns.iter().flat_map(|batch| &batch.children));
     }
-    runs.iter().enumerate().filter(|(index, run)| movable(*index, run) && !referenced.contains(&run.id)).map(|(index, _)| index).collect()
+    runs.iter()
+        .enumerate()
+        .filter(|(index, run)| movable(*index, run) && !referenced.contains(&run.id))
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// An archive change waiting for the save that commits it.
@@ -114,7 +134,11 @@ fn write_block(directory: &Path, span: Span, lines: &[&str]) -> io::Result<PathB
     let parent = file.parent().expect("blocks live in a directory");
     fs::create_dir_all(parent)?;
     let temporary = file.with_extension("jsonl.tmp");
-    let mut out = fs::OpenOptions::new().write(true).create(true).truncate(true).open(&temporary)?;
+    let mut out = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&temporary)?;
     for line in lines {
         out.write_all(line.as_bytes())?;
         out.write_all(b"\n")?;
@@ -135,10 +159,18 @@ pub(crate) fn step(directory: &Path, state: &State, archive: &mut Archive) -> io
     let result = (|| {
         while !remaining.is_empty() {
             let start = archive.next;
-            let level = (BASE..63).rev().find(|&level| start.trailing_zeros() >= level && (1usize << level) <= remaining.len()).expect("whole base blocks remain");
+            let level = (BASE..63)
+                .rev()
+                .find(|&level| start.trailing_zeros() >= level && (1usize << level) <= remaining.len())
+                .expect("whole base blocks remain");
             let (block, rest) = remaining.split_at(1 << level);
-            let lines: Vec<&str> = block.iter().map(|&index| state.runtime.runs[index].saved().expect("candidates are saved").get()).collect();
-            pending.written.push(write_block(directory, Span { start, level }, &lines)?);
+            let lines: Vec<&str> = block
+                .iter()
+                .map(|&index| state.runtime.runs[index].saved().expect("candidates are saved").get())
+                .collect();
+            pending
+                .written
+                .push(write_block(directory, Span { start, level }, &lines)?);
             for &index in block {
                 state.runtime.runs[index].set_archived(true);
                 pending.marked.push(index);
@@ -165,7 +197,13 @@ fn merge(directory: &Path, state: &State, archive: &mut Archive, pending: &mut P
         && left.start % (2 << left.level) == 0
     {
         // Runs un-archived since (now hot again) leave the merged block.
-        let archived: HashSet<&str> = state.runtime.runs.iter().filter(|run| run.archived()).map(|run| run.id.as_str()).collect();
+        let archived: HashSet<&str> = state
+            .runtime
+            .runs
+            .iter()
+            .filter(|run| run.archived())
+            .map(|run| run.id.as_str())
+            .collect();
         // A run archived twice keeps only its newer (right-most) copy.
         let mut lines: Vec<Option<String>> = Vec::new();
         let mut at: HashMap<String, usize> = HashMap::new();
@@ -184,7 +222,10 @@ fn merge(directory: &Path, state: &State, archive: &mut Archive, pending: &mut P
                 }
             }
         }
-        let parent = Span { start: left.start, level: left.level + 1 };
+        let parent = Span {
+            start: left.start,
+            level: left.level + 1,
+        };
         let lines: Vec<&str> = lines.iter().flatten().map(String::as_str).collect();
         pending.written.push(write_block(directory, parent, &lines)?);
         pending.replaced.extend([left.file(directory), right.file(directory)]);

@@ -60,11 +60,7 @@ impl MailboxWake {
             libc::inotify_add_watch(
                 fd,
                 path.as_ptr(),
-                libc::IN_MOVED_TO
-                    | libc::IN_CLOSE_WRITE
-                    | libc::IN_CREATE
-                    | libc::IN_DELETE_SELF
-                    | libc::IN_MOVE_SELF,
+                libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE | libc::IN_CREATE | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF,
             )
         } < 0
         {
@@ -84,26 +80,14 @@ impl MailboxWake {
             events: libc::POLLIN,
             revents: 0,
         };
-        if unsafe {
-            libc::poll(
-                &mut poll,
-                1,
-                maximum.as_millis().min(i32::MAX as u128) as i32,
-            )
-        } <= 0
-        {
+        if unsafe { libc::poll(&mut poll, 1, maximum.as_millis().min(i32::MAX as u128) as i32) } <= 0 {
             return;
         }
         #[cfg(target_os = "macos")]
         {
             let mut event: libc::kevent = unsafe { std::mem::zeroed() };
-            let timeout = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            let _ = unsafe {
-                libc::kevent(fd.as_raw_fd(), std::ptr::null(), 0, &mut event, 1, &timeout)
-            };
+            let timeout = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            let _ = unsafe { libc::kevent(fd.as_raw_fd(), std::ptr::null(), 0, &mut event, 1, &timeout) };
         }
         #[cfg(target_os = "linux")]
         {

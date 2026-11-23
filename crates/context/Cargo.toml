@@ -1,6 +1,8 @@
 [package]
 name = "control-context"
 version = "0.1.0"
+# Explicit, not inherited: the Nix UI build compiles this crate from web/ with a
+# source set that has no root workspace manifest to inherit from.
 edition = "2024"
 
 [lib]

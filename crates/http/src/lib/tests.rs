@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn response_policy_and_binary_lengths_are_independent_of_routes() {
@@ -26,15 +25,10 @@ fn response_policy_and_binary_lengths_are_independent_of_routes() {
         let split = bytes.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
         let header = std::str::from_utf8(&bytes[..split]).unwrap();
         assert_eq!(&bytes[split..], &[0, 255, 1]);
-        assert!(
-            header.contains("Content-Length: 3\r\n") && header.contains("Cache-Control: no-store")
-        );
+        assert!(header.contains("Content-Length: 3\r\n") && header.contains("Cache-Control: no-store"));
         assert!(header.contains(policy.csp()));
         assert_eq!(header.matches("set-cookie:").count(), 2);
-        assert_eq!(
-            header.contains("'unsafe-inline'"),
-            policy == Policy::ToolWindow
-        );
+        assert_eq!(header.contains("'unsafe-inline'"), policy == Policy::ToolWindow);
         assert_eq!(
             header.contains("'wasm-unsafe-eval'"),
             matches!(policy, Policy::ToolWindow | Policy::Chat | Policy::Client)
@@ -58,17 +52,7 @@ fn malformed_or_conflicting_headers_are_rejected_before_writing() {
         "Content-Security-Policy: unsafe\r\n",
     ] {
         let mut bytes = Vec::new();
-        assert!(
-            respond(
-                &mut bytes,
-                "200 OK",
-                "text/plain",
-                b"body",
-                extra,
-                Policy::Page
-            )
-            .is_err()
-        );
+        assert!(respond(&mut bytes, "200 OK", "text/plain", b"body", extra, Policy::Page).is_err());
         assert!(bytes.is_empty());
     }
     let mut bytes = Vec::new();

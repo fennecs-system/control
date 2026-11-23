@@ -49,7 +49,10 @@ fn exchange(
     let host = url.host_str().ok_or_else(unavailable)?;
     let port = url.port_or_known_default().ok_or_else(unavailable)?;
     let mut stream = None;
-    for address in (host.trim_matches(['[', ']']), port).to_socket_addrs().map_err(|_| unavailable())? {
+    for address in (host.trim_matches(['[', ']']), port)
+        .to_socket_addrs()
+        .map_err(|_| unavailable())?
+    {
         let wait = remaining().min(Duration::from_secs(5));
         if wait.is_zero() {
             return Err(timed_out());
@@ -70,7 +73,10 @@ fn exchange(
             url.path(),
             body.len()
         ),
-        None => format!("GET {} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n", url.path()),
+        None => format!(
+            "GET {} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n",
+            url.path()
+        ),
     };
     stream.set_write_timeout(Some(remaining().max(Duration::from_millis(1))))?;
     stream
@@ -101,7 +107,11 @@ fn exchange(
                     return Err(io::Error::other("Model response exceeds size limit"));
                 }
             }
-            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+                ) => {}
             Err(_) => return Err(unavailable()),
         }
     }
@@ -121,8 +131,7 @@ fn head(bytes: &[u8]) -> io::Result<Option<Head>> {
             Ok(None)
         };
     };
-    let text = std::str::from_utf8(&bytes[..end])
-        .map_err(|_| io::Error::other("Malformed model response headers"))?;
+    let text = std::str::from_utf8(&bytes[..end]).map_err(|_| io::Error::other("Malformed model response headers"))?;
     let mut lines = text.split("\r\n");
     let status = lines
         .next()
@@ -132,14 +141,26 @@ fn head(bytes: &[u8]) -> io::Result<Option<Head>> {
         .ok_or_else(|| io::Error::other("Malformed model response status"))?;
     let (mut length, mut chunked) = (None, false);
     for line in lines {
-        let Some((key, value)) = line.split_once(':') else { continue };
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
         if key.eq_ignore_ascii_case("content-length") {
-            length = Some(value.trim().parse().map_err(|_| io::Error::other("Malformed model response length"))?);
+            length = Some(
+                value
+                    .trim()
+                    .parse()
+                    .map_err(|_| io::Error::other("Malformed model response length"))?,
+            );
         } else if key.eq_ignore_ascii_case("transfer-encoding") {
             chunked = value.to_ascii_lowercase().contains("chunked");
         }
     }
-    Ok(Some(Head { status, length, chunked, body: end + 4 }))
+    Ok(Some(Head {
+        status,
+        length,
+        chunked,
+        body: end + 4,
+    }))
 }
 /// A complete response before EOF, when its framing says so.
 fn complete(bytes: &[u8]) -> io::Result<Option<io::Result<Vec<u8>>>> {
@@ -169,7 +190,9 @@ fn finish(bytes: &[u8]) -> io::Result<Vec<u8>> {
 fn dechunk(mut body: &[u8]) -> io::Result<Option<Vec<u8>>> {
     let mut out = Vec::new();
     loop {
-        let Some(end) = body.windows(2).position(|w| w == b"\r\n") else { return Ok(None) };
+        let Some(end) = body.windows(2).position(|w| w == b"\r\n") else {
+            return Ok(None);
+        };
         let size = std::str::from_utf8(&body[..end])
             .ok()
             .and_then(|s| usize::from_str_radix(s.split(';').next()?.trim(), 16).ok())
@@ -221,7 +244,10 @@ fn tls(url: &reqwest::Url, body: Option<&[u8]>, timeout: Duration) -> io::Result
         .build()
         .map_err(|_| io::Error::other("Cannot create model transport"))?;
     let request = match body {
-        Some(body) => client.post(url.clone()).header("content-type", "application/json").body(body.to_vec()),
+        Some(body) => client
+            .post(url.clone())
+            .header("content-type", "application/json")
+            .body(body.to_vec()),
         None => client.get(url.clone()),
     };
     let response = request.send().map_err(|_| unavailable())?;

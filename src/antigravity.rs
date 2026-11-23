@@ -1,9 +1,9 @@
 //! Google's Antigravity CLI (`agy`), run like Grok Build: its own tools are
 //! denied, its only tools are Control's over MCP, and executable work runs in
 //! separate offline containers through the host shell tool.
-use crate::{backend::Backend, claude, usage::Attempt, State};
+use crate::{State, backend::Backend, claude, usage::Attempt};
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Stream, Streams, Tmpfs, User};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{self, Read},
@@ -50,11 +50,19 @@ impl crate::backend::Agent for Antigravity {
     fn text_run(&self, _: &dyn Isolation, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
         let login = login()?;
         // The text call's scratch root is private and removed after a success.
-        let root = call.workspace.parent().ok_or_else(|| fail("Invalid text-call workspace"))?;
+        let root = call
+            .workspace
+            .parent()
+            .ok_or_else(|| fail("Invalid text-call workspace"))?;
         let private = prepare(root, &login, None, None)?;
         text_container(call, &login, &private)
     }
-    fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {
+    fn text(
+        &self,
+        reader: &mut dyn Read,
+        _max: usize,
+        emit: &mut dyn FnMut(control_ai::Event),
+    ) -> io::Result<control_ai::Output> {
         control_ai::json_lines(reader, control_ai::antigravity::Antigravity::text(), emit)
     }
     fn host_shell(&self) -> bool {
@@ -76,9 +84,22 @@ const PROBE_TIMED_OUT: &str = "Antigravity tool isolation probe timed out after 
 /// Headless and unattended. Approval prompts are skipped, so nothing is
 /// soft-denied; what stays blocked is the deny list in [`settings`], which
 /// applies in every mode.
-const FLAGS: [&str; 4] = ["--dangerously-skip-permissions", "--disable-slash-commands", "--output-format", "stream-json"];
+const FLAGS: [&str; 4] = [
+    "--dangerously-skip-permissions",
+    "--disable-slash-commands",
+    "--output-format",
+    "stream-json",
+];
 /// Every built-in action class the CLI's permission engine names.
-const DENY: [&str; 7] = ["command(*)", "unsandboxed(*)", "read_file(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "download_url(*)"];
+const DENY: [&str; 7] = [
+    "command(*)",
+    "unsandboxed(*)",
+    "read_file(*)",
+    "write_file(*)",
+    "read_url(*)",
+    "execute_url(*)",
+    "download_url(*)",
+];
 /// Where the sign-in token, API key and ADC files live inside the container.
 /// In a container the CLI keeps a Google sign-in in this file rather than the
 /// OS keyring; its own log says so ("container environment detected").
@@ -113,13 +134,19 @@ fn login() -> io::Result<Login> {
     login_in(&auth_directory()?)
 }
 fn login_in(directory: &Path) -> io::Result<Login> {
-    let meta = fs::symlink_metadata(directory).map_err(|_| fail("Run control antigravity login, or save a Gemini API key"))?;
+    let meta =
+        fs::symlink_metadata(directory).map_err(|_| fail("Run control antigravity login, or save a Gemini API key"))?;
     if !meta.is_dir() || !private_owned(&meta) {
-        return Err(fail("Antigravity login directory must be private, owned by a non-root user and not a symlink"));
+        return Err(fail(
+            "Antigravity login directory must be private, owned by a non-root user and not a symlink",
+        ));
     }
     let file = |name: &str| {
         let path = directory.join(name);
-        fs::symlink_metadata(&path).ok().filter(|m| m.is_file() && private_owned(m)).map(|_| path)
+        fs::symlink_metadata(&path)
+            .ok()
+            .filter(|m| m.is_file() && private_owned(m))
+            .map(|_| path)
     };
     if let Some(path) = file("gemini-api-key") {
         return Ok(Login::ApiKey(path));
@@ -130,7 +157,9 @@ fn login_in(directory: &Path) -> io::Result<Login> {
     if let Some(path) = file(SAVED) {
         return Ok(Login::Google(path));
     }
-    Err(fail("No Antigravity login: run control antigravity login, or save a private gemini-api-key or adc.json"))
+    Err(fail(
+        "No Antigravity login: run control antigravity login, or save a private gemini-api-key or adc.json",
+    ))
 }
 /// The settings every run gets. Deny rules win over allow rules and apply in
 /// every mode (https://antigravity.google/docs/permissions), so the CLI keeps
@@ -153,7 +182,10 @@ fn settings(login: &Login, tools: bool) -> Value {
 /// is found by reading its schema file, which the deny list forbids
 /// (https://antigravity.google/docs/mcp#tool-loading-lazy-vs-eager).
 fn mcp_config() -> Value {
-    let tools: serde_json::Map<String, Value> = control_context::worker_mcp_names().into_iter().map(|name| (name.to_owned(), json!({"eager": true}))).collect();
+    let tools: serde_json::Map<String, Value> = control_context::worker_mcp_names()
+        .into_iter()
+        .map(|name| (name.to_owned(), json!({"eager": true})))
+        .collect();
     json!({"mcpServers": {"control": {"command": "/bin/control-room-mcp", "tools": tools}}})
 }
 fn private_file(path: &Path, contents: &str) -> io::Result<()> {
@@ -165,7 +197,10 @@ fn private_file(path: &Path, contents: &str) -> io::Result<()> {
 fn prepare(root: &Path, login: &Login, mcp: Option<&Value>, prompt: Option<&str>) -> io::Result<PathBuf> {
     let directory = root.join(PRIVATE);
     fs::DirBuilder::new().recursive(true).mode(0o700).create(&directory)?;
-    private_file(&directory.join("settings.json"), &settings(login, mcp.is_some()).to_string())?;
+    private_file(
+        &directory.join("settings.json"),
+        &settings(login, mcp.is_some()).to_string(),
+    )?;
     if let Some(mcp) = mcp {
         private_file(&directory.join("mcp_config.json"), &mcp.to_string())?;
     }
@@ -180,10 +215,17 @@ fn container(name: &str, node: &str, login: &Login, private: &Path, image: &str)
     let meta = match login {
         Login::ApiKey(path) | Login::Adc(path) | Login::Google(path) => fs::symlink_metadata(path)?,
     };
-    let owner = User { uid: meta.uid(), gid: meta.gid() };
-    let spec = RunSpec { image: image.into(), input: Input::Attached, ..claude::base(name, node, owner) }
-        .tmpfs(Tmpfs::new("/home/agent/.gemini", Size::Mib(256)).owned(owner))
-        .bind(claude::checked(private)?, "/home/agent/.control", Access::ReadOnly);
+    let owner = User {
+        uid: meta.uid(),
+        gid: meta.gid(),
+    };
+    let spec = RunSpec {
+        image: image.into(),
+        input: Input::Attached,
+        ..claude::base(name, node, owner)
+    }
+    .tmpfs(Tmpfs::new("/home/agent/.gemini", Size::Mib(256)).owned(owner))
+    .bind(claude::checked(private)?, "/home/agent/.control", Access::ReadOnly);
     login_secret(spec, login)
 }
 fn text_container(call: &crate::backend::TextCall<'_>, login: &Login, private: &Path) -> io::Result<RunSpec> {
@@ -193,23 +235,52 @@ fn text_container(call: &crate::backend::TextCall<'_>, login: &Login, private: &
         .args(FLAGS)
         .args(["--model", call.model]))
 }
-fn turn_container(name: &str, node: &str, login: &Login, private: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<RunSpec> {
+fn turn_container(
+    name: &str,
+    node: &str,
+    login: &Login,
+    private: &Path,
+    mailbox: &Path,
+    image: &str,
+    model: &str,
+) -> io::Result<RunSpec> {
     Ok(container(name, node, login, private, image)?
         .bind(claude::checked(mailbox)?, "/workspace", Access::ReadWrite)
         .args(["control-agy", "turn"])
         .args(FLAGS)
         .args(["--model", model]))
 }
-fn login_container(name: &str, node: &str, owner: User, home: &Path, config: &Path, image: &str) -> io::Result<RunSpec> {
-    Ok(RunSpec { image: image.into(), input: Input::Terminal, ..claude::base(name, node, owner) }
-        // The sign-in's own home and configuration, kept: the CLI writes its token there.
-        .secret("antigravity/login-home", claude::checked(home)?, "/home/agent/.gemini", Access::ReadWrite)
-        .secret("antigravity/login-config", claude::checked(config)?, "/home/agent/.config/antigravity", Access::ReadWrite)
-        // No browser can open here. Over SSH the CLI prints an address
-        // and reads the code back (https://antigravity.google/docs/install).
-        .env("SSH_CONNECTION", "control-login 0 container 22")
-        .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
-        .args(["control-agy", "login"]))
+fn login_container(
+    name: &str,
+    node: &str,
+    owner: User,
+    home: &Path,
+    config: &Path,
+    image: &str,
+) -> io::Result<RunSpec> {
+    Ok(RunSpec {
+        image: image.into(),
+        input: Input::Terminal,
+        ..claude::base(name, node, owner)
+    }
+    // The sign-in's own home and configuration, kept: the CLI writes its token there.
+    .secret(
+        "antigravity/login-home",
+        claude::checked(home)?,
+        "/home/agent/.gemini",
+        Access::ReadWrite,
+    )
+    .secret(
+        "antigravity/login-config",
+        claude::checked(config)?,
+        "/home/agent/.config/antigravity",
+        Access::ReadWrite,
+    )
+    // No browser can open here. Over SSH the CLI prints an address
+    // and reads the code back (https://antigravity.google/docs/install).
+    .env("SSH_CONNECTION", "control-login 0 container 22")
+    .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
+    .args(["control-agy", "login"]))
 }
 /// Lists models with the saved login, without a workspace.
 fn check_container(name: &str, node: &str, login: &Login, private: &Path, image: &str) -> io::Result<RunSpec> {
@@ -220,10 +291,18 @@ fn check_container(name: &str, node: &str, login: &Login, private: &Path, image:
 fn login_secret(spec: RunSpec, login: &Login) -> io::Result<RunSpec> {
     Ok(match login {
         Login::ApiKey(path) => spec.secret("antigravity/api-key", claude::checked(path)?, KEY, Access::ReadOnly),
-        Login::Adc(path) => spec.env("AGY_ADC_AUTH", "true").secret("antigravity/adc", claude::checked(path)?, ADC, Access::ReadOnly),
+        Login::Adc(path) => {
+            spec.env("AGY_ADC_AUTH", "true")
+                .secret("antigravity/adc", claude::checked(path)?, ADC, Access::ReadOnly)
+        }
         // Read-only like every backend's login. That a token refresh then
         // stays in memory is unconfirmed until a real sign-in (docs/ANTIGRAVITY.md).
-        Login::Google(path) => spec.secret("antigravity/google-token", claude::checked(path)?, TOKEN, Access::ReadOnly),
+        Login::Google(path) => spec.secret(
+            "antigravity/google-token",
+            claude::checked(path)?,
+            TOKEN,
+            Access::ReadOnly,
+        ),
     })
 }
 /// The offline isolation probe; a timeout fails with [`io::ErrorKind::TimedOut`].
@@ -231,12 +310,24 @@ fn probe(isolation: &dyn Isolation, image: &str, node: &str, root: &Path, name: 
     let directory = root.join(PROBE);
     fs::create_dir_all(&directory)?;
     let command = "set -eu; test ! -e /home/agent/.gemini; test ! -e /home/agent/.control-key; test ! -e /home/agent/.config/gcloud; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.gemini; test -z \"${GEMINI_API_KEY-}${AGY_ADC_AUTH-}\"; printf verified > isolation-check";
-    let output = claude::shell_bounded(isolation, image, name, node, &directory, command, false, crate::worker::SANDBOX_PROBE_WAIT).map_err(|error| match error.kind() {
+    let output = claude::shell_bounded(
+        isolation,
+        image,
+        name,
+        node,
+        &directory,
+        command,
+        false,
+        crate::worker::SANDBOX_PROBE_WAIT,
+    )
+    .map_err(|error| match error.kind() {
         io::ErrorKind::TimedOut => io::Error::new(io::ErrorKind::TimedOut, PROBE_TIMED_OUT),
         _ => error,
     })?;
     if output["exit_code"] != 0 || fs::read(directory.join("isolation-check"))? != b"verified" {
-        return Err(fail("Antigravity workspace isolation check failed; no credentials were mounted"));
+        return Err(fail(
+            "Antigravity workspace isolation check failed; no credentials were mounted",
+        ));
     }
     Ok(())
 }
@@ -245,18 +336,34 @@ fn probe(isolation: &dyn Isolation, image: &str, node: &str, root: &Path, name: 
 fn diagnose(ended: Option<&str>, stderr: &[u8]) -> String {
     let own = |bytes: &[u8]| {
         let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
-        if ["authentication required", "authentication failed", "authentication expired", "log back in", "not logged into", "api key not valid", "gemini_api_key is not set"].iter().any(|s| text.contains(s)) {
+        if [
+            "authentication required",
+            "authentication failed",
+            "authentication expired",
+            "log back in",
+            "not logged into",
+            "api key not valid",
+            "gemini_api_key is not set",
+        ]
+        .iter()
+        .any(|s| text.contains(s))
+        {
             Some("Antigravity's login is missing, expired or was rejected. Run control antigravity check, then sign in again with control antigravity login or replace the API key.".to_owned())
         } else if text.contains("resource_exhausted") || text.contains("out of quota") {
             Some("The signed-in Antigravity account reached a usage or rate limit.".to_owned())
         } else {
-            Some(crate::worker::worker_failure(bytes)).filter(|m| *m != crate::worker::UNKNOWN_FAILURE).map(|m| m.replace("Codex", "Antigravity"))
+            Some(crate::worker::worker_failure(bytes))
+                .filter(|m| *m != crate::worker::UNKNOWN_FAILURE)
+                .map(|m| m.replace("Codex", "Antigravity"))
         }
     };
-    ended.and_then(|e| own(e.as_bytes()))
+    ended
+        .and_then(|e| own(e.as_bytes()))
         .or_else(|| ended.map(str::to_owned))
         .or_else(|| own(stderr))
-        .unwrap_or_else(|| "Antigravity stopped without success. Check its login, selected model and usage limits.".into())
+        .unwrap_or_else(|| {
+            "Antigravity stopped without success. Check its login, selected model and usage limits.".into()
+        })
 }
 
 /// One turn. `prompt` is the same captured turn context or framing Codex and
@@ -282,19 +389,41 @@ pub(crate) fn execute(
     })?;
     let mailbox = root.join(MAILBOX);
     fs::create_dir_all(&mailbox).map_err(|_| failed("Cannot prepare Antigravity mailbox"))?;
-    let private = prepare(root, &login, Some(&mcp_config()), Some(&crate::observe::append(bridge, prompt)))
-        .map_err(|_| failed("Cannot prepare Antigravity configuration"))?;
+    let private = prepare(
+        root,
+        &login,
+        Some(&mcp_config()),
+        Some(&crate::observe::append(bridge, prompt)),
+    )
+    .map_err(|_| failed("Cannot prepare Antigravity configuration"))?;
     let name = format!("control-{id}");
-    container(&name, node, &login, &private, image).map_err(|_| blocked("Antigravity login metadata or mount path unavailable"))?;
+    container(&name, node, &login, &private, image)
+        .map_err(|_| blocked("Antigravity login metadata or mount path unavailable"))?;
     claude::checked(&mailbox).map_err(|_| blocked("Invalid Antigravity mount path"))?;
-    let spec = turn_container(&name, node, &login, &private, &mailbox, image, &attempt.model).map_err(|_| blocked("Antigravity login metadata or mount path unavailable"))?;
+    let spec = turn_container(&name, node, &login, &private, &mailbox, image, &attempt.model)
+        .map_err(|_| blocked("Antigravity login metadata or mount path unavailable"))?;
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before Antigravity launch.".into()));
     }
-    let child = isolation.spawn(&spec, Streams::new(Stream::Null, Stream::Piped, Stream::Piped)).map_err(|_| failed("Cannot start the Antigravity Nix container"))?;
+    let child = isolation
+        .spawn(&spec, Streams::new(Stream::Null, Stream::Piped, Stream::Piped))
+        .map_err(|_| failed("Cannot start the Antigravity Nix container"))?;
     let cli = claude::Cli {
-        name: "Antigravity", id, mailbox: &mailbox, workspace, stdin: None,
-        capture: |reader, update, progress, bad_tools| claude::capture_with(reader, control_ai::antigravity::Antigravity::agent(), "Antigravity", update, progress, bad_tools),
+        name: "Antigravity",
+        id,
+        mailbox: &mailbox,
+        workspace,
+        stdin: None,
+        capture: |reader, update, progress, bad_tools| {
+            claude::capture_with(
+                reader,
+                control_ai::antigravity::Antigravity::agent(),
+                "Antigravity",
+                update,
+                progress,
+                bad_tools,
+            )
+        },
         failure: diagnose,
     };
     claude::supervise(cli, child, attempt, bridge)
@@ -304,10 +433,16 @@ pub fn command(args: &[String]) -> io::Result<()> {
     const USAGE: &str = "Use control antigravity login | check";
     let [action] = args else { return Err(fail(USAGE)) };
     if matches!(action.as_str(), "--help" | "-h" | "help") {
-        println!("control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity check: offline tool isolation, then the binary, the saved login and the model list it can see");
+        println!(
+            "control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity check: offline tool isolation, then the binary, the saved login and the model list it can see"
+        );
         return Ok(());
     }
-    let image = || Backend::Antigravity.image().ok_or_else(|| fail("Build and pin the Antigravity image first: nix run .#setup -- --antigravity"));
+    let image = || {
+        Backend::Antigravity
+            .image()
+            .ok_or_else(|| fail("Build and pin the Antigravity image first: nix run .#setup -- --antigravity"))
+    };
     let node = || crate::config::node_id().map_err(fail);
     let directory = auth_directory()?;
     match action.as_str() {
@@ -318,11 +453,27 @@ pub fn command(args: &[String]) -> io::Result<()> {
             }
             let meta = fs::symlink_metadata(&directory)?;
             if !meta.is_dir() || !private_owned(&meta) {
-                return Err(fail("Antigravity login directory must be private and owned by a non-root user"));
+                return Err(fail(
+                    "Antigravity login directory must be private and owned by a non-root user",
+                ));
             }
             // The sign-in's own home, kept: the CLI writes its token there.
-            let spec = login_container(&format!("control-antigravity-login-{}", std::process::id()), &node()?, User { uid: meta.uid(), gid: meta.gid() }, &home, &config, &image()?)?;
-            if !crate::engine::isolation().spawn(&spec, Streams::INHERIT)?.wait()?.success() {
+            let spec = login_container(
+                &format!("control-antigravity-login-{}", std::process::id()),
+                &node()?,
+                User {
+                    uid: meta.uid(),
+                    gid: meta.gid(),
+                },
+                &home,
+                &config,
+                &image()?,
+            )?;
+            if !crate::engine::isolation()
+                .spawn(&spec, Streams::INHERIT)?
+                .wait()?
+                .success()
+            {
                 return Err(fail("Antigravity login did not complete"));
             }
             let token = directory.join(SAVED);
@@ -335,12 +486,30 @@ pub fn command(args: &[String]) -> io::Result<()> {
             let image = image()?;
             let node = node()?;
             let state = crate::config::state("antigravity-check").map_err(fail)?;
-            probe(crate::engine::isolation(), &image, &node, &state, &format!("control-antigravity-probe-{}", std::process::id()))?;
-            println!("Antigravity offline workspace isolation verified. No account credentials were mounted or model called.");
+            probe(
+                crate::engine::isolation(),
+                &image,
+                &node,
+                &state,
+                &format!("control-antigravity-probe-{}", std::process::id()),
+            )?;
+            println!(
+                "Antigravity offline workspace isolation verified. No account credentials were mounted or model called."
+            );
             let login = login_in(&directory)?;
             let private = prepare(&state, &login, None, None)?;
-            let spec = check_container(&format!("control-antigravity-probe-{}-login", std::process::id()), &node, &login, &private, &image)?;
-            if !crate::engine::isolation().spawn(&spec, Streams::new(Stream::Null, Stream::Inherit, Stream::Inherit))?.wait()?.success() {
+            let spec = check_container(
+                &format!("control-antigravity-probe-{}-login", std::process::id()),
+                &node,
+                &login,
+                &private,
+                &image,
+            )?;
+            if !crate::engine::isolation()
+                .spawn(&spec, Streams::new(Stream::Null, Stream::Inherit, Stream::Inherit))?
+                .wait()?
+                .success()
+            {
                 return Err(fail("Antigravity could not list models with the saved login"));
             }
             Ok(())

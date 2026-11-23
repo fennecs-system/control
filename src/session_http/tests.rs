@@ -1,4 +1,3 @@
-
 use crate::runtime::RunKind;
 /// Control's own work around a conversation, without model calls: send,
 /// record the run's reply, save durably, then load the transcript and page,
@@ -13,10 +12,7 @@ fn fifteen_turn_conversations_workload() {
         calls: u64,
     }
     fn cpu_ns() -> u128 {
-        let mut time = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
+        let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
         assert_eq!(
             unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) },
             0
@@ -52,8 +48,7 @@ fn fifteen_turn_conversations_workload() {
         let id = crate::chat::create(&mut state);
         for turn in 0..15 {
             let mut out = Vec::new();
-            let body =
-                format!("message=Turn+{turn}%3A+keep+building+the+house+and+report+progress");
+            let body = format!("message=Turn+{turn}%3A+keep+building+the+house+and+report+progress");
             assert!(measure(&mut stages[0], || super::handle(
                 &mut out,
                 &mut state,
@@ -119,10 +114,7 @@ fn fifteen_turn_conversations_workload() {
         "{turns} turns in {:?} = {:?}/turn; saved state {} KiB",
         start.elapsed(),
         start.elapsed() / turns as u32,
-        crate::history::persisting(|| serde_json::to_vec(&state))
-            .unwrap()
-            .len()
-            / 1024
+        crate::history::persisting(|| serde_json::to_vec(&state)).unwrap().len() / 1024
     );
 }
 #[test]
@@ -135,7 +127,10 @@ fn memory_tree_has_one_address_and_the_old_ones_are_renamed() {
         String::from_utf8(response).unwrap()
     };
     for old in [format!("/chat/{id}/compaction"), format!("/dm/{id}/compaction")] {
-        assert_eq!(crate::url_names::renamed(&old), Some(crate::compaction::memory_url(&id)));
+        assert_eq!(
+            crate::url_names::renamed(&old),
+            Some(crate::compaction::memory_url(&id))
+        );
     }
     assert_eq!(crate::compaction::memory_url(&id), format!("/dm/{id}/memory"));
     let page = get(&mut state, &crate::compaction::memory_url(&id));
@@ -149,15 +144,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
     let mut state = crate::State::default();
     let id = crate::chat::create(&mut state);
     let mut response = Vec::new();
-    handle(
-        &mut response,
-        &mut state,
-        "GET",
-        &format!("/dm/{id}"),
-        "none",
-        "",
-        &[],
-    );
+    handle(&mut response, &mut state, "GET", &format!("/dm/{id}"), "none", "", &[]);
     assert!(
         String::from_utf8(response)
             .unwrap()
@@ -168,15 +155,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
     );
     let cookie = format!("Cookie: control_recent_chat={id}\r\n");
     let mut response = Vec::new();
-    handle(
-        &mut response,
-        &mut state,
-        "GET",
-        "/dms",
-        "none",
-        &cookie,
-        &[],
-    );
+    handle(&mut response, &mut state, "GET", "/dms", "none", &cookie, &[]);
     assert!(
         String::from_utf8(response)
             .unwrap()
@@ -186,22 +165,10 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
     for path in ["/dms?new=1", "/dms?discuss=tools", "/dms?improve=1"] {
         let mut response = Vec::new();
         handle(&mut response, &mut state, "GET", path, "none", &cookie, &[]);
-        assert!(
-            String::from_utf8(response)
-                .unwrap()
-                .starts_with("HTTP/1.1 200 OK")
-        );
+        assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 200 OK"));
     }
     let mut response = Vec::new();
-    handle(
-        &mut response,
-        &mut state,
-        "GET",
-        "/dms?new=1",
-        "none",
-        &cookie,
-        &[],
-    );
+    handle(&mut response, &mut state, "GET", "/dms?new=1", "none", &cookie, &[]);
     let page = String::from_utf8(response).unwrap();
     assert!(
         page.contains("name='room'")
@@ -217,15 +184,7 @@ fn returning_to_chat_remembers_only_an_existing_authorized_conversation() {
         "Cookie: control_recent_chat=../../tools\r\n",
     ] {
         let mut response = Vec::new();
-        handle(
-            &mut response,
-            &mut state,
-            "GET",
-            "/dms",
-            "none",
-            header,
-            &[],
-        );
+        handle(&mut response, &mut state, "GET", "/dms", "none", header, &[]);
         assert!(
             !String::from_utf8(response)
                 .unwrap()
@@ -246,15 +205,7 @@ fn conversations_panel_is_rendered_from_the_remembered_cookie() {
             ("Cookie: lens=x; control_conversations=open\r\n", true),
         ] {
             let mut response = Vec::new();
-            handle(
-                &mut response,
-                &mut state,
-                "GET",
-                &target,
-                "none",
-                cookie,
-                &[],
-            );
+            handle(&mut response, &mut state, "GET", &target, "none", cookie, &[]);
             let page = String::from_utf8(response).unwrap();
             assert_eq!(
                 page.matches("<details class='conversation-toggle").count(),
@@ -274,17 +225,9 @@ fn conversations_panel_is_rendered_from_the_remembered_cookie() {
 fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
     let mut state = State::default();
     let id = chat::create(&mut state);
-    assert!(
-        !chat::transcript(&state, &id)
-            .unwrap()
-            .contains("project-picker")
-    );
+    assert!(!chat::transcript(&state, &id).unwrap().contains("project-picker"));
     chat::send(&mut state, &id, "Discuss the design", "test").unwrap();
-    assert!(
-        !chat::transcript(&state, &id)
-            .unwrap()
-            .contains("project-picker")
-    );
+    assert!(!chat::transcript(&state, &id).unwrap().contains("project-picker"));
     let before = serde_json::to_vec(&state).unwrap();
     let mut response = Vec::new();
     assert!(handle(
@@ -302,13 +245,16 @@ fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
         response
             .lines()
             .filter_map(|line| line.split_once(':'))
-            .any(|(name, value)| name.eq_ignore_ascii_case("location")
-                && value.trim() == format!("/dm/{id}/project"))
+            .any(|(name, value)| name.eq_ignore_ascii_case("location") && value.trim() == format!("/dm/{id}/project"))
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     // An explicit path produces an approval in the separate request panel.
     // The operator's path is checked now; a missing folder fails at once.
-    assert!(chat::send(&mut state, &id, "/open /fixture/missing-source", "test").unwrap_err().contains("No readable folder"));
+    assert!(
+        chat::send(&mut state, &id, "/open /fixture/missing-source", "test")
+            .unwrap_err()
+            .contains("No readable folder")
+    );
     assert!(state.chats[0].project.is_none());
     let source = std::env::temp_dir();
     chat::send(&mut state, &id, &format!("/open {}", source.display()), "test").unwrap();
@@ -340,7 +286,13 @@ fn browser_fixture(long_messages_only: bool) {
     let question = initial.runtime.runs[0].question.take().unwrap();
     initial.runtime.runs[0].status = "running".into();
     initial.runtime.runs[0].result.clear();
-    crate::projects::request(&mut initial, &chat, "/fixture/project", crate::projects::Requester::Agent { run: None }).unwrap();
+    crate::projects::request(
+        &mut initial,
+        &chat,
+        "/fixture/project",
+        crate::projects::Requester::Agent { run: None },
+    )
+    .unwrap();
     let long_chat = crate::chat::create(&mut initial);
     let (ports, _, port_chat) = crate::ports::tests::pending_fixture();
     initial.services.extend(ports.services);
@@ -358,16 +310,27 @@ fn browser_fixture(long_messages_only: bool) {
     struct FixtureWrite<'a>(std::sync::MutexGuard<'a, crate::State>, bool);
     impl std::ops::Deref for FixtureWrite<'_> {
         type Target = crate::State;
-        fn deref(&self) -> &Self::Target { &self.0 }
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
     }
     impl std::ops::DerefMut for FixtureWrite<'_> {
-        fn deref_mut(&mut self) -> &mut Self::Target { self.1 = true; &mut self.0 }
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            self.1 = true;
+            &mut self.0
+        }
     }
     impl Drop for FixtureWrite<'_> {
-        fn drop(&mut self) { if self.1 { crate::live_updates::notify(); } }
+        fn drop(&mut self) {
+            if self.1 {
+                crate::live_updates::notify();
+            }
+        }
     }
     impl FixtureState {
-        fn lock(&self) -> Result<FixtureWrite<'_>, ()> { self.0.lock().map(|guard| FixtureWrite(guard, false)).map_err(|_| ()) }
+        fn lock(&self) -> Result<FixtureWrite<'_>, ()> {
+            self.0.lock().map(|guard| FixtureWrite(guard, false)).map_err(|_| ())
+        }
     }
     let state = FixtureState(Arc::new(Mutex::new(initial)));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -393,9 +356,7 @@ fn browser_fixture(long_messages_only: bool) {
                 continue;
             };
             stream.set_nonblocking(false).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             if reader.read_line(&mut line).unwrap_or(0) == 0 {
@@ -424,7 +385,9 @@ fn browser_fixture(long_messages_only: bool) {
                 crate::web_assets::serve(&mut stream, &path);
             } else if path == "/events" {
                 let token = events.clone();
-                std::thread::spawn(move || { let _ = crate::live_updates::fixture_stream(&mut stream, &token); });
+                std::thread::spawn(move || {
+                    let _ = crate::live_updates::fixture_stream(&mut stream, &token);
+                });
             } else if crate::serve_stylesheet(&mut stream, &path) {
             } else if path == "/tools/ports" {
                 posted_ports.fetch_add(1, Ordering::Relaxed);
@@ -434,44 +397,28 @@ fn browser_fixture(long_messages_only: bool) {
                     // Leave transcript polling live while operator validation
                     // is slow, including one recoverable persistence error.
                     std::thread::sleep(Duration::from_millis(1800));
-                    crate::ports::http_with_save(
-                        &mut stream,
-                        &served,
-                        &method,
-                        &path,
-                        &body,
-                        |_| {
-                            if fail_save {
-                                Err(std::io::Error::other("fixture port save failed"))
-                            } else {
-                                Ok(())
-                            }
-                        },
-                    );
-                });
-            } else if path.contains("/transcript") && fail.load(Ordering::Relaxed) {
-                let _=stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            } else if method == "POST" && path.ends_with("/messages") {
-                let id = path
-                    .trim_start_matches("/dm/")
-                    .trim_end_matches("/messages");
-                let fields = crate::fields(&String::from_utf8_lossy(&body));
-                let mut state = served.lock().unwrap();
-                send_message(
-                    &mut stream,
-                    &mut state,
-                    id,
-                    "engineering",
-                    &headers,
-                    &fields,
-                    |_| {
-                        if reject.load(Ordering::Relaxed) {
-                            Err(std::io::Error::other("fixture disk full"))
+                    crate::ports::http_with_save(&mut stream, &served, &method, &path, &body, |_| {
+                        if fail_save {
+                            Err(std::io::Error::other("fixture port save failed"))
                         } else {
                             Ok(())
                         }
-                    },
-                );
+                    });
+                });
+            } else if path.contains("/transcript") && fail.load(Ordering::Relaxed) {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            } else if method == "POST" && path.ends_with("/messages") {
+                let id = path.trim_start_matches("/dm/").trim_end_matches("/messages");
+                let fields = crate::fields(&String::from_utf8_lossy(&body));
+                let mut state = served.lock().unwrap();
+                send_message(&mut stream, &mut state, id, "engineering", &headers, &fields, |_| {
+                    if reject.load(Ordering::Relaxed) {
+                        Err(std::io::Error::other("fixture disk full"))
+                    } else {
+                        Ok(())
+                    }
+                });
                 for run in &mut state.runtime.runs {
                     if run.chat_id.as_deref() == Some(id) && run.status == "queued" {
                         run.status = "completed".into();
@@ -479,9 +426,15 @@ fn browser_fixture(long_messages_only: bool) {
                     }
                 }
             } else if let Some(query) = path.strip_prefix("/?") {
-                let html =
-                    crate::public_render(&served.lock().unwrap(), &crate::fields(query), "none");
-                let _ = control_http::respond(&mut stream, "200 OK", "text/html; charset=utf-8", html.as_bytes(), "", control_http::Policy::Embedded);
+                let html = crate::public_render(&served.lock().unwrap(), &crate::fields(query), "none");
+                let _ = control_http::respond(
+                    &mut stream,
+                    "200 OK",
+                    "text/html; charset=utf-8",
+                    html.as_bytes(),
+                    "",
+                    control_http::Policy::Embedded,
+                );
             } else {
                 crate::session_http::handle(
                     &mut stream,
@@ -519,10 +472,7 @@ fn browser_fixture(long_messages_only: bool) {
     } else {
         json!({"browserName":"firefox","moz:firefoxOptions":{"binary":"/Applications/Firefox.app/Contents/MacOS/firefox","args":["-headless"]}})
     };
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap();
+    let client = Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
     let session: Value = client
         .post(format!("{driver}/session"))
         .json(&json!({"capabilities":{"alwaysMatch":capabilities}}))
@@ -530,9 +480,7 @@ fn browser_fixture(long_messages_only: bool) {
         .unwrap()
         .json()
         .unwrap();
-    let id = session["value"]["sessionId"]
-        .as_str()
-        .expect("Browser session failed");
+    let id = session["value"]["sessionId"].as_str().expect("Browser session failed");
     struct Browser {
         client: Client,
         url: String,
@@ -540,20 +488,14 @@ fn browser_fixture(long_messages_only: bool) {
     impl Browser {
         #[track_caller]
         fn request(&self, method: reqwest::Method, path: &str, args: Value) -> Value {
-            let mut r = self
-                .client
-                .request(method.clone(), format!("{}{path}", self.url));
+            let mut r = self.client.request(method.clone(), format!("{}{path}", self.url));
             if method == reqwest::Method::POST {
                 r = r.json(&args);
             }
             let response = r.send().unwrap();
             let status = response.status();
             let value: Value = response.json().unwrap();
-            assert!(
-                status.is_success(),
-                "WebDriver {path}: {}",
-                value["value"]["error"]
-            );
+            assert!(status.is_success(), "WebDriver {path}: {}", value["value"]["error"]);
             value["value"].clone()
         }
         #[track_caller]
@@ -581,8 +523,7 @@ fn browser_fixture(long_messages_only: bool) {
                     return value["value"].as_str().unwrap().to_owned();
                 }
                 assert!(
-                    value["value"]["error"] == "stale element reference"
-                        && start.elapsed() < Duration::from_secs(10),
+                    value["value"]["error"] == "stale element reference" && start.elapsed() < Duration::from_secs(10),
                     "WebDriver text: {}",
                     value["value"]["error"]
                 );
@@ -648,15 +589,9 @@ fn browser_fixture(long_messages_only: bool) {
             text
         );
         for _ in 0..(control_context::limits::CHAT_MESSAGE_CHARS / 4000) {
-            b.post(
-                &format!("/element/{input}/value"),
-                json!({"text":"x".repeat(4000)}),
-            );
+            b.post(&format!("/element/{input}/value"), json!({"text":"x".repeat(4000)}));
         }
-        assert_eq!(
-            b.get(&format!("/element/{input}/property/validationMessage")),
-            ""
-        );
+        assert_eq!(b.get(&format!("/element/{input}/property/validationMessage")), "");
         b.post(&format!("/element/{input}/value"), json!({"text":"x"}));
         assert_eq!(
             b.get(&format!("/element/{input}/property/validationMessage")),
@@ -691,14 +626,8 @@ fn browser_fixture(long_messages_only: bool) {
                 .len(),
             control_context::limits::CHAT_MESSAGE_CHARS + 1
         );
-        b.post(
-            &format!("/element/{input}/value"),
-            json!({"text":"\u{e003}"}),
-        );
-        assert_eq!(
-            b.get(&format!("/element/{input}/property/validationMessage")),
-            ""
-        );
+        b.post(&format!("/element/{input}/value"), json!({"text":"\u{e003}"}));
+        assert_eq!(b.get(&format!("/element/{input}/property/validationMessage")), "");
         b.post(&format!("/element/{send}/click"), json!({}));
         let started = Instant::now();
         while b.get(&format!("/element/{input}/property/value")) != "" {
@@ -743,12 +672,21 @@ fn browser_fixture(long_messages_only: bool) {
         session.title = "Nested history agent".into();
         (child, parent)
     };
-    let count = |b: &Browser, selector: &str| b.post("/elements", json!({"using":"css selector","value":selector})).as_array().unwrap().len();
+    let count = |b: &Browser, selector: &str| {
+        b.post("/elements", json!({"using":"css selector","value":selector}))
+            .as_array()
+            .unwrap()
+            .len()
+    };
     // "Show turns", where the old run history redirects (the fixture server
     // does not redirect; `url_names` tests cover that), lists every DM's turns.
     b.post("/url", json!({"url":format!("{server}/bots/history?expand=1")}));
     b.wait("History run 54");
-    assert_eq!(count(&b, "details.history-dm[open]"), 50, "One page of DMs, every row open");
+    assert_eq!(
+        count(&b, "details.history-dm[open]"),
+        50,
+        "One page of DMs, every row open"
+    );
     assert_eq!(count(&b, ".history-turn"), 49, "The newest DM, the child, has no turns");
     // Without filters, rows load their turns when opened.
     b.post("/url", json!({"url":format!("{server}/bots/history")}));
@@ -762,7 +700,11 @@ fn browser_fixture(long_messages_only: bool) {
     b.post(&format!("/element/{row}/click"), json!({}));
     b.wait("History run 54");
     assert_eq!(count(&b, &format!("details[data-dm='{newest}'] .history-turn")), 1);
-    assert_eq!(count(&b, &format!("details[data-dm='{newest}'] [data-turns-slot]")), 0, "The fragment replaced the link");
+    assert_eq!(
+        count(&b, &format!("details[data-dm='{newest}'] [data-turns-slot]")),
+        0,
+        "The fragment replaced the link"
+    );
     if let Ok(path) = std::env::var("CONTROL_QA_HISTORY_SCREENSHOT") {
         use base64::Engine;
         let screenshot = b.get("/screenshot");
@@ -834,10 +776,7 @@ fn browser_fixture(long_messages_only: bool) {
         b.post("/window/rect", json!({"width":width,"height":900}));
         let new_chat = b.element(".conversation-navigation nav > a:first-child");
         assert!(
-            b.get(&format!("/element/{new_chat}/rect"))["height"]
-                .as_f64()
-                .unwrap()
-                >= 32.0,
+            b.get(&format!("/element/{new_chat}/rect"))["height"].as_f64().unwrap() >= 32.0,
             "New chat must retain its height beside a long expanded team"
         );
         let nav = b.element(".conversation-navigation nav");
@@ -973,17 +912,11 @@ fn browser_fixture(long_messages_only: bool) {
     assert_eq!(b.get(&format!("/element/{toggle}/property/open")), false);
     b.post(&format!("/element/{request_toggle}/click"), json!({}));
     let frame = b.element("iframe.chat-transcript");
-    b.post(
-        "/frame",
-        json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}),
-    );
+    b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
     let body = b.element("body");
     b.post("/frame", json!({"id":null}));
     let requests = b.element("iframe.chat-requests-frame");
-    b.post(
-        "/frame",
-        json!({"id":{"element-6066-11e4-a52e-4f735466cecf":requests}}),
-    );
+    b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":requests}}));
     b.wait("Trust folder and open");
     b.wait("Bot request");
     let approval = b.element(".project-picker button[name=approve]");
@@ -992,10 +925,7 @@ fn browser_fixture(long_messages_only: bool) {
         approval_color == "rgb(181, 160, 255)" || approval_color == "rgba(181, 160, 255, 1)",
         "Approval must use the theme purple: {approval_color}"
     );
-    assert_eq!(
-        b.get(&format!("/element/{approval}/css/border-radius")),
-        "0px"
-    );
+    assert_eq!(b.get(&format!("/element/{approval}/css/border-radius")), "0px");
     let previous_project = b.element(".project-picker > summary");
     b.post(&format!("/element/{previous_project}/click"), json!({}));
     {
@@ -1015,40 +945,32 @@ fn browser_fixture(long_messages_only: bool) {
         "A new request must not inherit the old collapsed state"
     );
     b.post("/frame", json!({"id":null}));
-    b.post(
-        "/frame",
-        json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}),
-    );
+    b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
     assert_eq!(b.get(&format!("/element/{body}/name")), "body");
     {
         let mut state = state.lock().unwrap();
-        state.runtime.runs[0].attempts[0]
-            .activity
-            .push(crate::usage::Activity {
-                id: "command-1".into(),
-                kind: "command_execution".into(),
-                text: "cargo test".into(),
-                output: "Streaming output alpha".into(),
-                status: "running".into(),
-            });
+        state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity {
+            id: "command-1".into(),
+            kind: "command_execution".into(),
+            text: "cargo test".into(),
+            output: "Streaming output alpha".into(),
+            status: "running".into(),
+        });
     }
     b.wait("Streaming output alpha");
     {
         let mut state = state.lock().unwrap();
-        state.runtime.runs[0].attempts[0]
-            .activity
-            .push(crate::usage::Activity {
-                id: "visible-message-1".into(),
-                kind: "message".into(),
-                text: "Cedar is checking inventory".into(),
-                output: String::new(),
-                status: "running".into(),
-            });
+        state.runtime.runs[0].attempts[0].activity.push(crate::usage::Activity {
+            id: "visible-message-1".into(),
+            kind: "message".into(),
+            text: "Cedar is checking inventory".into(),
+            output: String::new(),
+            status: "running".into(),
+        });
     }
     b.wait("Cedar is checking inventory");
     assert!(
-        !b.text(".run-activity")
-            .contains("Cedar is checking inventory"),
+        !b.text(".run-activity").contains("Cedar is checking inventory"),
         "Chat messages must be inline, outside the collapsed tool log"
     );
     b.wait("Service streaming alpha");
@@ -1056,8 +978,7 @@ fn browser_fixture(long_messages_only: bool) {
     {
         let mut state = state.lock().unwrap();
         let mut service = serde_json::to_value(&state.services[0]).unwrap();
-        service["executions"][0]["output"] =
-            json!("Service streaming alpha\nService streaming beta");
+        service["executions"][0]["output"] = json!("Service streaming alpha\nService streaming beta");
         state.services[0] = serde_json::from_value(service).unwrap();
     }
     b.wait("Service streaming beta");
@@ -1070,10 +991,7 @@ fn browser_fixture(long_messages_only: bool) {
     b.post(&format!("/element/{details}/click"), json!({}));
     b.post("/frame", json!({"id":null}));
     b.post(&format!("/element/{input}/click"), json!({}));
-    b.post(
-        "/frame",
-        json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}),
-    );
+    b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
     failed.store(true, Ordering::Relaxed);
     std::thread::sleep(Duration::from_millis(1600));
     {
@@ -1097,10 +1015,7 @@ fn browser_fixture(long_messages_only: bool) {
     assert_eq!(b.text(".diff-remove"), "-old");
     b.post("/frame", json!({"id":null}));
     b.post(&format!("/element/{input}/click"), json!({}));
-    b.post(
-        "/frame",
-        json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}),
-    );
+    b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
     let details = b.element(".run-activity");
     assert_eq!(b.get(&format!("/element/{details}/property/open")), false);
     assert_eq!(
@@ -1129,26 +1044,17 @@ fn browser_fixture(long_messages_only: bool) {
         "Collapsed activity must survive a changed transcript in both browser realms"
     );
     b.post("/frame", json!({"id":null}));
-    b.post(
-        "/frame",
-        json!({"id":{"element-6066-11e4-a52e-4f735466cecf":requests}}),
-    );
+    b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":requests}}));
     b.wait("Which format?");
     assert!(b.text("body").contains("Plain text"));
     let answer = b.element("form");
-    assert_eq!(
-        b.get(&format!("/element/{answer}/attribute/target")),
-        "_top"
-    );
+    assert_eq!(b.get(&format!("/element/{answer}/attribute/target")), "_top");
     b.post("/frame", json!({"id":null}));
     assert_eq!(
         b.get(&format!("/element/{input}/property/value")),
         "Keep this unfinished draft"
     );
-    assert_eq!(
-        b.get("/element/active")["element-6066-11e4-a52e-4f735466cecf"],
-        input
-    );
+    assert_eq!(b.get("/element/active")["element-6066-11e4-a52e-4f735466cecf"], input);
     // Fifteen real form submissions through the WASM client and HTTP command;
     // deterministic worker results isolate browser costs from model latency.
     b.post("/url", json!({"url":format!("{server}/dm/{port_chat}")}));
@@ -1233,10 +1139,7 @@ fn browser_fixture(long_messages_only: bool) {
         json!({"text":"Prompt rejected\u{E007}"}),
     );
     b.wait("Could not save the chat");
-    assert_eq!(
-        b.get(&format!("/element/{input}/property/value")),
-        "Prompt rejected"
-    );
+    assert_eq!(b.get(&format!("/element/{input}/property/value")), "Prompt rejected");
     assert!(
         state
             .lock()
@@ -1259,10 +1162,7 @@ fn browser_fixture(long_messages_only: bool) {
             &format!("/element/{input}/value"),
             json!({"text":format!("Prompt {turn}\u{E007}")}),
         );
-        b.post(
-            "/frame",
-            json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}),
-        );
+        b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
         b.wait(&format!("Response {turn}"));
         let scroller = b.element("html");
         let height = b
@@ -1314,10 +1214,7 @@ fn browser_fixture(long_messages_only: bool) {
             .len(),
         15
     );
-    b.post(
-        "/frame",
-        json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}),
-    );
+    b.post("/frame", json!({"id":{"element-6066-11e4-a52e-4f735466cecf":frame}}));
     let scroller = b.element("html");
     let bottom_before = b
         .get(&format!("/element/{scroller}/property/scrollTop"))
@@ -1342,8 +1239,7 @@ fn browser_fixture(long_messages_only: bool) {
             .rev()
             .find(|run| run.chat_id.as_deref() == Some(&long_chat))
             .unwrap();
-        run.result
-            .push_str("\n\nTail arrived while reading history.");
+        run.result.push_str("\n\nTail arrived while reading history.");
     }
     b.wait("Tail arrived while reading history.");
     let after = b
@@ -1472,10 +1368,7 @@ fn asynchronous_send_commits_before_ack_and_preserves_native_navigation() {
 }
 #[test]
 fn long_form_messages_checkpoint_completely_or_restore_the_draft() {
-    let text = format!(
-        "{} END",
-        "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4)
-    );
+    let text = format!("{} END", "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4));
     let encoded = format!(
         "message={}%20END",
         "%F0%9F%A6%8A".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4)
@@ -1485,40 +1378,22 @@ fn long_form_messages_checkpoint_completely_or_restore_the_draft() {
         let mut state = State::default();
         let id = chat::create(&mut state);
         let mut response = Vec::new();
-        send_message(
-            &mut response,
-            &mut state,
-            &id,
-            "none",
-            header,
-            &fields,
-            |saved| {
-                let restored: State = serde_json::from_slice(&serde_json::to_vec(saved)?).unwrap();
-                assert_eq!(restored.chats[0].messages[0].text, text);
-                assert_eq!(restored.runtime.runs[0].objective.as_str(), text);
-                Ok(())
-            },
-        );
-        assert!(
-            String::from_utf8(response)
-                .unwrap()
-                .starts_with(if header.is_empty() {
-                    "HTTP/1.1 303"
-                } else {
-                    "HTTP/1.1 200"
-                })
-        );
+        send_message(&mut response, &mut state, &id, "none", header, &fields, |saved| {
+            let restored: State = serde_json::from_slice(&serde_json::to_vec(saved)?).unwrap();
+            assert_eq!(restored.chats[0].messages[0].text, text);
+            assert_eq!(restored.runtime.runs[0].objective.as_str(), text);
+            Ok(())
+        });
+        assert!(String::from_utf8(response).unwrap().starts_with(if header.is_empty() {
+            "HTTP/1.1 303"
+        } else {
+            "HTTP/1.1 200"
+        }));
         let before = serde_json::to_vec(&state).unwrap();
         let mut response = Vec::new();
-        send_message(
-            &mut response,
-            &mut state,
-            &id,
-            "none",
-            header,
-            &fields,
-            |_| Err(std::io::Error::other("fixture disk full")),
-        );
+        send_message(&mut response, &mut state, &id, "none", header, &fields, |_| {
+            Err(std::io::Error::other("fixture disk full"))
+        });
         let response = String::from_utf8(response).unwrap();
         assert!(response.starts_with("HTTP/1.1 400"));
         if header.is_empty() {
@@ -1533,12 +1408,9 @@ fn failed_design_answer_checkpoint_restores_question_and_does_not_resume() {
     let (mut state, id) = crate::design::tests::paused();
     let before = serde_json::to_vec(&state).unwrap();
     assert!(
-        change_with_save(
-            &mut state,
-            "control.chat.send",
-            &json!({"id":id,"message":"2"}),
-            |_| Err(std::io::Error::other("disk full"))
-        )
+        change_with_save(&mut state, "control.chat.send", &json!({"id":id,"message":"2"}), |_| {
+            Err(std::io::Error::other("disk full"))
+        })
         .is_err()
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
@@ -1571,9 +1443,7 @@ fn rejected_first_message_creates_no_chat_and_keeps_the_escaped_draft() {
     assert!(state.chats.is_empty() && state.runtime.runs.is_empty());
     assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     assert!(response.contains("role='alert'>Use /answer"));
-    assert!(
-        response.contains("/answer &lt;b&gt;draft</textarea>") && !response.contains("<b>draft")
-    );
+    assert!(response.contains("/answer &lt;b&gt;draft</textarea>") && !response.contains("<b>draft"));
 }
 #[test]
 fn failed_cancel_checkpoint_restores_existing_run_and_conversation() {
@@ -1645,13 +1515,9 @@ fn mcp_negotiation_catalog_and_unknown_methods() {
         &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}),
     );
     assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
-    let catalogue = rpc(
-        &mut state,
-        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
-    );
+    let catalogue = rpc(&mut state, &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
     let tools = catalogue["result"]["tools"].as_array().unwrap();
-    let names: std::collections::BTreeSet<_> =
-        tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    let names: std::collections::BTreeSet<_> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     assert_eq!(names.len(), tools.len(), "MCP tools must have unique names");
     for expected in [
         "control.chat.create",
@@ -1662,10 +1528,7 @@ fn mcp_negotiation_catalog_and_unknown_methods() {
         assert!(names.contains(expected));
     }
     assert_eq!(
-        rpc(
-            &mut state,
-            &json!({"jsonrpc":"2.0","id":3,"method":"unknown"})
-        )["error"]["code"],
+        rpc(&mut state, &json!({"jsonrpc":"2.0","id":3,"method":"unknown"}))["error"]["code"],
         -32601
     );
 }
@@ -1692,17 +1555,11 @@ fn room_checkpoint_failure_rolls_back_and_invalid_membership_creates_nothing() {
         .is_err()
     );
     assert!(state.chats.is_empty());
-    let chat = change_with_save(
-        &mut state,
-        "control.chat.create",
-        &json!({"room":"research"}),
-        |_| Ok(()),
-    )
+    let chat = change_with_save(&mut state, "control.chat.create", &json!({"room":"research"}), |_| {
+        Ok(())
+    })
     .unwrap();
-    assert_eq!(
-        chat["room"],
-        format!("research/{}", chat["id"].as_str().unwrap())
-    );
+    assert_eq!(chat["room"], format!("research/{}", chat["id"].as_str().unwrap()));
     assert!(
         crate::rooms::read(&state, chat["room"].as_str().unwrap())["chats"]
             .as_array()
@@ -1718,26 +1575,58 @@ fn operator_mcp_envelopes_are_pinned() {
     let mut state = State::default();
     let version = env!("CARGO_PKG_VERSION");
     for (request, expected) in [
-        (json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}),
-            json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"control","version":version}}})),
-        (json!({"jsonrpc":"2.0","id":"a","method":"initialize","params":{"protocolVersion":"1999-01-01"}}),
-            json!({"jsonrpc":"2.0","id":"a","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control","version":version}}})),
-        (json!({"jsonrpc":"2.0","id":2,"method":"ping"}), json!({"jsonrpc":"2.0","id":2,"result":{}})),
-        (json!({"jsonrpc":"2.0","id":null,"method":"ping"}), json!({"jsonrpc":"2.0","id":null,"result":{}})),
-        (json!({"jsonrpc":"1.0","id":3,"method":"ping"}), json!({"jsonrpc":"2.0","id":3,"error":{"code":-32600,"message":"Invalid request."}})),
-        (json!({"id":4,"method":"ping"}), json!({"jsonrpc":"2.0","id":4,"error":{"code":-32600,"message":"Invalid request."}})),
-        (json!([{"jsonrpc":"2.0","id":5,"method":"ping"}]), json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid request."}})),
-        (json!({"jsonrpc":"2.0","id":6,"method":"resources/list"}), json!({"jsonrpc":"2.0","id":6,"error":{"code":-32601,"message":"Method not found."}})),
-        (json!({"jsonrpc":"2.0","id":7}), json!({"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found."}})),
-        (json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"control.packages.search","arguments":{}}}),
-            json!({"jsonrpc":"2.0","id":8,"result":{"content":[{"type":"text","text":"Package tools are served by the HTTP MCP endpoint."}],"isError":true}})),
-        (json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"control.chats.list","arguments":{}}}),
-            json!({"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"[]"}],"structuredContent":{"data":[]},"isError":false}})),
+        (
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}),
+            json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"control","version":version}}}),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":"a","method":"initialize","params":{"protocolVersion":"1999-01-01"}}),
+            json!({"jsonrpc":"2.0","id":"a","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control","version":version}}}),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":2,"method":"ping"}),
+            json!({"jsonrpc":"2.0","id":2,"result":{}}),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":null,"method":"ping"}),
+            json!({"jsonrpc":"2.0","id":null,"result":{}}),
+        ),
+        (
+            json!({"jsonrpc":"1.0","id":3,"method":"ping"}),
+            json!({"jsonrpc":"2.0","id":3,"error":{"code":-32600,"message":"Invalid request."}}),
+        ),
+        (
+            json!({"id":4,"method":"ping"}),
+            json!({"jsonrpc":"2.0","id":4,"error":{"code":-32600,"message":"Invalid request."}}),
+        ),
+        (
+            json!([{"jsonrpc":"2.0","id":5,"method":"ping"}]),
+            json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid request."}}),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":6,"method":"resources/list"}),
+            json!({"jsonrpc":"2.0","id":6,"error":{"code":-32601,"message":"Method not found."}}),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":7}),
+            json!({"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found."}}),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"control.packages.search","arguments":{}}}),
+            json!({"jsonrpc":"2.0","id":8,"result":{"content":[{"type":"text","text":"Package tools are served by the HTTP MCP endpoint."}],"isError":true}}),
+        ),
+        (
+            json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"control.chats.list","arguments":{}}}),
+            json!({"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"[]"}],"structuredContent":{"data":[]},"isError":false}}),
+        ),
     ] {
         assert_eq!(rpc(&mut state, &request), expected, "{request}");
     }
     let listed = rpc(&mut state, &json!({"jsonrpc":"2.0","id":10,"method":"tools/list"}));
-    assert_eq!(listed, json!({"jsonrpc":"2.0","id":10,"result":{"tools":crate::tool_registry::http_definitions()}}));
+    assert_eq!(
+        listed,
+        json!({"jsonrpc":"2.0","id":10,"result":{"tools":crate::tool_registry::http_definitions()}})
+    );
 }
 
 /// Every header of the chat routes' three response kinds (a redirect, a plain
@@ -1752,13 +1641,33 @@ fn chat_route_response_bytes_are_pinned() {
     let mut state = State::default();
     let mut get = |target: &str| {
         let mut response = Vec::new();
-        assert!(handle(&mut response, &mut state, "GET", target, "none", "", &[]), "{target}");
+        assert!(
+            handle(&mut response, &mut state, "GET", target, "none", "", &[]),
+            "{target}"
+        );
         String::from_utf8(response).unwrap()
     };
-    assert_eq!(get("/?view=evolution"), format!("HTTP/1.1 303 See Other\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n{SECURITY}{EMBEDDED}location: /dms?improve=1\r\n\r\n"));
-    assert_eq!(get("/dm/..."), format!("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n{SECURITY}{EMBEDDED}\r\nChat not found."));
+    assert_eq!(
+        get("/?view=evolution"),
+        format!(
+            "HTTP/1.1 303 See Other\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n{SECURITY}{EMBEDDED}location: /dms?improve=1\r\n\r\n"
+        )
+    );
+    assert_eq!(
+        get("/dm/..."),
+        format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n{SECURITY}{EMBEDDED}\r\nChat not found."
+        )
+    );
     let page = get("/dms?new=1");
     let (head, body) = page.split_once("\r\n\r\n").unwrap();
     assert!(body.contains("/tool-window/chat-bootstrap.js"));
-    assert_eq!(head, format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{SECURITY}{}", body.len(), CHAT.trim_end()));
+    assert_eq!(
+        head,
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{SECURITY}{}",
+            body.len(),
+            CHAT.trim_end()
+        )
+    );
 }

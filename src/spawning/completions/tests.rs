@@ -1,4 +1,3 @@
-
 use super::*;
 fn spawned(n: usize) -> State {
     let (mut state, id) = super::super::tests::active();
@@ -39,10 +38,7 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
     assert_eq!(callback.chat_id.as_deref(), Some(parent_chat.as_str()));
     assert!(callback.continuation.is_none());
     assert!(callback.queue_order > state.runtime.runs[2].queue_order);
-    assert_eq!(
-        state.chats[0].workspace.as_deref(),
-        Some("newer-human-workspace")
-    );
+    assert_eq!(state.chats[0].workspace.as_deref(), Some("newer-human-workspace"));
     assert_eq!(crate::scheduler::next(&state.runtime), Some(2));
     let (_, children) = crate::delegated_results::scope(&state, callback).unwrap();
     assert!(children.contains(child.as_str()));
@@ -52,10 +48,7 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
             .contains("Control update")
     );
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    reconcile(&mut restored, |_| {
-        panic!("Saved completion must not replay")
-    })
-    .unwrap();
+    reconcile(&mut restored, |_| panic!("Saved completion must not replay")).unwrap();
     assert_eq!(restored.runtime.runs.len(), 4);
 }
 #[test]
@@ -113,10 +106,7 @@ fn full_queue_defers_without_consuming_the_completion_receipt() {
     assert!(state.runtime.runs[0].spawns[0].completions.is_empty());
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     reconcile(&mut state, |_| Ok(())).unwrap();
-    assert_eq!(
-        state.runtime.runs.last().unwrap().kind,
-        RunKind::AgentCompletion
-    );
+    assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::AgentCompletion);
 }
 #[test]
 fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
@@ -150,10 +140,7 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
         answer: Some("A".into()),
         continuation: Some(next_id),
     });
-    reconcile(&mut state, |_| {
-        panic!("Active continuation must not notify")
-    })
-    .unwrap();
+    reconcile(&mut state, |_| panic!("Active continuation must not notify")).unwrap();
     state.runtime.runs[2].status = "failed".into();
     state.runtime.runs[2].actor = identity::Actor::Unknown;
     assert!(reconcile(&mut state, |_| panic!("Mismatched scope must not notify")).is_err());

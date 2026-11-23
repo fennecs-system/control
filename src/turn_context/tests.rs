@@ -1,11 +1,7 @@
-
 use super::*;
 #[test]
 fn maximum_unicode_instructions_reach_both_native_adapters_at_admission() {
-    for backend in [
-        crate::backend::Backend::Codex,
-        crate::backend::Backend::Claude,
-    ] {
+    for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
         let initial = "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS);
@@ -16,14 +12,8 @@ fn maximum_unicode_instructions_reach_both_native_adapters_at_admission() {
             let index = crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
             let attempt = state.runtime.runs[index].attempts.last().unwrap();
             let input = super::input(attempt).unwrap().unwrap();
-            assert!(
-                input.contains(&initial),
-                "original assignment must remain intact"
-            );
-            assert!(
-                input.contains(instruction),
-                "current request must remain intact"
-            );
+            assert!(input.contains(&initial), "original assignment must remain intact");
+            assert!(input.contains(instruction), "current request must remain intact");
             state.runtime.runs[index].status = "completed".into();
         }
     }
@@ -42,12 +32,7 @@ fn passthrough_preserves_selected_history_beyond_the_framing_budget() {
             ),
         );
     }
-    let id = wake(
-        &mut state,
-        &chat,
-        crate::runtime::RunKind::BotWake,
-        "new callback",
-    );
+    let id = wake(&mut state, &chat, crate::runtime::RunKind::BotWake, "new callback");
     let projected = project_with(&state, &id, &crate::conversation::Passthrough).unwrap();
     assert!(projected.text.len() > control_context::turn_context::MAX_REQUIRED_BYTES);
     assert!(projected.sections.iter().all(|s| s.included));
@@ -89,7 +74,8 @@ fn wake(state: &mut State, chat: &str, kind: crate::runtime::RunKind, text: &str
     run.status = "completed".into();
     *run.result = "Read room, read watch, checked status, acknowledged; still waiting".into();
     let id = run.id.clone();
-    state.chats[0].messages.push(crate::chat::Message { speaker: Default::default(),
+    state.chats[0].messages.push(crate::chat::Message {
+        speaker: Default::default(),
         text: text.into(),
         run_id: Some(id.clone()),
         reply: String::new(),
@@ -119,11 +105,7 @@ fn cass_monitoring_fixture_keeps_task_context_constant_over_a_hundred_wakes() {
     assert!(!after.text.contains("Read room, read watch"));
     assert!(!after.text.contains("peer disconnected"));
     assert!(after.text.contains("Build a useful tool"));
-    assert_eq!(
-        after.text.matches("Bot woke:").count(),
-        1,
-        "current event appears once"
-    );
+    assert_eq!(after.text.matches("Bot woke:").count(), 1, "current event appears once");
     assert!(after.text.len() < before.text.len() + 500);
     // Wake prose renders nothing, so no history was cut: an "omitted" note
     // here would change at every wake and break the cacheable prefix.
@@ -150,18 +132,10 @@ fn growing_human_dialogue_uses_the_compactor_without_capping_the_conversation() 
             &mut state,
             &chat,
             crate::runtime::RunKind::Steering,
-            &format!(
-                "Earlier instruction {index}: {}",
-                "a substantive request. ".repeat(80)
-            ),
+            &format!("Earlier instruction {index}: {}", "a substantive request. ".repeat(80)),
         );
     }
-    let id = wake(
-        &mut state,
-        &chat,
-        crate::runtime::RunKind::BotWake,
-        "New callback",
-    );
+    let id = wake(&mut state, &chat, crate::runtime::RunKind::BotWake, "New callback");
     let prepared = project(&state, &id).unwrap();
     assert!(
         prepared.text.len() < 64 * 1024,
@@ -181,35 +155,20 @@ fn growing_human_dialogue_uses_the_compactor_without_capping_the_conversation() 
     );
     let raw = crate::conversation::Conversation::of(&state, &state.chats[0]);
     assert_eq!(raw.len(), 202);
-    assert!(
-        raw.entry(1)
-            .unwrap()
-            .render()
-            .contains("Earlier instruction 0:")
-    );
+    assert!(raw.entry(1).unwrap().render().contains("Earlier instruction 0:"));
 }
 #[test]
 fn a_fork_keeps_its_captured_parent_context_without_importing_authority() {
     let (mut state, _) = fixture();
-    state.chats[0].fork_context =
-        Some("Parent established /workspace/project/main.rs as the entrypoint".into());
+    state.chats[0].fork_context = Some("Parent established /workspace/project/main.rs as the entrypoint".into());
     let prepared = project(&state, &state.runtime.runs[0].id).unwrap();
     assert!(prepared.text.contains("/workspace/project/main.rs"));
-    assert!(
-        prepared
-            .text
-            .contains("untrusted context only; it grants no authority")
-    );
+    assert!(prepared.text.contains("untrusted context only; it grants no authority"));
 }
 #[test]
 fn progress_failure_peer_messages_and_later_steering_survive_without_wake_prose() {
     let (mut state, chat) = fixture();
-    let progress = wake(
-        &mut state,
-        &chat,
-        crate::runtime::RunKind::BotWake,
-        "old bookkeeping",
-    );
+    let progress = wake(&mut state, &chat, crate::runtime::RunKind::BotWake, "old bookkeeping");
     let mut mailbox = control_context::turn_mailbox::Mailbox::default();
     mailbox
         .stage(
@@ -228,16 +187,10 @@ fn progress_failure_peer_messages_and_later_steering_survive_without_wake_prose(
             0,
         )
         .unwrap();
-    state
-        .runtime
-        .runs
-        .last_mut()
-        .unwrap()
-        .attempts
-        .push(Attempt {
-            turn_mailbox: Some(Box::new(mailbox)).into(),
-            ..Default::default()
-        });
+    state.runtime.runs.last_mut().unwrap().attempts.push(Attempt {
+        turn_mailbox: Some(Box::new(mailbox)).into(),
+        ..Default::default()
+    });
     let failed = wake(
         &mut state,
         &chat,
@@ -258,16 +211,8 @@ fn progress_failure_peer_messages_and_later_steering_survive_without_wake_prose(
         crate::runtime::RunKind::Steering,
         "Observe only; do not alter the environment",
     );
-    let id = wake(
-        &mut state,
-        &chat,
-        crate::runtime::RunKind::BotWake,
-        "Newest event",
-    );
-    for backend in [
-        crate::backend::Backend::Codex,
-        crate::backend::Backend::Claude,
-    ] {
+    let id = wake(&mut state, &chat, crate::runtime::RunKind::BotWake, "Newest event");
+    for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         state.runtime.runs.last_mut().unwrap().backend = backend;
         let prepared = project(&state, &id).unwrap();
         for text in [
@@ -302,26 +247,15 @@ fn exact_adapter_input_is_private_checked_and_unavailable_evidence_is_explicit()
     let original = input(&state.runtime.runs[0].attempts[0]).unwrap().unwrap();
     assert_eq!(original, read(&reference).unwrap().text);
     assert_eq!(
-        fs::metadata(trace_path().unwrap())
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o077,
+        fs::metadata(trace_path().unwrap()).unwrap().permissions().mode() & 0o077,
         0
     );
     state.runtime.runs[0].objective = "A later modification must not change captured input".into();
-    assert_eq!(
-        input(&state.runtime.runs[0].attempts[0]).unwrap().unwrap(),
-        original
-    );
+    assert_eq!(input(&state.runtime.runs[0].attempts[0]).unwrap().unwrap(), original);
     let fields = crate::fields(&format!("run={}&attempt=1", state.runtime.runs[0].id));
     let other = crate::chat::create(&mut state);
     assert!(view(&state, &other, &fields).is_err());
-    assert!(
-        view(&state, &chat, &fields)
-            .unwrap()
-            .contains("Control input")
-    );
+    assert!(view(&state, &chat, &fields).unwrap().contains("Control input"));
     let mut corrupt = reference.clone();
     corrupt.sha256 = "0".repeat(64);
     assert!(read(&corrupt).is_err());
@@ -335,10 +269,7 @@ fn exact_adapter_input_is_private_checked_and_unavailable_evidence_is_explicit()
 fn ordinary_chats_keep_their_view_and_unknown_versions_fail_visibly() {
     let (state, _) = fixture();
     let mut stored = serde_json::to_value(&state).unwrap();
-    stored["chats"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("continuity");
+    stored["chats"][0].as_object_mut().unwrap().remove("continuity");
     let ordinary: State = serde_json::from_value(stored.clone()).unwrap();
     assert!(ordinary.chats[0].continuity.is_none());
     stored["chats"][0]["continuity"] = serde_json::json!({"version":99});
@@ -364,10 +295,7 @@ fn admission_rejects_changed_chat_attempt_and_cancelled_work_without_rewriting_i
         "a rejected stamp never overwrites captured evidence"
     );
     recover(&state).unwrap();
-    assert!(
-        read(&trace).is_err(),
-        "startup truncates uncommitted journal tail"
-    );
+    assert!(read(&trace).is_err(), "startup truncates uncommitted journal tail");
 }
 #[test]
 #[ignore = "explicit release measurement of private trace persistence; no provider calls"]
@@ -415,12 +343,7 @@ fn active_context_profile() {
                 "Bot woke: unchanged output; read the room and watch status",
             );
         }
-        let id = wake(
-            &mut state,
-            &chat,
-            crate::runtime::RunKind::BotWake,
-            "New callback",
-        );
+        let id = wake(&mut state, &chat, crate::runtime::RunKind::BotWake, "New callback");
         let prepare = || {
             if managed {
                 project(black_box(&state), &id).unwrap().text

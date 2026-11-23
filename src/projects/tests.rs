@@ -1,4 +1,3 @@
-
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 struct Fixture(PathBuf);
@@ -16,7 +15,10 @@ fn pending_project_files_survive_uncertain_unwind_but_not_ordinary_rejection() {
         panic!("unconfirmed checkpoint");
     });
     assert!(result.is_err());
-    assert_eq!(fs::read_to_string(path.join("checkpoint.txt")).unwrap(), "candidate bytes");
+    assert_eq!(
+        fs::read_to_string(path.join("checkpoint.txt")).unwrap(),
+        "candidate bytes"
+    );
     drop(PendingGrant(Some(path.clone())));
     assert!(!path.exists(), "ordinary rollback removes unpublished files");
 }
@@ -45,12 +47,7 @@ impl Drop for Fixture {
 }
 fn command(directory: &Path, args: &[&str]) -> std::process::Output {
     let output = Command::new("git")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-        ])
+        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"])
         .arg("-C")
         .arg(directory)
         .args(args)
@@ -149,10 +146,7 @@ fn profile_large_project_turn_copies() {
                 .len(),
             1024 * 1024 * 1024
         );
-        assert_eq!(
-            fs::read_dir(directory.join("workspace")).unwrap().count(),
-            4001
-        );
+        assert_eq!(fs::read_dir(directory.join("workspace")).unwrap().count(), 4001);
     }
 }
 #[test]
@@ -195,11 +189,7 @@ fn git_worktree_preserves_dirty_files_deletions_history_and_executable_modes() {
     assert!(!imported.join(".netrc").exists());
     assert!(!imported.join("target").exists());
     assert_eq!(
-        fs::metadata(imported.join("run.sh"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o111,
+        fs::metadata(imported.join("run.sh")).unwrap().permissions().mode() & 0o111,
         0o111
     );
     assert!(
@@ -208,18 +198,12 @@ fn git_worktree_preserves_dirty_files_deletions_history_and_executable_modes() {
             .contains("original history")
     );
     let status = String::from_utf8(command(&imported, &["status", "--porcelain"]).stdout).unwrap();
-    assert!(
-        status.contains("main.rs") && status.contains("removed.txt") && status.contains("new.txt")
-    );
+    assert!(status.contains("main.rs") && status.contains("removed.txt") && status.contains("new.txt"));
     assert!(command(&imported, &["remote"]).stdout.is_empty());
     assert!(!status.contains(".control-git"));
-    let worktrees =
-        String::from_utf8(command(&imported, &["worktree", "list", "--porcelain"]).stdout).unwrap();
+    let worktrees = String::from_utf8(command(&imported, &["worktree", "list", "--porcelain"]).stdout).unwrap();
     assert!(
-        worktrees.contains(&format!(
-            "worktree {}",
-            imported.canonicalize().unwrap().display()
-        )),
+        worktrees.contains(&format!("worktree {}", imported.canonicalize().unwrap().display())),
         "Relative worktree metadata must work on the host: {worktrees}"
     );
     let second = fixture.0.join("independent");
@@ -257,13 +241,9 @@ fn checkpoints_keep_large_files_and_git_separate_from_bounded_previews() {
         project: Some("grant".into()),
         ..Default::default()
     };
-    publish_with(
-        &root,
-        &mut attempt,
-        &fixture.0.join("seed"),
-        "generation-1",
-        || Err(io::Error::other("viewer limit")),
-    )
+    publish_with(&root, &mut attempt, &fixture.0.join("seed"), "generation-1", || {
+        Err(io::Error::other("viewer limit"))
+    })
     .unwrap();
     assert_eq!(attempt.project_checkpoint.as_deref(), Some("generation-1"));
     assert!(attempt.artifact.is_none());
@@ -276,20 +256,14 @@ fn checkpoints_keep_large_files_and_git_separate_from_bounded_previews() {
     )
     .unwrap();
     assert_eq!(
-        fs::metadata(fixture.0.join("restored/large.bin"))
-            .unwrap()
-            .len(),
+        fs::metadata(fixture.0.join("restored/large.bin")).unwrap().len(),
         3 * 1024 * 1024
     );
     assert!(fixture.0.join("restored/.git/HEAD").is_file());
     assert!(
-        publish_with(
-            &root,
-            &mut attempt,
-            &fixture.0.join("seed"),
-            "generation-1",
-            || Ok("unused".into())
-        )
+        publish_with(&root, &mut attempt, &fixture.0.join("seed"), "generation-1", || Ok(
+            "unused".into()
+        ))
         .is_err()
     );
 }
@@ -313,15 +287,9 @@ fn import_ignores_links_to_files_directories_missing_paths_and_cycles() {
     fs::write(source.join("code.txt"), "keep me").unwrap();
     let copied = fixture.0.join("copy");
     copy_tree(&source, &copied, false).unwrap();
-    assert_eq!(
-        fs::read_to_string(copied.join("code.txt")).unwrap(),
-        "keep me"
-    );
+    assert_eq!(fs::read_to_string(copied.join("code.txt")).unwrap(), "keep me");
     for link in ["escape", ".clickhouse/clickhouse", "linked-file", "cycle"] {
-        assert!(
-            fs::symlink_metadata(copied.join(link)).is_err(),
-            "Must skip {link}"
-        );
+        assert!(fs::symlink_metadata(copied.join(link)).is_err(), "Must skip {link}");
     }
     // This also applies to subsequent checkpoints, including agent-created links.
     copy_tree(&source, &fixture.0.join("checkpoint"), true).unwrap();
@@ -342,10 +310,7 @@ fn project_copy_accepts_files_over_one_gib() {
     large.set_len(length).unwrap();
     let copied = fixture.0.join("large-copy");
     copy_tree(&source, &copied, false).unwrap();
-    assert_eq!(
-        fs::metadata(copied.join("large.bin")).unwrap().len(),
-        length
-    );
+    assert_eq!(fs::metadata(copied.join("large.bin")).unwrap().len(), length);
 }
 #[test]
 fn project_copy_keeps_wide_directories_without_truncation() {
@@ -356,10 +321,7 @@ fn project_copy_keeps_wide_directories_without_truncation() {
     }
     let copied = fixture.0.join("wide-copy");
     copy_tree(&source, &copied, false).unwrap();
-    assert_eq!(
-        fs::read_to_string(copied.join("file-2099")).unwrap(),
-        "keep"
-    );
+    assert_eq!(fs::read_to_string(copied.join("file-2099")).unwrap(), "keep");
     assert_eq!(fs::read_dir(copied).unwrap().count(), 2100);
 }
 #[test]
@@ -376,49 +338,24 @@ fn plain_folder_first_turn_and_next_checkpoint_create_fresh_run_directories() {
         ..Default::default()
     };
     let first = fixture.0.join("runs/first");
-    prepare_in(
-        &root,
-        &attempt,
-        &first.join("baseline"),
-        &first.join("workspace"),
-    )
-    .unwrap();
+    prepare_in(&root, &attempt, &first.join("baseline"), &first.join("workspace")).unwrap();
     assert_eq!(
         fs::read_to_string(first.join("workspace/code.txt")).unwrap(),
         "original"
     );
     command(&first.join("workspace"), &["status", "--porcelain"]);
     fs::write(first.join("workspace/code.txt"), "edited").unwrap();
-    assert_eq!(
-        fs::read_to_string(first.join("baseline/code.txt")).unwrap(),
-        "original"
-    );
-    publish_with(
-        &root,
-        &mut attempt,
-        &first.join("workspace"),
-        "first",
-        || Ok("fixture-artifact".into()),
-    )
+    assert_eq!(fs::read_to_string(first.join("baseline/code.txt")).unwrap(), "original");
+    publish_with(&root, &mut attempt, &first.join("workspace"), "first", || {
+        Ok("fixture-artifact".into())
+    })
     .unwrap();
     attempt.project_parent = attempt.project_checkpoint.clone();
     let second = fixture.0.join("runs/second");
-    prepare_in(
-        &root,
-        &attempt,
-        &second.join("baseline"),
-        &second.join("workspace"),
-    )
-    .unwrap();
-    assert_eq!(
-        fs::read_to_string(second.join("workspace/code.txt")).unwrap(),
-        "edited"
-    );
+    prepare_in(&root, &attempt, &second.join("baseline"), &second.join("workspace")).unwrap();
+    assert_eq!(fs::read_to_string(second.join("workspace/code.txt")).unwrap(), "edited");
     command(&second.join("workspace"), &["status", "--porcelain"]);
-    assert_eq!(
-        fs::read_to_string(source.join("code.txt")).unwrap(),
-        "original"
-    );
+    assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "original");
     assert!(!source.join(".git").exists());
 }
 #[test]
@@ -449,16 +386,19 @@ fn adding_a_folder_migrates_a_legacy_root_without_reimporting_its_host_files() {
         fs::read_to_string(stage.join("seed/source/code.txt")).unwrap(),
         "private edit"
     );
-    assert_eq!(
-        fs::read_to_string(stage.join("seed/web/page.txt")).unwrap(),
-        "page"
-    );
-    assert_eq!(
-        fs::read_to_string(source.join("code.txt")).unwrap(),
-        "host original"
-    );
+    assert_eq!(fs::read_to_string(stage.join("seed/web/page.txt")).unwrap(), "page");
+    assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "host original");
     for name in ["..", "../escape", ".git", "target", "a/b", "a b"] {
-        assert!(request_named(&mut state, &id, second.to_str().unwrap(), Some(name), Requester::Operator).is_err());
+        assert!(
+            request_named(
+                &mut state,
+                &id,
+                second.to_str().unwrap(),
+                Some(name),
+                Requester::Operator
+            )
+            .is_err()
+        );
     }
 }
 #[test]
@@ -492,7 +432,8 @@ fn repeated_folder_requests_keep_message_provenance_and_replace_panel_approval()
     assert!(!rendered.contains("Synthetic import failure"));
     // Old state still binds a request to its matching command, not later chat.
     state.chats[0].project.as_mut().unwrap().message_index = None;
-    state.chats[0].messages.push(crate::chat::Message { speaker: Default::default(),
+    state.chats[0].messages.push(crate::chat::Message {
+        speaker: Default::default(),
         text: "Later message".into(),
         run_id: None,
         reply: "Later response".into(),
@@ -573,11 +514,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         let project = state.chats[0].project.as_ref().unwrap();
         assert!(project.error.is_some());
         assert!(project.grant.is_none());
-        assert!(
-            crate::chat::requests(&state, &id)
-                .unwrap()
-                .contains("role='alert'")
-        );
+        assert!(crate::chat::requests(&state, &id).unwrap().contains("role='alert'"));
     }
     open(&first.display().to_string(), None);
     approve();
@@ -589,12 +526,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         ..Default::default()
     };
     let first_run = state_dir.join("runs/first");
-    prepare(
-        &attempt,
-        &first_run.join("baseline"),
-        &first_run.join("workspace"),
-    )
-    .unwrap();
+    prepare(&attempt, &first_run.join("baseline"), &first_run.join("workspace")).unwrap();
     assert_eq!(
         fs::read_to_string(first_run.join("workspace/api/code.txt")).unwrap(),
         "first"
@@ -609,11 +541,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         || Ok("fixture-artifact".into()),
     )
     .unwrap();
-    shared.lock().unwrap().chats[0]
-        .project
-        .as_mut()
-        .unwrap()
-        .head = attempt.project_checkpoint.clone();
+    shared.lock().unwrap().chats[0].project.as_mut().unwrap().head = attempt.project_checkpoint.clone();
     open(&second.display().to_string(), None);
     approve();
     {
@@ -636,12 +564,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         ..Default::default()
     };
     let second_run = state_dir.join("runs/second");
-    prepare(
-        &attempt,
-        &second_run.join("baseline"),
-        &second_run.join("workspace"),
-    )
-    .unwrap();
+    prepare(&attempt, &second_run.join("baseline"), &second_run.join("workspace")).unwrap();
     assert_eq!(
         fs::read_to_string(second_run.join("workspace/api/code.txt")).unwrap(),
         "edited first"
@@ -650,28 +573,26 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         fs::read_to_string(second_run.join("workspace/api2/code.txt")).unwrap(),
         "second"
     );
-    command(
-        &second_run.join("workspace/api"),
-        &["status", "--porcelain"],
-    );
-    command(
-        &second_run.join("workspace/api2"),
-        &["status", "--porcelain"],
-    );
+    command(&second_run.join("workspace/api"), &["status", "--porcelain"]);
+    command(&second_run.join("workspace/api2"), &["status", "--porcelain"]);
     assert_eq!(fs::read_to_string(first.join("code.txt")).unwrap(), "first");
     assert!(!first.join(".git").exists());
     let state = shared.lock().unwrap();
     let transcript = crate::chat::transcript(&state, &id).unwrap();
     assert!(transcript.contains("Opened /workspace/api"));
     assert!(!transcript.contains("Trust folder and open"));
-    let saved: State =
-        crate::config::read_state_in(&state_dir, isize::MAX as usize).unwrap().unwrap();
+    let saved: State = crate::config::read_state_in(&state_dir, isize::MAX as usize)
+        .unwrap()
+        .unwrap();
     assert_eq!(saved.chats[0].project.as_ref().unwrap().mounts.len(), 2);
 }
 fn wait_for_import(id: &str) {
     let started = std::time::Instant::now();
     while importing(id).is_some() {
-        assert!(started.elapsed() < std::time::Duration::from_secs(60), "import did not finish");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "import did not finish"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -680,21 +601,38 @@ static GATE: (Mutex<bool>, std::sync::Condvar) = (Mutex::new(false), std::sync::
 fn gated_save(_: &State) -> io::Result<()> {
     let (open, changed) = &GATE;
     let mut open = open.lock().unwrap();
-    while !*open { open = changed.wait(open).unwrap(); }
+    while !*open {
+        open = changed.wait(open).unwrap();
+    }
     Ok(())
 }
 fn open_gate() {
     *GATE.0.lock().unwrap() = true;
     GATE.1.notify_all();
 }
-fn no_save(_: &State) -> io::Result<()> { Ok(()) }
+fn no_save(_: &State) -> io::Result<()> {
+    Ok(())
+}
 fn exchange(shared: &Arc<Mutex<State>>, method: &str, path: &str, query: &str, body: &str, save: Save) -> String {
     let mut response = Vec::new();
-    assert!(http_in(&mut response, shared, method, path, query, body.as_bytes(), save));
+    assert!(http_in(
+        &mut response,
+        shared,
+        method,
+        path,
+        query,
+        body.as_bytes(),
+        save
+    ));
     String::from_utf8(response).unwrap()
 }
 fn pending_request(shared: &Arc<Mutex<State>>) -> String {
-    shared.lock().unwrap().chats[0].project.as_ref().unwrap().request.clone()
+    shared.lock().unwrap().chats[0]
+        .project
+        .as_ref()
+        .unwrap()
+        .request
+        .clone()
 }
 #[test]
 fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat() {
@@ -712,24 +650,65 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
     // The attachment is held open, yet approval answers immediately.
-    let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
+    let response = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes"),
+        gated_save,
+    );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")), "{response}");
+    assert!(
+        response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")),
+        "{response}"
+    );
     assert_eq!(importing(&id).unwrap().request, request);
     // A repeated click neither fails nor starts another copy.
-    let repeated = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
+    let repeated = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes"),
+        gated_save,
+    );
     assert!(repeated.starts_with("HTTP/1.1 303"), "{repeated}");
-    assert_eq!(IMPORTS.lock().unwrap().iter().filter(|import| import.chat == id).count(), 1);
+    assert_eq!(
+        IMPORTS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|import| import.chat == id)
+            .count(),
+        1
+    );
     let progress = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(progress.starts_with("HTTP/1.1 200"), "{progress}");
-    assert!(progress.contains("Importing folder…") && progress.contains("role='status'"), "{progress}");
-    assert!(progress.contains(&format!("http-equiv='refresh' content='1;url=/dm/{id}/project?importing={request}'")));
-    assert!(!progress.contains("Trust folder and open"), "no second approval while importing");
+    assert!(
+        progress.contains("Importing folder…") && progress.contains("role='status'"),
+        "{progress}"
+    );
+    assert!(progress.contains(&format!(
+        "http-equiv='refresh' content='1;url=/dm/{id}/project?importing={request}'"
+    )));
+    assert!(
+        !progress.contains("Trust folder and open"),
+        "no second approval while importing"
+    );
     {
         let mut state = shared.lock().unwrap();
-        assert!(crate::chat::transcript(&state, &id).unwrap().contains("Importing folder…"));
+        assert!(
+            crate::chat::transcript(&state, &id)
+                .unwrap()
+                .contains("Importing folder…")
+        );
         assert_eq!(crate::chat::detail(&state, &id).unwrap()["project_importing"], true);
-        assert!(crate::chat::send(&mut state, &id, "hello", "test").unwrap_err().contains("still importing"));
+        assert!(
+            crate::chat::send(&mut state, &id, "hello", "test")
+                .unwrap_err()
+                .contains("still importing")
+        );
         assert!(state.chats[0].project.as_ref().unwrap().needs_approval());
     }
     open_gate();
@@ -745,18 +724,41 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
         project.grant.clone().unwrap()
     };
     // Adding a folder to the open project follows the same path.
-    crate::chat::send(&mut shared.lock().unwrap(), &id, &format!("/open {}", second.display()), "test").unwrap();
+    crate::chat::send(
+        &mut shared.lock().unwrap(),
+        &id,
+        &format!("/open {}", second.display()),
+        "test",
+    )
+    .unwrap();
     let request = pending_request(&shared);
-    let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), gated_save);
-    assert!(response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")), "{response}");
+    let response = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes"),
+        gated_save,
+    );
+    assert!(
+        response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")),
+        "{response}"
+    );
     wait_for_import(&id);
     let done = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(done.contains(&format!("location: /dm/{id}\r\n")), "{done}");
     let state = shared.lock().unwrap();
     let project = state.chats[0].project.as_ref().unwrap();
-    assert_eq!(project.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["mc263-client", "mc-pi-skills"]);
+    assert_eq!(
+        project.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+        ["mc263-client", "mc-pi-skills"]
+    );
     assert_ne!(project.grant.as_deref(), Some(grant.as_str()));
-    let seed = root().unwrap().join("grants").join(project.grant.as_ref().unwrap()).join("seed");
+    let seed = root()
+        .unwrap()
+        .join("grants")
+        .join(project.grant.as_ref().unwrap())
+        .join("seed");
     assert_eq!(fs::read_to_string(seed.join("mc-pi-skills/README.md")).unwrap(), "tool");
     assert!(seed.join("mc263-client/README.md").exists());
 }
@@ -771,16 +773,28 @@ fn copied_entries_hint_open_pages_at_a_bounded_rate() {
     IMPORT_HINTED.with(|hinted| hinted.set(None));
     let before = crate::live_updates::generation();
     copied_entry().unwrap();
-    let hinted = IMPORT_HINTED.with(|hinted| hinted.get()).expect("the first entry is shown at once");
-    assert!(crate::live_updates::generation() > before, "connected pages are told to re-read");
+    let hinted = IMPORT_HINTED
+        .with(|hinted| hinted.get())
+        .expect("the first entry is shown at once");
+    assert!(
+        crate::live_updates::generation() > before,
+        "connected pages are told to re-read"
+    );
     copied_entry().unwrap();
-    assert_eq!(IMPORT_HINTED.with(|hinted| hinted.get()), Some(hinted), "a burst of entries shares one hint");
+    assert_eq!(
+        IMPORT_HINTED.with(|hinted| hinted.get()),
+        Some(hinted),
+        "a burst of entries shares one hint"
+    );
     assert_eq!(entries.load(Ordering::Relaxed), 2);
     IMPORT_PROGRESS.with(|progress| *progress.borrow_mut() = None);
     // Ending an import (here, its registry entry) hints readers again, so a
     // failure saved while it still showed as running is not left stale.
     let before = crate::live_updates::generation();
-    drop(Registered { chat: "c-none".into(), request: "p-0".into() });
+    drop(Registered {
+        chat: "c-none".into(),
+        request: "p-0".into(),
+    });
     assert!(crate::live_updates::generation() > before);
 }
 #[test]
@@ -795,23 +809,76 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
     let page = format!("/dm/{id}/project");
     {
         let panel = crate::chat::requests(&shared.lock().unwrap(), &id).unwrap();
-        assert!(panel.contains(&format!("<form class='decision-form' method='post' action='{page}'")), "{panel}");
+        assert!(
+            panel.contains(&format!("<form class='decision-form' method='post' action='{page}'")),
+            "{panel}"
+        );
         assert!(panel.contains("Trust folder and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form>"));
     }
     // A stale request is refused in the form, not as an error page.
-    let stale = exchange(&shared, "POST", &page, "", "request=p-0&approve=yes&response=json", no_save);
-    assert!(stale.starts_with("HTTP/1.1 400") && stale.contains("application/json") && stale.contains("request changed"), "{stale}");
+    let stale = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        "request=p-0&approve=yes&response=json",
+        no_save,
+    );
+    assert!(
+        stale.starts_with("HTTP/1.1 400") && stale.contains("application/json") && stale.contains("request changed"),
+        "{stale}"
+    );
     let request = pending_request(&shared);
-    let accepted = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
-    assert!(accepted.starts_with("HTTP/1.1 200") && accepted.ends_with("{\"ok\":true}"), "{accepted}");
+    let accepted = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes&response=json"),
+        no_save,
+    );
+    assert!(
+        accepted.starts_with("HTTP/1.1 200") && accepted.ends_with("{\"ok\":true}"),
+        "{accepted}"
+    );
     wait_for_import(&id);
-    assert!(!shared.lock().unwrap().chats[0].project.as_ref().unwrap().needs_approval());
+    assert!(
+        !shared.lock().unwrap().chats[0]
+            .project
+            .as_ref()
+            .unwrap()
+            .needs_approval()
+    );
     // An import that fails is reported to the form that approved it.
-    super::request(&mut shared.lock().unwrap(), &id, fixture.0.join("missing").to_str().unwrap(), AGENT).unwrap();
+    super::request(
+        &mut shared.lock().unwrap(),
+        &id,
+        fixture.0.join("missing").to_str().unwrap(),
+        AGENT,
+    )
+    .unwrap();
     let request = pending_request(&shared);
-    let accepted = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
-    if accepted.starts_with("HTTP/1.1 200") { wait_for_import(&id); } else { assert!(accepted.contains("\"error\""), "{accepted}"); }
-    assert!(shared.lock().unwrap().chats[0].project.as_ref().unwrap().error.is_some());
+    let accepted = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes&response=json"),
+        no_save,
+    );
+    if accepted.starts_with("HTTP/1.1 200") {
+        wait_for_import(&id);
+    } else {
+        assert!(accepted.contains("\"error\""), "{accepted}");
+    }
+    assert!(
+        shared.lock().unwrap().chats[0]
+            .project
+            .as_ref()
+            .unwrap()
+            .error
+            .is_some()
+    );
 }
 #[test]
 fn background_import_errors_appear_beside_the_request_for_retry() {
@@ -826,27 +893,54 @@ fn background_import_errors_appear_beside_the_request_for_retry() {
     let shared = Arc::new(Mutex::new(initial));
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
-    let response = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), no_save);
-    assert!(response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")), "{response}");
+    let response = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes"),
+        no_save,
+    );
+    assert!(
+        response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")),
+        "{response}"
+    );
     wait_for_import(&id);
     let shown = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(shown.starts_with("HTTP/1.1 200"), "{shown}");
     assert!(shown.contains("role='alert'"), "{shown}");
-    assert!(shown.contains("Trust folder and open"), "the request stays available to retry");
+    assert!(
+        shown.contains("Trust folder and open"),
+        "the request stays available to retry"
+    );
     assert!(!shown.contains("http-equiv='refresh'"));
     {
         let state = shared.lock().unwrap();
         let project = state.chats[0].project.as_ref().unwrap();
         assert!(project.error.is_some() && project.grant.is_none());
-        assert!(crate::chat::transcript(&state, &id).unwrap().contains("Folder request · see Requests"));
+        assert!(
+            crate::chat::transcript(&state, &id)
+                .unwrap()
+                .contains("Folder request · see Requests")
+        );
     }
     // Approving a replaced request is refused and grants nothing.
     let stale = exchange(&shared, "POST", &page, "", "request=p-0&approve=yes", no_save);
-    assert!(stale.starts_with("HTTP/1.1 400") && stale.contains("request changed"), "{stale}");
+    assert!(
+        stale.starts_with("HTTP/1.1 400") && stale.contains("request changed"),
+        "{stale}"
+    );
     assert!(importing(&id).is_none());
     fs::create_dir(&missing).unwrap();
     fs::write(missing.join("code.txt"), "now present").unwrap();
-    let retry = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes"), no_save);
+    let retry = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes"),
+        no_save,
+    );
     assert!(retry.starts_with("HTTP/1.1 303"), "{retry}");
     wait_for_import(&id);
     let project = shared.lock().unwrap().chats[0].project.clone().unwrap();
@@ -891,9 +985,7 @@ fn live_container_git_commits_and_restores_an_independent_project_worktree() {
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             "--user",
-            &format!("{}:{}", unsafe { libc::getuid() }, unsafe {
-                libc::getgid()
-            }),
+            &format!("{}:{}", unsafe { libc::getuid() }, unsafe { libc::getgid() }),
             "--tmpfs",
             "/tmp:rw,nosuid,size=64m",
             "--env",
@@ -926,9 +1018,24 @@ fn operator_open_checks_the_folder_but_agent_requests_are_never_probed() {
     fs::write(&file, "text").unwrap();
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
-    assert!(crate::chat::send(&mut state, &id, &format!("/open {}", file.display()), "test").unwrap_err().contains("not a folder"));
-    assert!(crate::chat::send(&mut state, &id, &format!("/open --as other {}/missing", folder.display()), "test").is_err());
-    assert!(state.chats[0].project.is_none() && state.chats[0].messages.is_empty(), "nothing is requested or recorded");
+    assert!(
+        crate::chat::send(&mut state, &id, &format!("/open {}", file.display()), "test")
+            .unwrap_err()
+            .contains("not a folder")
+    );
+    assert!(
+        crate::chat::send(
+            &mut state,
+            &id,
+            &format!("/open --as other {}/missing", folder.display()),
+            "test"
+        )
+        .is_err()
+    );
+    assert!(
+        state.chats[0].project.is_none() && state.chats[0].messages.is_empty(),
+        "nothing is requested or recorded"
+    );
     // A doubled command reads as a list; its refused part requests nothing.
     let typo = format!("/open /open {}", folder.display());
     crate::chat::send(&mut state, &id, &typo, "test").unwrap();
@@ -939,19 +1046,45 @@ fn operator_open_checks_the_folder_but_agent_requests_are_never_probed() {
     // An agent learns nothing about the host: a folder, a file and a missing
     // path give the same answer, and the requesting turn is recorded.
     let answers = [folder.clone(), file, fixture.0.join("missing")].map(|path| {
-        let mut value = request_named(&mut state, &id, path.to_str().unwrap(), Some("asked"), Requester::Agent { run: Some("r-asking") }).unwrap();
-        assert_eq!(state.chats[0].project.as_ref().unwrap().origin.as_deref(), Some("r-asking"));
-        for varying in ["request", "path"] { value.as_object_mut().unwrap().remove(varying); }
+        let mut value = request_named(
+            &mut state,
+            &id,
+            path.to_str().unwrap(),
+            Some("asked"),
+            Requester::Agent { run: Some("r-asking") },
+        )
+        .unwrap();
+        assert_eq!(
+            state.chats[0].project.as_ref().unwrap().origin.as_deref(),
+            Some("r-asking")
+        );
+        for varying in ["request", "path"] {
+            value.as_object_mut().unwrap().remove(varying);
+        }
         value
     });
     assert!(answers.iter().all(|answer| *answer == answers[0]), "{answers:?}");
 }
 fn approved(path: &str) -> Project {
     let name = Path::new(path).file_name().unwrap().to_str().unwrap();
-    Project { request: "p-approved".into(), path: path.into(), name: name.into(), grant: Some("p-grant".into()), head: Some("c-before".into()),
-        named: true, mounts: vec![Mount { name: name.into(), path: path.into(), message_index: Some(0) }], ..Project::default() }
+    Project {
+        request: "p-approved".into(),
+        path: path.into(),
+        name: name.into(),
+        grant: Some("p-grant".into()),
+        head: Some("c-before".into()),
+        named: true,
+        mounts: vec![Mount {
+            name: name.into(),
+            path: path.into(),
+            message_index: Some(0),
+        }],
+        ..Project::default()
+    }
 }
-fn snapshot(project: &Option<Project>) -> Value { serde_json::to_value(project).unwrap() }
+fn snapshot(project: &Option<Project>) -> Value {
+    serde_json::to_value(project).unwrap()
+}
 #[test]
 fn dismissal_restores_the_previous_folders_and_ignores_stale_or_repeated_requests() {
     let mut state = State::default();
@@ -971,10 +1104,18 @@ fn dismissal_restores_the_previous_folders_and_ignores_stale_or_repeated_request
     let before = serde_json::to_vec(&state).unwrap();
     assert!(dismiss(&mut state, &id, "p-0").unwrap().is_none());
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    assert_eq!(dismiss(&mut state, &id, &pending.request).unwrap(), Some(crate::approvals::Outcome::Noted));
+    assert_eq!(
+        dismiss(&mut state, &id, &pending.request).unwrap(),
+        Some(crate::approvals::Outcome::Noted)
+    );
     assert_eq!(snapshot(&state.chats[0].project), snapshot(&Some(expected)));
     let notice = state.chats[0].messages.last().unwrap();
-    assert!(notice.text.starts_with("Folder decisions\n/open /node/typo (") && notice.text.contains("dismissed by the operator"), "{}", notice.text);
+    assert!(
+        notice.text.starts_with("Folder decisions\n/open /node/typo (")
+            && notice.text.contains("dismissed by the operator"),
+        "{}",
+        notice.text
+    );
     assert!(notice.is_notice(None));
     // A repeated dismissal, or one for the approved request, is a no-op.
     let after = serde_json::to_vec(&state).unwrap();
@@ -990,11 +1131,17 @@ fn dismissal_restores_the_previous_folders_and_ignores_stale_or_repeated_request
     assert!(state.chats[index].project.is_none());
     // Requests saved before predecessors were recorded keep approved folders.
     let mut legacy = approved("/node/api");
-    (legacy.pending, legacy.request, legacy.path, legacy.name) = (true, "p-legacy".into(), "/node/new".into(), "new".into());
+    (legacy.pending, legacy.request, legacy.path, legacy.name) =
+        (true, "p-legacy".into(), "/node/new".into(), "new".into());
     state.chats[index].project = Some(legacy);
     dismiss(&mut state, &fresh, "p-legacy").unwrap().unwrap();
     let kept = state.chats[index].project.as_ref().unwrap();
-    assert!(!kept.needs_approval() && kept.path == "/node/api" && kept.name == "api" && kept.grant.as_deref() == Some("p-grant"));
+    assert!(
+        !kept.needs_approval()
+            && kept.path == "/node/api"
+            && kept.name == "api"
+            && kept.grant.as_deref() == Some("p-grant")
+    );
 }
 #[test]
 fn dismissal_reaches_the_requesting_agent_like_a_port_decision() {
@@ -1006,16 +1153,34 @@ fn dismissal_reaches_the_requesting_agent_like_a_port_decision() {
     request(&mut state, &id, "/node/library", Requester::Agent { run }).unwrap();
     // A busy chat only notes it; the agent reads it on its next turn.
     let busy = state.chats[0].project.as_ref().unwrap().request.clone();
-    assert_eq!(dismiss(&mut state, &id, &busy).unwrap(), Some(crate::approvals::Outcome::Noted));
+    assert_eq!(
+        dismiss(&mut state, &id, &busy).unwrap(),
+        Some(crate::approvals::Outcome::Noted)
+    );
     assert_eq!(state.runtime.runs.len(), 1);
     state.runtime.runs[0].status = "completed".into();
     request(&mut state, &id, "/node/library", Requester::Agent { run }).unwrap();
     let idle = state.chats[0].project.as_ref().unwrap().request.clone();
-    let Some(crate::approvals::Outcome::Resumed(resumed)) = dismiss(&mut state, &id, &idle).unwrap() else { panic!("resumes the finished turn") };
+    let Some(crate::approvals::Outcome::Resumed(resumed)) = dismiss(&mut state, &id, &idle).unwrap() else {
+        panic!("resumes the finished turn")
+    };
     let continuation = state.runtime.runs.last().unwrap();
-    assert_eq!((continuation.id.as_str(), continuation.kind), (resumed.as_str(), crate::runtime::RunKind::FolderDecision));
-    assert!(continuation.objective.starts_with("Operator folder decisions:\n/node/library ("), "{}", *continuation.objective);
-    assert!(continuation.objective.contains("Original task:\nReview the shared library"));
+    assert_eq!(
+        (continuation.id.as_str(), continuation.kind),
+        (resumed.as_str(), crate::runtime::RunKind::FolderDecision)
+    );
+    assert!(
+        continuation
+            .objective
+            .starts_with("Operator folder decisions:\n/node/library ("),
+        "{}",
+        *continuation.objective
+    );
+    assert!(
+        continuation
+            .objective
+            .contains("Original task:\nReview the shared library")
+    );
 }
 #[test]
 fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
@@ -1027,33 +1192,99 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
     let shared = Arc::new(Mutex::new(initial));
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
-    let stale = exchange(&shared, "POST", &page, "", "request=p-0&dismiss=yes&response=json", no_save);
-    assert!(stale.starts_with("HTTP/1.1 200") && stale.contains("already dismissed, replaced or approved"), "{stale}");
-    assert!(shared.lock().unwrap().chats[0].project.as_ref().is_some_and(|p| p.request == request));
+    let stale = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        "request=p-0&dismiss=yes&response=json",
+        no_save,
+    );
+    assert!(
+        stale.starts_with("HTTP/1.1 200") && stale.contains("already dismissed, replaced or approved"),
+        "{stale}"
+    );
+    assert!(
+        shared.lock().unwrap().chats[0]
+            .project
+            .as_ref()
+            .is_some_and(|p| p.request == request)
+    );
     // A dismissal that cannot be saved leaves the request in place.
-    let unsaved = exchange(&shared, "POST", &page, "", &format!("request={request}&dismiss=yes&response=json"), failed_save);
-    assert!(unsaved.starts_with("HTTP/1.1 400") && unsaved.contains("request is unchanged"), "{unsaved}");
-    assert!(shared.lock().unwrap().chats[0].project.as_ref().is_some_and(|p| p.request == request && p.needs_approval()));
+    let unsaved = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&dismiss=yes&response=json"),
+        failed_save,
+    );
+    assert!(
+        unsaved.starts_with("HTTP/1.1 400") && unsaved.contains("request is unchanged"),
+        "{unsaved}"
+    );
+    assert!(
+        shared.lock().unwrap().chats[0]
+            .project
+            .as_ref()
+            .is_some_and(|p| p.request == request && p.needs_approval())
+    );
     assert_eq!(shared.lock().unwrap().chats[0].messages.len(), 1);
-    let dismissed = exchange(&shared, "POST", &page, "", &format!("request={request}&dismiss=yes&response=json"), no_save);
-    assert!(dismissed.starts_with("HTTP/1.1 200") && dismissed.contains(&format!("\"message\":\"{DISMISSED}\"")), "{dismissed}");
+    let dismissed = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&dismiss=yes&response=json"),
+        no_save,
+    );
+    assert!(
+        dismissed.starts_with("HTTP/1.1 200") && dismissed.contains(&format!("\"message\":\"{DISMISSED}\"")),
+        "{dismissed}"
+    );
     {
         let state = shared.lock().unwrap();
         assert!(state.chats[0].project.is_none());
         assert_eq!(state.chats[0].messages[0].reply, DISMISSED);
         let transcript = crate::chat::transcript(&state, &id).unwrap();
-        assert!(transcript.contains(DISMISSED) && !transcript.contains("replaced by a later request"), "{transcript}");
-        assert!(!crate::chat::requests(&state, &id).unwrap().contains("Trust folder and open"));
+        assert!(
+            transcript.contains(DISMISSED) && !transcript.contains("replaced by a later request"),
+            "{transcript}"
+        );
+        assert!(
+            !crate::chat::requests(&state, &id)
+                .unwrap()
+                .contains("Trust folder and open")
+        );
     }
     // The approval page's own (non-script) form gets a page, not an error.
-    let again = exchange(&shared, "POST", &page, "", &format!("request={request}&dismiss=yes"), no_save);
-    assert!(again.starts_with("HTTP/1.1 200") && again.contains("role='status'>That folder request was already dismissed"), "{again}");
+    let again = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&dismiss=yes"),
+        no_save,
+    );
+    assert!(
+        again.starts_with("HTTP/1.1 200") && again.contains("role='status'>That folder request was already dismissed"),
+        "{again}"
+    );
     // An approval for a dismissed request grants nothing.
-    let late = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
+    let late = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes&response=json"),
+        no_save,
+    );
     assert!(late.starts_with("HTTP/1.1 400"), "{late}");
     assert!(importing(&id).is_none() && shared.lock().unwrap().chats[0].project.is_none());
 }
-fn failed_save(_: &State) -> io::Result<()> { Err(io::Error::other("disk full")) }
+fn failed_save(_: &State) -> io::Result<()> {
+    Err(io::Error::other("disk full"))
+}
 /// The copy cannot be cancelled: once approved, a request imports to the end.
 #[test]
 fn a_request_that_is_importing_cannot_be_dismissed() {
@@ -1061,8 +1292,16 @@ fn a_request_that_is_importing_cannot_be_dismissed() {
     let id = crate::chat::create(&mut state);
     request(&mut state, &id, "/node/large", AGENT).unwrap();
     let request = state.chats[0].project.as_ref().unwrap().request.clone();
-    IMPORTS.lock().unwrap().push(Import { chat: id.clone(), request: request.clone(), started: std::time::Instant::now(), entries: Arc::default() });
-    let registered = Registered { chat: id.clone(), request: request.clone() };
+    IMPORTS.lock().unwrap().push(Import {
+        chat: id.clone(),
+        request: request.clone(),
+        started: std::time::Instant::now(),
+        entries: Arc::default(),
+    });
+    let registered = Registered {
+        chat: id.clone(),
+        request: request.clone(),
+    };
     let before = serde_json::to_vec(&state).unwrap();
     assert!(dismiss(&mut state, &id, &request).unwrap_err().contains("importing"));
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
@@ -1080,18 +1319,34 @@ fn approving_twice_starts_one_import_and_keeps_its_grant() {
     let shared = Arc::new(Mutex::new(initial));
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
-    let first = exchange(&shared, "POST", &page, "", &format!("request={request}&approve=yes&response=json"), no_save);
+    let first = exchange(
+        &shared,
+        "POST",
+        &page,
+        "",
+        &format!("request={request}&approve=yes&response=json"),
+        no_save,
+    );
     assert!(first.ends_with("{\"ok\":true}"), "{first}");
     wait_for_import(&id);
     let opened = shared.lock().unwrap().chats[0].project.clone().unwrap();
     assert!(!opened.needs_approval() && opened.previous.is_none() && opened.origin.is_none());
     // Once attached, the approval is not replayed: refused, with nothing copied.
-    for body in [format!("request={request}&approve=yes&response=json"), format!("request={request}&approve=yes")] {
+    for body in [
+        format!("request={request}&approve=yes&response=json"),
+        format!("request={request}&approve=yes"),
+    ] {
         let repeated = exchange(&shared, "POST", &page, "", &body, no_save);
-        assert!(repeated.starts_with("HTTP/1.1 400") && repeated.contains("request changed"), "{repeated}");
+        assert!(
+            repeated.starts_with("HTTP/1.1 400") && repeated.contains("request changed"),
+            "{repeated}"
+        );
         assert!(importing(&id).is_none(), "no second copy starts");
     }
-    assert_eq!(snapshot(&shared.lock().unwrap().chats[0].project), snapshot(&Some(opened)));
+    assert_eq!(
+        snapshot(&shared.lock().unwrap().chats[0].project),
+        snapshot(&Some(opened))
+    );
 }
 /// Only a complete copy is ever published under `grants/`, and only while the
 /// checkpoint that attaches it is written.
@@ -1109,24 +1364,52 @@ fn failed_or_interrupted_imports_publish_nothing() {
     request(&mut state, &id, folder.to_str().unwrap(), AGENT).unwrap();
     let project = state.chats[0].project.clone().unwrap();
     let shared = Arc::new(Mutex::new(state));
-    let published = || fs::read_dir(root.join("grants")).map(|entries| entries.map(|e| e.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>()).unwrap_or_default();
+    let published = || {
+        fs::read_dir(root.join("grants"))
+            .map(|entries| {
+                entries
+                    .map(|e| e.unwrap().file_name().into_string().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
     // Superusers read anything; the unreadable-entry case needs a normal user.
     if !readable {
-        assert!(import_in(&root, &shared, &id, &project.request, project.clone(), no_save).unwrap_err().to_string().contains("unreadable"));
+        assert!(
+            import_in(&root, &shared, &id, &project.request, project.clone(), no_save)
+                .unwrap_err()
+                .to_string()
+                .contains("unreadable")
+        );
         assert!(published().is_empty(), "{:?}", published());
     }
     fs::set_permissions(folder.join("z.txt"), fs::Permissions::from_mode(0o600)).unwrap();
     // A checkpoint that cannot be written attaches nothing and keeps no copy.
     assert!(import_in(&root, &shared, &id, &project.request, project.clone(), failed_save).is_err());
     assert!(published().is_empty(), "{:?}", published());
-    assert!(shared.lock().unwrap().chats[0].project.as_ref().unwrap().needs_approval());
+    assert!(
+        shared.lock().unwrap().chats[0]
+            .project
+            .as_ref()
+            .unwrap()
+            .needs_approval()
+    );
     // A process that stopped mid-copy left only a staging directory, which the
     // next start removes; published grants stay.
     fs::create_dir_all(root.join("grants/.pending-p-1/combined")).unwrap();
     fs::write(root.join("grants/.pending-p-1/combined/half.txt"), "partial").unwrap();
     import_in(&root, &shared, &id, &project.request, project.clone(), no_save).unwrap();
-    let grant = shared.lock().unwrap().chats[0].project.as_ref().unwrap().grant.clone().unwrap();
-    assert_eq!(fs::read_to_string(root.join("grants").join(&grant).join("seed/source/z.txt")).unwrap(), "unreadable");
+    let grant = shared.lock().unwrap().chats[0]
+        .project
+        .as_ref()
+        .unwrap()
+        .grant
+        .clone()
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("grants").join(&grant).join("seed/source/z.txt")).unwrap(),
+        "unreadable"
+    );
     discard_interrupted_in(&root).unwrap();
     assert_eq!(published(), [grant]);
     discard_interrupted_in(&fixture.0.join("absent")).unwrap();
@@ -1136,13 +1419,32 @@ fn failed_or_interrupted_imports_publish_nothing() {
 fn open_lists_split_on_commas_lines_or_a_space_before_the_next_path() {
     let home = Some("/home/me");
     assert_eq!(paths(" /a/api /b/web", home), ["/a/api", "/b/web"]);
-    assert_eq!(paths("/Users/me/My Project", home), ["/Users/me/My Project"], "one path with spaces still opens alone");
-    assert_eq!(paths("/Users/me/My Project /srv/web", home), ["/Users/me/My Project", "/srv/web"]);
+    assert_eq!(
+        paths("/Users/me/My Project", home),
+        ["/Users/me/My Project"],
+        "one path with spaces still opens alone"
+    );
+    assert_eq!(
+        paths("/Users/me/My Project /srv/web", home),
+        ["/Users/me/My Project", "/srv/web"]
+    );
     assert_eq!(paths("/a, /b c ,/d", home), ["/a", "/b c", "/d"]);
-    assert_eq!(paths("/a /x\n/b /y\n\n", home), ["/a /x", "/b /y"], "each line is one path");
-    assert_eq!(paths("\"/data/a /b\" '/c d' /e", home), ["/data/a /b", "/c d", "/e"], "quotes keep a space before a /");
+    assert_eq!(
+        paths("/a /x\n/b /y\n\n", home),
+        ["/a /x", "/b /y"],
+        "each line is one path"
+    );
+    assert_eq!(
+        paths("\"/data/a /b\" '/c d' /e", home),
+        ["/data/a /b", "/c d", "/e"],
+        "quotes keep a space before a /"
+    );
     assert_eq!(paths("~ ~/code/api /x", home), ["/home/me", "/home/me/code/api", "/x"]);
-    assert_eq!(paths("~/code", None), ["~/code"], "no home, no expansion: refused later as relative");
+    assert_eq!(
+        paths("~/code", None),
+        ["~/code"],
+        "no home, no expansion: refused later as relative"
+    );
     assert_eq!(paths("relative/path", home), ["relative/path"]);
     assert!(paths("  ", home).is_empty());
 }
@@ -1161,11 +1463,20 @@ fn operator_open_list_reports_each_path_and_requests_the_valid_folders_together(
     // One per line, a space inside a name, a duplicate name, a file and a
     // missing folder: each path gets its own result, and any refusal requests
     // nothing, so the corrected list is sent again whole.
-    crate::chat::send(&mut state, &id, &format!("/open {base}/api\n{base}/my web\n{base}/api\n{base}/notes.txt\n{base}/gone"), "test").unwrap();
+    crate::chat::send(
+        &mut state,
+        &id,
+        &format!("/open {base}/api\n{base}/my web\n{base}/api\n{base}/notes.txt\n{base}/gone"),
+        "test",
+    )
+    .unwrap();
     let lines = state.chats[0].messages[0].reply.lines().collect::<Vec<_>>();
     assert!(lines[0].starts_with("No folder was requested"), "{lines:?}");
     assert!(lines[1].ends_with("/api → /workspace/api"), "{lines:?}");
-    assert!(lines[2].contains("my web: Folder names must use letters"), "names come from the folder; {lines:?}");
+    assert!(
+        lines[2].contains("my web: Folder names must use letters"),
+        "names come from the folder; {lines:?}"
+    );
     assert!(lines[3].contains("already used"), "{lines:?}");
     assert!(lines[4].contains("notes.txt: That path is not a folder"), "{lines:?}");
     assert!(lines[5].contains("gone: No readable folder"), "{lines:?}");
@@ -1176,14 +1487,37 @@ fn operator_open_list_reports_each_path_and_requests_the_valid_folders_together(
     crate::chat::send(&mut state, &id, &format!("/open {base}/api {base}/other"), "test").unwrap();
     let index = state.chats[0].messages.len() - 1;
     let lines = state.chats[0].messages[index].reply.lines().collect::<Vec<_>>();
-    assert!(lines[0].starts_with("Review and approve folder access") && lines[2].ends_with("/other → /workspace/other"), "{lines:?}");
+    assert!(
+        lines[0].starts_with("Review and approve folder access") && lines[2].ends_with("/other → /workspace/other"),
+        "{lines:?}"
+    );
     let project = state.chats[0].project.clone().unwrap();
     assert!(project.pending && project.name == "api" && project.message_index == Some(index));
-    assert_eq!(project.also.iter().map(|m| (m.name.as_str(), m.message_index)).collect::<Vec<_>>(), [("other", Some(index))]);
+    assert_eq!(
+        project
+            .also
+            .iter()
+            .map(|m| (m.name.as_str(), m.message_index))
+            .collect::<Vec<_>>(),
+        [("other", Some(index))]
+    );
     let panel = panel(&state, &id);
-    assert!(panel.contains("Trust these 2 folders") && panel.contains("<code>/workspace/other</code>") && !panel.contains("Change folder"), "{panel}");
+    assert!(
+        panel.contains("Trust these 2 folders")
+            && panel.contains("<code>/workspace/other</code>")
+            && !panel.contains("Change folder"),
+        "{panel}"
+    );
     // `--as` names exactly one folder.
-    assert!(crate::chat::send(&mut state, &id, &format!("/open --as x {base}/api {base}/other"), "test").is_err());
+    assert!(
+        crate::chat::send(
+            &mut state,
+            &id,
+            &format!("/open --as x {base}/api {base}/other"),
+            "test"
+        )
+        .is_err()
+    );
 
     // One approval copies both folders, each to its own mount.
     let root = fixture.0.join("projects");
@@ -1194,7 +1528,16 @@ fn operator_open_list_reports_each_path_and_requests_the_valid_folders_together(
     let state = shared.lock().unwrap();
     let opened = state.chats[0].project.as_ref().unwrap();
     assert!(!opened.pending && opened.also.is_empty());
-    assert_eq!(opened.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["api", "other"]);
+    assert_eq!(
+        opened.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+        ["api", "other"]
+    );
     let seed = root.join("grants").join(opened.grant.as_ref().unwrap()).join("seed");
-    assert_eq!((fs::read_to_string(seed.join("api/a.txt")).unwrap(), fs::read_to_string(seed.join("other/b.txt")).unwrap()), ("a".into(), "b".into()));
+    assert_eq!(
+        (
+            fs::read_to_string(seed.join("api/a.txt")).unwrap(),
+            fs::read_to_string(seed.join("other/b.txt")).unwrap()
+        ),
+        ("a".into(), "b".into())
+    );
 }

@@ -26,7 +26,14 @@ pub enum Kind {
     Knowledge,
 }
 impl Kind {
-    pub const ALL: [Kind; 6] = [Kind::Question, Kind::Bot, Kind::Port, Kind::Notice, Kind::Folder, Kind::Knowledge];
+    pub const ALL: [Kind; 6] = [
+        Kind::Question,
+        Kind::Bot,
+        Kind::Port,
+        Kind::Notice,
+        Kind::Folder,
+        Kind::Knowledge,
+    ];
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Question => "question",
@@ -60,7 +67,9 @@ impl<T: std::fmt::Display> std::fmt::Display for Clean<T> {
         struct Filter<'a, 'b>(&'a mut std::fmt::Formatter<'b>);
         impl std::fmt::Write for Filter<'_, '_> {
             fn write_str(&mut self, text: &str) -> std::fmt::Result {
-                text.chars().filter(|c| !c.is_control()).try_for_each(|c| self.0.write_char(c))
+                text.chars()
+                    .filter(|c| !c.is_control())
+                    .try_for_each(|c| self.0.write_char(c))
             }
         }
         std::fmt::write(&mut Filter(f), format_args!("{}", self.0))
@@ -90,9 +99,17 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
         let loopback = port["loopback_required"] == true;
         items.push(Pending {
             kind: Kind::Port,
-            heading: Cow::Owned(format!("Port request · {} · {}", Clean(text(&port["name"])), Clean(&port["target"]))),
+            heading: Cow::Owned(format!(
+                "Port request · {} · {}",
+                Clean(text(&port["name"])),
+                Clean(&port["target"])
+            )),
             body: "",
-            usage: Some(format!("/port allow {0}{1} · /port deny {0}", Clean(id), if loopback { " --loopback" } else { "" })),
+            usage: Some(format!(
+                "/port allow {0}{1} · /port deny {0}",
+                Clean(id),
+                if loopback { " --loopback" } else { "" }
+            )),
             id,
             loopback,
         });
@@ -125,7 +142,11 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
         items.push(Pending {
             kind: Kind::Folder,
             id: text(&folder["request"]),
-            heading: Cow::Owned(format!("Folder request · {} ({})", Clean(text(&folder["path"])), Clean(text(&folder["chat_id"])))),
+            heading: Cow::Owned(format!(
+                "Folder request · {} ({})",
+                Clean(text(&folder["path"])),
+                Clean(text(&folder["chat_id"]))
+            )),
             body: "",
             usage: Some(FOLDER_USAGE.into()),
             loopback: false,
@@ -145,7 +166,8 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
     items
 }
 /// Folder access is reviewed where the exact path is shown, not by reply.
-pub const FOLDER_USAGE: &str = "Review the exact path and approve or dismiss it in Control: /open in that DM (web or TUI).";
+pub const FOLDER_USAGE: &str =
+    "Review the exact path and approve or dismiss it in Control: /open in that DM (web or TUI).";
 
 /// What a client sends to decide a request or talk to a chat.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,7 +175,11 @@ pub enum Command {
     /// `control.chat.send`, as typed in the chat (also `/answer` and `/bot allow|deny`).
     Send(String),
     /// The port decision form the web panel posts.
-    Port { id: String, decision: PortDecision, loopback: bool },
+    Port {
+        id: String,
+        decision: PortDecision,
+        loopback: bool,
+    },
     /// Accept or reject a knowledge proposal through the Knowledge → Review form.
     Knowledge { id: String, accept: bool },
 }
@@ -162,22 +188,40 @@ pub enum Command {
 /// `loopback_required` returns `None` when the request is no longer shown.
 pub fn port(text: &str, loopback_required: impl Fn(&str) -> Option<bool>) -> Result<Command, &'static str> {
     let parts = text.split_whitespace().collect::<Vec<_>>();
-    if parts.first() != Some(&"/port") || !(3..=4).contains(&parts.len()) || !matches!(parts[1], "allow" | "deny") || (parts.len() == 4 && parts[3] != "--loopback") {
-        return Err("Use /port allow ID [--loopback] or /port deny ID. Review the exact target before allowing loopback.");
+    if parts.first() != Some(&"/port")
+        || !(3..=4).contains(&parts.len())
+        || !matches!(parts[1], "allow" | "deny")
+        || (parts.len() == 4 && parts[3] != "--loopback")
+    {
+        return Err(
+            "Use /port allow ID [--loopback] or /port deny ID. Review the exact target before allowing loopback.",
+        );
     }
-    let required = loopback_required(parts[2]).ok_or("Port request changed. Refresh the conversation before approving it.")?;
+    let required =
+        loopback_required(parts[2]).ok_or("Port request changed. Refresh the conversation before approving it.")?;
     let loopback = parts.get(3) == Some(&"--loopback");
     if parts[1] == "allow" && required && !loopback {
         return Err("This exact loopback target requires /port allow ID --loopback.");
     }
-    let decision = if parts[1] == "allow" { PortDecision::Allow } else { PortDecision::Deny };
-    Ok(Command::Port { id: parts[2].into(), decision, loopback })
+    let decision = if parts[1] == "allow" {
+        PortDecision::Allow
+    } else {
+        PortDecision::Deny
+    };
+    Ok(Command::Port {
+        id: parts[2].into(),
+        decision,
+        loopback,
+    })
 }
 
 /// `/knowledge accept|reject ID`.
 pub fn knowledge(text: &str) -> Result<Command, &'static str> {
     match text.split_whitespace().collect::<Vec<_>>().as_slice() {
-        ["/knowledge", verdict @ ("accept" | "reject"), id] => Ok(Command::Knowledge { id: (*id).into(), accept: *verdict == "accept" }),
+        ["/knowledge", verdict @ ("accept" | "reject"), id] => Ok(Command::Knowledge {
+            id: (*id).into(),
+            accept: *verdict == "accept",
+        }),
         _ => Err("Use /knowledge accept ID or /knowledge reject ID."),
     }
 }
@@ -206,7 +250,11 @@ pub fn named(text: &str) -> Option<(Kind, &str)> {
 /// answer, allow/deny (yes/no), or a typed command naming this request.
 pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str> {
     let (text, id) = (text.trim(), pending.id);
-    let words = text.to_lowercase().split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let words = text
+        .to_lowercase()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     let verdict = match words.first().map(String::as_str) {
         Some("allow" | "approve" | "accept" | "yes" | "y") => "allow",
         Some("deny" | "reject" | "no" | "n") => "deny",
@@ -227,7 +275,10 @@ pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str>
             _ if verdict.is_empty() || (words.len() > 1 && !loopback) => return Err("Reply allow or deny."),
             Kind::Bot => format!("/bot {verdict} {id}"),
             Kind::Port => format!("/port {verdict} {id}{}", if loopback { " --loopback" } else { "" }),
-            Kind::Knowledge => format!("/knowledge {} {id}", if verdict == "allow" { "accept" } else { "reject" }),
+            Kind::Knowledge => format!(
+                "/knowledge {} {id}",
+                if verdict == "allow" { "accept" } else { "reject" }
+            ),
             Kind::Folder => return Err(FOLDER_USAGE),
         }
     };
@@ -241,12 +292,13 @@ pub fn reply(pending: &Pending<'_>, text: &str) -> Result<Command, &'static str>
 /// Carry out `command` in `chat` through the operator interface.
 pub fn execute(hive: &mut Hive, chat: &str, command: &Command) -> io::Result<()> {
     match command {
-        Command::Send(message) => hive.tool("control.chat.send", json!({"id":chat,"message":message})).map(drop),
+        Command::Send(message) => hive
+            .tool("control.chat.send", json!({"id":chat,"message":message}))
+            .map(drop),
         Command::Port { id, decision, loopback } => hive.decide_port(chat, id, *decision, *loopback),
         Command::Knowledge { id, accept } => hive.review_knowledge(id, *accept),
     }
 }
-
 
 #[cfg(test)]
 mod tests;

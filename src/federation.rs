@@ -24,11 +24,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 fn unhex(s: &str, size: usize) -> Result<Vec<u8>> {
-    if s.len() != size * 2
-        || !s
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+    if s.len() != size * 2 || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
         return Err(io::Error::other("Invalid lowercase hex length or encoding"));
     }
     (0..s.len())
@@ -44,10 +40,7 @@ fn public(id: &str) -> Result<Vec<u8>> {
     )
 }
 fn hash(s: &str) -> String {
-    format!(
-        "sha256:{}",
-        hex(digest::digest(&digest::SHA256, s.as_bytes()).as_ref())
-    )
+    format!("sha256:{}", hex(digest::digest(&digest::SHA256, s.as_bytes()).as_ref()))
 }
 fn now() -> Result<u64> {
     Ok(SystemTime::now()
@@ -107,19 +100,13 @@ impl Bundle {
             || self.roots.len() > 128
             || self.definitions.len() > 128
             || self.documents.len() > 128
-            || self
-                .definitions
-                .iter()
-                .map(|d| d.tools.len())
-                .sum::<usize>()
-                > 256
+            || self.definitions.iter().map(|d| d.tools.len()).sum::<usize>() > 256
         {
             return Err(io::Error::other("Bundle cardinality limit"));
         }
         let mut ids = BTreeSet::new();
         for d in &self.definitions {
-            if !ids.insert(&d.id) || d.tools.len() > 256 || d.tools.iter().any(|t| t.len() > 65536)
-            {
+            if !ids.insert(&d.id) || d.tools.len() > 256 || d.tools.iter().any(|t| t.len() > 65536) {
                 return Err(io::Error::other("Duplicate definition or excessive tools"));
             }
         }
@@ -142,15 +129,11 @@ impl Bundle {
             definitions: self.definitions.clone(),
             builtin: Default::default(),
         };
-        library
-            .validate(&self.documents)
-            .map_err(io::Error::other)?;
+        library.validate(&self.documents).map_err(io::Error::other)?;
         let resolved = library
             .resolve(&self.roots, &self.documents)
             .map_err(io::Error::other)?;
-        if resolved.lenses.len() != self.definitions.len()
-            || resolved.documents.len() != self.documents.len()
-        {
+        if resolved.lenses.len() != self.definitions.len() || resolved.documents.len() != self.documents.len() {
             return Err(io::Error::other(
                 "Bundle must contain exactly the reachable dependency closure",
             ));
@@ -218,7 +201,9 @@ struct Store {
 // it. Release ownership explicitly rather than waiting for the final fd close.
 struct StoreLock(File);
 impl Drop for StoreLock {
-    fn drop(&mut self) { let _ = self.0.unlock(); }
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 impl Store {
     fn open(dir: &Path) -> Result<Self> {
@@ -256,8 +241,7 @@ impl Store {
             }
             Err(e) => return Err(e),
         };
-        let key = Ed25519KeyPair::from_pkcs8(&bytes)
-            .map_err(|_| io::Error::other("Invalid private identity file"))?;
+        let key = Ed25519KeyPair::from_pkcs8(&bytes).map_err(|_| io::Error::other("Invalid private identity file"))?;
         File::open(dir)?.sync_all()?;
         let ledger = match read(&dir.join("ledger.json"), STORE_BYTES, true) {
             Ok(b) => serde_json::from_slice(&b).map_err(io::Error::other)?,
@@ -280,11 +264,9 @@ impl Store {
             return Err(io::Error::other("Federation store byte quota reached"));
         }
         // Unique create-new temporary names, never follow or truncate a planted path.
-        let temp = self.dir.join(format!(
-            "ledger-{}-{}.tmp",
-            std::process::id(),
-            next.sequence
-        ));
+        let temp = self
+            .dir
+            .join(format!("ledger-{}-{}.tmp", std::process::id(), next.sequence));
         create(&temp, &data)?;
         if let Err(e) = fs::rename(&temp, self.dir.join("ledger.json")) {
             let _ = fs::remove_file(&temp);
@@ -426,11 +408,7 @@ impl Store {
 }
 
 const HELP: &str = "control federation identity\ncontrol federation trust NODE --label NAME --root LENS [--root LENS] [--allow-documents]\ncontrol federation revoke NODE\ncontrol federation export LENS --recipient NODE --output FILE [--include-documents]\ncontrol federation import FILE\ncontrol federation inspect INDEX\ncontrol federation status\n\nState: .control/federation (or CONTROL_FEDERATION_DIR). Imports are quarantined; no network or remote execution.";
-fn parse_options(
-    args: &[String],
-    flags: &[&str],
-    switches: &[&str],
-) -> Result<Vec<(String, String)>> {
+fn parse_options(args: &[String], flags: &[&str], switches: &[&str]) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -476,10 +454,7 @@ fn selected(root: &str, include: bool) -> Result<Bundle> {
         })
         .collect();
     let roots = vec![root.to_owned()];
-    let resolved = state
-        .lens_library
-        .resolve(&roots, &docs)
-        .map_err(io::Error::other)?;
+    let resolved = state.lens_library.resolve(&roots, &docs).map_err(io::Error::other)?;
     if !include && !resolved.documents.is_empty() {
         return Err(io::Error::other(
             "Lens contains documents; explicit --include-documents required",
@@ -534,17 +509,10 @@ pub fn run(args: &[String]) -> Result<()> {
             println!("Peer revoked; replay history retained.");
         }
         "export" if args.len() >= 2 => {
-            let opts = parse_options(
-                &args[2..],
-                &["--recipient", "--output"],
-                &["--include-documents"],
-            )?;
+            let opts = parse_options(&args[2..], &["--recipient", "--output"], &["--include-documents"])?;
             let recipient = value(&opts, "--recipient")?;
             let output = Path::new(value(&opts, "--output")?);
-            let bundle = selected(
-                &args[1],
-                opts.iter().any(|(k, _)| k == "--include-documents"),
-            )?;
+            let bundle = selected(&args[1], opts.iter().any(|(k, _)| k == "--include-documents"))?;
             let titles: Vec<_> = bundle.documents.iter().map(|d| display(&d.title)).collect();
             let e = store.export(bundle, recipient, now()?)?;
             let bytes = serde_json::to_vec_pretty(&e).map_err(io::Error::other)?;
@@ -590,10 +558,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 );
             }
             for (i, e) in store.ledger.imports.iter().enumerate() {
-                println!(
-                    "[{i}] {} from {} sequence={}",
-                    e.resource_id, e.sender, e.sequence
-                );
+                println!("[{i}] {} from {} sequence={}", e.resource_id, e.sender, e.sequence);
             }
         }
         "inspect" if args.len() == 2 => {
@@ -603,7 +568,14 @@ pub fn run(args: &[String]) -> Result<()> {
                 .imports
                 .get(index)
                 .ok_or_else(|| io::Error::other("Unknown quarantine index"))?;
-            println!("Sender: {}\nResource: {}\nSequence: {}\nExpires: {}\nQuarantined; no local activation.\n{}",e.sender,e.resource_id,e.sequence,e.expires_at,display(&e.payload));
+            println!(
+                "Sender: {}\nResource: {}\nSequence: {}\nExpires: {}\nQuarantined; no local activation.\n{}",
+                e.sender,
+                e.resource_id,
+                e.sequence,
+                e.expires_at,
+                display(&e.payload)
+            );
         }
         _ => return Err(io::Error::other(HELP)),
     }

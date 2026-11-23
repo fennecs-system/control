@@ -2,18 +2,20 @@ use crate::{escape, toolbox};
 use serde_json::json;
 use std::net::TcpStream;
 
-pub fn handle(
-    stream: &mut TcpStream,
-    method: &str,
-    target: &str,
-    body: &[u8],
-) -> bool {
+pub fn handle(stream: &mut TcpStream, method: &str, target: &str, body: &[u8]) -> bool {
     let (path, _) = target.split_once('?').unwrap_or((target, ""));
     if !["/tools/search", "/tools/rust"].contains(&path) {
         return false;
     }
     if !["GET", "POST"].contains(&method) {
-        let _ = control_http::respond(stream, "405 Method Not Allowed", "text/plain", b"Use GET or POST.", "", control_http::Policy::Embedded);
+        let _ = control_http::respond(
+            stream,
+            "405 Method Not Allowed",
+            "text/plain",
+            b"Use GET or POST.",
+            "",
+            control_http::Policy::Embedded,
+        );
         return true;
     }
     let fields = crate::fields(&String::from_utf8_lossy(body));
@@ -27,9 +29,15 @@ pub fn handle(
             ""
         });
     let mut content = if is_rust {
-        format!("<h2>Rust playground</h2><p class='muted'>Rust 2024 · standard library · offline</p><form method='post' action='/tools/rust'><textarea class='rust-source' name='code' required maxlength='16384' rows='12' aria-label='Rust source'>{}</textarea><button class='primary'>Run</button></form>", escape(input))
+        format!(
+            "<h2>Rust playground</h2><p class='muted'>Rust 2024 · standard library · offline</p><form method='post' action='/tools/rust'><textarea class='rust-source' name='code' required maxlength='16384' rows='12' aria-label='Rust source'>{}</textarea><button class='primary'>Run</button></form>",
+            escape(input)
+        )
     } else {
-        format!("<h2>Search</h2><form method='post' action='/tools/search'><label>Search the web<input name='query' required maxlength='500' value='{}'></label><button class='primary'>Search</button></form>", escape(input))
+        format!(
+            "<h2>Search</h2><form method='post' action='/tools/search'><label>Search the web<input name='query' required maxlength='500' value='{}'></label><button class='primary'>Search</button></form>",
+            escape(input)
+        )
     };
     if method == "POST" {
         let args = if is_rust {
@@ -56,24 +64,29 @@ pub fn handle(
                     "<p class='muted' role='status'>{} · {} results{}</p>",
                     escape(value["provider"].as_str().unwrap()),
                     results.len(),
-                    if value["fallback"] == true {
-                        " · fallback"
-                    } else {
-                        ""
-                    }
+                    if value["fallback"] == true { " · fallback" } else { "" }
                 ));
                 for result in results {
-                    content.push_str(&format!("<article class='record'><h3><a href='{}' rel='noreferrer'>{}</a></h3><p>{}</p></article>", escape(result["url"].as_str().unwrap()), escape(result["title"].as_str().unwrap()), escape(result["snippet"].as_str().unwrap())));
+                    content.push_str(&format!(
+                        "<article class='record'><h3><a href='{}' rel='noreferrer'>{}</a></h3><p>{}</p></article>",
+                        escape(result["url"].as_str().unwrap()),
+                        escape(result["title"].as_str().unwrap()),
+                        escape(result["snippet"].as_str().unwrap())
+                    ));
                 }
             }
-            Err(error) => content.push_str(&format!(
-                "<p role='alert'>{}</p>",
-                escape(&error.to_string())
-            )),
+            Err(error) => content.push_str(&format!("<p role='alert'>{}</p>", escape(&error.to_string()))),
         }
     }
     let page = crate::render(&crate::State::default(), "tool-page", "none", &content);
-    let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Embedded);
+    let _ = control_http::respond(
+        stream,
+        "200 OK",
+        "text/html; charset=utf-8",
+        page.as_bytes(),
+        "",
+        control_http::Policy::Embedded,
+    );
     true
 }
 

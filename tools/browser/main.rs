@@ -61,13 +61,7 @@ pub struct Capture {
     pub width: u16,
     pub height: u16,
 }
-pub fn capture(
-    image: &str,
-    input: &Path,
-    width: u16,
-    height: u16,
-    output: &Path,
-) -> io::Result<Capture> {
+pub fn capture(image: &str, input: &Path, width: u16, height: u16, output: &Path) -> io::Result<Capture> {
     capture_with_timeout(image, input, width, height, output, Duration::from_secs(60))
 }
 pub fn capture_with_timeout(
@@ -90,8 +84,7 @@ pub fn capture_with_timeout(
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_nanos();
-    let scratch =
-        std::env::temp_dir().join(format!("control-browser-{}-{stamp}", std::process::id()));
+    let scratch = std::env::temp_dir().join(format!("control-browser-{}-{stamp}", std::process::id()));
     private_dir(&scratch)?;
     let result = (|| {
         use std::os::unix::fs::PermissionsExt;
@@ -167,12 +160,8 @@ pub fn capture_with_timeout(
             let _ = child.kill();
             let _ = child.wait();
         }
-        let bytes = reader
-            .join()
-            .map_err(|_| fail("Browser output reader failed"))??;
-        if !status.is_some_and(|s| s.success())
-            || bytes.len() > IMAGE_LIMIT
-            || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        let bytes = reader.join().map_err(|_| fail("Browser output reader failed"))??;
+        if !status.is_some_and(|s| s.success()) || bytes.len() > IMAGE_LIMIT || !bytes.starts_with(b"\x89PNG\r\n\x1a\n")
         {
             return Err(fail("Browser capture failed or exceeded its limits"));
         }

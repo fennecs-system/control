@@ -1,4 +1,3 @@
-
 #[test]
 fn missing_history_warning_remains_visible_when_activity_is_folded() {
     for show_activity in [false, true] {
@@ -27,11 +26,21 @@ fn advisor_notes_render_as_a_distinct_box() {
     };
     let text = app.transcript();
     let lines = text.lines.iter().map(ToString::to_string).collect::<Vec<_>>();
-    let top = lines.iter().position(|line| line == "┌ Advisor note from c-advisor · read-only evidence").unwrap();
-    assert_eq!(lines[top + 1..top + 4], ["│ Tester waits on build", "│ Suggest: tell the builder", "└"]);
+    let top = lines
+        .iter()
+        .position(|line| line == "┌ Advisor note from c-advisor · read-only evidence")
+        .unwrap();
+    assert_eq!(
+        lines[top + 1..top + 4],
+        ["│ Tester waits on build", "│ Suggest: tell the builder", "└"]
+    );
     assert_eq!(text.lines[top].style.fg, Some(history::CYAN));
     assert_eq!(text.lines[top + 1].style.bg, Some(history::CARD));
-    assert_eq!(lines.iter().filter(|line| line.contains("Advisor note")).count(), 1, "not also rendered as an event");
+    assert_eq!(
+        lines.iter().filter(|line| line.contains("Advisor note")).count(),
+        1,
+        "not also rendered as an event"
+    );
 }
 
 #[test]
@@ -45,54 +54,97 @@ fn control_notices_render_as_one_muted_line_not_user_input() {
     };
     let text = app.transcript();
     let lines = text.lines.iter().map(ToString::to_string).collect::<Vec<_>>();
-    let at = lines.iter().position(|line| line == "◇ Control · Port decisions: relay (p-1): approved.").unwrap();
+    let at = lines
+        .iter()
+        .position(|line| line == "◇ Control · Port decisions: relay (p-1): approved.")
+        .unwrap();
     assert_eq!(lines[at + 1], "  web (p-2): denied.");
-    assert!(text.lines[at..at + 2].iter().all(|line| line.style.bg != Some(history::CARD)), "not a user card");
-    assert!(!lines.iter().any(|line| line == "◇ Event"), "one notice line, not an event block");
+    assert!(
+        text.lines[at..at + 2]
+            .iter()
+            .all(|line| line.style.bg != Some(history::CARD)),
+        "not a user card"
+    );
+    assert!(
+        !lines.iter().any(|line| line == "◇ Event"),
+        "one notice line, not an event block"
+    );
     let user = lines.iter().position(|line| line == "Run the server").unwrap();
-    assert_eq!(text.lines[user].style.bg, Some(history::CARD), "operator input keeps its card");
+    assert_eq!(
+        text.lines[user].style.bg,
+        Some(history::CARD),
+        "operator input keeps its card"
+    );
 }
 
 #[test]
 fn github_inspection_uses_the_typed_read_without_sending_a_chat_message() {
     use std::io::{BufRead, Read, Write};
-    for (input,tool,arguments) in [
-        ("/github 170 checks 2", "control_github_read",json!({"chat_id":"c-inspection","query":{"pull_request":170,"section":"checks","page":2}})),
-        ("/github 170 merge 1234567890123456789012345678901234567890", "control_github_write",json!({"chat_id":"c-inspection","operation":{"action":"merge","pull_request":170,"expected_head_sha":"1234567890123456789012345678901234567890","method":"squash"}})),
-        ("/github 170 comment Review findings\n\nPlease check this.", "control_github_write",json!({"chat_id":"c-inspection","operation":{"action":"comment","pull_request":170,"body":"Review findings\n\nPlease check this."}})),
+    for (input, tool, arguments) in [
+        (
+            "/github 170 checks 2",
+            "control_github_read",
+            json!({"chat_id":"c-inspection","query":{"pull_request":170,"section":"checks","page":2}}),
+        ),
+        (
+            "/github 170 merge 1234567890123456789012345678901234567890",
+            "control_github_write",
+            json!({"chat_id":"c-inspection","operation":{"action":"merge","pull_request":170,"expected_head_sha":"1234567890123456789012345678901234567890","method":"squash"}}),
+        ),
+        (
+            "/github 170 comment Review findings\n\nPlease check this.",
+            "control_github_write",
+            json!({"chat_id":"c-inspection","operation":{"action":"comment","pull_request":170,"body":"Review findings\n\nPlease check this."}}),
+        ),
     ] {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-        let mut reader = io::BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        assert!(line.starts_with("POST /mcp "));
-        let mut length = 0;
-        loop {
-            line.clear();reader.read_line(&mut line).unwrap();
-            if line=="\r\n" {break;}
-            if let Some((key,value))=line.split_once(':') && key.eq_ignore_ascii_case("content-length") {length=value.trim().parse().unwrap();}
-        }
-        let mut body=vec![0;length];reader.read_exact(&mut body).unwrap();
-        let request:Value=serde_json::from_slice(&body).unwrap();
-        assert_eq!(request["params"]["name"],tool);
-        assert_eq!(request["params"]["arguments"],arguments);
-        let response=json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"head_sha":"verified-head","items":[]}}}}).to_string();
-        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
-    });
-    let mut hive=Hive::fixture(Client::new(),format!("http://{address}/mcp"));
-    let mut app=App {active:"c-inspection".into(),input:input.into(),detail:json!({"messages":[{"text":"Retain this conversation"}]}),..Default::default()};
-    let before=app.detail.clone();
-    assert!(!app.submit(&mut hive).unwrap());
-    assert!(app.inspector.as_ref().unwrap().1.contains("verified-head"));
-    assert_eq!(app.detail,before);
-    assert!(app.input.is_empty());
-    server.join().unwrap();
-    app.input="/github 170 merge".into();
-    assert!(app.submit(&mut hive).is_err(),"invalid commands fail before contacting the closed server");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("POST /mcp "));
+            let mut length = 0;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((key, value)) = line.split_once(':')
+                    && key.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let request: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(request["params"]["name"], tool);
+            assert_eq!(request["params"]["arguments"], arguments);
+            let response=json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"head_sha":"verified-head","items":[]}}}}).to_string();
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
+        });
+        let mut hive = Hive::fixture(Client::new(), format!("http://{address}/mcp"));
+        let mut app = App {
+            active: "c-inspection".into(),
+            input: input.into(),
+            detail: json!({"messages":[{"text":"Retain this conversation"}]}),
+            ..Default::default()
+        };
+        let before = app.detail.clone();
+        assert!(!app.submit(&mut hive).unwrap());
+        assert!(app.inspector.as_ref().unwrap().1.contains("verified-head"));
+        assert_eq!(app.detail, before);
+        assert!(app.input.is_empty());
+        server.join().unwrap();
+        app.input = "/github 170 merge".into();
+        assert!(
+            app.submit(&mut hive).is_err(),
+            "invalid commands fail before contacting the closed server"
+        );
     }
 }
 
@@ -120,9 +172,7 @@ fn folder_prompt_stays_at_the_live_tail_and_tracks_replaced_requests() {
     assert!(transcript.contains("The folder could not be read"));
     assert!(
         transcript.find("Latest response").unwrap()
-            < transcript
-                .find("Folder access requested · /node/current")
-                .unwrap()
+            < transcript.find("Folder access requested · /node/current").unwrap()
     );
     assert!(!transcript.contains("/dm/c-fixture/project") && !transcript.contains("/chat/c-fixture/project"));
     app.detail["project"]["pending"] = json!(false);
@@ -137,9 +187,7 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
     let server = std::thread::spawn(move || {
         for index in 0..5 {
             let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
             let mut reader = io::BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
@@ -166,14 +214,12 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
             if index == 0 || index == 2 {
                 assert_eq!(path, "/dm/c-fixture/project");
                 assert_eq!(origin, format!("http://{addr}"));
-                let fields: std::collections::HashMap<_, _> = Url::parse(&format!(
-                    "http://fixture/?{}",
-                    String::from_utf8(bytes).unwrap()
-                ))
-                .unwrap()
-                .query_pairs()
-                .into_owned()
-                .collect();
+                let fields: std::collections::HashMap<_, _> =
+                    Url::parse(&format!("http://fixture/?{}", String::from_utf8(bytes).unwrap()))
+                        .unwrap()
+                        .query_pairs()
+                        .into_owned()
+                        .collect();
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields["request"], "p-fixture");
                 assert_eq!(fields["approve"], "yes");
@@ -209,11 +255,14 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
             }
         }
     });
-    let mut hive = Hive::fixture(Client::builder()
+    let mut hive = Hive::fixture(
+        Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(3))
             .build()
-            .unwrap(), format!("http://{addr}/mcp"));
+            .unwrap(),
+        format!("http://{addr}/mcp"),
+    );
     let mut app = App {
         active: "c-fixture".into(),
         detail: json!({"project":{"request":"p-fixture","path":"/node/project","name":"project","pending":true}}),
@@ -231,11 +280,7 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
         app.submit(&mut hive).unwrap_err().to_string(),
         "Source is not a directory"
     );
-    assert!(
-        app.transcript()
-            .to_string()
-            .contains("Source is not a directory")
-    );
+    assert!(app.transcript().to_string().contains("Source is not a directory"));
     app.input = "/trust p-fixture".into();
     app.submit(&mut hive).unwrap();
     assert_eq!(app.status, "Folder ready · isolated worktree");
@@ -249,10 +294,7 @@ fn terminal_folder_approval_uses_displayed_identity_and_retains_errors_without_a
     );
     app.input = "/open".into();
     app.submit(&mut hive).unwrap();
-    assert_eq!(
-        app.status,
-        "Use /open /absolute/path or /open --as NAME /absolute/path"
-    );
+    assert_eq!(app.status, "Use /open /absolute/path or /open --as NAME /absolute/path");
     server.join().unwrap();
 }
 
@@ -273,8 +315,12 @@ fn terminal_dismissal_names_the_displayed_request() {
             loop {
                 line.clear();
                 reader.read_line(&mut line).unwrap();
-                if line == "\r\n" { break; }
-                if let Some((name, value)) = line.split_once(':') && name.eq_ignore_ascii_case("content-length") {
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
                     length = value.trim().parse::<usize>().unwrap();
                 }
             }
@@ -282,9 +328,20 @@ fn terminal_dismissal_names_the_displayed_request() {
             reader.read_exact(&mut bytes).unwrap();
             let response = if index == 0 {
                 assert_eq!(path, "/dm/c-fixture/project");
-                let fields: std::collections::HashMap<_, _> = Url::parse(&format!("http://fixture/?{}", String::from_utf8(bytes).unwrap()))
-                    .unwrap().query_pairs().into_owned().collect();
-                assert_eq!((fields["dismiss"].as_str(), fields["request"].as_str(), fields["response"].as_str()), ("yes", "p-fixture", "json"));
+                let fields: std::collections::HashMap<_, _> =
+                    Url::parse(&format!("http://fixture/?{}", String::from_utf8(bytes).unwrap()))
+                        .unwrap()
+                        .query_pairs()
+                        .into_owned()
+                        .collect();
+                assert_eq!(
+                    (
+                        fields["dismiss"].as_str(),
+                        fields["request"].as_str(),
+                        fields["response"].as_str()
+                    ),
+                    ("yes", "p-fixture", "json")
+                );
                 json!({"ok":true,"message":"Folder request dismissed."})
             } else {
                 assert_eq!(path, "/mcp");
@@ -292,10 +349,21 @@ fn terminal_dismissal_names_the_displayed_request() {
                 assert_eq!(request["params"]["name"], "control.chat.read");
                 json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":false,"structuredContent":{"data":{"id":"c-fixture","project":null}}}})
             };
-            control_http::respond(&mut stream, "200 OK", "application/json", response.to_string().as_bytes(), "", control_http::Policy::Embedded).unwrap();
+            control_http::respond(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                response.to_string().as_bytes(),
+                "",
+                control_http::Policy::Embedded,
+            )
+            .unwrap();
         }
     });
-    let mut hive = Hive::fixture(Client::builder().timeout(Duration::from_secs(3)).build().unwrap(), format!("http://{addr}/mcp"));
+    let mut hive = Hive::fixture(
+        Client::builder().timeout(Duration::from_secs(3)).build().unwrap(),
+        format!("http://{addr}/mcp"),
+    );
     let mut app = App {
         active: "c-fixture".into(),
         detail: json!({"project":{"request":"p-fixture","path":"/open /node/project","name":"project","pending":true}}),
@@ -304,13 +372,23 @@ fn terminal_dismissal_names_the_displayed_request() {
     };
     assert!(app.transcript().to_string().contains("/dismiss p-fixture to reject"));
     // A different request than the one displayed is refused before any call.
-    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("request changed"));
+    assert!(
+        app.submit(&mut hive)
+            .unwrap_err()
+            .to_string()
+            .contains("request changed")
+    );
     app.input = "/dismiss".into();
     app.submit(&mut hive).unwrap();
     assert_eq!(app.status, "Folder request dismissed.");
     assert!(!app.transcript().to_string().contains("/dismiss"));
     app.input = "/dismiss".into();
-    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("No folder request"));
+    assert!(
+        app.submit(&mut hive)
+            .unwrap_err()
+            .to_string()
+            .contains("No folder request")
+    );
     server.join().unwrap();
 }
 
@@ -322,9 +400,7 @@ fn listen_commands_reach_the_server_and_render_returned_state() {
     let server = std::thread::spawn(move || {
         for command in ["/listen", "/listen off"] {
             let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
             let mut reader = io::BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
@@ -367,21 +443,17 @@ fn listen_commands_reach_the_server_and_render_returned_state() {
             .unwrap();
         }
     });
-    let mut hive = Hive::fixture(Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .unwrap(), format!("http://{addr}/mcp"));
+    let mut hive = Hive::fixture(
+        Client::builder().timeout(Duration::from_secs(3)).build().unwrap(),
+        format!("http://{addr}/mcp"),
+    );
     let mut app = App {
         active: "c-fixture".into(),
         input: "/listen".into(),
         ..Default::default()
     };
     app.submit(&mut hive).unwrap();
-    assert!(
-        app.transcript()
-            .to_string()
-            .contains("Room #research · listening")
-    );
+    assert!(app.transcript().to_string().contains("Room #research · listening"));
     app.input = "/listen off".into();
     app.submit(&mut hive).unwrap();
     assert!(!app.transcript().to_string().contains("listening"));
@@ -398,12 +470,9 @@ fn parent_transcript_exposes_child_decisions_and_answer_command() {
     assert!(transcript.contains("Choose a route"));
     assert!(transcript.contains("/answer q-child YOUR_ANSWER"));
     assert!(transcript.contains("Room #research · listening"));
+    assert!(transcript.contains("Bot request · c-child") && transcript.contains("/bot allow bot-child"));
     assert!(
-        transcript.contains("Bot request · c-child") && transcript.contains("/bot allow bot-child")
-    );
-    assert!(
-        transcript.find("Earlier response").unwrap()
-            < transcript.find("Decision requested").unwrap(),
+        transcript.find("Earlier response").unwrap() < transcript.find("Decision requested").unwrap(),
         "Pending decisions must remain visible at the live tail"
     );
 }
@@ -415,9 +484,7 @@ fn terminal_port_decisions_require_explicit_loopback_and_use_operator_http() {
     let server = std::thread::spawn(move || {
         for index in 0..2 {
             let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
             let mut reader = io::BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
@@ -444,14 +511,12 @@ fn terminal_port_decisions_require_explicit_loopback_and_use_operator_http() {
             let value = if index == 0 {
                 assert_eq!(path, "/tools/ports");
                 assert_eq!(origin, format!("http://{addr}"));
-                let fields: std::collections::HashMap<_, _> = Url::parse(&format!(
-                    "http://fixture/?{}",
-                    String::from_utf8(bytes).unwrap()
-                ))
-                .unwrap()
-                .query_pairs()
-                .into_owned()
-                .collect();
+                let fields: std::collections::HashMap<_, _> =
+                    Url::parse(&format!("http://fixture/?{}", String::from_utf8(bytes).unwrap()))
+                        .unwrap()
+                        .query_pairs()
+                        .into_owned()
+                        .collect();
                 assert_eq!(fields["id"], "port-fixture");
                 assert_eq!(fields["revoke"], "yes");
                 assert_eq!(fields["seconds"], "-1");
@@ -475,10 +540,10 @@ fn terminal_port_decisions_require_explicit_loopback_and_use_operator_http() {
             .unwrap();
         }
     });
-    let mut hive = Hive::fixture(Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .unwrap(), format!("http://{addr}/mcp"));
+    let mut hive = Hive::fixture(
+        Client::builder().timeout(Duration::from_secs(3)).build().unwrap(),
+        format!("http://{addr}/mcp"),
+    );
     let mut app = App {
         active: "c-fixture".into(),
         detail: json!({"messages":[{"text":"Earlier prompt","reply":"Earlier response"}],"pending_ports":[{"port_id":"port-fixture","name":"relay","target":{"host":"127.0.0.1","port":25565},"loopback_required":true}]}),
@@ -486,15 +551,8 @@ fn terminal_port_decisions_require_explicit_loopback_and_use_operator_http() {
         ..Default::default()
     };
     let transcript = app.transcript().to_string();
-    assert!(
-        transcript.find("Earlier response").unwrap() < transcript.find("Port request").unwrap()
-    );
-    assert!(
-        app.submit(&mut hive)
-            .unwrap_err()
-            .to_string()
-            .contains("--loopback")
-    );
+    assert!(transcript.find("Earlier response").unwrap() < transcript.find("Port request").unwrap());
+    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("--loopback"));
     app.input = "/port deny port-fixture".into();
     app.submit(&mut hive).unwrap();
     assert_eq!(app.detail["pending_ports"], json!([]));
@@ -523,9 +581,7 @@ fn refresh_keeps_a_new_chat_blank_and_preserves_explicit_resume() {
         let mut calls = Vec::new();
         for _ in 0..5 {
             let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
             let mut reader = io::BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
@@ -567,10 +623,10 @@ fn refresh_keeps_a_new_chat_blank_and_preserves_explicit_resume() {
         }
         calls
     });
-    let mut hive = Hive::fixture(Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .unwrap(), format!("http://{addr}/mcp"));
+    let mut hive = Hive::fixture(
+        Client::builder().timeout(Duration::from_secs(3)).build().unwrap(),
+        format!("http://{addr}/mcp"),
+    );
     let mut app = App::default();
     app.refresh(&mut hive).unwrap();
     app.refresh(&mut hive).unwrap();
@@ -597,7 +653,12 @@ use super::*;
 
 #[test]
 fn completing_commands_only_edits_the_draft_and_never_changes_the_conversation() {
-    let mut app = App { input: "/con".into(), active: "chat-a".into(), detail: json!({"revision":3,"messages":[]}), ..Default::default() };
+    let mut app = App {
+        input: "/con".into(),
+        active: "chat-a".into(),
+        detail: json!({"revision":3,"messages":[]}),
+        ..Default::default()
+    };
     let before = app.detail.clone();
     app.complete_command();
     assert_eq!(app.input, "/context ");
@@ -621,11 +682,23 @@ fn completing_commands_only_edits_the_draft_and_never_changes_the_conversation()
 fn composer_marks_known_and_unknown_use_lenses() {
     let catalog = lens_input::Catalog::from_list(&json!([{"id":"evidence"},{"id":"swarm"}]));
     let line = composer_line("/use swarm, typo evidence", &catalog);
-    let spans: Vec<_> = line.spans.iter().map(|span| (span.content.as_ref(), span.style)).collect();
-    assert_eq!(spans, vec![
-        ("/use", COMMAND_STYLE), (" ", Style::default()), ("swarm", LENS_STYLE), (", ", Style::default()),
-        ("typo", UNKNOWN_LENS_STYLE), (" ", Style::default()), ("evidence", LENS_STYLE),
-    ]);
+    let spans: Vec<_> = line
+        .spans
+        .iter()
+        .map(|span| (span.content.as_ref(), span.style))
+        .collect();
+    assert_eq!(
+        spans,
+        vec![
+            ("/use", COMMAND_STYLE),
+            (" ", Style::default()),
+            ("swarm", LENS_STYLE),
+            (", ", Style::default()),
+            ("typo", UNKNOWN_LENS_STYLE),
+            (" ", Style::default()),
+            ("evidence", LENS_STYLE),
+        ]
+    );
     assert_eq!(line.to_string(), "/use swarm, typo evidence");
     // Without a library the draft keeps plain command highlighting.
     let plain = composer_line("/use swarm", &lens_input::Catalog::Unavailable);
@@ -659,10 +732,7 @@ fn live_rust_benchmarks_use_mcp_and_compare_html_escaping() {
         .join("\n");
     let previous = r#"fn previous(s:&str)->String {s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;").replace('\'',"&#39;")}"#;
     for (name, input) in [
-        (
-            "plain",
-            "ordinary command output without markup\n".repeat(48),
-        ),
+        ("plain", "ordinary command output without markup\n".repeat(48)),
         ("escaped", "Synthetic output <&> λ\n".repeat(48)),
         ("sparse", format!("{}<", "x".repeat(1800))),
         ("short", "é<&>λ'🦊\"".into()),
@@ -683,9 +753,7 @@ fn live_rust_benchmarks_use_mcp_and_compare_html_escaping() {
         }
     }
     for (code, status) in [("not valid Rust", "compile 1"), ("loop {}", "run timeout")] {
-        let result = hive
-            .tool("control.rust.bench", json!({"code":code}))
-            .unwrap();
+        let result = hive.tool("control.rust.bench", json!({"code":code})).unwrap();
         assert_eq!(result["success"], false);
         assert_eq!(result["status"], status);
         assert!(result["timings"].is_null());
@@ -703,21 +771,18 @@ fn live_improve_build_and_independent_judge_roundtrip() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated self-development server");
     let publish = std::env::var_os("CONTROL_QA_SELFDEV_PUBLISH").is_some();
     if publish {
-        assert!(control_config::directory().unwrap().join("github.json").is_file(),
-            "Configure the isolated node's GitHub binding before starting: publication provenance cannot be added retroactively");
+        assert!(
+            control_config::directory().unwrap().join("github.json").is_file(),
+            "Configure the isolated node's GitHub binding before starting: publication provenance cannot be added retroactively"
+        );
     }
     let mut hive = Hive::connect(&server).unwrap();
-    let chat = hive
-        .tool("control.chat.create", json!({"mode":"improve"}))
-        .unwrap()["id"]
+    let chat = hive.tool("control.chat.create", json!({"mode":"improve"})).unwrap()["id"]
         .as_str()
         .unwrap()
         .to_owned();
     let submitted=hive.tool("control.chat.send",json!({"id":chat,"message":"Implement this small self-development verification task in the isolated Control source. Create docs/self-development-proof.md containing exactly: Control self-development verified. Do not change any other source file. Then use control_workspace_start with environment build and timeout_seconds 1800 to run cargo test --locked --bin control github::tests. Use the status tool until the job completes and verify exit code zero. Next call control_agent_spawn_blocking with role judge and objective: Review docs/self-development-proof.md against the requested exact text Control self-development verified. Inspect the actual file in the read-only source; report findings and do not modify files. Stop after blocking-spawn acknowledgement. When Control resumes you with the judge feedback, use control_agent_result section summary to inspect its full report, verify the proof file remains correct and finish briefly. Do not publish a PR, deploy, inspect credentials or modify the host checkout."})).unwrap();
-    let root = submitted["messages"][0]["run_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let root = submitted["messages"][0]["run_id"].as_str().unwrap().to_owned();
     let started = Instant::now();
     loop {
         let detail = hive.tool("control.chat.read", json!({"id":chat})).unwrap();
@@ -737,8 +802,9 @@ fn live_improve_build_and_independent_judge_roundtrip() {
         );
         std::thread::sleep(Duration::from_millis(500));
     }
-    let saved: Value =
-        control_config::read_state_in(&state_dir, isize::MAX as usize).unwrap().unwrap();
+    let saved: Value = control_config::read_state_in(&state_dir, isize::MAX as usize)
+        .unwrap()
+        .unwrap();
     let runs = saved["runtime"]["runs"].as_array().unwrap();
     let parent = runs.iter().find(|r| r["id"] == root).unwrap();
     assert_eq!(
@@ -767,8 +833,12 @@ fn live_improve_build_and_independent_judge_roundtrip() {
             .any(|job| job["build_environment"] == true
                 && job["exit_code"] == 0
                 && job["status"] == "completed"
-                && job["command"].as_str().is_some_and(|command| command.contains("cargo test --locked --bin control github::tests"))
-                && job["output"].as_str().is_some_and(|output| output.contains("test result: ok."))),
+                && job["command"]
+                    .as_str()
+                    .is_some_and(|command| command.contains("cargo test --locked --bin control github::tests"))
+                && job["output"]
+                    .as_str()
+                    .is_some_and(|output| output.contains("test result: ok."))),
         "A real declared build job must pass"
     );
     let final_run = runs
@@ -800,7 +870,9 @@ fn live_improve_build_and_independent_judge_roundtrip() {
         let arguments = json!({"run_id":final_run["id"],"title":"Self-development verification: isolated source edit, build and judge",
             "body":"Draft verification from Control's own /improve workflow. Adds only docs/self-development-proof.md after a real declared-environment test and independent read-only judge. Do not merge this synthetic proof file."});
         let publication = hive.tool("control_github_open_pr", arguments.clone()).unwrap();
-        let url = publication["url"].as_str().expect("Publisher must return the real draft PR URL");
+        let url = publication["url"]
+            .as_str()
+            .expect("Publisher must return the real draft PR URL");
         assert!(url.starts_with("https://github.com/") && url.contains("/pull/"));
         let retry = hive.tool("control_github_open_pr", arguments).unwrap();
         assert_eq!(retry["url"], publication["url"], "Retry must recover the same PR");
@@ -835,10 +907,7 @@ fn live_workspace_diff_tracks_real_edits_and_persists() {
                 if status == "completed" {
                     break;
                 }
-                assert!(
-                    ["queued", "running"].contains(&status),
-                    "Diff task ended with {status}"
-                );
+                assert!(["queued", "running"].contains(&status), "Diff task ended with {status}");
                 assert!(Instant::now() < deadline, "Diff task timed out");
                 std::thread::sleep(Duration::from_millis(300));
             }
@@ -851,21 +920,14 @@ fn live_workspace_diff_tracks_real_edits_and_persists() {
                     .find(|event| event["id"] == "workspace-diff")
                     .expect("New file creation must also have a diff");
                 assert_eq!(changes["text"], "1 file · +2 −0");
-                assert!(
-                    changes["output"]
-                        .as_str()
-                        .unwrap()
-                        .contains("+alpha\n+beta\n")
-                );
+                assert!(changes["output"].as_str().unwrap().contains("+alpha\n+beta\n"));
             }
         }
         fs::write(&fixture, &id).unwrap();
         id
     };
     let detail = hive.tool("control.chat.read", json!({"id":id})).unwrap();
-    let events = detail["messages"][1]["attempts"][0]["activity"]
-        .as_array()
-        .unwrap();
+    let events = detail["messages"][1]["attempts"][0]["activity"].as_array().unwrap();
     let patch = events
         .iter()
         .find(|e| e["id"] == "workspace-diff")
@@ -920,9 +982,7 @@ fn live_design_question_pauses_and_resumes_checkpoint() {
         paused["messages"][0]["question"]["input"]["options"],
         json!(["Plain text", "JSON"])
     );
-    let artifact = paused["messages"][0]["attempts"][0]["artifact"]
-        .as_str()
-        .unwrap();
+    let artifact = paused["messages"][0]["attempts"][0]["artifact"].as_str().unwrap();
     let before = hive
         .tool(
             "control.artifact.read",
@@ -985,11 +1045,8 @@ fn live_harness_commands_create_children_and_cancel_without_losing_history() {
         .as_str()
         .unwrap()
         .to_owned();
-    hive.tool(
-        "control.chat.send",
-        json!({"id":parent,"message":"Build a parser"}),
-    )
-    .unwrap();
+    hive.tool("control.chat.send", json!({"id":parent,"message":"Build a parser"}))
+        .unwrap();
     hive.tool(
         "control.chat.send",
         json!({"id":parent,"message":"/steer Include tests"}),
@@ -1036,9 +1093,7 @@ fn live_harness_commands_create_children_and_cancel_without_losing_history() {
         .send()
         .unwrap();
     assert_eq!(response.status().as_u16(), 303);
-    let detail = hive
-        .tool("control.chat.read", json!({"id":parent}))
-        .unwrap();
+    let detail = hive.tool("control.chat.read", json!({"id":parent})).unwrap();
     assert_eq!(detail["messages"][1]["status"], "cancelled");
     assert!(detail["revision"].as_u64().unwrap() > revision);
     assert_eq!(detail["messages"][0]["text"], "Build a parser");
@@ -1046,29 +1101,20 @@ fn live_harness_commands_create_children_and_cancel_without_losing_history() {
 #[test]
 #[ignore = "requires isolated server with workers disabled, built WASM assets, and local Firefox WebDriver"]
 fn live_chat_enter_sends_and_shift_enter_adds_newline() {
-    let server =
-        std::env::var("CONTROL_QA_URL").expect("Use isolated server with workers disabled");
+    let server = std::env::var("CONTROL_QA_URL").expect("Use isolated server with workers disabled");
     let mut hive = Hive::connect(&server).unwrap();
-    let driver =
-        std::env::var("CONTROL_WEBDRIVER_URL").unwrap_or_else(|_| "http://127.0.0.1:18082".into());
+    let driver = std::env::var("CONTROL_WEBDRIVER_URL").unwrap_or_else(|_| "http://127.0.0.1:18082".into());
     local_server(&driver).unwrap();
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap();
+    let client = Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
     let session: Value = client.post(format!("{driver}/session")).json(&json!({"capabilities":{"alwaysMatch":{"browserName":"firefox","moz:firefoxOptions":{"args":["-headless"],"binary":"/Applications/Firefox.app/Contents/MacOS/firefox"}}}})).send().unwrap().json().unwrap();
-    let id = session["value"]["sessionId"]
-        .as_str()
-        .expect("Firefox session failed");
+    let id = session["value"]["sessionId"].as_str().expect("Firefox session failed");
     struct Browser {
         client: Client,
         url: String,
     }
     impl Browser {
         fn request(&self, method: reqwest::Method, path: &str, args: Value) -> Value {
-            let mut request = self
-                .client
-                .request(method.clone(), format!("{}{path}", self.url));
+            let mut request = self.client.request(method.clone(), format!("{}{path}", self.url));
             if method == reqwest::Method::POST {
                 request = request.json(&args);
             }
@@ -1092,7 +1138,13 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
             self.post("/actions", json!({"actions":[{"type":"key","id":"keyboard","actions":[{"type":"keyDown","value":"\u{e007}"},{"type":"keyUp","value":"\u{e007}"}]}]}));
         }
         fn input(&self) -> String {
-            self.post("/element", json!({"using":"css selector","value":".conversation-composer textarea[data-enter-sends=true]"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().expect("Chat WASM did not initialize").to_owned()
+            self.post(
+                "/element",
+                json!({"using":"css selector","value":".conversation-composer textarea[data-enter-sends=true]"}),
+            )["element-6066-11e4-a52e-4f735466cecf"]
+                .as_str()
+                .expect("Chat WASM did not initialize")
+                .to_owned()
         }
     }
     impl Drop for Browser {
@@ -1114,7 +1166,10 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         .unwrap()
         .strip_prefix("control_operator=")
         .unwrap();
-    browser.post("/cookie", json!({"cookie":{"name":"control_operator","value":cookie,"path":"/","httpOnly":true,"sameSite":"Strict"}}));
+    browser.post(
+        "/cookie",
+        json!({"cookie":{"name":"control_operator","value":cookie,"path":"/","httpOnly":true,"sameSite":"Strict"}}),
+    );
     browser.post("/url", json!({"url":format!("{server}/dms")}));
     let before = hive.tool("control.chats.list", json!({})).unwrap();
     let input = browser.input();
@@ -1134,15 +1189,10 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         if let Some(id) = path.strip_prefix("/dm/c-") {
             break format!("c-{id}");
         }
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "Enter did not submit"
-        );
+        assert!(start.elapsed() < Duration::from_secs(10), "Enter did not submit");
         std::thread::sleep(Duration::from_millis(100));
     };
-    let chat = hive
-        .tool("control.chat.read", json!({"id":chat_id}))
-        .unwrap();
+    let chat = hive.tool("control.chat.read", json!({"id":chat_id})).unwrap();
     assert_eq!(chat["messages"][0]["text"], "first\r\nsecond");
     let transcript = hive
         .http()
@@ -1156,16 +1206,11 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
             .contains("script-src 'none'")
     );
     let input = browser.input();
-    browser.post(
-        &format!("/element/{input}/value"),
-        json!({"text":"followup"}),
-    );
+    browser.post(&format!("/element/{input}/value"), json!({"text":"followup"}));
     browser.enter();
     let start = Instant::now();
     loop {
-        let chat = hive
-            .tool("control.chat.read", json!({"id":chat_id}))
-            .unwrap();
+        let chat = hive.tool("control.chat.read", json!({"id":chat_id})).unwrap();
         if chat["messages"].as_array().unwrap().len() == 2 {
             assert_eq!(chat["messages"][1]["text"], "followup");
             break;
@@ -1178,14 +1223,10 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     }
     browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
     let input = browser.input();
-    browser.post(
-        &format!("/element/{input}/value"),
-        json!({"text":"\u{e007}"}),
-    );
+    browser.post(&format!("/element/{input}/value"), json!({"text":"\u{e007}"}));
     assert_eq!(browser.get(&format!("/element/{input}/property/value")), "");
     assert_eq!(
-        hive.tool("control.chat.read", json!({"id":chat_id}))
-            .unwrap()["messages"]
+        hive.tool("control.chat.read", json!({"id":chat_id})).unwrap()["messages"]
             .as_array()
             .unwrap()
             .len(),
@@ -1193,19 +1234,21 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     );
     // Completing a slash command changes only the draft. A second Enter sends it.
     browser.post(&format!("/element/{input}/value"), json!({"text":"/imp"}));
-    let command = browser.post("/element", json!({"using":"css selector","value":"#chat-commands:not([hidden]) [data-command='/improve']"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+    let command = browser.post(
+        "/element",
+        json!({"using":"css selector","value":"#chat-commands:not([hidden]) [data-command='/improve']"}),
+    )["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
         browser.get(&format!("/element/{command}/css/color")),
         "rgb(181, 160, 255)"
     );
     browser.enter();
+    assert_eq!(browser.get(&format!("/element/{input}/property/value")), "/improve");
     assert_eq!(
-        browser.get(&format!("/element/{input}/property/value")),
-        "/improve"
-    );
-    assert_eq!(
-        hive.tool("control.chat.read", json!({"id":chat_id}))
-            .unwrap()["mode"],
+        hive.tool("control.chat.read", json!({"id":chat_id})).unwrap()["mode"],
         "chat"
     );
     let highlighted = browser.post(
@@ -1222,11 +1265,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     browser.enter();
     let start = Instant::now();
     loop {
-        if hive
-            .tool("control.chat.read", json!({"id":chat_id}))
-            .unwrap()["mode"]
-            == "improve"
-        {
+        if hive.tool("control.chat.read", json!({"id":chat_id})).unwrap()["mode"] == "improve" {
             break;
         }
         assert!(
@@ -1238,23 +1277,13 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
     let input = browser.input();
     // Tab completes an off command, and mouse completion remains available.
-    browser.post(
-        &format!("/element/{input}/value"),
-        json!({"text":"/improve o"}),
-    );
+    browser.post(&format!("/element/{input}/value"), json!({"text":"/improve o"}));
     browser.post("/actions", json!({"actions":[{"type":"key","id":"keyboard","actions":[{"type":"keyDown","value":"\u{e004}"},{"type":"keyUp","value":"\u{e004}"}]}]}));
-    assert_eq!(
-        browser.get(&format!("/element/{input}/property/value")),
-        "/improve off"
-    );
+    assert_eq!(browser.get(&format!("/element/{input}/property/value")), "/improve off");
     browser.enter();
     let start = Instant::now();
     loop {
-        if hive
-            .tool("control.chat.read", json!({"id":chat_id}))
-            .unwrap()["mode"]
-            == "chat"
-        {
+        if hive.tool("control.chat.read", json!({"id":chat_id})).unwrap()["mode"] == "chat" {
             break;
         }
         assert!(
@@ -1266,12 +1295,15 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
     let input = browser.input();
     browser.post(&format!("/element/{input}/value"), json!({"text":"/"}));
-    let off = browser.post("/element", json!({"using":"css selector","value":"#chat-commands:not([hidden]) [data-command='/improve off']"}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+    let off = browser.post(
+        "/element",
+        json!({"using":"css selector","value":"#chat-commands:not([hidden]) [data-command='/improve off']"}),
+    )["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     browser.post(&format!("/element/{off}/click"), json!({}));
-    assert_eq!(
-        browser.get(&format!("/element/{input}/property/value")),
-        "/improve off"
-    );
+    assert_eq!(browser.get(&format!("/element/{input}/property/value")), "/improve off");
     for (draft, command) in [
         ("/bt", "/btw"),
         ("/spa", "/spawn"),
@@ -1281,16 +1313,19 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
         browser.post("/url", json!({"url":format!("{server}/dm/{chat_id}")}));
         let input = browser.input();
         browser.post(&format!("/element/{input}/value"), json!({"text":draft}));
-        let option = browser.post("/element", json!({"using":"css selector","value":format!("#chat-commands:not([hidden]) [data-command='{command}']")}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
+        let option = browser.post(
+            "/element",
+            json!({"using":"css selector","value":format!("#chat-commands:not([hidden]) [data-command='{command}']")}),
+        )["element-6066-11e4-a52e-4f735466cecf"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         assert_eq!(
             browser.get(&format!("/element/{option}/css/color")),
             "rgb(181, 160, 255)"
         );
         browser.enter();
-        assert_eq!(
-            browser.get(&format!("/element/{input}/property/value")),
-            command
-        );
+        assert_eq!(browser.get(&format!("/element/{input}/property/value")), command);
         let prefix = browser.post(
             "/element",
             json!({"using":"css selector","value":".composer-highlight .chat-command"}),
@@ -1305,10 +1340,7 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
     }
     if std::env::var_os("CONTROL_QA_DIFF_BROWSER").is_some() {
         let diff_chat = fs::read_to_string(control_config::state("diff-qa-chat").unwrap()).unwrap();
-        browser.post(
-            "/url",
-            json!({"url":format!("{server}/dm/{diff_chat}/transcript")}),
-        );
+        browser.post("/url", json!({"url":format!("{server}/dm/{diff_chat}/transcript")}));
         for (selector, color) in [
             (".edit-diff[open] .diff-add", "rgb(181, 160, 255)"),
             (".edit-diff[open] .diff-remove", "rgb(217, 154, 171)"),
@@ -1327,16 +1359,10 @@ fn live_chat_enter_sends_and_shift_enter_adds_newline() {
             )
             .unwrap();
         }
-        browser.post(
-            "/url",
-            json!({"url":format!("{server}/?view=providers#saved")}),
-        );
+        browser.post("/url", json!({"url":format!("{server}/?view=providers#saved")}));
         for (selector, property) in [
             (".provider-saved:target", "color"),
-            (
-                ".model-choice[aria-pressed=true] .model-dot",
-                "background-color",
-            ),
+            (".model-choice[aria-pressed=true] .model-dot", "background-color"),
         ] {
             let element=browser.post("/element",json!({"using":"css selector","value":selector}))["element-6066-11e4-a52e-4f735466cecf"].as_str().unwrap().to_owned();
             assert_eq!(
@@ -1385,21 +1411,13 @@ fn live_tools_catalog_and_rust_roundtrip() {
         )
         .unwrap();
     assert_eq!(result["success"], true);
-    assert!(
-        result["output"]
-            .as_str()
-            .unwrap()
-            .contains("tool-roundtrip-ok")
-    );
+    assert!(result["output"].as_str().unwrap().contains("tool-roundtrip-ok"));
     let result = hive
         .http()
         .post(format!("{server}/tools/rust"))
         .timeout(Duration::from_secs(25))
         .header("Origin", &server)
-        .form(&[(
-            "code",
-            "fn main() { println!(\"<script>escaped</script>\"); }",
-        )])
+        .form(&[("code", "fn main() { println!(\"<script>escaped</script>\"); }")])
         .send()
         .unwrap()
         .text()
@@ -1426,33 +1444,15 @@ fn live_worker_uses_credential_free_playground_tool() {
                 std::thread::sleep(Duration::from_millis(500))
             }
             "completed" => {
-                assert!(
-                    message["reply"]
-                        .as_str()
-                        .unwrap()
-                        .contains("worker-playground-ok")
-                );
-                assert!(
-                    message["attempts"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(
-                            |attempt| attempt["activity"].as_array().unwrap().iter().any(
-                                |a| a["kind"] == "mcp_tool_call"
-                                    && a["text"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .contains("control_rust_run")
-                            )
-                        )
-                );
+                assert!(message["reply"].as_str().unwrap().contains("worker-playground-ok"));
+                assert!(message["attempts"].as_array().unwrap().iter().any(|attempt| {
+                    attempt["activity"].as_array().unwrap().iter().any(|a| {
+                        a["kind"] == "mcp_tool_call" && a["text"].as_str().unwrap_or("").contains("control_rust_run")
+                    })
+                }));
                 break;
             }
-            status => panic!(
-                "Worker tool check ended with {status}: {}",
-                message["reply"]
-            ),
+            status => panic!("Worker tool check ended with {status}: {}", message["reply"]),
         }
     }
 }
@@ -1467,34 +1467,38 @@ fn automatic_updates_stay_distinct_from_human_message_cards() {
         ..App::default()
     };
     let text = app.transcript();
-    let labels = text
-        .lines
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
+    let labels = text.lines.iter().map(ToString::to_string).collect::<Vec<_>>();
     assert_eq!(labels.iter().filter(|line| *line == "◇ Event").count(), 2);
-    assert!(!labels.iter().any(|line|matches!(line.as_str(),"You"|"Control")));
-    assert_eq!(text.lines.iter().find(|line|line.to_string()=="Use the smaller option").unwrap().style.bg,Some(history::CARD));
-    assert!(text.lines.iter().filter(|line|matches!(line.to_string().as_str(),"New room posts"|"Delegated task · completed")).all(|line|line.style.bg!=Some(history::CARD)));
+    assert!(!labels.iter().any(|line| matches!(line.as_str(), "You" | "Control")));
+    assert_eq!(
+        text.lines
+            .iter()
+            .find(|line| line.to_string() == "Use the smaller option")
+            .unwrap()
+            .style
+            .bg,
+        Some(history::CARD)
+    );
+    assert!(
+        text.lines
+            .iter()
+            .filter(|line| matches!(
+                line.to_string().as_str(),
+                "New room posts" | "Delegated task · completed"
+            ))
+            .all(|line| line.style.bg != Some(history::CARD))
+    );
 }
 #[test]
 fn file_diffs_use_purple_additions_and_pastel_red_removals_in_terminal() {
     let app = App {
-        show_activity:true,
+        show_activity: true,
         detail: json!({"messages":[{"text":"Edit","status":"completed","reply":"Done","attempts":[{"activity":[{"kind":"file_change","status":"completed","text":"1 file · +1 −1","output":"@@ -1 +1 @@\n-old\n+new\n"},{"kind":"command_execution","text":"echo","output":"+ordinary output"}]}]}]}),
         ..App::default()
     };
     let text = app.transcript();
-    let add = text
-        .lines
-        .iter()
-        .find(|line| line.to_string() == "  +new")
-        .unwrap();
-    let removed = text
-        .lines
-        .iter()
-        .find(|line| line.to_string() == "  -old")
-        .unwrap();
+    let add = text.lines.iter().find(|line| line.to_string() == "  +new").unwrap();
+    let removed = text.lines.iter().find(|line| line.to_string() == "  -old").unwrap();
     assert_eq!(add.style.fg, Some(Color::Rgb(181, 160, 255)));
     assert_eq!(removed.style.fg, Some(Color::Rgb(217, 154, 171)));
     let ordinary = text
@@ -1506,23 +1510,33 @@ fn file_diffs_use_purple_additions_and_pastel_red_removals_in_terminal() {
 }
 #[test]
 fn folded_activity_retains_failures_and_expansion_is_a_local_action() {
-    let mut app=App {detail:json!({"messages":[{"text":"Build","reply":"Working","attempts":[{"activity":[
-        {"kind":"command_execution","text":"cargo check","status":"completed","output":"private verbose success detail"},
-        {"kind":"command_execution","text":"cargo test","status":"failed","output":"E42: test failed\nlong stack trace"}
-    ]}]}]}),input:"/activity full".into(),..Default::default()};
-    let compact=app.transcript().to_string();assert!(compact.contains("2 actions · 1 failed"));assert!(compact.contains("E42: test failed"));assert!(!compact.contains("private verbose success detail"));
-    let mut hive=Hive::fixture(Client::new(),"http://127.0.0.1:1/".into());
+    let mut app = App {
+        detail: json!({"messages":[{"text":"Build","reply":"Working","attempts":[{"activity":[
+            {"kind":"command_execution","text":"cargo check","status":"completed","output":"private verbose success detail"},
+            {"kind":"command_execution","text":"cargo test","status":"failed","output":"E42: test failed\nlong stack trace"}
+        ]}]}]}),
+        input: "/activity full".into(),
+        ..Default::default()
+    };
+    let compact = app.transcript().to_string();
+    assert!(compact.contains("2 actions · 1 failed"));
+    assert!(compact.contains("E42: test failed"));
+    assert!(!compact.contains("private verbose success detail"));
+    let mut hive = Hive::fixture(Client::new(), "http://127.0.0.1:1/".into());
     app.submit(&mut hive).unwrap();
-    assert!(app.show_activity);assert!(app.transcript().to_string().contains("private verbose success detail"));
-    app.layout_history(80);assert!(!app.history.dirty());
+    assert!(app.show_activity);
+    assert!(app.transcript().to_string().contains("private verbose success detail"));
+    app.layout_history(80);
+    assert!(!app.history.dirty());
     app.set_detail(json!({"messages":[{"text":"New result","reply":"Verified"}]}));
-    assert!(app.history.dirty());app.layout_history(80);
-    assert!(app.history.window(0,30).to_string().contains("Verified"));
+    assert!(app.history.dirty());
+    app.layout_history(80);
+    assert!(app.history.window(0, 30).to_string().contains("Verified"));
 }
 #[test]
 fn activity_and_context_boundary_render_in_terminal() {
     let app = App {
-        show_activity:true,
+        show_activity: true,
         detail: json!({"messages":[{"text":"Build", "status":"running", "reply":"", "attempts":[{"omitted_history":3,"activity":[{"status":"completed","text":"cargo check", "output":"finished\u{001b}[31m"}]}]}]}),
         ..App::default()
     };
@@ -1535,14 +1549,23 @@ fn activity_and_context_boundary_render_in_terminal() {
 #[test]
 fn attempt_tokens_render_live_and_after_the_attempt_ends() {
     let attempt = |extra: serde_json::Value| {
-        let app = App { detail: json!({"messages":[{"text":"Build","reply":"","attempts":[extra]}]}), ..App::default() };
+        let app = App {
+            detail: json!({"messages":[{"text":"Build","reply":"","attempts":[extra]}]}),
+            ..App::default()
+        };
         app.transcript().to_string()
     };
     let tokens = json!({"input_tokens":12000,"cached_input_tokens":11000,"output_tokens":300});
     let live = attempt(json!({"status":"running","tokens":tokens,"accounting":"partial","omitted_history":2}));
-    assert!(live.contains("attempt 1 · ↑ 12,000 in (11,000 cached) · ↓ 300 out… · 2 earlier exchanges excluded"), "{live}");
+    assert!(
+        live.contains("attempt 1 · ↑ 12,000 in (11,000 cached) · ↓ 300 out… · 2 earlier exchanges excluded"),
+        "{live}"
+    );
     let done = attempt(json!({"status":"completed","tokens":tokens,"accounting":"reported"}));
-    assert!(done.contains("↓ 300 out") && !done.contains('…') && !done.contains('≥'), "{done}");
+    assert!(
+        done.contains("↓ 300 out") && !done.contains('…') && !done.contains('≥'),
+        "{done}"
+    );
     let stopped = attempt(json!({"status":"cancelled","tokens":tokens,"accounting":"partial"}));
     assert!(stopped.contains("↓ ≥300 out"), "{stopped}");
     assert!(attempt(json!({"status":"running","accounting":"unknown"})).contains("attempt 1 · tokens pending…"));
@@ -1553,7 +1576,7 @@ fn attempt_tokens_render_live_and_after_the_attempt_ends() {
 #[test]
 fn service_commands_and_child_stdout_render_in_terminal() {
     let app = App {
-        show_activity:true,
+        show_activity: true,
         detail: json!({"messages":[{"text":"Run","commands":[{"text":"echo own","status":"completed","output":"own output\nExit 0"}]}],"agent_activity":[{"chat":"child-chat","activity":{"text":"npm install","status":"running","output":"downloaded\u{001b}[31m\n"}}]}),
         ..App::default()
     };
@@ -1586,22 +1609,14 @@ fn visible_messages_render_as_chat_and_do_not_duplicate_the_final_reply() {
 fn live_browser_ui_capture_and_protected_artifact() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let hive = Hive::connect(&server).unwrap();
-    let page = hive
-        .http()
-        .get(format!("{server}/tools/browser"))
-        .send()
-        .unwrap();
+    let page = hive.http().get(format!("{server}/tools/browser")).send().unwrap();
     assert_eq!(page.status().as_u16(), 200);
     assert_eq!(page.headers()["referrer-policy"], "same-origin");
     assert!(page.text().unwrap().contains("/tools/browser/capture"));
     let outside = hive
         .http()
         .post(format!("{server}/tools/browser/capture"))
-        .form(&[
-            ("input", "../outside.html"),
-            ("width", "390"),
-            ("height", "844"),
-        ])
+        .form(&[("input", "../outside.html"), ("width", "390"), ("height", "844")])
         .send()
         .unwrap();
     assert_eq!(outside.status().as_u16(), 400);
@@ -1609,11 +1624,7 @@ fn live_browser_ui_capture_and_protected_artifact() {
         .http()
         .post(format!("{server}/tools/browser/capture"))
         .header("Origin", &server)
-        .form(&[
-            ("input", "preview.html"),
-            ("width", "390"),
-            ("height", "844"),
-        ])
+        .form(&[("input", "preview.html"), ("width", "390"), ("height", "844")])
         .send()
         .unwrap();
     assert_eq!(capture.status().as_u16(), 303);
@@ -1659,36 +1670,25 @@ fn live_tui_lens_commands() {
         input: "/use engineering, missing-lens".into(),
         ..App::default()
     };
-    assert!(app.submit(&mut hive).unwrap_err().to_string().contains("Unknown gene: missing-lens."));
+    assert!(
+        app.submit(&mut hive)
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown gene: missing-lens.")
+    );
     assert!(app.active.is_empty());
     app.input = "/use engineering, evidence".into();
     app.submit(&mut hive).unwrap();
     assert_eq!(app.detail["lenses"], json!(["engineering", "evidence"]));
     app.input = "/genes".into();
     app.submit(&mut hive).unwrap();
-    assert!(
-        app.inspector
-            .as_ref()
-            .unwrap()
-            .1
-            .contains("repository-read")
-    );
+    assert!(app.inspector.as_ref().unwrap().1.contains("repository-read"));
     let menu = app.menu.as_mut().unwrap();
-    menu.selected = menu
-        .entries
-        .iter()
-        .position(|(_, _, id)| id == "research")
-        .unwrap();
+    menu.selected = menu.entries.iter().position(|(_, _, id)| id == "research").unwrap();
     menu.toggle();
     app.input = menu.command().unwrap();
     app.submit(&mut hive).unwrap();
-    assert!(
-        app.detail["lenses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "research")
-    );
+    assert!(app.detail["lenses"].as_array().unwrap().iter().any(|v| v == "research"));
     app.input = "/context".into();
     app.submit(&mut hive).unwrap();
     assert!(app.inspector.as_ref().unwrap().1.contains("repo.read"));
@@ -1722,17 +1722,8 @@ fn live_declarative_lens_library() {
         .send()
         .unwrap();
     assert_eq!(note.status().as_u16(), 303);
-    let url = Url::parse(&format!(
-        "{server}{}",
-        note.headers()["location"].to_str().unwrap()
-    ))
-    .unwrap();
-    let doc_id = url
-        .query_pairs()
-        .find(|(k, _)| k == "doc")
-        .unwrap()
-        .1
-        .into_owned();
+    let url = Url::parse(&format!("{server}{}", note.headers()["location"].to_str().unwrap())).unwrap();
+    let doc_id = url.query_pairs().find(|(k, _)| k == "doc").unwrap().1.into_owned();
     let mut fields = vec![
         ("id".to_string(), lens_id.clone()),
         ("name".into(), "Fixture composition".into()),
@@ -1753,10 +1744,7 @@ fn live_declarative_lens_library() {
         .tool("control.lenses.resolve", json!({"lenses":[lens_id]}))
         .unwrap();
     assert_eq!(resolved["tools"].as_array().unwrap().len(), 5);
-    assert_eq!(
-        resolved["documents"][0]["body"],
-        "A pinned knowledge fixture."
-    );
+    assert_eq!(resolved["documents"][0]["body"], "A pinned knowledge fixture.");
     assert!(
         resolved["instructions"]
             .as_array()
@@ -1764,9 +1752,7 @@ fn live_declarative_lens_library() {
             .iter()
             .any(|s| s == "Fixture instructions.")
     );
-    let chat = hive
-        .tool("control.chat.create", json!({"lenses":[lens_id]}))
-        .unwrap();
+    let chat = hive.tool("control.chat.create", json!({"lenses":[lens_id]})).unwrap();
     assert_eq!(chat["lenses"], json!([lens_id]));
     let page = hive
         .http()
@@ -1910,12 +1896,7 @@ fn live_knowledge_save_and_graph() {
         let result = hive
             .http()
             .post(format!("{server}/knowledge/save"))
-            .form(&[
-                ("id", ""),
-                ("title", title),
-                ("body", body),
-                ("revision", "0"),
-            ])
+            .form(&[("id", ""), ("title", title), ("body", body), ("revision", "0")])
             .send()
             .unwrap();
         assert_eq!(result.status().as_u16(), 303);
@@ -1923,12 +1904,7 @@ fn live_knowledge_save_and_graph() {
     };
     let location = create("Durability A", "[[Durability B]]\nA saved note.");
     let url = Url::parse(&format!("{server}{location}")).unwrap();
-    let id = url
-        .query_pairs()
-        .find(|(key, _)| key == "doc")
-        .unwrap()
-        .1
-        .into_owned();
+    let id = url.query_pairs().find(|(key, _)| key == "doc").unwrap().1.into_owned();
     let page = hive.http().get(url).send().unwrap().text().unwrap();
     assert!(page.contains("✓ Saved Durability A.md · revision 1"));
     assert!(page.contains("A saved note."));
@@ -1970,10 +1946,7 @@ fn live_room_tools_connect_worker_chat_and_ui() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let mut hive = Hive::connect(&server).unwrap();
     let chat = hive
-        .tool(
-            "control.chat.create",
-            json!({"room":"research","lens":"research"}),
-        )
+        .tool("control.chat.create", json!({"room":"research","lens":"research"}))
         .unwrap();
     let id = chat["id"].as_str().unwrap();
     let thread = chat["room"].as_str().unwrap();
@@ -1995,9 +1968,7 @@ fn live_room_tools_connect_worker_chat_and_ui() {
             _ => panic!("Room worker did not complete; no private diagnostics displayed"),
         }
     }
-    let room = hive
-        .tool("control.room.read", json!({"room":thread}))
-        .unwrap();
+    let room = hive.tool("control.room.read", json!({"room":thread})).unwrap();
     assert!(
         room["posts"]
             .as_array()
@@ -2005,9 +1976,7 @@ fn live_room_tools_connect_worker_chat_and_ui() {
             .iter()
             .any(|p| p["chat"] == id && p["text"] == "ROOM_CEDAR" && p["author"] == "agent")
     );
-    let other = hive
-        .tool("control.room.read", json!({"room":"engineering"}))
-        .unwrap();
+    let other = hive.tool("control.room.read", json!({"room":"engineering"})).unwrap();
     assert!(!other.to_string().contains("ROOM_CEDAR"));
     let room_page = format!("/?view=rooms&channel={thread}");
     for (path, expected) in [
@@ -2036,12 +2005,8 @@ fn live_room_tools_connect_worker_chat_and_ui() {
 fn live_task_threads_isolate_operator_posts_and_ui() {
     let server = std::env::var("CONTROL_QA_URL").expect("Use an isolated server");
     let mut hive = Hive::connect(&server).unwrap();
-    let first = hive
-        .tool("control.chat.create", json!({"room":"general"}))
-        .unwrap();
-    let second = hive
-        .tool("control.chat.create", json!({"room":"general"}))
-        .unwrap();
+    let first = hive.tool("control.chat.create", json!({"room":"general"})).unwrap();
+    let second = hive.tool("control.chat.create", json!({"room":"general"})).unwrap();
     let first_room = first["room"].as_str().unwrap();
     let second_room = second["room"].as_str().unwrap();
     assert_ne!(first_room, second_room);
@@ -2055,9 +2020,7 @@ fn live_task_threads_isolate_operator_posts_and_ui() {
         json!({"room":second_room,"message":"SECOND_THREAD_ONLY"}),
     )
     .unwrap();
-    let first_posts = hive
-        .tool("control.room.read", json!({"room":first_room}))
-        .unwrap();
+    let first_posts = hive.tool("control.room.read", json!({"room":first_room})).unwrap();
     assert!(first_posts.to_string().contains("FIRST_THREAD_ONLY"));
     assert!(!first_posts.to_string().contains("SECOND_THREAD_ONLY"));
     let page = hive
@@ -2079,17 +2042,10 @@ fn live_task_threads_isolate_operator_posts_and_ui() {
         .unwrap();
     assert_eq!(response.status().as_u16(), 303);
     assert_eq!(
-        response
-            .headers()
-            .get("location")
-            .unwrap()
-            .to_str()
-            .unwrap(),
+        response.headers().get("location").unwrap().to_str().unwrap(),
         format!("/?view=rooms&channel={first_room}")
     );
-    let posts = hive
-        .tool("control.room.read", json!({"room":first_room}))
-        .unwrap();
+    let posts = hive.tool("control.room.read", json!({"room":first_room})).unwrap();
     assert!(posts.to_string().contains("OPERATOR_REPLY"));
     assert!(
         !hive
@@ -2124,9 +2080,7 @@ fn live_shared_chat_keeps_context_and_web_transcript() {
                 "queued" | "running" if started.elapsed() < Duration::from_secs(120) => {
                     std::thread::sleep(Duration::from_millis(500))
                 }
-                _ => panic!(
-                    "Isolated session did not complete successfully; no raw diagnostics displayed."
-                ),
+                _ => panic!("Isolated session did not complete successfully; no raw diagnostics displayed."),
             }
         }
     }
@@ -2203,9 +2157,7 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
                 status => panic!("Artifact test ended with {status}: {}", current["reply"]),
             }
         }
-        let listed = hive
-            .tool("control.artifacts.list", json!({"id":chat}))
-            .unwrap();
+        let listed = hive.tool("control.artifacts.list", json!({"id":chat})).unwrap();
         let artifact = listed["artifacts"][0]["id"].as_str().unwrap();
         if improve {
             let source = hive
@@ -2251,8 +2203,7 @@ fn live_artifacts_preserve_project_files_and_viewer_after_restart() {
         let page = response.text().unwrap();
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!page.contains("<script>alert(1)</script>"));
-        let unauthenticated =
-            reqwest::blocking::get(format!("{server}/dm/{chat}/artifacts")).unwrap();
+        let unauthenticated = reqwest::blocking::get(format!("{server}/dm/{chat}/artifacts")).unwrap();
         assert_eq!(unauthenticated.status().as_u16(), 401);
     }
 }
@@ -2286,11 +2237,7 @@ fn live_model_library_selection_and_reload() {
                 .http()
                 .post(format!("{server}/providers"))
                 .header("Origin", &server)
-                .form(&[
-                    ("action", "select"),
-                    ("provider", provider),
-                    ("model", model),
-                ])
+                .form(&[("action", "select"), ("provider", provider), ("model", model)])
                 .send()
                 .unwrap();
             assert_eq!(response.status().as_u16(), 303);
@@ -2302,9 +2249,7 @@ fn live_model_library_selection_and_reload() {
     }
     let html = page();
     assert!(html.contains("value='fixture-codex'") && html.contains("value='fixture-claude'"));
-    assert!(
-        html.contains("value='fixture-codex'><button class='model-choice' aria-pressed='true'")
-    );
+    assert!(html.contains("value='fixture-codex'><button class='model-choice' aria-pressed='true'"));
     assert!(!html.contains("<select"));
     assert!(!html.contains("provider-new"));
 }
@@ -2312,7 +2257,10 @@ fn live_model_library_selection_and_reload() {
 #[ignore = "explicit release-mode synthetic timing; no server, credentials or model calls"]
 fn transcript_render_timing() {
     // More samples for profiling: CONTROL_TIMING_ROUNDS=2000.
-    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9);
     use std::{hint::black_box, time::Instant};
     for (messages, pending) in [(10, 0), (200, 10), (1000, 50)] {
         let app = super::App {
@@ -2333,6 +2281,9 @@ fn transcript_render_timing() {
             samples.push(start.elapsed().as_nanos() / 20);
         }
         samples.sort_unstable();
-        println!("{}", json!({"workload":"tui_transcript","messages":messages,"pending_each":pending,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"lines":app.transcript().lines.len()}));
+        println!(
+            "{}",
+            json!({"workload":"tui_transcript","messages":messages,"pending_each":pending,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"lines":app.transcript().lines.len()})
+        );
     }
 }

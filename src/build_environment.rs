@@ -2,7 +2,8 @@
 //! Dependency metadata is checked outside State; no model or container is run.
 use std::{collections::BTreeMap, io, path::Path};
 
-const REBUILD: &str = "rebuild the declared build image from the current lockfiles (nix run .#setup -- --build-environment)";
+const REBUILD: &str =
+    "rebuild the declared build image from the current lockfiles (nix run .#setup -- --build-environment)";
 
 pub(crate) fn image() -> io::Result<Option<String>> {
     let value = match std::env::var("CONTROL_BUILD_IMAGE") {
@@ -22,9 +23,7 @@ pub(crate) fn image() -> io::Result<Option<String>> {
         .map(|value| {
             let value = value.trim().to_owned();
             if !crate::runtime::pinned_image(&value) {
-                return Err(io::Error::other(
-                    "Build environment must be pinned by digest",
-                ));
+                return Err(io::Error::other("Build environment must be pinned by digest"));
             }
             Ok(value)
         })
@@ -33,11 +32,12 @@ pub(crate) fn image() -> io::Result<Option<String>> {
 
 pub(crate) fn check(isolation: &dyn control_isolation::Isolation, image: &str, workspace: &Path) -> io::Result<()> {
     if !crate::runtime::pinned_image(image) {
-        return Err(io::Error::other(
-            "Build environment must be pinned by digest",
-        ));
+        return Err(io::Error::other("Build environment must be pinned by digest"));
     }
-    let metadata = isolation.image_labels(&image.into())?.remove("dev.control.build-locks").unwrap_or_default();
+    let metadata = isolation
+        .image_labels(&image.into())?
+        .remove("dev.control.build-locks")
+        .unwrap_or_default();
     let locks = parse(&metadata)?;
     matches(&locks, |path| {
         match crate::artifacts::safe_read(workspace, path, 2 * 1024 * 1024) {
@@ -49,30 +49,21 @@ pub(crate) fn check(isolation: &dyn control_isolation::Isolation, image: &str, w
 }
 
 fn parse(text: &str) -> io::Result<BTreeMap<String, String>> {
-    let locks: BTreeMap<String, String> = serde_json::from_str(text.trim()).map_err(|_| {
-        io::Error::other(format!(
-            "Build environment lacks dependency metadata; {REBUILD}"
-        ))
-    })?;
+    let locks: BTreeMap<String, String> = serde_json::from_str(text.trim())
+        .map_err(|_| io::Error::other(format!("Build environment lacks dependency metadata; {REBUILD}")))?;
     if locks.is_empty()
         || locks.len() > 64
         || locks.iter().any(|(path, hash)| {
             path.len() > 1024
-                || Path::new(path)
-                    .file_name()
-                    .is_none_or(|name| name != "Cargo.lock")
+                || Path::new(path).file_name().is_none_or(|name| name != "Cargo.lock")
                 || !Path::new(path)
                     .components()
                     .all(|part| matches!(part, std::path::Component::Normal(_)))
                 || hash.len() != 64
-                || !hash
-                    .bytes()
-                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                || !hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         })
     {
-        return Err(io::Error::other(
-            "Invalid build environment dependency metadata",
-        ));
+        return Err(io::Error::other("Invalid build environment dependency metadata"));
     }
     Ok(locks)
 }

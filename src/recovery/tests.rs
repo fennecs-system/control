@@ -1,22 +1,16 @@
-
 use super::*;
 #[test]
 #[ignore = "requires pinned worker image, Docker and isolated CONTROL_STATE_DIR; no model calls"]
 fn live_stopped_writer_leaves_recovery_bytes_without_a_model_handoff() {
     let state_root = std::env::var("CONTROL_STATE_DIR").expect("isolated state directory");
-    assert!(
-        state_root.starts_with("/private/tmp/control-r1-")
-            || state_root.starts_with("/tmp/control-r1-")
-    );
+    assert!(state_root.starts_with("/private/tmp/control-r1-") || state_root.starts_with("/tmp/control-r1-"));
     let image = crate::runtime::worker_image().expect("pinned worker image");
     let generation = format!("r1-fixture-{}", std::process::id());
     let workspace = crate::runtime::workspace(&generation).unwrap();
     fs::create_dir_all(&workspace).unwrap();
     let source = workspace.canonicalize().unwrap();
     let name = format!("control-{generation}");
-    let user = format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
-        libc::getegid()
-    });
+    let user = format!("{}:{}", unsafe { libc::geteuid() }, unsafe { libc::getegid() });
     let id = crate::engine::query(&[
         "run",
         "--detach",
@@ -57,8 +51,7 @@ fn live_stopped_writer_leaves_recovery_bytes_without_a_model_handoff() {
         ..Default::default()
     };
     capture(None, &mut attempt);
-    let running =
-        crate::engine::query(&["ps", "--quiet", "--filter", &format!("id={}", id.trim())]).unwrap();
+    let running = crate::engine::query(&["ps", "--quiet", "--filter", &format!("id={}", id.trim())]).unwrap();
     // Cleanup even when the assertion below reports an ownership/copy failure.
     if !running.trim().is_empty() {
         let _ = crate::engine::query(&["rm", "-f", id.trim()]);
@@ -81,8 +74,7 @@ fn live_stopped_writer_leaves_recovery_bytes_without_a_model_handoff() {
 }
 #[test]
 fn missing_source_never_creates_a_completed_candidate() {
-    let root =
-        std::env::temp_dir().join(format!("control-recovery-missing-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("control-recovery-missing-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let candidate = Candidate {
         generation: "attempt-1".into(),
@@ -105,10 +97,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
     crate::chat::send(&mut state, &chat, "Recover my work", "test").unwrap();
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let id = state.runtime.runs[0].id.clone();
-    let generation = state.runtime.runs[0].attempts[0]
-        .workspace_id
-        .clone()
-        .unwrap();
+    let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     state.runtime.runs[0].attempts[0].recovery = Some(Candidate {
         generation: "old".into(),
         base: Some("different-base".into()),
@@ -151,11 +140,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
     );
     assert!(
         Tools
-            .call(
-                &cx,
-                "control_recovery",
-                &json!({"generation":"old","restore":true})
-            )
+            .call(&cx, "control_recovery", &json!({"generation":"old","restore":true}))
             .unwrap_err()
             .to_string()
             .contains("base")
@@ -185,20 +170,11 @@ fn candidate_retains_bytes_independently_without_publishing_or_following_links()
     snapshot(&root.join("retained"), &root.join("live"), &candidate).unwrap();
     fs::write(root.join("live/notes.txt"), "later edit").unwrap();
     let saved = root.join("retained/attempt-1/workspace");
-    assert_eq!(
-        fs::read_to_string(saved.join("notes.txt")).unwrap(),
-        "useful work"
-    );
-    assert_eq!(
-        fs::metadata(saved.join("large.bin")).unwrap().len(),
-        3 * 1024 * 1024
-    );
+    assert_eq!(fs::read_to_string(saved.join("notes.txt")).unwrap(), "useful work");
+    assert_eq!(fs::metadata(saved.join("large.bin")).unwrap().len(), 3 * 1024 * 1024);
     assert!(!saved.join("link").exists());
     snapshot(&root.join("retained"), &root.join("live"), &candidate).unwrap();
-    assert_eq!(
-        fs::read_to_string(saved.join("notes.txt")).unwrap(),
-        "useful work"
-    );
+    assert_eq!(fs::read_to_string(saved.join("notes.txt")).unwrap(), "useful work");
     let mut moved = candidate;
     moved.base = Some("new".into());
     assert!(snapshot(&root.join("retained"), &root.join("live"), &moved).is_err());

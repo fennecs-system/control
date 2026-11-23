@@ -108,11 +108,20 @@ impl Walk<'_> {
     /// contour of its left siblings, spreading the shift over the subtrees in
     /// between so small siblings stay evenly spaced.
     fn apportion(&mut self, v: usize, mut default_ancestor: usize) -> usize {
-        let Some(w) = self.left_sibling(v) else { return default_ancestor };
+        let Some(w) = self.left_sibling(v) else {
+            return default_ancestor;
+        };
         let (mut vip, mut vop, mut vim, mut vom) = (v, v, w, self.leftmost_sibling(v));
-        let (mut sip, mut sop, mut sim, mut som) = (self.modifier[vip], self.modifier[vop], self.modifier[vim], self.modifier[vom]);
+        let (mut sip, mut sop, mut sim, mut som) = (
+            self.modifier[vip],
+            self.modifier[vop],
+            self.modifier[vim],
+            self.modifier[vom],
+        );
         while let (Some(right), Some(left)) = (self.next_right(vim), self.next_left(vip)) {
-            let (Some(outer_left), Some(outer_right)) = (self.next_left(vom), self.next_right(vop)) else { break };
+            let (Some(outer_left), Some(outer_right)) = (self.next_left(vom), self.next_right(vop)) else {
+                break;
+            };
             (vim, vip, vom, vop) = (right, left, outer_left, outer_right);
             self.ancestor[vop] = v;
             let shift = (self.prelim[vim] + sim) - (self.prelim[vip] + sip) + 1.0;
@@ -140,7 +149,11 @@ impl Walk<'_> {
     }
     fn ancestor_of(&self, vim: usize, v: usize, default_ancestor: usize) -> usize {
         let ancestor = self.ancestor[vim];
-        if self.parent[ancestor] == self.parent[v] { ancestor } else { default_ancestor }
+        if self.parent[ancestor] == self.parent[v] {
+            ancestor
+        } else {
+            default_ancestor
+        }
     }
     fn move_subtree(&mut self, wm: usize, wp: usize, shift: f64) {
         let subtrees = (self.number[wp] - self.number[wm]) as f64;
@@ -204,7 +217,10 @@ impl Tree {
 /// so the page costs O(chats + runs) rather than a run scan per chat.
 type Latest<'a> = std::collections::HashMap<&'a str, &'a str>;
 fn latest_statuses(state: &State) -> Latest<'_> {
-    state.runtime.runs.iter()
+    state
+        .runtime
+        .runs
+        .iter()
         .filter_map(|run| Some((run.chat_id.as_deref()?, run.status.as_str())))
         .collect()
 }
@@ -218,9 +234,18 @@ fn busy(status: Option<&str>) -> bool {
 /// (case-insensitively) and marks those chats.
 fn forest(state: &State, search: &str) -> Vec<Tree> {
     let ids: std::collections::HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
-    let owners: std::collections::HashSet<&str> = state.services.iter().filter(|s| s.live()).map(|s| s.resource.owner.chat.as_str()).collect();
+    let owners: std::collections::HashSet<&str> = state
+        .services
+        .iter()
+        .filter(|s| s.live())
+        .map(|s| s.resource.owner.chat.as_str())
+        .collect();
     let needle = search.to_lowercase();
-    let mut graph = Index { kids: std::collections::HashMap::new(), latest: latest_statuses(state), matches: std::collections::HashSet::new() };
+    let mut graph = Index {
+        kids: std::collections::HashMap::new(),
+        latest: latest_statuses(state),
+        matches: std::collections::HashSet::new(),
+    };
     for chat in &state.chats {
         if let Some(parent) = chat.parent_chat.as_deref().filter(|parent| ids.contains(parent)) {
             graph.kids.entry(parent).or_default().push(chat.id.as_str());
@@ -229,21 +254,35 @@ fn forest(state: &State, search: &str) -> Vec<Tree> {
     // Shown names, derived once a tree has something to show (or at once
     // when searching, since a search matches them).
     let mut names: Option<Names<'_>> = None;
-    let all_names = || state.chats.iter().zip(crate::callsigns::all(&state.chats))
-        .map(|(chat, callsign)| (chat.id.as_str(), crate::callsigns::label(chat, callsign))).collect::<Names<'_>>();
+    let all_names = || {
+        state
+            .chats
+            .iter()
+            .zip(crate::callsigns::all(&state.chats))
+            .map(|(chat, callsign)| (chat.id.as_str(), crate::callsigns::label(chat, callsign)))
+            .collect::<Names<'_>>()
+    };
     if !needle.is_empty() {
         let shown = names.insert(all_names());
-        graph.matches = state.chats.iter()
-            .filter(|chat| chat.title.to_lowercase().contains(&needle)
-                || shown.get(chat.id.as_str()).is_some_and(|name| name.to_lowercase().contains(&needle)))
+        graph.matches = state
+            .chats
+            .iter()
+            .filter(|chat| {
+                chat.title.to_lowercase().contains(&needle)
+                    || shown
+                        .get(chat.id.as_str())
+                        .is_some_and(|name| name.to_lowercase().contains(&needle))
+            })
             .map(|chat| chat.id.as_str())
             .collect();
     }
     let (kids, latest, matches) = (&graph.kids, &graph.latest, &graph.matches);
-    let relevant = |chat: &str| {
-        crate::bots::defined(state, chat) || busy(latest.get(chat).copied()) || owners.contains(chat)
-    };
-    let roots = state.chats.iter().rev()
+    let relevant =
+        |chat: &str| crate::bots::defined(state, chat) || busy(latest.get(chat).copied()) || owners.contains(chat);
+    let roots = state
+        .chats
+        .iter()
+        .rev()
         .filter(|chat| chat.parent_chat.as_deref().is_none_or(|parent| !ids.contains(parent)))
         .map(|chat| chat.id.as_str());
     let mut trees = Vec::new();
@@ -257,10 +296,14 @@ fn forest(state: &State, search: &str) -> Vec<Tree> {
             index += 1;
         }
         if !subtree.iter().any(|chat| relevant(chat))
-            || (!needle.is_empty() && !subtree.iter().any(|chat| matches.contains(chat))) {
+            || (!needle.is_empty() && !subtree.iter().any(|chat| matches.contains(chat)))
+        {
             continue;
         }
-        let mut tree = Tree { nodes: Vec::new(), children: Vec::new() };
+        let mut tree = Tree {
+            nodes: Vec::new(),
+            children: Vec::new(),
+        };
         let names = names.get_or_insert_with(all_names);
         add_chat(state, &graph, names, &mut tree, None, root, 0);
         trees.push(tree);
@@ -278,20 +321,37 @@ struct Index<'a> {
     /// Chats the page search matched; empty without a search.
     matches: std::collections::HashSet<&'a str>,
 }
-fn add_chat(state: &State, index: &Index<'_>, names: &Names<'_>, tree: &mut Tree, parent: Option<usize>, chat: &str, depth: usize) {
+fn add_chat(
+    state: &State,
+    index: &Index<'_>,
+    names: &Names<'_>,
+    tree: &mut Tree,
+    parent: Option<usize>,
+    chat: &str,
+    depth: usize,
+) {
     let kids = &index.kids;
     let status = index.latest.get(chat).copied();
     let bot = crate::bots::status(state, chat);
-    let kind = if parent.is_none() { Kind::Steering } else if bot.is_some() { Kind::Bot } else { Kind::Agent };
+    let kind = if parent.is_none() {
+        Kind::Steering
+    } else if bot.is_some() {
+        Kind::Bot
+    } else {
+        Kind::Agent
+    };
     let detail = bot.unwrap_or_else(|| status.map_or("no turns".into(), |status| format!("turn {status}")));
-    let node = tree.add(parent, Node {
-        kind,
-        title: names.get(chat).map_or(chat, |name| name.as_ref()).to_owned(),
-        detail,
-        href: crate::chat::valid_id(chat).then(|| format!("/dm/{chat}")),
-        active: busy(status),
-        matched: index.matches.contains(chat),
-    });
+    let node = tree.add(
+        parent,
+        Node {
+            kind,
+            title: names.get(chat).map_or(chat, |name| name.as_ref()).to_owned(),
+            detail,
+            href: crate::chat::valid_id(chat).then(|| format!("/dm/{chat}")),
+            active: busy(status),
+            matched: index.matches.contains(chat),
+        },
+    );
     if depth >= MAX_DEPTH {
         return;
     }
@@ -299,31 +359,58 @@ fn add_chat(state: &State, index: &Index<'_>, names: &Names<'_>, tree: &mut Tree
     for child in children {
         add_chat(state, index, names, tree, Some(node), child, depth + 1);
     }
-    for service in state.services.iter().filter(|s| s.live() && s.resource.owner.chat.as_str() == chat) {
+    for service in state
+        .services
+        .iter()
+        .filter(|s| s.live() && s.resource.owner.chat.as_str() == chat)
+    {
         let id = service.resource.id.as_str();
         let running = matches!(service.resource.phase, control_core::resources::Phase::Running(_));
         let shape = service.shape_name();
-        let service_node = tree.add(Some(node), Node {
-            kind: Kind::Service,
-            title: format!("{shape} service {}", id.trim_start_matches("svc-").chars().take(6).collect::<String>()),
-            detail: format!("{} · {}", service.phase_name(), service.label()),
-            // Straight to its card, where it stops in one click.
-            href: Some(format!("/tools/services#{id}")),
-            active: running,
-            matched: false,
-        });
-        for watch in state.watches.iter().filter(|w| w.service == id && w.active()) {
-            tree.add(Some(service_node), Node {
-                kind: Kind::Process,
-                title: watch.name.clone(),
-                detail: if watch.permanent { "watch · restarts".into() } else { "watch".into() },
-                href: None,
-                active: true,
+        let service_node = tree.add(
+            Some(node),
+            Node {
+                kind: Kind::Service,
+                title: format!(
+                    "{shape} service {}",
+                    id.trim_start_matches("svc-").chars().take(6).collect::<String>()
+                ),
+                detail: format!("{} · {}", service.phase_name(), service.label()),
+                // Straight to its card, where it stops in one click.
+                href: Some(format!("/tools/services#{id}")),
+                active: running,
                 matched: false,
-            });
+            },
+        );
+        for watch in state.watches.iter().filter(|w| w.service == id && w.active()) {
+            tree.add(
+                Some(service_node),
+                Node {
+                    kind: Kind::Process,
+                    title: watch.name.clone(),
+                    detail: if watch.permanent {
+                        "watch · restarts".into()
+                    } else {
+                        "watch".into()
+                    },
+                    href: None,
+                    active: true,
+                    matched: false,
+                },
+            );
         }
         for command in service.running_commands() {
-            tree.add(Some(service_node), Node { kind: Kind::Process, title: command, detail: "command".into(), href: None, active: true, matched: false });
+            tree.add(
+                Some(service_node),
+                Node {
+                    kind: Kind::Process,
+                    title: command,
+                    detail: "command".into(),
+                    href: None,
+                    active: true,
+                    matched: false,
+                },
+            );
         }
     }
 }
@@ -356,14 +443,22 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
     // Trees grow up like real ones: every root stands on one baseline at the
     // bottom of the drawing and each generation is drawn a level above it.
     let placements = trees.iter().map(|tree| layout(&tree.children)).collect::<Vec<_>>();
-    let levels = placements.iter().flatten().map(|(_, depth)| depth + 1).max().unwrap_or(1);
+    let levels = placements
+        .iter()
+        .flatten()
+        .map(|(_, depth)| depth + 1)
+        .max()
+        .unwrap_or(1);
     let height = levels as f64 * (HEIGHT + V_GAP) - V_GAP;
     let (mut body, mut offset) = (String::new(), 0.0_f64);
     for (tree, placed) in trees.iter().zip(&placements) {
         let span = placed.iter().map(|(x, _)| *x).fold(0.0, f64::max);
         let at = |index: usize| {
             let (x, depth) = placed[index];
-            (offset + x * (WIDTH + H_GAP), (levels - 1 - depth) as f64 * (HEIGHT + V_GAP))
+            (
+                offset + x * (WIDTH + H_GAP),
+                (levels - 1 - depth) as f64 * (HEIGHT + V_GAP),
+            )
         };
         for (parent, children) in tree.children.iter().enumerate() {
             let (px, py) = at(parent);
@@ -390,7 +485,11 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
                 crate::escape(&full),
                 crate::escape(&clip(&node.title, fits(WIDTH - PAD - LIVE_DOT, 12.0))),
                 crate::escape(&clip(&node.detail, fits(WIDTH - 2.0 * PAD, 10.0))),
-                if node.active { format!("<circle class='pt-live' cx='{}' cy='12' r='3'/>", WIDTH - PAD) } else { String::new() },
+                if node.active {
+                    format!("<circle class='pt-live' cx='{}' cy='12' r='3'/>", WIDTH - PAD)
+                } else {
+                    String::new()
+                },
             );
             if let Some(href) = &node.href {
                 group = format!("<a href='{}'>{group}</a>", crate::escape(href));
@@ -406,7 +505,10 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
     // below them stays close.
     Some(format!(
         "<div class='process-tree' id='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='{}'><svg{} preserveAspectRatio='xMidYMax meet' role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}'>{body}</svg></div>",
-        levels.min(6), if search.is_empty() { "" } else { " class='searching'" }, width + 4.0, height + 4.0
+        levels.min(6),
+        if search.is_empty() { "" } else { " class='searching'" },
+        width + 4.0,
+        height + 4.0
     ))
 }
 

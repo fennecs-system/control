@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub use control_ai::{attempt_status, Accounting, Activity, StatusPart, Tokens};
+pub use control_ai::{Accounting, Activity, StatusPart, Tokens, attempt_status};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -90,11 +90,17 @@ impl Attempt {
     }
     /// The attempt's compact status line; see [`attempt_status`].
     pub fn status(&self, index: usize) -> Vec<StatusPart> {
-        attempt_status(index, self.tokens, self.accounting, self.running(), self.omitted_history)
+        attempt_status(
+            index,
+            self.tokens,
+            self.accounting,
+            self.running(),
+            self.omitted_history,
+        )
     }
     /// Callers expose this only for successfully completed runs. The accepted
     /// handoff is the single retained source, not a duplicated summary field.
-    pub(crate) fn task_progress(&self)->Option<&str> {
+    pub(crate) fn task_progress(&self) -> Option<&str> {
         self.turn_mailbox.as_ref()?.accepted()?.progress.as_deref()
     }
     pub fn new() -> Self {
@@ -115,8 +121,7 @@ pub fn valid_model(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 100
         && !s.starts_with('-')
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-:/".contains(&b))
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-:/".contains(&b))
 }
 pub fn default_model() -> String {
     std::env::var("CONTROL_CODEX_MODEL")
@@ -132,8 +137,11 @@ pub fn capture(reader: impl Read) -> Option<Tokens> {
 }
 pub fn capture_with(reader: impl Read, mut update: impl FnMut(Activity)) -> control_ai::Usage {
     control_ai::json_lines_usage(reader, control_ai::codex::Codex::default(), |event| {
-        if let control_ai::Event::Activity(activity) = event { update(activity); }
-    }).1
+        if let control_ai::Event::Activity(activity) = event {
+            update(activity);
+        }
+    })
+    .1
 }
 
 #[derive(Default)]
@@ -192,7 +200,9 @@ fn actor_label(actor: &Actor) -> String {
 }
 
 fn table(title: &str, groups: &BTreeMap<String, Summary>) -> String {
-    let mut html = format!("<details class='record'><summary>{title}</summary><div class='usage-scroll'><table class='usage-table'><thead><tr><th>Group</th><th>Input</th><th>Cached</th><th>Output</th><th>Measured</th></tr></thead><tbody>");
+    let mut html = format!(
+        "<details class='record'><summary>{title}</summary><div class='usage-scroll'><table class='usage-table'><thead><tr><th>Group</th><th>Input</th><th>Cached</th><th>Output</th><th>Measured</th></tr></thead><tbody>"
+    );
     for (name, sum) in groups {
         html.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}</td></tr>",
@@ -221,13 +231,31 @@ fn outcomes(models: &BTreeMap<String, Summary>) -> String {
     }
     for (name, sum) in rows.iter().take(6) {
         let other = sum.attempts - sum.completed - sum.failed - sum.interrupted;
-        let label = format!("{}: {} completed, {} failed, {} interrupted, {} other attempts", name, sum.completed, sum.failed, sum.interrupted, other);
-        let _ = write!(html, "<div class='usage-outcome-row'><div><span>{}</span><span>{} attempts</span></div><svg viewBox='0 0 100 3' preserveAspectRatio='none' role='img' aria-label='{}'><title>{}</title>", escape(name), sum.attempts, escape(&label), escape(&label));
+        let label = format!(
+            "{}: {} completed, {} failed, {} interrupted, {} other attempts",
+            name, sum.completed, sum.failed, sum.interrupted, other
+        );
+        let _ = write!(
+            html,
+            "<div class='usage-outcome-row'><div><span>{}</span><span>{} attempts</span></div><svg viewBox='0 0 100 3' preserveAspectRatio='none' role='img' aria-label='{}'><title>{}</title>",
+            escape(name),
+            sum.attempts,
+            escape(&label),
+            escape(&label)
+        );
         let mut offset = 0.0;
-        for (class, count) in [("completed", sum.completed), ("failed", sum.failed), ("interrupted", sum.interrupted), ("other", other)] {
+        for (class, count) in [
+            ("completed", sum.completed),
+            ("failed", sum.failed),
+            ("interrupted", sum.interrupted),
+            ("other", other),
+        ] {
             let width = count as f64 / sum.attempts as f64 * 100.0;
             if count > 0 {
-                let _ = write!(html, "<rect x='{offset:.4}' y='0' width='{width:.4}' height='3' class='usage-outcome-{class}'/>");
+                let _ = write!(
+                    html,
+                    "<rect x='{offset:.4}' y='0' width='{width:.4}' height='3' class='usage-outcome-{class}'/>"
+                );
             }
             offset += width;
         }
@@ -247,18 +275,40 @@ fn running(runtime: &Runtime) -> String {
     use std::fmt::Write;
     let mut rows = String::new();
     for run in runtime.runs.iter().rev() {
-        let Some(attempt) = run.attempts.last().filter(|a| a.running()) else { continue };
+        let Some(attempt) = run.attempts.last().filter(|a| a.running()) else {
+            continue;
+        };
         let cell = |n: Option<u64>| n.map_or_else(|| "—".to_owned(), |n| n.to_string());
-        let served = attempt.reported_model.as_deref().filter(|m| *m != attempt.model).map(|m| format!(" (served: {})", escape(m))).unwrap_or_default();
-        let _ = write!(rows, "<tr><td>{}</td><td>{} · {}{served}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            escape(&run.id), escape(&attempt.provider), escape(&attempt.model),
-            cell(attempt.tokens.map(|t| t.input_tokens)), cell(attempt.tokens.map(|t| t.cached_input_tokens)), cell(attempt.tokens.map(|t| t.output_tokens)),
-            if attempt.tokens.is_some() { "so far" } else if attempt.accounting.is_unrecorded() { "no model call yet" } else { "not reported yet" });
+        let served = attempt
+            .reported_model
+            .as_deref()
+            .filter(|m| *m != attempt.model)
+            .map(|m| format!(" (served: {})", escape(m)))
+            .unwrap_or_default();
+        let _ = write!(
+            rows,
+            "<tr><td>{}</td><td>{} · {}{served}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            escape(&run.id),
+            escape(&attempt.provider),
+            escape(&attempt.model),
+            cell(attempt.tokens.map(|t| t.input_tokens)),
+            cell(attempt.tokens.map(|t| t.cached_input_tokens)),
+            cell(attempt.tokens.map(|t| t.output_tokens)),
+            if attempt.tokens.is_some() {
+                "so far"
+            } else if attempt.accounting.is_unrecorded() {
+                "no model call yet"
+            } else {
+                "not reported yet"
+            }
+        );
     }
     if rows.is_empty() {
         return rows;
     }
-    format!("<details class='record' open><summary>Running now</summary><div class='usage-scroll'><table class='usage-table'><thead><tr><th>Run</th><th>Provider / model</th><th>Input</th><th>Cached</th><th>Output</th><th>Usage</th></tr></thead><tbody>{rows}</tbody></table></div><p class='muted'>Live totals reported so far: after every model call on local endpoints and Claude; Codex reports at the end of its turn.</p></details>")
+    format!(
+        "<details class='record' open><summary>Running now</summary><div class='usage-scroll'><table class='usage-table'><thead><tr><th>Run</th><th>Provider / model</th><th>Input</th><th>Cached</th><th>Output</th><th>Usage</th></tr></thead><tbody>{rows}</tbody></table></div><p class='muted'>Live totals reported so far: after every model call on local endpoints and Claude; Codex reports at the end of its turn.</p></details>"
+    )
 }
 
 /// The Usage page: node totals (DMs, runs, genes) above model usage.
@@ -276,24 +326,26 @@ pub fn render(state: &crate::State) -> String {
         }
         for attempt in &run.attempts {
             overall.add(attempt);
-            people
-                .entry(actor_label(&run.actor))
-                .or_default()
-                .add(attempt);
+            people.entry(actor_label(&run.actor)).or_default().add(attempt);
             models
                 .entry(format!("{} · {}", attempt.provider, attempt.model))
                 .or_default()
                 .add(attempt);
-            days.entry(day_label(attempt.started_unix))
-                .or_default()
-                .add(attempt);
+            days.entry(day_label(attempt.started_unix)).or_default().add(attempt);
             if let Some(tokens) = attempt.tokens {
                 *daily.entry(attempt.started_unix / 86400).or_default() += tokens.input_tokens + tokens.output_tokens;
             }
         }
     }
-    let mut html = format!("<h2>Usage</h2><div class='metrics usage-summary' aria-label='Node summary'><div><b>{}</b><span>DMS</span></div><div><b>{}</b><span>RUNS</span></div><div><b>{}</b><span>GENES</span></div></div>", state.chats.len(), runtime.runs.len(), state.lens_library.current().len());
-    let today = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86400);
+    let mut html = format!(
+        "<h2>Usage</h2><div class='metrics usage-summary' aria-label='Node summary'><div><b>{}</b><span>DMS</span></div><div><b>{}</b><span>RUNS</span></div><div><b>{}</b><span>GENES</span></div></div>",
+        state.chats.len(),
+        runtime.runs.len(),
+        state.lens_library.current().len()
+    );
+    let today = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() / 86400);
     html.push_str(&heatmap(&daily, today));
     html.push_str(&running(runtime));
     html.push_str(&outcomes(&models));
@@ -301,7 +353,9 @@ pub fn render(state: &crate::State) -> String {
     html.push_str(&table("By person", &people));
     html.push_str(&table("By provider / requested model", &models));
     html.push_str(&table("By day (UTC)", &days));
-    html.push_str("<p class='muted'>Per-turn attempts and tokens are in <a href='/bots/history?expand=1'>History ↗</a>.</p>");
+    html.push_str(
+        "<p class='muted'>Per-turn attempts and tokens are in <a href='/bots/history?expand=1'>History ↗</a>.</p>",
+    );
     html
 }
 
@@ -312,13 +366,26 @@ fn heatmap(daily: &BTreeMap<u64, u64>, today: u64) -> String {
     // Unix day 0 was a Thursday; columns start on Sunday.
     let start = today.saturating_sub((today + 4) % 7 + (WEEKS - 1) * 7);
     let max = daily.range(start..=today).map(|(_, tokens)| *tokens).max().unwrap_or(0);
-    let cells = (start..=today).map(|day| {
-        let tokens = daily.get(&day).copied().unwrap_or(0);
-        let level = if tokens == 0 { 0 } else { 1 + (3 * tokens / max.max(1)).min(3) };
-        format!("<span class='l{level}' title='{}: {tokens} tokens'></span>", day_label(day * 86400))
-    }).collect::<String>();
-    let legend = (0..5).map(|level| format!("<span class='l{level}'></span>")).collect::<String>();
-    format!("<section class='usage-graph'><div class='usage-heatmap' role='img' aria-label='Tokens per day over the last {WEEKS} weeks'>{cells}</div><p class='usage-legend muted'>Less {legend} More · tokens per day (UTC)</p></section>")
+    let cells = (start..=today)
+        .map(|day| {
+            let tokens = daily.get(&day).copied().unwrap_or(0);
+            let level = if tokens == 0 {
+                0
+            } else {
+                1 + (3 * tokens / max.max(1)).min(3)
+            };
+            format!(
+                "<span class='l{level}' title='{}: {tokens} tokens'></span>",
+                day_label(day * 86400)
+            )
+        })
+        .collect::<String>();
+    let legend = (0..5)
+        .map(|level| format!("<span class='l{level}'></span>"))
+        .collect::<String>();
+    format!(
+        "<section class='usage-graph'><div class='usage-heatmap' role='img' aria-label='Tokens per day over the last {WEEKS} weeks'>{cells}</div><p class='usage-legend muted'>Less {legend} More · tokens per day (UTC)</p></section>"
+    )
 }
 
 // Gregorian civil date from Unix days; display grouping is explicitly UTC.

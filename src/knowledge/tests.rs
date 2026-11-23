@@ -1,4 +1,3 @@
-
 use super::*;
 fn fields(id: &str, title: &str, body: &str, rev: u64) -> HashMap<String, String> {
     [
@@ -36,9 +35,9 @@ fn saves_are_durable_or_rolled_back_and_detect_stale_edits() {
     assert!(s.documents.is_empty());
     let id = save_with(&mut s, &f, |_| Ok(())).unwrap();
     assert!(
-        save_with(&mut s, &fields(&id, "One", "changed", 1), |_| Err(
-            io::Error::other("disk full")
-        ))
+        save_with(&mut s, &fields(&id, "One", "changed", 1), |_| Err(io::Error::other(
+            "disk full"
+        )))
         .is_err()
     );
     assert_eq!(s.documents[0].body, "first");
@@ -78,17 +77,11 @@ fn graph_uses_real_links_and_escapes_notes() {
                 )
                 .replace(
                     "<link rel='stylesheet' href='/collective.css'>",
-                    &format!(
-                        "<style>{}</style>",
-                        include_str!("../../assets/collective.css")
-                    ),
+                    &format!("<style>{}</style>", include_str!("../../assets/collective.css")),
                 )
                 .replace(
                     "<link rel='stylesheet' href='/runtime.css'>",
-                    &format!(
-                        "<style>{}</style>",
-                        include_str!("../../assets/runtime.css")
-                    ),
+                    &format!("<style>{}</style>", include_str!("../../assets/runtime.css")),
                 );
             std::fs::write(std::path::Path::new(&directory).join(file), page).unwrap();
         }
@@ -103,5 +96,8 @@ fn refused_save_response_bytes_are_pinned() {
     state.documents.retain(|d| d.id != "scratchpad");
     let mut out = Vec::new();
     assert!(handle(&mut out, &mut state, "POST", "/save", &HashMap::new(), "", b""));
-    assert_eq!(String::from_utf8(out).unwrap(), "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 17\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\nNo draft to save.");
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 17\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\nNo draft to save."
+    );
 }

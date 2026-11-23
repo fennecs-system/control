@@ -14,7 +14,9 @@ fn invalid(what: &str) -> io::Error {
 /// An engine container ID: 64 hexadecimal digits.
 pub(super) fn container_id(text: &str) -> io::Result<ContainerId> {
     let id = text.trim();
-    (id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| ContainerId::from(id)).ok_or_else(|| invalid("container ID"))
+    (id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| ContainerId::from(id))
+        .ok_or_else(|| invalid("container ID"))
 }
 
 #[derive(Deserialize)]
@@ -99,7 +101,16 @@ pub(super) fn inspection(text: &str) -> io::Result<Vec<Observed>> {
     records.into_iter().map(observed).collect()
 }
 fn observed(record: Container) -> io::Result<Observed> {
-    let Container { id, name, image, config, state, host_config: host, mounts, network_settings } = record;
+    let Container {
+        id,
+        name,
+        image,
+        config,
+        state,
+        host_config: host,
+        mounts,
+        network_settings,
+    } = record;
     Ok(Observed {
         id: container_id(&id)?,
         name,
@@ -125,7 +136,12 @@ fn observed(record: Container) -> io::Result<Observed> {
         tmpfs: host.tmpfs.unwrap_or_default(),
         storage_opt: host.storage_opt,
         mounts: mounts.into_iter().map(mount).collect(),
-        ports: network_settings.and_then(|settings| settings.ports).map(|ports| ports.into_iter().map(|(port, bindings)| (port, !bindings.is_null())).collect()),
+        ports: network_settings.and_then(|settings| settings.ports).map(|ports| {
+            ports
+                .into_iter()
+                .map(|(port, bindings)| (port, !bindings.is_null()))
+                .collect()
+        }),
     })
 }
 fn mount(record: MountRecord) -> ObservedMount {
@@ -135,12 +151,22 @@ fn mount(record: MountRecord) -> ObservedMount {
         "tmpfs" => MountKind::Tmpfs,
         other => MountKind::Other(other.to_owned()),
     };
-    ObservedMount { kind, name: record.name, driver: record.driver, source: record.source, destination: record.destination, writable: record.rw }
+    ObservedMount {
+        kind,
+        name: record.name,
+        driver: record.driver,
+        source: record.source,
+        destination: record.destination,
+        writable: record.rw,
+    }
 }
 
 /// A `{{.Labels}}` field: `key=value` pairs joined by commas.
 fn labels(text: &str) -> BTreeMap<String, String> {
-    text.split(',').filter_map(|pair| pair.split_once('=')).map(|(key, value)| (key.to_owned(), value.to_owned())).collect()
+    text.split(',')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
 }
 /// `ps` lines of ID, names and labels, tab-separated.
 pub(super) fn listing(text: &str) -> io::Result<Vec<Listed>> {
@@ -148,8 +174,16 @@ pub(super) fn listing(text: &str) -> io::Result<Vec<Listed>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let mut fields = line.splitn(3, '\t');
-            let (id, name, labeled) = (fields.next().unwrap_or(""), fields.next().ok_or_else(|| invalid("listing"))?, fields.next().unwrap_or(""));
-            Ok(Listed { id: container_id(id)?, name: name.to_owned(), labels: labels(labeled) })
+            let (id, name, labeled) = (
+                fields.next().unwrap_or(""),
+                fields.next().ok_or_else(|| invalid("listing"))?,
+                fields.next().unwrap_or(""),
+            );
+            Ok(Listed {
+                id: container_id(id)?,
+                name: name.to_owned(),
+                labels: labels(labeled),
+            })
         })
         .collect()
 }
@@ -159,7 +193,10 @@ pub(super) fn volume_listing(text: &str) -> io::Result<Vec<ListedVolume>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let (name, labeled) = line.split_once('\t').unwrap_or((line, ""));
-            Ok(ListedVolume { name: name.to_owned(), labels: labels(labeled) })
+            Ok(ListedVolume {
+                name: name.to_owned(),
+                labels: labels(labeled),
+            })
         })
         .collect()
 }
@@ -178,7 +215,13 @@ pub(super) fn volumes(text: &str) -> io::Result<Vec<ObservedVolume>> {
     let records: Vec<Volume> = serde_json::from_str(text.trim()).map_err(|_| invalid("volume inspection"))?;
     Ok(records
         .into_iter()
-        .map(|volume| ObservedVolume { name: volume.name, driver: volume.driver, scope: volume.scope, labels: volume.labels.unwrap_or_default(), options: volume.options.unwrap_or_default() })
+        .map(|volume| ObservedVolume {
+            name: volume.name,
+            driver: volume.driver,
+            scope: volume.scope,
+            labels: volume.labels.unwrap_or_default(),
+            options: volume.options.unwrap_or_default(),
+        })
         .collect())
 }
 
@@ -208,7 +251,14 @@ pub(super) fn stats(text: &str) -> HashMap<String, Stats> {
             let mut fields = line.split('\t');
             let id = fields.next()?.trim();
             let (cpu, memory, pids) = (fields.next()?, fields.next()?, fields.next()?);
-            Some((id.to_owned(), Stats { cpu: cpu.trim().into(), memory: memory.trim().into(), pids: pids.trim().into() }))
+            Some((
+                id.to_owned(),
+                Stats {
+                    cpu: cpu.trim().into(),
+                    memory: memory.trim().into(),
+                    pids: pids.trim().into(),
+                },
+            ))
         })
         .collect()
 }
@@ -219,8 +269,15 @@ pub(super) fn top(text: &str) -> Vec<Process> {
         .filter_map(|line| {
             let line = line.trim_start();
             let (pid, rest) = line.split_once(char::is_whitespace)?;
-            let (user, command) = rest.trim_start().split_once(char::is_whitespace).unwrap_or((rest.trim(), ""));
-            Some(Process { pid: pid.into(), user: user.into(), command: command.trim().into() })
+            let (user, command) = rest
+                .trim_start()
+                .split_once(char::is_whitespace)
+                .unwrap_or((rest.trim(), ""));
+            Some(Process {
+                pid: pid.into(),
+                user: user.into(),
+                command: command.trim().into(),
+            })
         })
         .collect()
 }
@@ -231,7 +288,11 @@ pub fn quota_capable(info: &str) -> bool {
     let (driver, status) = info.trim().split_once(' ').unwrap_or((info.trim(), ""));
     match driver {
         "btrfs" | "zfs" | "devicemapper" | "windowsfilter" => true,
-        "overlay2" => serde_json::from_str::<Vec<[String; 2]>>(status).is_ok_and(|status| status.iter().any(|[key, value]| key == "Backing Filesystem" && value == "xfs")),
+        "overlay2" => serde_json::from_str::<Vec<[String; 2]>>(status).is_ok_and(|status| {
+            status
+                .iter()
+                .any(|[key, value]| key == "Backing Filesystem" && value == "xfs")
+        }),
         _ => false,
     }
 }

@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Test messages: posts that fold, counters that add, exits kept apart.
@@ -89,37 +88,20 @@ fn turns(planned: &[Planned<BotId, Effect<Msg>>]) -> Vec<(&str, TurnId, &[R])> {
     planned
         .iter()
         .filter_map(|p| match &p.effect {
-            Effect::RequestTurn {
-                bot, turn, reasons, ..
-            } => Some((bot.0.as_str(), *turn, reasons.as_slice())),
+            Effect::RequestTurn { bot, turn, reasons, .. } => Some((bot.0.as_str(), *turn, reasons.as_slice())),
             _ => None,
         })
         .collect()
 }
 fn done(name: &str, turn: TurnId) -> Event<Msg> {
-    Event::TurnCompleted {
-        bot: bot(name),
-        turn,
-    }
+    Event::TurnCompleted { bot: bot(name), turn }
 }
 
 #[test]
 fn messages_request_turns_coalesce_and_ignore_own_posts_and_replays() {
     let mut s = S::default();
-    define(
-        &mut s,
-        "alice",
-        vec![room("general")],
-        budget(0, 60_000, 10),
-        0,
-    );
-    define(
-        &mut s,
-        "cass",
-        vec![room("general")],
-        budget(0, 60_000, 10),
-        0,
-    );
+    define(&mut s, "alice", vec![room("general")], budget(0, 60_000, 10), 0);
+    define(&mut s, "cass", vec![room("general")], budget(0, 60_000, 10), 0);
     let first = s.step(message(Some("alice"), 1), Now(10));
     let [(name, cass_turn, reasons)] = turns(&first)[..] else {
         panic!("one turn")
@@ -129,14 +111,8 @@ fn messages_request_turns_coalesce_and_ignore_own_posts_and_replays() {
     assert!(matches!(&first[0].effect, Effect::RequestTurn { chat, .. } if chat.0 == "chat-cass"));
     assert_eq!(s.status(&bot("cass")), Some(Status::WaitingTurn));
     let alice = turns(&s.step(message(None, 2), Now(20)))[0].1;
-    assert!(
-        s.step(message(None, 3), Now(30)).is_empty(),
-        "both bots are mid-turn"
-    );
-    assert!(
-        s.step(message(None, 3), Now(31)).is_empty(),
-        "replayed cursor"
-    );
+    assert!(s.step(message(None, 3), Now(30)).is_empty(), "both bots are mid-turn");
+    assert!(s.step(message(None, 3), Now(31)).is_empty(), "replayed cursor");
     assert!(s.step(message(None, 4), Now(40)).is_empty());
     let resumed = s.step(done("cass", cass_turn), Now(50));
     assert_eq!(turns(&resumed)[0].2, [posted(4)]);
@@ -150,13 +126,7 @@ fn messages_request_turns_coalesce_and_ignore_own_posts_and_replays() {
 #[test]
 fn active_turns_are_not_restarted_by_callbacks_or_clock_ticks() {
     let mut s = S::default();
-    define(
-        &mut s,
-        "agent",
-        vec![room("general")],
-        budget(0, 3_600_000, 60),
-        0,
-    );
+    define(&mut s, "agent", vec![room("general")], budget(0, 3_600_000, 60), 0);
     let active = turns(&s.step(message(None, 1), Now(1)))[0].1;
     for cursor in 2..100 {
         assert!(turns(&s.step(message(None, cursor), Now(cursor * 10_000))).is_empty());
@@ -280,10 +250,7 @@ fn idle_waits_suspend_periodic_checks_but_preserve_deadlines_failures_and_pause(
         s.step(done("agent", active), Now(1003));
         assert!(s.step(Event::Tick, Now(3000)).is_empty());
         assert_eq!(s.status(&bot("agent")), Some(Status::Paused));
-        assert_eq!(
-            turns(&s.step(Event::Resume(bot("agent")), Now(3001))).len(),
-            1
-        );
+        assert_eq!(turns(&s.step(Event::Resume(bot("agent")), Now(3001))).len(), 1);
     }
 }
 #[test]
@@ -292,11 +259,7 @@ fn event_only_wait_sleeps_for_days_and_retains_new_events_without_preemption() {
     define(
         &mut s,
         "agent",
-        vec![
-            room("general"),
-            room("dependency"),
-            Source::Timer { every_ms: 100 },
-        ],
+        vec![room("general"), room("dependency"), Source::Timer { every_ms: 100 }],
         budget(0, 60_000, 10),
         0,
     );
@@ -356,13 +319,7 @@ fn event_only_wait_sleeps_for_days_and_retains_new_events_without_preemption() {
 #[test]
 fn runnable_continuations_coalesce_obey_budget_and_do_not_resurrect_temporary_bots() {
     let mut s = S::default();
-    define(
-        &mut s,
-        "agent",
-        vec![room("general")],
-        budget(0, 60_000, 2),
-        0,
-    );
+    define(&mut s, "agent", vec![room("general")], budget(0, 60_000, 2), 0);
     let first = turns(&s.step(message(None, 1), Now(1)))[0].1;
     assert!(s.step(Event::Continue(bot("agent")), Now(2)).is_empty());
     assert!(s.step(Event::Continue(bot("agent")), Now(3)).is_empty());
@@ -404,13 +361,7 @@ fn runnable_continuations_coalesce_obey_budget_and_do_not_resurrect_temporary_bo
 #[test]
 fn published_processing_can_precede_supervisor_ingestion_without_replaying_it() {
     let mut s = S::default();
-    define(
-        &mut s,
-        "agent",
-        vec![room("general")],
-        budget(0, 60_000, 10),
-        0,
-    );
+    define(&mut s, "agent", vec![room("general")], budget(0, 60_000, 10), 0);
     s.step(
         Event::Processed {
             bot: bot("agent"),
@@ -428,13 +379,7 @@ fn published_processing_can_precede_supervisor_ingestion_without_replaying_it() 
 fn committed_processing_retires_only_matching_pending_watermarks() {
     for (newest, expect_next) in [(2, false), (3, true)] {
         let mut s = S::default();
-        define(
-            &mut s,
-            "agent",
-            vec![room("general")],
-            budget(0, 60_000, 10),
-            0,
-        );
+        define(&mut s, "agent", vec![room("general")], budget(0, 60_000, 10), 0);
         let first = turns(&s.step(message(None, 1), Now(1)))[0].1;
         s.step(message(None, 2), Now(2));
         if newest == 3 {
@@ -496,13 +441,7 @@ fn temporary_bots_end_after_their_first_turn_and_redefinition_can_make_them_perm
 #[test]
 fn stale_or_duplicate_completions_never_release_a_newer_turn() {
     let mut s = S::default();
-    define(
-        &mut s,
-        "bot",
-        vec![room("general")],
-        budget(0, 60_000, 10),
-        0,
-    );
+    define(&mut s, "bot", vec![room("general")], budget(0, 60_000, 10), 0);
     let first = turns(&s.step(message(None, 1), Now(1)))[0].1;
     assert!(s.step(message(None, 2), Now(2)).is_empty());
     let second = turns(&s.step(done("bot", first), Now(3)))[0].1;
@@ -536,11 +475,7 @@ fn explicit_rearm_keeps_exactly_one_next_callback_and_stop_still_wins() {
     assert!(s.step(message(None, 2), Now(3)).is_empty());
     let effects = s.step(done("once", first), Now(4));
     let next = turns(&effects);
-    assert_eq!(
-        next.len(),
-        1,
-        "an explicit request survives the previous callback"
-    );
+    assert_eq!(next.len(), 1, "an explicit request survives the previous callback");
     assert!(s.step(done("once", next[0].1), Now(5)).is_empty());
     assert_eq!(s.status(&bot("once")), None);
     assert!(!s.retains(&Topic::new("room", "general")));
@@ -578,26 +513,14 @@ fn a_paused_temporary_callback_keeps_its_mailbox_until_explicit_resume() {
 #[test]
 fn budgets_bound_turns_survive_redefinition_and_report_exhaustion_once() {
     let mut s = S::default();
-    define(
-        &mut s,
-        "bot",
-        vec![room("general")],
-        budget(1_000, 10_000, 2),
-        0,
-    );
+    define(&mut s, "bot", vec![room("general")], budget(1_000, 10_000, 2), 0);
     let t1 = turns(&s.step(message(None, 1), Now(0)))[0].1;
     s.step(done("bot", t1), Now(100));
     assert!(s.step(message(None, 2), Now(200)).is_empty(), "cooldown");
     assert_eq!(s.next_deadline(Now(200)), Some(Now(1_000)));
     let t2 = turns(&s.step(Event::Tick, Now(1_000)))[0].1;
     s.step(done("bot", t2), Now(1_100));
-    define(
-        &mut s,
-        "bot",
-        vec![room("general")],
-        budget(1_000, 10_000, 2),
-        1_200,
-    );
+    define(&mut s, "bot", vec![room("general")], budget(1_000, 10_000, 2), 1_200);
     let exhausted = s.step(message(None, 3), Now(2_000));
     assert!(
         matches!(
@@ -635,10 +558,7 @@ fn timers_wake_idle_bots_and_set_the_next_deadline() {
         s.step(Event::Tick, Now(11_000)).is_empty(),
         "a running turn defers the timer"
     );
-    assert_eq!(
-        turns(&s.step(done("scout", turn), Now(11_500)))[0].2,
-        [Reason::Timer]
-    );
+    assert_eq!(turns(&s.step(done("scout", turn), Now(11_500)))[0].2, [Reason::Timer]);
     assert_eq!(s.next_deadline(Now(11_500)), Some(Now(16_000)));
 }
 
@@ -658,23 +578,14 @@ fn deadlines_beyond_the_clock_never_fire_or_loop() {
         "the first timer is unrepresentable"
     );
     assert!(s.step(Event::Tick, Now(u64::MAX)).is_empty());
-    define(
-        &mut s,
-        "edge",
-        vec![room("general")],
-        budget(10, u64::MAX, 1),
-        0,
-    );
+    define(&mut s, "edge", vec![room("general")], budget(10, u64::MAX, 1), 0);
     let turn = turns(&s.step(message(None, 1), Now(u64::MAX - 1)))[0].1;
     s.step(done("edge", turn), Now(u64::MAX));
     let blocked = s.step(message(None, 2), Now(u64::MAX));
     assert!(matches!(
         &blocked[..],
         [Planned {
-            effect: Effect::BudgetExhausted {
-                until: u64::MAX,
-                ..
-            },
+            effect: Effect::BudgetExhausted { until: u64::MAX, .. },
             ..
         }]
     ));
@@ -703,17 +614,11 @@ fn messages_reach_only_subscribers_and_overflow_names_topics_to_resync() {
     assert!(s.step(observed("svc-cass", 2, "died"), Now(1)).is_empty());
     for cursor in 2..42 {
         assert!(
-            s.step(
-                observed("svc-alice", cursor, &format!("event-{}", cursor % 20)),
-                Now(2)
-            )
-            .is_empty()
+            s.step(observed("svc-alice", cursor, &format!("event-{}", cursor % 20)), Now(2))
+                .is_empty()
         );
     }
-    assert!(
-        s.step(observed("svc-alice", 41, "replayed"), Now(3))
-            .is_empty()
-    );
+    assert!(s.step(observed("svc-alice", 41, "replayed"), Now(3)).is_empty());
     let woke = s.step(done("alice", turn), Now(4));
     let (second, reasons) = (turns(&woke)[0].1, turns(&woke)[0].2.to_vec());
     assert_eq!(
@@ -739,8 +644,7 @@ fn messages_reach_only_subscribers_and_overflow_names_topics_to_resync() {
             .any(|r| matches!(r, Reason::Info { info: Msg::Kind(kind), .. } if kind == "replayed"))
     );
     assert!(
-        s.step(observed("svc-alice", 18, "event-18"), Now(5))
-            .is_empty(),
+        s.step(observed("svc-alice", 18, "event-18"), Now(5)).is_empty(),
         "dropped messages are acknowledged, not replayed"
     );
     assert!(s.step(done("alice", second), Now(6)).is_empty());
@@ -777,27 +681,14 @@ fn application_merge_rules_decide_coalescing_per_topic() {
             info: Msg::Lines(2)
         }]
     );
+    assert!(s.step(info("w-alice", 15, Msg::Lines(4)), Now(3)).is_empty());
     assert!(
-        s.step(info("w-alice", 15, Msg::Lines(4)), Now(3))
-            .is_empty()
-    );
-    assert!(
-        s.step(info("w-alice", 15, Msg::Lines(4)), Now(3))
-            .is_empty(),
+        s.step(info("w-alice", 15, Msg::Lines(4)), Now(3)).is_empty(),
         "replays at or below the cursor are ignored"
     );
-    assert!(
-        s.step(info("w-alice", 20, Msg::Lines(1)), Now(4))
-            .is_empty()
-    );
-    assert!(
-        s.step(info("w-alice", 21, Msg::Exit(Some(137))), Now(5))
-            .is_empty()
-    );
-    assert!(
-        s.step(info("w-alice", 22, Msg::Exit(Some(0))), Now(5))
-            .is_empty()
-    );
+    assert!(s.step(info("w-alice", 20, Msg::Lines(1)), Now(4)).is_empty());
+    assert!(s.step(info("w-alice", 21, Msg::Exit(Some(137))), Now(5)).is_empty());
+    assert!(s.step(info("w-alice", 22, Msg::Exit(Some(0))), Now(5)).is_empty());
     let next = s.step(done("alice", turn), Now(6));
     let (_, _, reasons) = turns(&next)[0];
     assert_eq!(
@@ -903,13 +794,7 @@ fn pause_stop_and_validation_follow_the_command_contract() {
         assert!(s.step(Event::Define(definition), Now(0)).is_empty());
     }
     assert_eq!(s.definitions().count(), 0);
-    define(
-        &mut s,
-        "bot",
-        vec![room("general")],
-        budget(0, 60_000, 10),
-        0,
-    );
+    define(&mut s, "bot", vec![room("general")], budget(0, 60_000, 10), 0);
     assert!(s.step(Event::Pause(bot("bot")), Now(1)).is_empty());
     assert!(s.step(message(None, 1), Now(2)).is_empty());
     assert_eq!(s.status(&bot("bot")), Some(Status::Paused));
@@ -924,13 +809,7 @@ fn pause_stop_and_validation_follow_the_command_contract() {
         !s.eligible(&bot("bot"), &turn),
         "a stopping bot's turn is not re-queued"
     );
-    define(
-        &mut s,
-        "bot",
-        vec![room("general")],
-        budget(0, 60_000, 10),
-        5,
-    );
+    define(&mut s, "bot", vec![room("general")], budget(0, 60_000, 10), 5);
     assert!(
         s.step(message(None, 2), Now(6)).is_empty(),
         "a stopping bot admits nothing"
@@ -944,13 +823,7 @@ fn pause_stop_and_validation_follow_the_command_contract() {
 #[test]
 fn restored_state_round_trips_and_definitions_outside_the_contract_never_produce_turns() {
     let mut s = S::default();
-    define(
-        &mut s,
-        "bot",
-        vec![room("general")],
-        budget(0, 60_000, 10),
-        0,
-    );
+    define(&mut s, "bot", vec![room("general")], budget(0, 60_000, 10), 0);
     let turn = turns(&s.step(message(None, 1), Now(1)))[0].1;
     for i in 0..20 {
         s.step(
@@ -1051,10 +924,7 @@ fn selective_waits_retain_direct_input_while_open_waits_and_early_input_release(
     define(
         &mut s,
         "agent",
-        vec![
-            room("dependency"),
-            Source::Topic(topic("conversation", "chat-agent")),
-        ],
+        vec![room("dependency"), Source::Topic(topic("conversation", "chat-agent"))],
         budget(0, 60_000, 10),
         0,
     );
@@ -1090,7 +960,12 @@ fn selective_waits_retain_direct_input_while_open_waits_and_early_input_release(
 }
 
 fn quiet(cursor: u64) -> Event<Msg> {
-    Event::Info { topic: topic("conversation", "chat-agent"), cursor, from: None, info: Msg::Quiet }
+    Event::Info {
+        topic: topic("conversation", "chat-agent"),
+        cursor,
+        from: None,
+        info: Msg::Quiet,
+    }
 }
 fn deferring(s: &mut S, defer_ms: Option<u64>) {
     let definition = Definition {
@@ -1109,31 +984,69 @@ fn deferred_input_rides_with_the_next_wake_and_never_starts_one_alone() {
     deferring(&mut s, None);
     assert!(s.step(quiet(1), Now(1)).is_empty(), "deferred input is not a wake");
     assert!(s.step(quiet(2), Now(2)).is_empty());
-    assert!(s.step(Event::Tick, Now(10_000_000)).is_empty(), "without a bound it waits for another reason");
-    assert_eq!(s.next_deadline(Now(3)), None, "a sleeping bot with only deferred input sets no deadline");
+    assert!(
+        s.step(Event::Tick, Now(10_000_000)).is_empty(),
+        "without a bound it waits for another reason"
+    );
+    assert_eq!(
+        s.next_deadline(Now(3)),
+        None,
+        "a sleeping bot with only deferred input sets no deadline"
+    );
     let woken = s.step(message(None, 1), Now(10_000_001));
     let (_, _, reasons) = turns(&woken)[0];
-    assert_eq!(reasons.len(), 2, "the post wakes and carries the coalesced deferred input");
-    assert!(reasons.iter().any(|r| matches!(r, Reason::Info { info: Msg::Quiet, through: 2, .. })));
-    assert!(!woken.iter().any(|p| matches!(p.effect, Effect::BudgetExhausted { .. })), "no budget notice for deferred input");
+    assert_eq!(
+        reasons.len(),
+        2,
+        "the post wakes and carries the coalesced deferred input"
+    );
+    assert!(reasons.iter().any(|r| matches!(
+        r,
+        Reason::Info {
+            info: Msg::Quiet,
+            through: 2,
+            ..
+        }
+    )));
+    assert!(
+        !woken.iter().any(|p| matches!(p.effect, Effect::BudgetExhausted { .. })),
+        "no budget notice for deferred input"
+    );
 }
 #[test]
 fn deferred_input_starts_a_turn_after_its_bound_from_the_oldest_admission() {
     let mut s = S::default();
     deferring(&mut s, Some(1_000));
     assert!(s.step(quiet(1), Now(100)).is_empty());
-    assert!(s.step(quiet(2), Now(900)).is_empty(), "newer input does not restart the clock");
+    assert!(
+        s.step(quiet(2), Now(900)).is_empty(),
+        "newer input does not restart the clock"
+    );
     assert_eq!(s.next_deadline(Now(901)), Some(Now(1_100)));
     assert!(s.step(Event::Tick, Now(1_099)).is_empty());
     let due = s.step(Event::Tick, Now(1_100));
     let (_, turn, reasons) = turns(&due)[0];
-    assert!(matches!(reasons, [Reason::Info { info: Msg::Quiet, through: 2, .. }]));
+    assert!(matches!(
+        reasons,
+        [Reason::Info {
+            info: Msg::Quiet,
+            through: 2,
+            ..
+        }]
+    ));
     // The clock restarts with the next deferred input after that turn.
     s.step(done("agent", turn), Now(1_200));
     assert!(s.step(quiet(3), Now(1_300)).is_empty());
     assert_eq!(s.next_deadline(Now(1_301)), Some(Now(2_300)));
     // Processing it before the bound clears the clock.
-    s.step(Event::Processed { bot: bot("agent"), topic: topic("conversation", "chat-agent"), through: 3 }, Now(1_400));
+    s.step(
+        Event::Processed {
+            bot: bot("agent"),
+            topic: topic("conversation", "chat-agent"),
+            through: 3,
+        },
+        Now(1_400),
+    );
     assert_eq!(s.next_deadline(Now(1_401)), None);
     assert!(s.step(Event::Tick, Now(5_000)).is_empty());
 }
@@ -1142,13 +1055,30 @@ fn deferred_input_releases_only_waits_that_select_it_or_open_waits_past_the_boun
     let mut s = S::default();
     deferring(&mut s, Some(1_000));
     let active = turns(&s.step(message(None, 1), Now(1)))[0].1;
-    s.step(Event::Wait { bot: bot("agent"), topics: vec![], until: None }, Now(2));
+    s.step(
+        Event::Wait {
+            bot: bot("agent"),
+            topics: vec![],
+            until: None,
+        },
+        Now(2),
+    );
     s.step(done("agent", active), Now(3));
-    assert!(s.step(quiet(1), Now(10)).is_empty(), "an open wait is not released by deferred input");
+    assert!(
+        s.step(quiet(1), Now(10)).is_empty(),
+        "an open wait is not released by deferred input"
+    );
     assert_eq!(s.next_deadline(Now(11)), Some(Now(1_010)));
     let (_, active, _) = turns(&s.step(Event::Tick, Now(1_010)))[0];
     // A selective wait on the conversation is an explicit wait for messages.
-    s.step(Event::Wait { bot: bot("agent"), topics: vec![topic("conversation", "chat-agent")], until: None }, Now(1_011));
+    s.step(
+        Event::Wait {
+            bot: bot("agent"),
+            topics: vec![topic("conversation", "chat-agent")],
+            until: None,
+        },
+        Now(1_011),
+    );
     s.step(done("agent", active), Now(1_012));
     assert_eq!(turns(&s.step(quiet(2), Now(1_013))).len(), 1);
 }

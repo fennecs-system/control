@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn search_parses_both_providers_and_rejects_active_urls() {
@@ -8,20 +7,11 @@ fn search_parses_both_providers_and_rejects_active_urls() {
     assert_eq!(result[0]["title"], "Rust & tools");
     assert_eq!(result[0]["url"], "https://www.rust-lang.org/");
     let bing = "<li class='b_algo'><h2><a href='https://example.com'>Example</a></h2><div class='b_caption'><p>Result.</p></div></li>";
-    assert_eq!(
-        parse_search(bing, true, 1).unwrap()[0]["snippet"],
-        "Result."
-    );
+    assert_eq!(parse_search(bing, true, 1).unwrap()[0]["snippet"], "Result.");
     assert!(parse_search("<form id='captcha'>Challenge</form>", false, 5).is_err());
     assert!(link("https://user:password@example.com", true).is_none());
     assert!(call("control.rust.run", &json!({"code":"", "mount":"/"})).is_err());
-    assert!(
-        call(
-            "control.web.search",
-            &json!({"query":"", "url":"http://localhost"})
-        )
-        .is_err()
-    );
+    assert!(call("control.web.search", &json!({"query":"", "url":"http://localhost"})).is_err());
 }
 #[test]
 #[ignore = "requires the pinned Nix development image; no model calls"]
@@ -39,8 +29,14 @@ fn live_rust_playground_success_errors_and_timeout() {
 #[test]
 fn playground_launch_vectors_are_pinned() {
     use crate::engine::golden::{fill, pin_equivalent, run};
-    pin_equivalent(&run(&playground_container("control-playground-1", "sha256:img", false)), &fill(GOLDEN, &[]));
-    pin_equivalent(&run(&playground_container("control-playground-1", "sha256:img", true)), &fill(GOLDEN_BENCH, &[]));
+    pin_equivalent(
+        &run(&playground_container("control-playground-1", "sha256:img", false)),
+        &fill(GOLDEN, &[]),
+    );
+    pin_equivalent(
+        &run(&playground_container("control-playground-1", "sha256:img", true)),
+        &fill(GOLDEN_BENCH, &[]),
+    );
 }
 const GOLDEN: &[&str] = &[
     "run",

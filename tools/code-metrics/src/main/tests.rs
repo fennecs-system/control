@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -10,8 +9,7 @@ fn groups_preserve_presentation_boundary() {
 
 #[test]
 fn functions_use_test_attribute_spans_and_skip_anonymous_closures() {
-    let source =
-        syn::parse_file("#[cfg(test)] mod checks {\n fn scenario() {}\n}\nfn live() {}\n").unwrap();
+    let source = syn::parse_file("#[cfg(test)] mod checks {\n fn scenario() {}\n}\nfn live() {}\n").unwrap();
     let mut tests = TestScopes::default();
     tests.visit_file(&source);
     let tree = json!({"spaces": [{"name": "scenario", "kind": "function", "start_line": 2, "spaces": [{"name": "<anonymous>", "kind": "function"}]}, {"name":"live", "kind":"function", "start_line":4}]});

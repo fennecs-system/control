@@ -224,8 +224,18 @@ pub(crate) fn policy<'a>(
         return (None, "opted out");
     }
     if memory.settings.enabled && memory.settings.chats.contains(&session.id) {
-        let model = memory.models.iter().find(|m| Some(&m.id) == memory.settings.model.as_ref());
-        return (model, if model.is_some() { "operator opt-in" } else { "opted in, but no configured compactor model" });
+        let model = memory
+            .models
+            .iter()
+            .find(|m| Some(&m.id) == memory.settings.model.as_ref());
+        return (
+            model,
+            if model.is_some() {
+                "operator opt-in"
+            } else {
+                "opted in, but no configured compactor model"
+            },
+        );
     }
     match local_endpoint(state, session) {
         Some(model) => (Some(model), "local chat model default"),
@@ -239,23 +249,14 @@ fn local_endpoint<'a>(state: &'a State, session: &crate::chat::Session) -> Optio
         Some(model) => (model.backend, model.model.clone()),
         None => (state.runtime.backend, state.runtime.configured_model()),
     };
-    (backend == crate::backend::Backend::Local).then(|| crate::providers::endpoint(&state.runtime, &name)).flatten()
+    (backend == crate::backend::Backend::Local)
+        .then(|| crate::providers::endpoint(&state.runtime, &name))
+        .flatten()
 }
-fn identity(
-    state: &State,
-    session: &crate::chat::Session,
-) -> Option<(String, crate::model_calls::Endpoint)> {
+fn identity(state: &State, session: &crate::chat::Session) -> Option<(String, crate::model_calls::Endpoint)> {
     let memory = &state.runtime.compaction;
     let model = compactor_for(state, session)?;
-    let bytes = serde_json::to_vec(&(
-        2u32,
-        &session.id,
-        &session.actor,
-        &memory.settings,
-        model,
-        SYSTEM,
-    ))
-    .ok()?;
+    let bytes = serde_json::to_vec(&(2u32, &session.id, &session.actor, &memory.settings, model, SYSTEM)).ok()?;
     Some((hash(&bytes), model.clone()))
 }
 fn prepare(state: &State) -> Option<Job> {
@@ -289,9 +290,10 @@ fn prepare(state: &State) -> Option<Job> {
             .iter()
             .map(|message| (message, message.run_id.as_deref().and_then(|id| runs.get(id).copied())))
             .take_while(|(message, index)| {
-                let entry =
-                    crate::conversation::Entry::source(message, index.map(|i| &state.runtime.runs[i]));
-                !entry.run.is_some_and(|r| !crate::application::runs::status::finished(&r.status))
+                let entry = crate::conversation::Entry::source(message, index.map(|i| &state.runtime.runs[i]));
+                !entry
+                    .run
+                    .is_some_and(|r| !crate::application::runs::status::finished(&r.status))
             })
             .map(|(_, index)| index)
             .collect();
@@ -313,9 +315,7 @@ fn prepare(state: &State) -> Option<Job> {
     None
 }
 fn node_key(job: &Job, block: Block) -> io::Result<String> {
-    let digest = job
-        .entries
-        .digest(block.start as usize, block.end() as usize)?;
+    let digest = job.entries.digest(block.start as usize, block.end() as usize)?;
     // Operator revisions inside the block change what its summary is built
     // from; without any, the key (and every cached node) is unchanged.
     let revised = job.edits.descendants(block);
@@ -337,15 +337,10 @@ fn child_text<'a>(job: &'a Job, node: &'a Node) -> &'a str {
 }
 fn private_directory(path: &std::path::Path) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)?;
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(path)?;
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
-        return Err(io::Error::other(
-            "Summary cache must be a private directory",
-        ));
+        return Err(io::Error::other("Summary cache must be a private directory"));
     }
     Ok(())
 }
@@ -353,11 +348,7 @@ fn build(
     job: &Job,
     block: Block,
     directory: &std::path::Path,
-    call: &mut impl FnMut(
-        &crate::model_calls::Endpoint,
-        &str,
-        &str,
-    ) -> io::Result<control_ai::model::Response>,
+    call: &mut impl FnMut(&crate::model_calls::Endpoint, &str, &str) -> io::Result<control_ai::model::Response>,
 ) -> io::Result<Node> {
     if crate::shutdown::requested() || job.cancel.load(std::sync::atomic::Ordering::Acquire) {
         return Err(io::Error::other("Compaction cancelled"));
@@ -366,8 +357,8 @@ fn build(
     let filename = format!("{key}.json");
     match crate::config::read_regular(&directory.join(&filename), NODE_BYTES, true) {
         Ok(bytes) => {
-            let node: Node = serde_json::from_slice(&bytes)
-                .map_err(|_| io::Error::other("Corrupt summary cache node"))?;
+            let node: Node =
+                serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Corrupt summary cache node"))?;
             if node.key != key
                 || node.start != block.start
                 || node.level != block.level
@@ -398,10 +389,9 @@ fn build(
     };
     let mut children = Vec::new();
     let mut sources = Vec::new();
-    let input = if let Some(raw) = raw.filter(|text| {
-        SYSTEM.len().saturating_add(text.len()) <= job.model.limits.input_budget()
-            || block.is_item()
-    }) {
+    let input = if let Some(raw) =
+        raw.filter(|text| SYSTEM.len().saturating_add(text.len()) <= job.model.limits.input_budget() || block.is_item())
+    {
         sources = job.entries.read(
             block.start as usize,
             block.end() as usize,
@@ -449,11 +439,7 @@ fn build(
 fn execute(
     job: &Job,
     directory: &std::path::Path,
-    mut call: impl FnMut(
-        &crate::model_calls::Endpoint,
-        &str,
-        &str,
-    ) -> io::Result<control_ai::model::Response>,
+    mut call: impl FnMut(&crate::model_calls::Endpoint, &str, &str) -> io::Result<control_ai::model::Response>,
 ) -> io::Result<View> {
     private_directory(directory)?;
     let nodes = cut(job.entries.len() as u64, job.settings.recent_entries)
@@ -522,22 +508,15 @@ pub fn tick(state: &Arc<Mutex<State>>) {
                     .map_err(io::Error::other)
                     .and_then(|dir| {
                         private_directory(&dir)?;
-                        job.entries =
-                            source::Records::capture(job.entries.len(), &dir, |start, count| {
-                                let s = state
-                                    .lock()
-                                    .map_err(|_| io::Error::other("State unavailable"))?;
-                                source_page(&s, &job, start, count)
-                            })?;
+                        job.entries = source::Records::capture(job.entries.len(), &dir, |start, count| {
+                            let s = state.lock().map_err(|_| io::Error::other("State unavailable"))?;
+                            source_page(&s, &job, start, count)
+                        })?;
                         execute(&job, &dir, |model, system, input| {
                             {
-                                let s = state
-                                    .lock()
-                                    .map_err(|_| io::Error::other("State unavailable"))?;
+                                let s = state.lock().map_err(|_| io::Error::other("State unavailable"))?;
                                 if !allowed(&s, &job) {
-                                    return Err(io::Error::other(
-                                        "Compaction no longer authorized or enabled",
-                                    ));
+                                    return Err(io::Error::other("Compaction no longer authorized or enabled"));
                                 }
                             }
                             crate::model_calls::call(model, system, input)
@@ -548,14 +527,14 @@ pub fn tick(state: &Arc<Mutex<State>>) {
             if let Ok(mut s) = state.lock() {
                 let valid = allowed(&s, &job);
                 let result = result.and_then(|view| {
-                    if s.chats.iter().find(|c| c.id == job.chat).is_some_and(|c| {
-                        sources_match(&Conversation::of(&s, c), &view.source_hash, view.count)
-                    }) {
+                    if s.chats
+                        .iter()
+                        .find(|c| c.id == job.chat)
+                        .is_some_and(|c| sources_match(&Conversation::of(&s, c), &view.source_hash, view.count))
+                    {
                         Ok(view)
                     } else {
-                        Err(io::Error::other(
-                            "Summary sources changed before publication",
-                        ))
+                        Err(io::Error::other("Summary sources changed before publication"))
                     }
                 });
                 s.runtime.compaction.pending = None;
@@ -573,10 +552,7 @@ pub fn tick(state: &Arc<Mutex<State>>) {
                             memory.views.insert(job.chat, view);
                         }
                         Err(error) => {
-                            s.runtime
-                                .compaction
-                                .errors
-                                .insert(job.chat, error.to_string());
+                            s.runtime.compaction.errors.insert(job.chat, error.to_string());
                         }
                     }
                 }
@@ -597,15 +573,11 @@ pub fn tick(state: &Arc<Mutex<State>>) {
 fn allowed(state: &State, job: &Job) -> bool {
     !crate::shutdown::requested()
         && !job.cancel.load(std::sync::atomic::Ordering::Acquire)
-        && state
-            .chats
-            .iter()
-            .find(|c| c.id == job.chat)
-            .is_some_and(|c| {
-                crate::identity::authorize(&c.actor, crate::identity::Action::Task).is_ok()
-                    && identity(state, c).is_some_and(|(id, _)| id == job.identity)
-                    && crate::bots::background_allowed(state, &c.id)
-            })
+        && state.chats.iter().find(|c| c.id == job.chat).is_some_and(|c| {
+            crate::identity::authorize(&c.actor, crate::identity::Action::Task).is_ok()
+                && identity(state, c).is_some_and(|(id, _)| id == job.identity)
+                && crate::bots::background_allowed(state, &c.id)
+        })
 }
 
 fn source_page(state: &State, job: &Job, start: usize, count: usize) -> io::Result<Vec<String>> {
@@ -701,9 +673,7 @@ impl Selector<'_> {
             let (item, size) = if block.is_item() {
                 (
                     Item::Entry(block.start as usize),
-                    conversation
-                        .entry(block.start as usize)
-                        .map_or(0, |e| e.render().len()),
+                    conversation.entry(block.start as usize).map_or(0, |e| e.render().len()),
                 )
             } else if let Some(node) = view
                 .nodes
@@ -800,14 +770,9 @@ pub fn status(state: &State, chat: &str) -> serde_json::Value {
 
 /// The Memory Tree overview: bounded, in-memory, no disk reads or model calls.
 pub fn render(state: &State, id: &str, query: &str) -> Result<String, &'static str> {
-    let session = state
-        .chats
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or("Chat not found")?;
+    let session = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found")?;
     crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
-    let metadata = serde_json::to_string_pretty(&status(state, id))
-        .map_err(|_| "Cannot render compaction metadata")?;
+    let metadata = serde_json::to_string_pretty(&status(state, id)).map_err(|_| "Cannot render compaction metadata")?;
     Ok(tree::overview(state, session, &crate::fields(query), &metadata))
 }
 

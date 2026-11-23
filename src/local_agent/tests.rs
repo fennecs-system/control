@@ -2,7 +2,12 @@ use super::*;
 use std::collections::VecDeque;
 
 fn limits() -> Limits {
-    Limits { context_tokens: 32768, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 }
+    Limits {
+        context_tokens: 32768,
+        output_tokens: 1024,
+        input_bytes: 28000,
+        output_bytes: 8192,
+    }
 }
 fn reply(content: Option<&str>, calls: Value, finish: &str) -> Value {
     json!({"choices":[{"finish_reason":finish,"message":{"role":"assistant","content":content,"tool_calls":calls}}],
@@ -62,7 +67,9 @@ impl Host for Mock {
     }
     fn model(&mut self, body: &Value) -> io::Result<Value> {
         self.requests.push(body.clone());
-        self.replies.pop_front().unwrap_or_else(|| Err(io::Error::other("script exhausted")))
+        self.replies
+            .pop_front()
+            .unwrap_or_else(|| Err(io::Error::other("script exhausted")))
     }
     fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> {
         self.summaries.push(evidence.into());
@@ -85,7 +92,13 @@ impl Host for Mock {
         self.firsts.push(first);
         self.observations.pop_front()
     }
-    fn retain(&mut self, block: control_comonad::Block, _: &str, _: Option<[String; 2]>, sources: Vec<String>) -> Option<String> {
+    fn retain(
+        &mut self,
+        block: control_comonad::Block,
+        _: &str,
+        _: Option<[String; 2]>,
+        sources: Vec<String>,
+    ) -> Option<String> {
         self.retained.push((block, sources));
         Some(format!("{:064x}", self.retained.len()))
     }
@@ -94,26 +107,46 @@ impl Host for Mock {
     }
 }
 fn mock(replies: Vec<Value>) -> Mock {
-    Mock { replies: replies.into_iter().map(Ok).collect(), ..Default::default() }
+    Mock {
+        replies: replies.into_iter().map(Ok).collect(),
+        ..Default::default()
+    }
 }
 fn compactor(input_bytes: usize) -> Compactor {
-    Compactor { input_bytes, output_tokens: 512 }
+    Compactor {
+        input_bytes,
+        output_tokens: 512,
+    }
 }
 fn go(host: &mut Mock) -> Result<Outcome, Failure> {
-    run(host, "qwen-local", &limits(), compactor(20000), "Current request: post a status", &Policy::default())
+    run(
+        host,
+        "qwen-local",
+        &limits(),
+        compactor(20000),
+        "Current request: post a status",
+        &Policy::default(),
+    )
 }
 
 #[test]
 fn tool_calls_run_through_the_dispatcher_and_text_ends_the_turn() {
     let mut host = mock(vec![
-        reply(Some("Posting."), call("control_room_post", r#"{"message":"hello"}"#), "tool_calls"),
+        reply(
+            Some("Posting."),
+            call("control_room_post", r#"{"message":"hello"}"#),
+            "tool_calls",
+        ),
         reply(Some("Posted the status."), json!(null), "stop"),
     ]);
     let outcome = go(&mut host).unwrap();
     assert_eq!(outcome.text, "Posted the status.");
     assert_eq!(outcome.steps, 2);
     assert_eq!(outcome.tokens.unwrap().output_tokens, 20);
-    assert_eq!(host.calls, vec![("control_room_post".into(), json!({"message":"hello"}), "1-0".into())]);
+    assert_eq!(
+        host.calls,
+        vec![("control_room_post".into(), json!({"message":"hello"}), "1-0".into())]
+    );
     // The request carries Control's tools as functions and the tool result.
     let first = &host.requests[0];
     assert_eq!(first["tools"][0]["function"]["name"], "control_room_post");
@@ -123,7 +156,11 @@ fn tool_calls_run_through_the_dispatcher_and_text_ends_the_turn() {
     assert_eq!(second[2]["tool_calls"][0]["function"]["name"], "control_room_post");
     assert_eq!(second[3]["role"], "tool");
     assert_eq!(second[3]["tool_call_id"], "id-control_room_post");
-    assert!(host.records.iter().any(|(k, t)| k == "mcp_tool_call" && t.ends_with(":completed")));
+    assert!(
+        host.records
+            .iter()
+            .any(|(k, t)| k == "mcp_tool_call" && t.ends_with(":completed"))
+    );
 }
 #[test]
 fn a_committed_handoff_finishes_the_attempt_without_another_model_call() {
@@ -144,9 +181,16 @@ fn malformed_steps_get_bounded_corrective_feedback_and_never_execute() {
     assert!(host.calls.is_empty(), "malformed calls must not run");
     let last = host.requests[3]["messages"].as_array().unwrap();
     let text = serde_json::to_string(last).unwrap();
-    assert!(text.contains("not valid JSON") && text.contains("unknown tool") && text.contains("output limit"), "{text}");
+    assert!(
+        text.contains("not valid JSON") && text.contains("unknown tool") && text.contains("output limit"),
+        "{text}"
+    );
 
-    let mut host = mock((0..5).map(|_| reply(None, call("control_room_post", "[1]"), "tool_calls")).collect());
+    let mut host = mock(
+        (0..5)
+            .map(|_| reply(None, call("control_room_post", "[1]"), "tool_calls"))
+            .collect(),
+    );
     let (status, message) = go(&mut host).err().unwrap();
     assert_eq!(status, "failed");
     assert!(message.contains("4 malformed steps"), "{message}");
@@ -167,7 +211,12 @@ fn malformed_steps_get_bounded_corrective_feedback_and_never_execute() {
 fn empty_and_unusable_replies_fail_visibly_without_fallback() {
     let mut host = mock(vec![json!({"choices":[]})]);
     assert!(go(&mut host).err().unwrap().1.contains("unusable response"));
-    let mut host = Mock { replies: VecDeque::from([Err(io::Error::other("Model endpoint unavailable; no fallback was used"))]), ..Default::default() };
+    let mut host = Mock {
+        replies: VecDeque::from([Err(io::Error::other(
+            "Model endpoint unavailable; no fallback was used",
+        ))]),
+        ..Default::default()
+    };
     let message = go(&mut host).err().unwrap().1;
     assert!(message.contains("No hosted fallback"), "{message}");
 }
@@ -183,42 +232,124 @@ fn cancellation_and_deadlines_stop_between_steps_and_during_calls() {
     assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
     assert!(host.calls.is_empty());
     // Cancelled after a tool step: no further model request.
-    let mut host = mock(vec![reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls"), reply(Some("late"), json!(null), "stop")]);
+    let mut host = mock(vec![
+        reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls"),
+        reply(Some("late"), json!(null), "stop"),
+    ]);
     host.polls = VecDeque::from([Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]);
     assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
     assert_eq!(host.requests.len(), 1);
     // The step budget is a hard bound.
-    let mut host = mock((0..3).map(|_| reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls")).collect());
-    let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 2, ..Policy::default() }).err().unwrap();
+    let mut host = mock(
+        (0..3)
+            .map(|_| reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls"))
+            .collect(),
+    );
+    let failure = run(
+        &mut host,
+        "m",
+        &limits(),
+        compactor(20000),
+        "p",
+        &Policy {
+            max_steps: 2,
+            ..Policy::default()
+        },
+    )
+    .err()
+    .unwrap();
     assert!(failure.1.contains("its 2-step limit"), "{}", failure.1);
     assert!(host.step_limited);
 }
 #[test]
 fn a_turn_near_its_step_cap_is_told_once_and_the_cap_leaves_a_host_checkpoint() {
-    let step = || reply(None, call("control_room_post", r#"{"message":"retrying"}"#), "tool_calls");
+    let step = || {
+        reply(
+            None,
+            call("control_room_post", r#"{"message":"retrying"}"#),
+            "tool_calls",
+        )
+    };
     let mut host = mock((0..20).map(|_| step()).collect());
-    let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 16, ..Policy::default() }).err().unwrap();
+    let failure = run(
+        &mut host,
+        "m",
+        &limits(),
+        compactor(20000),
+        "p",
+        &Policy {
+            max_steps: 16,
+            ..Policy::default()
+        },
+    )
+    .err()
+    .unwrap();
     assert_eq!(host.requests.len(), 16);
     assert_eq!(failure.0, "failed");
-    assert!(failure.1.contains("host checkpoint") && failure.1.contains("local_agent_steps"), "{}", failure.1);
-    assert!(host.step_limited, "the worker is told so it records a StepLimit host checkpoint");
+    assert!(
+        failure.1.contains("host checkpoint") && failure.1.contains("local_agent_steps"),
+        "{}",
+        failure.1
+    );
+    assert!(
+        host.step_limited,
+        "the worker is told so it records a StepLimit host checkpoint"
+    );
     // Once, a quarter of the cap (4 steps) before it, naming the handoff.
     let notes = host.records.iter().filter(|(k, _)| k == "note").collect::<Vec<_>>();
     assert_eq!(notes.len(), 1, "{notes:?}");
-    assert!(notes[0].1.starts_with("4 model steps left in this turn: publish your checkpoint (control_turn_handoff)"), "{notes:?}");
+    assert!(
+        notes[0]
+            .1
+            .starts_with("4 model steps left in this turn: publish your checkpoint (control_turn_handoff)"),
+        "{notes:?}"
+    );
     let noted = |r: &Value| r.to_string().contains("model steps left in this turn");
     assert!(!host.requests[..12].iter().any(noted));
-    assert!(host.requests[12..].iter().all(noted), "the note stays on the tool result it was added to");
+    assert!(
+        host.requests[12..].iter().all(noted),
+        "the note stays on the tool result it was added to"
+    );
     // A turn that hands off after the note finishes normally.
-    let mut host = mock((0..13).map(|_| step()).chain([reply(None, call("control_turn_handoff", "{}"), "tool_calls")]).collect());
-    let outcome = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 16, ..Policy::default() }).unwrap();
+    let mut host = mock(
+        (0..13)
+            .map(|_| step())
+            .chain([reply(None, call("control_turn_handoff", "{}"), "tool_calls")])
+            .collect(),
+    );
+    let outcome = run(
+        &mut host,
+        "m",
+        &limits(),
+        compactor(20000),
+        "p",
+        &Policy {
+            max_steps: 16,
+            ..Policy::default()
+        },
+    )
+    .unwrap();
     assert_eq!((outcome.text.as_str(), host.step_limited), ("handed off", false));
 }
 #[test]
 fn oversized_mandatory_input_is_refused_before_any_model_call() {
     let mut host = mock(vec![]);
-    let small = Limits { context_tokens: 2048, output_tokens: 512, input_bytes: 1024, output_bytes: 2048 };
-    let failure = run(&mut host, "m", &small, compactor(1000), &"x".repeat(6000), &Policy::default()).err().unwrap();
+    let small = Limits {
+        context_tokens: 2048,
+        output_tokens: 512,
+        input_bytes: 1024,
+        output_bytes: 2048,
+    };
+    let failure = run(
+        &mut host,
+        "m",
+        &small,
+        compactor(1000),
+        &"x".repeat(6000),
+        &Policy::default(),
+    )
+    .err()
+    .unwrap();
     assert_eq!(failure.0, "blocked");
     assert!(failure.1.contains("does not fit"), "{}", failure.1);
     assert!(host.requests.is_empty());
@@ -227,31 +358,66 @@ fn oversized_mandatory_input_is_refused_before_any_model_call() {
 fn a_turn_that_outgrows_the_context_is_compacted_on_the_local_compactor_and_then_fits() {
     // Each tool result is large; after a few steps the conversation exceeds the
     // 8k context, so earlier steps are summarized and the next request fits.
-    let small = Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let small = Limits {
+        context_tokens: 8192,
+        output_tokens: 512,
+        input_bytes: 28000,
+        output_bytes: 2048,
+    };
     let mut replies: Vec<Value> = (0..6)
-        .map(|i| reply(None, call("control_room_post", &format!(r#"{{"message":"update {i}"}}"#)), "tool_calls"))
+        .map(|i| {
+            reply(
+                None,
+                call("control_room_post", &format!(r#"{{"message":"update {i}"}}"#)),
+                "tool_calls",
+            )
+        })
         .collect();
     replies.push(reply(Some("All updates posted."), json!(null), "stop"));
     let mut host = mock(replies);
     host.tool_text = "room transcript ".repeat(300);
-    let outcome = run(&mut host, "m", &small, compactor(6000), "Current request: post six updates", &Policy::default()).unwrap();
+    let outcome = run(
+        &mut host,
+        "m",
+        &small,
+        compactor(6000),
+        "Current request: post six updates",
+        &Policy::default(),
+    )
+    .unwrap();
     assert_eq!(outcome.text, "All updates posted.");
     assert!(outcome.compactions >= 1);
     assert!(!host.summaries.is_empty());
-    assert!(host.summaries.iter().all(|s| s.len() <= 6000), "compactor input respects its budget");
+    assert!(
+        host.summaries.iter().all(|s| s.len() <= 6000),
+        "compactor input respects its budget"
+    );
     for request in &host.requests {
-        let used = tokens(size(request["messages"].as_array().unwrap())) + tokens(size(request["tools"].as_array().unwrap()));
-        assert!(used <= small.context_tokens - small.output_tokens, "request exceeded the budget: {used}");
+        let used =
+            tokens(size(request["messages"].as_array().unwrap())) + tokens(size(request["tools"].as_array().unwrap()));
+        assert!(
+            used <= small.context_tokens - small.output_tokens,
+            "request exceeded the budget: {used}"
+        );
     }
     let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
     assert!(last.contains("Summary of steps"));
-    assert!(last.contains("Current request: post six updates"), "the request itself is never compacted");
+    assert!(
+        last.contains("Current request: post six updates"),
+        "the request itself is never compacted"
+    );
     // Every kept tool result still follows its call.
     for request in &host.requests {
         let messages = request["messages"].as_array().unwrap();
         for (i, m) in messages.iter().enumerate() {
             if m["role"] == "tool" {
-                assert!(messages[..i].iter().rev().find(|p| p["role"] != "tool").is_some_and(|p| p["tool_calls"].is_array()));
+                assert!(
+                    messages[..i]
+                        .iter()
+                        .rev()
+                        .find(|p| p["role"] != "tool")
+                        .is_some_and(|p| p["tool_calls"].is_array())
+                );
             }
         }
     }
@@ -259,20 +425,43 @@ fn a_turn_that_outgrows_the_context_is_compacted_on_the_local_compactor_and_then
 }
 #[test]
 fn context_that_cannot_be_compacted_further_fails_visibly() {
-    let small = Limits { context_tokens: 4096, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let small = Limits {
+        context_tokens: 4096,
+        output_tokens: 512,
+        input_bytes: 28000,
+        output_bytes: 2048,
+    };
     // A single bulky newest result is shortened as a last resort, not fatal.
     let mut host = mock(vec![
         reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls"),
         reply(Some("Done."), json!(null), "stop"),
     ]);
     host.tool_text = "y".repeat(11000);
-    assert_eq!(run(&mut host, "m", &small, compactor(6000), "p", &Policy::default()).unwrap().text, "Done.");
+    assert_eq!(
+        run(&mut host, "m", &small, compactor(6000), "p", &Policy::default())
+            .unwrap()
+            .text,
+        "Done."
+    );
     let last = serde_json::to_string(&host.requests[1]["messages"]).unwrap();
     assert!(last.contains("more bytes of this earlier result"), "{last}");
     // A request that leaves no room even then fails visibly.
-    let mut host = mock(vec![reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls")]);
+    let mut host = mock(vec![reply(
+        None,
+        call("control_room_post", r#"{"message":"x"}"#),
+        "tool_calls",
+    )]);
     host.tool_text = "y".repeat(11000);
-    let failure = run(&mut host, "m", &small, compactor(6000), &"p".repeat(9300), &Policy::default()).err().unwrap();
+    let failure = run(
+        &mut host,
+        "m",
+        &small,
+        compactor(6000),
+        &"p".repeat(9300),
+        &Policy::default(),
+    )
+    .err()
+    .unwrap();
     assert!(failure.1.contains("context is exhausted"), "{}", failure.1);
 }
 
@@ -281,12 +470,23 @@ fn context_that_cannot_be_compacted_further_fails_visibly() {
 fn setup_turn(limits: &Limits, policy: &Policy, steps: usize) -> (Mock, Result<Outcome, Failure>, Vec<u32>) {
     let script = "apt-get install -y build-essential pkg-config libssl-dev\n".repeat(20);
     let arguments = json!({"message":script}).to_string();
-    let mut replies: Vec<Value> = (0..steps).map(|_| reply(None, call("control_room_post", &arguments), "tool_calls")).collect();
+    let mut replies: Vec<Value> = (0..steps)
+        .map(|_| reply(None, call("control_room_post", &arguments), "tool_calls"))
+        .collect();
     replies.push(reply(Some("Setup finished."), json!(null), "stop"));
     let mut host = mock(replies);
     host.tool_text = format!("$ {script}\n{}", "Setting up package 1.2.3 (amd64) ...\n".repeat(150));
-    let outcome = run(&mut host, "m", limits, compactor(6000), "Current request: set up the build host", policy);
-    let used = host.requests.iter()
+    let outcome = run(
+        &mut host,
+        "m",
+        limits,
+        compactor(6000),
+        "Current request: set up the build host",
+        policy,
+    );
+    let used = host
+        .requests
+        .iter()
         .map(|r| tokens(size(r["messages"].as_array().unwrap())) + tokens(size(r["tools"].as_array().unwrap())))
         .collect();
     (host, outcome, used)
@@ -294,31 +494,84 @@ fn setup_turn(limits: &Limits, policy: &Policy, steps: usize) -> (Mock, Result<O
 #[test]
 fn a_lean_transcript_grows_slowly_and_carries_nothing_twice() {
     // A large context, so neither run compacts: only the rolling window differs.
-    let wide = Limits { context_tokens: 131072, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
-    let (_, _, full) = setup_turn(&wide, &Policy { verbatim_steps: usize::MAX, ..Policy::default() }, 12);
+    let wide = Limits {
+        context_tokens: 131072,
+        output_tokens: 1024,
+        input_bytes: 28000,
+        output_bytes: 8192,
+    };
+    let (_, _, full) = setup_turn(
+        &wide,
+        &Policy {
+            verbatim_steps: usize::MAX,
+            ..Policy::default()
+        },
+        12,
+    );
     // A zero threshold shrinks every step that leaves the window.
-    let (host, outcome, lean) = setup_turn(&wide, &Policy { shrink_batch: 1, shrink_percent: 0, ..Policy::default() }, 12);
+    let (host, outcome, lean) = setup_turn(
+        &wide,
+        &Policy {
+            shrink_batch: 1,
+            shrink_percent: 0,
+            ..Policy::default()
+        },
+        12,
+    );
     assert_eq!(outcome.unwrap().compactions, 0);
     let growth = |used: &[u32]| used.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>();
-    println!("input tokens per request, whole transcript: {full:?}\n  growth per step: {:?}", growth(&full));
-    println!("input tokens per request, rolling window:   {lean:?}\n  growth per step: {:?}", growth(&lean));
+    println!(
+        "input tokens per request, whole transcript: {full:?}\n  growth per step: {:?}",
+        growth(&full)
+    );
+    println!(
+        "input tokens per request, rolling window:   {lean:?}\n  growth per step: {:?}",
+        growth(&lean)
+    );
     let (full_step, lean_step) = (growth(&full)[10], growth(&lean)[10]);
-    assert!(lean_step * 5 < full_step, "a step past the window adds {lean_step} tokens, against {full_step} unwindowed");
+    assert!(
+        lean_step * 5 < full_step,
+        "a step past the window adds {lean_step} tokens, against {full_step} unwindowed"
+    );
     assert!(lean.last().unwrap() * 2 < *full.last().unwrap());
     // The newest results are whole; their echoed script is cited, not repeated.
     let last = host.requests.last().unwrap()["messages"].as_array().unwrap();
     let results = last.iter().filter(|m| m["role"] == "tool").collect::<Vec<_>>();
-    assert!(results.iter().all(|m| !m["content"].as_str().unwrap().contains("apt-get install")));
-    assert!(results.iter().rev().take(4).all(|m| m["content"].as_str().unwrap().contains("[the call's message argument")
-        && !m["content"].as_str().unwrap().contains("more bytes of this earlier result")));
-    assert!(results.iter().rev().skip(4).all(|m| m["content"].as_str().unwrap().contains("more bytes of this earlier result")));
+    assert!(
+        results
+            .iter()
+            .all(|m| !m["content"].as_str().unwrap().contains("apt-get install"))
+    );
+    assert!(results.iter().rev().take(4).all(|m| {
+        m["content"].as_str().unwrap().contains("[the call's message argument")
+            && !m["content"]
+                .as_str()
+                .unwrap()
+                .contains("more bytes of this earlier result")
+    }));
+    assert!(results.iter().rev().skip(4).all(|m| {
+        m["content"]
+            .as_str()
+            .unwrap()
+            .contains("more bytes of this earlier result")
+    }));
     // Older calls keep a short head of their script.
     let calls = last.iter().filter(|m| m["tool_calls"].is_array()).collect::<Vec<_>>();
-    assert!(calls[0]["tool_calls"][0]["function"]["arguments"].as_str().unwrap().contains("bytes elided"));
+    assert!(
+        calls[0]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap()
+            .contains("bytes elided")
+    );
 }
 #[test]
 fn a_long_turn_compacts_before_its_context_is_exhausted_and_is_told_once() {
-    let small = Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let small = Limits {
+        context_tokens: 8192,
+        output_tokens: 512,
+        input_bytes: 28000,
+        output_bytes: 2048,
+    };
     let budget = small.context_tokens - small.output_tokens;
     let (host, outcome, used) = setup_turn(&small, &Policy::default(), 16);
     let outcome = outcome.unwrap();
@@ -332,36 +585,83 @@ fn a_long_turn_compacts_before_its_context_is_exhausted_and_is_told_once() {
     assert!(host.words.iter().all(|&w| w == crate::compaction::target_words(512)));
     // Once, when older results first shrink, the turn is told to write down
     // what it needs, since a file read again is shortened again.
-    let (elided, notes): (Vec<_>, Vec<_>) = host.records.iter().filter(|(k, _)| k == "note").partition(|(_, text)| text.starts_with("Control now shortens tool results older than your last 4 steps"));
+    let (elided, notes): (Vec<_>, Vec<_>) = host
+        .records
+        .iter()
+        .filter(|(k, _)| k == "note")
+        .partition(|(_, text)| text.starts_with("Control now shortens tool results older than your last 4 steps"));
     assert!(elided.len() == 1 && elided[0].1.contains("Finding:"), "{elided:?}");
     // The context note was added once, to one tool result, naming the handoff.
-    assert!(notes[0].1.starts_with("Context ") && notes[0].1.contains("% full: publish your checkpoint (control_turn_handoff)"));
+    assert!(
+        notes[0].1.starts_with("Context ")
+            && notes[0]
+                .1
+                .contains("% full: publish your checkpoint (control_turn_handoff)")
+    );
     // It asks for findings and the plan in the working notes before they are compacted away.
-    assert!(notes[0].1.contains("working notes, payload.findings and payload.next") && notes[0].1.contains("Finding:"), "{notes:?}");
+    assert!(
+        notes[0].1.contains("working notes, payload.findings and payload.next") && notes[0].1.contains("Finding:"),
+        "{notes:?}"
+    );
     let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
     assert!(last.matches("% full: publish your checkpoint").count() <= 1);
-    assert!(host.requests.iter().any(|r| r.to_string().contains("% full: publish your checkpoint")));
+    assert!(
+        host.requests
+            .iter()
+            .any(|r| r.to_string().contains("% full: publish your checkpoint"))
+    );
 }
 #[test]
 fn a_truncated_summary_is_retried_shorter_then_replaced_by_a_digest() {
-    let small = Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let small = Limits {
+        context_tokens: 8192,
+        output_tokens: 512,
+        input_bytes: 28000,
+        output_bytes: 2048,
+    };
     let truncated = || io::Error::other("Output reached the declared token limit; partial text was discarded");
     let target = crate::compaction::target_words(512);
     // One truncated summary: retried with a tighter target, which succeeds.
     let mut host = mock(vec![]);
     host.summary_errors = VecDeque::from([truncated()]);
     let script = "x".repeat(3000);
-    let mut replies: Vec<Value> = (0..12).map(|i| reply(None, call("control_room_post", &json!({"message":format!("{i}{script}")}).to_string()), "tool_calls")).collect();
+    let mut replies: Vec<Value> = (0..12)
+        .map(|i| {
+            reply(
+                None,
+                call(
+                    "control_room_post",
+                    &json!({"message":format!("{i}{script}")}).to_string(),
+                ),
+                "tool_calls",
+            )
+        })
+        .collect();
     replies.push(reply(Some("Done."), json!(null), "stop"));
     host.replies = replies.into_iter().map(Ok).collect();
     host.tool_text = "output line\n".repeat(800);
     let outcome = run(&mut host, "m", &small, compactor(6000), "set up", &Policy::default()).unwrap();
     assert!(outcome.compactions >= 1);
     assert_eq!(&host.words[..2], &[target, target / 3]);
-    assert!(host.records.iter().any(|(k, t)| k == "compaction" && t.contains("retried with a shorter summary target")));
+    assert!(
+        host.records
+            .iter()
+            .any(|(k, t)| k == "compaction" && t.contains("retried with a shorter summary target"))
+    );
     // Every summary fails: the turn continues on a labelled deterministic digest.
     let script = "y".repeat(3000);
-    let mut replies: Vec<Value> = (0..12).map(|i| reply(None, call("control_room_post", &json!({"message":format!("{i}{script}")}).to_string()), "tool_calls")).collect();
+    let mut replies: Vec<Value> = (0..12)
+        .map(|i| {
+            reply(
+                None,
+                call(
+                    "control_room_post",
+                    &json!({"message":format!("{i}{script}")}).to_string(),
+                ),
+                "tool_calls",
+            )
+        })
+        .collect();
     replies.push(reply(Some("Done."), json!(null), "stop"));
     let mut host = mock(replies);
     host.summary_errors = (0..64).map(|_| truncated()).collect();
@@ -372,30 +672,64 @@ fn a_truncated_summary_is_retried_shorter_then_replaced_by_a_digest() {
     let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
     assert!(last.contains("Digest of steps"), "{last}");
     assert!(last.contains("called control_room_post"));
-    assert!(host.records.iter().any(|(k, t)| k == "compaction" && t.contains("deterministic digest") && t.contains("declared token limit")));
+    assert!(
+        host.records.iter().any(|(k, t)| k == "compaction"
+            && t.contains("deterministic digest")
+            && t.contains("declared token limit"))
+    );
     // Cancellation during a summary is not papered over with a digest.
-    let mut host = mock((0..12).map(|i| reply(None, call("control_room_post", &json!({"message":format!("{i}{script}")}).to_string()), "tool_calls")).collect());
+    let mut host = mock(
+        (0..12)
+            .map(|i| {
+                reply(
+                    None,
+                    call(
+                        "control_room_post",
+                        &json!({"message":format!("{i}{script}")}).to_string(),
+                    ),
+                    "tool_calls",
+                )
+            })
+            .collect(),
+    );
     host.tool_text = "output line\n".repeat(800);
     host.summary_errors = VecDeque::from([io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled")]);
     let _ = run(&mut host, "m", &small, compactor(6000), "set up", &Policy::default());
     assert!(!host.words.is_empty());
-    assert!(!host.records.iter().any(|(k, t)| k == "compaction" && t.contains("Model call cancelled")));
+    assert!(
+        !host
+            .records
+            .iter()
+            .any(|(k, t)| k == "compaction" && t.contains("Model call cancelled"))
+    );
 }
 #[test]
 fn worker_tool_schemas_fit_the_declared_overhead_reserve() {
-    use crate::worker_tools::deferred::{listed, offered, Facts};
+    use crate::worker_tools::deferred::{Facts, listed, offered};
     use control_context::Audience;
     for role in Audience::ALL {
         for improve in [false, true] {
-            let facts = Facts { role, improve, managed: true, judge: role == Audience::Advisor, advisor: role == Audience::Advisor,
-                shell: true, local: true, rooms: true, standing: crate::personas::Effective::builtin("worker", false) };
+            let facts = Facts {
+                role,
+                improve,
+                managed: true,
+                judge: role == Audience::Advisor,
+                advisor: role == Audience::Advisor,
+                shell: true,
+                local: true,
+                rooms: true,
+                standing: crate::personas::Effective::builtin("worker", false),
+            };
             let definitions = listed(&facts);
             let tools = functions(&definitions);
             let estimate = tokens(size(&tools));
             let all = tokens(size(&functions(&offered(&facts))));
             println!("{role:?} improve={improve}: core {estimate} tokens, every callable tool {all} tokens");
             // The reserve covers the role core, schemas loaded during the turn and one exchange.
-            assert!(estimate <= CORE_TOKENS, "core schemas need {estimate} tokens; raise CORE_TOKENS");
+            assert!(
+                estimate <= CORE_TOKENS,
+                "core schemas need {estimate} tokens; raise CORE_TOKENS"
+            );
             // Names and parameter schemas are passed through unchanged.
             for (tool, definition) in tools.iter().zip(&definitions) {
                 assert_eq!(tool["function"]["name"], definition["name"]);
@@ -426,11 +760,21 @@ fn deferred_tools_load_natively_on_search_or_first_use() {
                 .collect::<Vec<_>>();
             crate::toolbox::result(Ok(json!({"tools":tools})))
         }
-        fn poll(&mut self) -> Poll { self.0.poll() }
-        fn model(&mut self, body: &Value) -> io::Result<Value> { self.0.model(body) }
-        fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> { self.0.summarize(evidence, words) }
-        fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) { self.0.record(kind, id, text, output, status) }
-        fn metered(&mut self, meter: &Meter) { self.0.metered(meter) }
+        fn poll(&mut self) -> Poll {
+            self.0.poll()
+        }
+        fn model(&mut self, body: &Value) -> io::Result<Value> {
+            self.0.model(body)
+        }
+        fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> {
+            self.0.summarize(evidence, words)
+        }
+        fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) {
+            self.0.record(kind, id, text, output, status)
+        }
+        fn metered(&mut self, meter: &Meter) {
+            self.0.metered(meter)
+        }
     }
     let mut host = Deferred(mock(vec![
         reply(None, call("control_watch_stop", r#"{"id":"w1"}"#), "tool_calls"),
@@ -438,40 +782,92 @@ fn deferred_tools_load_natively_on_search_or_first_use() {
         reply(None, call("control_nope", "{}"), "tool_calls"),
         reply(Some("Stopped."), json!(null), "stop"),
     ]));
-    let outcome = run(&mut host, "qwen-local", &limits(), compactor(20000), "Stop the watch", &Policy::default()).unwrap();
+    let outcome = run(
+        &mut host,
+        "qwen-local",
+        &limits(),
+        compactor(20000),
+        "Stop the watch",
+        &Policy::default(),
+    )
+    .unwrap();
     assert_eq!(outcome.text, "Stopped.");
-    let calls = host.0.calls.iter().map(|(n, a, nonce)| format!("{n} {a} {nonce}")).collect::<Vec<_>>();
-    assert_eq!(calls, [
-        r#"control_tool_search {"names":["control_watch_stop"]} 1-0-1"#,
-        r#"control_watch_stop {"id":"w1"} 1-0"#,
-        r#"control_tool_search {"names":["control_port_status"]} 2-0"#,
-        r#"control_tool_search {"names":["control_nope"]} 3-0-1"#,
-    ], "an unknown name loads nothing and never runs");
-    let offered = |step: usize| host.0.requests[step]["tools"].as_array().unwrap().iter()
-        .map(|t| t["function"]["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let calls = host
+        .0
+        .calls
+        .iter()
+        .map(|(n, a, nonce)| format!("{n} {a} {nonce}"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        calls,
+        [
+            r#"control_tool_search {"names":["control_watch_stop"]} 1-0-1"#,
+            r#"control_watch_stop {"id":"w1"} 1-0"#,
+            r#"control_tool_search {"names":["control_port_status"]} 2-0"#,
+            r#"control_tool_search {"names":["control_nope"]} 3-0-1"#,
+        ],
+        "an unknown name loads nothing and never runs"
+    );
+    let offered = |step: usize| {
+        host.0.requests[step]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
     assert!(!offered(0).contains(&"control_watch_stop".to_owned()));
-    assert!(offered(1).contains(&"control_watch_stop".to_owned()) && !offered(1).contains(&"control_port_status".to_owned()));
+    assert!(
+        offered(1).contains(&"control_watch_stop".to_owned())
+            && !offered(1).contains(&"control_port_status".to_owned())
+    );
     assert!(offered(2).contains(&"control_port_status".to_owned()));
     let last = serde_json::to_string(&host.0.requests[3]["messages"]).unwrap();
     assert!(last.contains("unknown tool"), "{last}");
     // The loaded schema is a function tool; the search result only names it.
-    let seen = host.0.requests[2]["messages"].as_array().unwrap().iter().rev().find(|m| m["role"] == "tool").unwrap()["content"].as_str().unwrap().to_owned();
-    assert_eq!(seen, r#"{"tools":[{"description":"control_port_status schema","name":"control_port_status"}]}"#);
+    let seen = host.0.requests[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "tool")
+        .unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        seen,
+        r#"{"tools":[{"description":"control_port_status schema","name":"control_port_status"}]}"#
+    );
 }
 
 #[test]
 fn a_search_result_names_loaded_tools_instead_of_repeating_their_schemas() {
-    let schemas = crate::tool_registry::worker_definitions(false).into_iter()
-        .filter(|t| matches!(t["name"].as_str(), Some("control_service_exec" | "control_watch_stop" | "control_port_status")))
+    let schemas = crate::tool_registry::worker_definitions(false)
+        .into_iter()
+        .filter(|t| {
+            matches!(
+                t["name"].as_str(),
+                Some("control_service_exec" | "control_watch_stop" | "control_port_status")
+            )
+        })
         .collect::<Vec<_>>();
     assert_eq!(schemas.len(), 3);
     let note = "Host note: one more thing.";
-    let mut full = crate::toolbox::result(Ok(json!({"tools":schemas,"next":"These tools are now callable directly by name."})));
-    full["content"].as_array_mut().unwrap().push(json!({"type":"text","text":note}));
+    let mut full = crate::toolbox::result(Ok(
+        json!({"tools":schemas,"next":"These tools are now callable directly by name."}),
+    ));
+    full["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type":"text","text":note}));
     let before = result_text(&full).0.len();
     let shown = searched(full);
     let (text, failed) = result_text(&shown);
-    assert!(!failed && !text.contains("inputSchema") && text.ends_with(note), "{text}");
+    assert!(
+        !failed && !text.contains("inputSchema") && text.ends_with(note),
+        "{text}"
+    );
     assert!(text.contains(r#""name":"control_service_exec""#) && text.contains("callable directly"));
     for line in shown["structuredContent"]["data"]["tools"].as_array().unwrap() {
         assert!(line["description"].as_str().unwrap().len() <= 160, "{line}");
@@ -497,23 +893,49 @@ fn accounting(meter: Meter) -> (crate::usage::Accounting, Option<Tokens>) {
 #[test]
 fn usage_is_metered_after_every_model_call_with_cached_prompt_tokens() {
     use crate::usage::Accounting;
-    let tokens = |i, c, o| Tokens { input_tokens: i, cached_input_tokens: c, output_tokens: o };
+    let tokens = |i, c, o| Tokens {
+        input_tokens: i,
+        cached_input_tokens: c,
+        output_tokens: o,
+    };
     // llama.cpp reports the reused prefix in timings.cache_n.
     let mut host = mock(vec![
-        used(reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls"), json!({"prompt_tokens":1000,"completion_tokens":20})),
+        used(
+            reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls"),
+            json!({"prompt_tokens":1000,"completion_tokens":20}),
+        ),
         json!({"choices":[{"finish_reason":"stop","message":{"content":"Done."}}],
             "usage":{"prompt_tokens":1100,"completion_tokens":5},"timings":{"cache_n":990,"prompt_n":110,"predicted_n":5}}),
     ]);
     let outcome = go(&mut host).unwrap();
     assert_eq!(host.meters.len(), 2, "one live update per model call");
-    assert_eq!(host.meters[0], Meter { tokens: Some(tokens(1000, 0, 20)), calls: 1, reported: 1, reasoning: 0 });
-    assert_eq!(host.meters[1], Meter { tokens: Some(tokens(2100, 990, 25)), calls: 2, reported: 2, reasoning: 0 });
+    assert_eq!(
+        host.meters[0],
+        Meter {
+            tokens: Some(tokens(1000, 0, 20)),
+            calls: 1,
+            reported: 1,
+            reasoning: 0
+        }
+    );
+    assert_eq!(
+        host.meters[1],
+        Meter {
+            tokens: Some(tokens(2100, 990, 25)),
+            calls: 2,
+            reported: 2,
+            reasoning: 0
+        }
+    );
     assert_eq!(outcome.tokens, Some(tokens(2100, 990, 25)));
     // While running the totals are a lower bound; once over, all calls reported.
     let mut running = crate::usage::Attempt::default();
     running.record_usage(host.meters[0].usage(false, None));
     assert_eq!(running.accounting, Accounting::Partial);
-    assert_eq!(accounting(host.meters[1]), (Accounting::Reported, Some(tokens(2100, 990, 25))));
+    assert_eq!(
+        accounting(host.meters[1]),
+        (Accounting::Reported, Some(tokens(2100, 990, 25)))
+    );
 
     // A call without usage makes the total a lower bound.
     let mut host = mock(vec![
@@ -521,10 +943,15 @@ fn usage_is_metered_after_every_model_call_with_cached_prompt_tokens() {
         json!({"choices":[{"finish_reason":"stop","message":{"content":"Done."}}]}),
     ]);
     go(&mut host).unwrap();
-    assert_eq!(accounting(*host.meters.last().unwrap()), (Accounting::Partial, Some(tokens(100, 0, 10))));
+    assert_eq!(
+        accounting(*host.meters.last().unwrap()),
+        (Accounting::Partial, Some(tokens(100, 0, 10)))
+    );
 
     // No call reported anything: unknown, never zero.
-    let mut host = mock(vec![json!({"choices":[{"finish_reason":"stop","message":{"content":"Done."}}]})]);
+    let mut host = mock(vec![
+        json!({"choices":[{"finish_reason":"stop","message":{"content":"Done."}}]}),
+    ]);
     go(&mut host).unwrap();
     assert_eq!(accounting(*host.meters.last().unwrap()), (Accounting::Unknown, None));
 }
@@ -533,26 +960,71 @@ fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
     use crate::usage::Accounting;
     // Cancelled while the second call was in flight: the first call's usage is
     // kept and the unanswered call makes it a lower bound.
-    let mut host = mock(vec![reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls")]);
-    host.replies.push_back(Err(io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled")));
-    host.polls = VecDeque::from([Poll::Continue, Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]);
+    let mut host = mock(vec![reply(
+        None,
+        call("control_room_post", r#"{"message":"a"}"#),
+        "tool_calls",
+    )]);
+    host.replies
+        .push_back(Err(io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled")));
+    host.polls = VecDeque::from([
+        Poll::Continue,
+        Poll::Continue,
+        Poll::Stop(("cancelled", "Cancelled.".into())),
+    ]);
     assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
     let last = *host.meters.last().unwrap();
     assert_eq!((last.calls, last.reported), (2, 1));
-    assert_eq!(accounting(last), (Accounting::Partial, Some(Tokens { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10 })));
+    assert_eq!(
+        accounting(last),
+        (
+            Accounting::Partial,
+            Some(Tokens {
+                input_tokens: 100,
+                cached_input_tokens: 0,
+                output_tokens: 10
+            })
+        )
+    );
     // Cancelled between steps: every sent call reported, so the totals are exact.
-    let mut host = mock(vec![reply(None, call("control_room_post", r#"{"message":"a"}"#), "tool_calls")]);
+    let mut host = mock(vec![reply(
+        None,
+        call("control_room_post", r#"{"message":"a"}"#),
+        "tool_calls",
+    )]);
     host.polls = VecDeque::from([Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]);
     assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
     assert_eq!(accounting(*host.meters.last().unwrap()).0, Accounting::Reported);
     // A failed turn keeps its totals too.
-    let mut host = mock((0..5).map(|_| reply(None, call("control_room_post", "[1]"), "tool_calls")).collect());
+    let mut host = mock(
+        (0..5)
+            .map(|_| reply(None, call("control_room_post", "[1]"), "tool_calls"))
+            .collect(),
+    );
     assert_eq!(go(&mut host).err().unwrap().0, "failed");
     assert_eq!(host.meters.last().unwrap().tokens.unwrap().input_tokens, 400);
     // Refused before any call: nothing is metered (the worker records not launched).
     let mut host = mock(vec![]);
-    let small = Limits { context_tokens: 2048, output_tokens: 512, input_bytes: 1024, output_bytes: 2048 };
-    assert_eq!(run(&mut host, "m", &small, compactor(1000), &"x".repeat(6000), &Policy::default()).err().unwrap().0, "blocked");
+    let small = Limits {
+        context_tokens: 2048,
+        output_tokens: 512,
+        input_bytes: 1024,
+        output_bytes: 2048,
+    };
+    assert_eq!(
+        run(
+            &mut host,
+            "m",
+            &small,
+            compactor(1000),
+            &"x".repeat(6000),
+            &Policy::default()
+        )
+        .err()
+        .unwrap()
+        .0,
+        "blocked"
+    );
     assert!(host.meters.is_empty());
 }
 
@@ -568,19 +1040,41 @@ fn the_observation_ends_every_request_and_never_enters_the_stable_prefix() {
     ]);
     host.observations = ["hp=20", "hp=17", "hp=9"].map(observed).into();
     go(&mut host).unwrap();
-    assert_eq!(host.firsts, [true, false, false], "the first step waits like a turn start");
-    let requests: Vec<&Vec<Value>> = host.requests.iter().map(|r| r["messages"].as_array().unwrap()).collect();
+    assert_eq!(
+        host.firsts,
+        [true, false, false],
+        "the first step waits like a turn start"
+    );
+    let requests: Vec<&Vec<Value>> = host
+        .requests
+        .iter()
+        .map(|r| r["messages"].as_array().unwrap())
+        .collect();
     for (request, value) in requests.iter().zip(["hp=20", "hp=17", "hp=9"]) {
-        assert_eq!(request.last().unwrap(), &json!({"role":"user","content":observed(value)}), "refreshed, last");
-        let shown = request.iter().filter(|m| m.to_string().contains("[Observation")).count();
+        assert_eq!(
+            request.last().unwrap(),
+            &json!({"role":"user","content":observed(value)}),
+            "refreshed, last"
+        );
+        let shown = request
+            .iter()
+            .filter(|m| m.to_string().contains("[Observation"))
+            .count();
         assert_eq!(shown, 1, "only this step's observation: {request:?}");
     }
     // Everything before the observation is a byte-identical prefix of the next request.
     for pair in requests.windows(2) {
         let stable = &pair[0][..pair[0].len() - 1];
-        assert_eq!(&pair[1][..stable.len()], stable, "the stable prefix is unchanged step to step");
+        assert_eq!(
+            &pair[1][..stable.len()],
+            stable,
+            "the stable prefix is unchanged step to step"
+        );
     }
-    assert!(host.records.iter().all(|(_, text)| !text.contains("hp=")), "never recorded");
+    assert!(
+        host.records.iter().all(|(_, text)| !text.contains("hp=")),
+        "never recorded"
+    );
 }
 #[test]
 fn an_inbox_joins_the_end_of_the_next_request_once_and_keeps_the_prefix() {
@@ -593,14 +1087,22 @@ fn an_inbox_joins_the_end_of_the_next_request_once_and_keeps_the_prefix() {
     host.inboxes = [None, Some(inbox.to_owned()), None].into();
     host.observations = ["hp=20", "hp=17", "hp=9"].map(observed).into();
     go(&mut host).unwrap();
-    let requests: Vec<&Vec<Value>> = host.requests.iter().map(|r| r["messages"].as_array().unwrap()).collect();
+    let requests: Vec<&Vec<Value>> = host
+        .requests
+        .iter()
+        .map(|r| r["messages"].as_array().unwrap())
+        .collect();
     assert!(!requests[0].iter().any(|m| m.to_string().contains("Go north")));
     // Last before the observation: the end of the newest tool result.
     let newest = &requests[1][requests[1].len() - 2];
     assert_eq!(newest["role"], "tool");
     assert!(newest["content"].as_str().unwrap().ends_with(inbox), "{newest}");
     for request in &requests[1..] {
-        assert_eq!(request.iter().filter(|m| m.to_string().contains("Go north")).count(), 1, "exactly once: {request:?}");
+        assert_eq!(
+            request.iter().filter(|m| m.to_string().contains("Go north")).count(),
+            1,
+            "exactly once: {request:?}"
+        );
     }
     for pair in requests.windows(2) {
         let stable = &pair[0][..pair[0].len() - 2];
@@ -623,27 +1125,59 @@ fn a_step_without_an_observation_sends_nothing_extra() {
 fn measure_observation_tokens_per_step() {
     let state = |step: usize, changing: bool| {
         let value = if changing { step } else { 0 };
-        let lines: String = (0..40).map(|i| format!("entity-{i:02} hp={} pos={},{},64\n", 20 - (value + i) % 20, value * 3 + i, i * 7)).collect();
+        let lines: String = (0..40)
+            .map(|i| {
+                format!(
+                    "entity-{i:02} hp={} pos={},{},64\n",
+                    20 - (value + i) % 20,
+                    value * 3 + i,
+                    i * 7
+                )
+            })
+            .collect();
         observed(lines.trim_end())
     };
     for (label, changing) in [("unchanged", false), ("changing", true)] {
-        let replies = (0..8).map(|i| reply(None, call("control_room_post", &format!(r#"{{"message":"update {i}"}}"#)), "tool_calls"))
-            .chain([reply(Some("Done."), json!(null), "stop")]).collect();
+        let replies = (0..8)
+            .map(|i| {
+                reply(
+                    None,
+                    call("control_room_post", &format!(r#"{{"message":"update {i}"}}"#)),
+                    "tool_calls",
+                )
+            })
+            .chain([reply(Some("Done."), json!(null), "stop")])
+            .collect();
         let mut host = mock(replies);
         host.tool_text = "{\"posted\":true}".into();
         host.observations = (0..9).map(|step| state(step, changing)).collect();
         go(&mut host).unwrap();
-        let requests: Vec<Vec<String>> = host.requests.iter()
-            .map(|r| r["messages"].as_array().unwrap().iter().map(Value::to_string).collect()).collect();
-        let observation = tokens(serde_json::to_vec(&json!({"role":"user","content":state(0, false)})).unwrap().len());
+        let requests: Vec<Vec<String>> = host
+            .requests
+            .iter()
+            .map(|r| r["messages"].as_array().unwrap().iter().map(Value::to_string).collect())
+            .collect();
+        let observation = tokens(
+            serde_json::to_vec(&json!({"role":"user","content":state(0, false)}))
+                .unwrap()
+                .len(),
+        );
         let mut total = Vec::new();
         let mut fresh = Vec::new();
         for (index, request) in requests.iter().enumerate() {
             total.push(tokens(request.iter().map(String::len).sum()));
-            let shared = index.checked_sub(1).map_or(0, |previous| request.iter().zip(&requests[previous]).take_while(|(a, b)| a == b).count());
+            let shared = index.checked_sub(1).map_or(0, |previous| {
+                request
+                    .iter()
+                    .zip(&requests[previous])
+                    .take_while(|(a, b)| a == b)
+                    .count()
+            });
             fresh.push(tokens(request[shared..].iter().map(String::len).sum()));
         }
-        println!("local {label}: observation ≈{observation} tokens; request tokens per step {total:?}; uncached tokens per step {fresh:?}");
+        println!(
+            "local {label}: observation ≈{observation} tokens; request tokens per step {total:?}; uncached tokens per step {fresh:?}"
+        );
     }
 }
 
@@ -653,7 +1187,10 @@ fn thought(content: Option<&str>, reasoning: &str, calls: Value, finish: &str) -
     value
 }
 fn budgets(host: &Mock) -> Vec<u64> {
-    host.requests.iter().map(|r| r["reasoning_budget_tokens"].as_u64().unwrap()).collect()
+    host.requests
+        .iter()
+        .map(|r| r["reasoning_budget_tokens"].as_u64().unwrap())
+        .collect()
 }
 fn post(message: &str) -> Value {
     call("control_room_post", &json!({"message":message}).to_string())
@@ -661,17 +1198,31 @@ fn post(message: &str) -> Value {
 #[test]
 fn reasoning_never_enters_the_transcript_and_is_metered_as_output() {
     let mut host = mock(vec![
-        thought(Some("Posting."), "SECRET-PLAN: post first, then report.", post("hello"), "tool_calls"),
+        thought(
+            Some("Posting."),
+            "SECRET-PLAN: post first, then report.",
+            post("hello"),
+            "tool_calls",
+        ),
         thought(Some("<think>INLINE-PLAN</think>Posted."), "", json!(null), "stop"),
     ]);
     let outcome = go(&mut host).unwrap();
     assert_eq!(outcome.text, "Posted.", "an inline think block is not the report");
     let sent = serde_json::to_string(&host.requests).unwrap();
-    assert!(!sent.contains("SECRET-PLAN") && !sent.contains("reasoning_content"), "{sent}");
+    assert!(
+        !sent.contains("SECRET-PLAN") && !sent.contains("reasoning_content"),
+        "{sent}"
+    );
     let second = host.requests[1]["messages"].as_array().unwrap();
-    assert_eq!(second[2], json!({"role":"assistant","content":"Posting.","tool_calls":[{"id":"id-control_room_post","type":"function",
-        "function":{"name":"control_room_post","arguments":"{\"message\":\"hello\"}"}}]}));
-    assert!(host.records.iter().all(|(_, text)| !text.contains("PLAN")), "not recorded as activity");
+    assert_eq!(
+        second[2],
+        json!({"role":"assistant","content":"Posting.","tool_calls":[{"id":"id-control_room_post","type":"function",
+        "function":{"name":"control_room_post","arguments":"{\"message\":\"hello\"}"}}]})
+    );
+    assert!(
+        host.records.iter().all(|(_, text)| !text.contains("PLAN")),
+        "not recorded as activity"
+    );
     assert_eq!(host.reasoned, ["SECRET-PLAN: post first, then report.", "INLINE-PLAN"]);
     // Reasoning is part of the output tokens; estimated when not reported.
     let meter = host.meters.last().unwrap();
@@ -686,7 +1237,12 @@ fn reasoning_never_enters_the_transcript_and_is_metered_as_output() {
 }
 #[test]
 fn thinking_budgets_follow_the_turn_and_always_leave_room_to_answer() {
-    let wide = Limits { context_tokens: 32768, output_tokens: 8192, input_bytes: 28000, output_bytes: 8192 };
+    let wide = Limits {
+        context_tokens: 32768,
+        output_tokens: 8192,
+        input_bytes: 28000,
+        output_bytes: 8192,
+    };
     let mut host = mock(vec![
         reply(None, post("a"), "tool_calls"),                       // first step: high
         reply(None, post("fail"), "tool_calls"),                    // routine: low
@@ -708,42 +1264,100 @@ fn thinking_budgets_follow_the_turn_and_always_leave_room_to_answer() {
     for request in &host.requests {
         let budget = request["reasoning_budget_tokens"].as_u64().unwrap();
         assert_eq!(request["max_tokens"], 8192);
-        assert!(budget * 2 <= 8192, "thinking leaves at least half the output for the answer");
+        assert!(
+            budget * 2 <= 8192,
+            "thinking leaves at least half the output for the answer"
+        );
         assert_eq!(request["chat_template_kwargs"]["enable_thinking"], budget > 0);
         assert_eq!(request["reasoning_format"], "deepseek");
     }
-    assert!(host.requests[0]["messages"][0]["content"].as_str().unwrap().contains("/think"), "the switch is explained");
+    assert!(
+        host.requests[0]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("/think"),
+        "the switch is explained"
+    );
     // A small output reserve caps every level at half of it.
-    let mut host = mock(vec![reply(None, post("a"), "tool_calls"), reply(Some("Done."), json!(null), "stop")]);
+    let mut host = mock(vec![
+        reply(None, post("a"), "tool_calls"),
+        reply(Some("Done."), json!(null), "stop"),
+    ]);
     go(&mut host).unwrap();
     assert_eq!(budgets(&host), [512, 512]);
     // An entry set to off never thinks, whatever the model asks.
-    let mut host = mock(vec![reply(Some("/think"), json!(null), "stop"), reply(Some("Done."), json!(null), "stop")]);
-    let off = Policy { thinking: Thinking::Off, ..Policy::default() };
-    assert_eq!(run(&mut host, "m", &wide, compactor(20000), "p", &off).unwrap().text, "Done.");
+    let mut host = mock(vec![
+        reply(Some("/think"), json!(null), "stop"),
+        reply(Some("Done."), json!(null), "stop"),
+    ]);
+    let off = Policy {
+        thinking: Thinking::Off,
+        ..Policy::default()
+    };
+    assert_eq!(
+        run(&mut host, "m", &wide, compactor(20000), "p", &off).unwrap().text,
+        "Done."
+    );
     assert_eq!(budgets(&host), [0, 0]);
-    assert!(host.requests.iter().all(|r| r["chat_template_kwargs"]["enable_thinking"] == false));
-    assert!(!host.requests[0]["messages"][0]["content"].as_str().unwrap().contains("/think"));
+    assert!(
+        host.requests
+            .iter()
+            .all(|r| r["chat_template_kwargs"]["enable_thinking"] == false)
+    );
+    assert!(
+        !host.requests[0]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("/think")
+    );
 }
 #[test]
 fn a_resumed_turn_thinks_minimally_until_its_first_tool_call() {
-    let wide = Limits { context_tokens: 32768, output_tokens: 8192, input_bytes: 28000, output_bytes: 8192 };
+    let wide = Limits {
+        context_tokens: 32768,
+        output_tokens: 8192,
+        input_bytes: 28000,
+        output_bytes: 8192,
+    };
     let mut host = mock(vec![
         reply(None, call("control_unknown", "{}"), "tool_calls"), // nothing ran: still resuming
         reply(None, post("fail"), "tool_calls"),                  // ran (and failed): acting again
         reply(None, post("a"), "tool_calls"),
         reply(Some("Done."), json!(null), "stop"),
     ]);
-    let resumed = Policy { resumed: true, ..Policy::default() };
+    let resumed = Policy {
+        resumed: true,
+        ..Policy::default()
+    };
     run(&mut host, "m", &wide, compactor(20000), "p", &resumed).unwrap();
     assert_eq!(budgets(&host), [128, 128, 4096, 512]);
 }
 #[test]
 fn a_cut_off_turn_hands_over_its_latest_reasoning() {
-    let mut host = mock((0..3).map(|i| thought(None, &format!("plan step {i}"), post("x"), "tool_calls")).collect());
-    let failure = run(&mut host, "m", &limits(), compactor(20000), "p", &Policy { max_steps: 2, ..Policy::default() }).err().unwrap();
+    let mut host = mock(
+        (0..3)
+            .map(|i| thought(None, &format!("plan step {i}"), post("x"), "tool_calls"))
+            .collect(),
+    );
+    let failure = run(
+        &mut host,
+        "m",
+        &limits(),
+        compactor(20000),
+        "p",
+        &Policy {
+            max_steps: 2,
+            ..Policy::default()
+        },
+    )
+    .err()
+    .unwrap();
     assert!(failure.1.contains("2-step limit") && host.step_limited);
-    assert_eq!(host.reasoned.last().unwrap(), "plan step 1", "the worker carries the latest into the host checkpoint");
+    assert_eq!(
+        host.reasoned.last().unwrap(),
+        "plan step 1",
+        "the worker carries the latest into the host checkpoint"
+    );
 }
 
 #[test]
@@ -753,16 +1367,38 @@ fn a_diagnosis_survives_many_in_turn_compactions() {
     // with every node, whatever the compactor keeps.
     let finding = "Finding: the Oracle JDK hard-codes /lib/ld-linux-aarch64.so.1, absent in the Nix image";
     let decision = "Decision: run java through the Nix glibc loader";
-    let small = Limits { context_tokens: 8192, output_tokens: 512, input_bytes: 28000, output_bytes: 2048 };
+    let small = Limits {
+        context_tokens: 8192,
+        output_tokens: 512,
+        input_bytes: 28000,
+        output_bytes: 2048,
+    };
     let mut replies = vec![
-        reply(Some(&format!("Checked the interpreter.\n{finding}")), post("elf"), "tool_calls"),
-        thought(None, &format!("The loader is missing.\n{decision}"), post("plan"), "tool_calls"),
+        reply(
+            Some(&format!("Checked the interpreter.\n{finding}")),
+            post("elf"),
+            "tool_calls",
+        ),
+        thought(
+            None,
+            &format!("The loader is missing.\n{decision}"),
+            post("plan"),
+            "tool_calls",
+        ),
     ];
     replies.extend((0..28).map(|i| reply(None, post(&format!("check {i} {}", "x".repeat(2000))), "tool_calls")));
     replies.push(reply(Some("Done."), json!(null), "stop"));
     let mut host = mock(replies);
     host.tool_text = "readelf output line\n".repeat(150);
-    let outcome = run(&mut host, "m", &small, compactor(6000), "Current request: make the JDK run", &Policy::default()).unwrap();
+    let outcome = run(
+        &mut host,
+        "m",
+        &small,
+        compactor(6000),
+        "Current request: make the JDK run",
+        &Policy::default(),
+    )
+    .unwrap();
     assert!(outcome.compactions >= 3, "{} compactions", outcome.compactions);
     let last = serde_json::to_string(&host.requests.last().unwrap()["messages"]).unwrap();
     // The mock compactor's summaries never mention them, yet both survive.
@@ -784,24 +1420,44 @@ fn rendered(request: &Value) -> String {
 fn prefix_reuse(requests: &[Value]) -> (usize, usize) {
     let texts: Vec<String> = requests.iter().map(rendered).collect();
     let total = texts.iter().map(String::len).sum();
-    let shared = texts.windows(2).map(|pair| pair[0].bytes().zip(pair[1].bytes()).take_while(|(a, b)| a == b).count()).sum();
+    let shared = texts
+        .windows(2)
+        .map(|pair| pair[0].bytes().zip(pair[1].bytes()).take_while(|(a, b)| a == b).count())
+        .sum();
     (shared, total)
 }
 #[test]
 fn shrinking_in_batches_keeps_the_prefix_stable_between_batches() {
     // A zero threshold: every step that leaves the window shrinks, in batches.
-    let wide = Limits { context_tokens: 131072, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
+    let wide = Limits {
+        context_tokens: 131072,
+        output_tokens: 1024,
+        input_bytes: 28000,
+        output_bytes: 8192,
+    };
     let steps = 24;
-    let eager = Policy { shrink_percent: 0, ..Policy::default() };
+    let eager = Policy {
+        shrink_percent: 0,
+        ..Policy::default()
+    };
     let (host, outcome, _) = setup_turn(&wide, &eager, steps);
     assert_eq!(outcome.unwrap().compactions, 0);
-    let messages: Vec<&Vec<Value>> = host.requests.iter().map(|r| r["messages"].as_array().unwrap()).collect();
+    let messages: Vec<&Vec<Value>> = host
+        .requests
+        .iter()
+        .map(|r| r["messages"].as_array().unwrap())
+        .collect();
     let shrunk = |step: usize| step.saturating_sub(4) / 4 * 4;
     let mut breaks = 0;
     for (step, pair) in messages.windows(2).enumerate() {
         let prefix = pair[1].len() >= pair[0].len() && pair[1][..pair[0].len()] == pair[0][..];
         if shrunk(step) == shrunk(step + 1) {
-            assert!(prefix, "request {} is not a byte-identical prefix of request {}", step, step + 1);
+            assert!(
+                prefix,
+                "request {} is not a byte-identical prefix of request {}",
+                step,
+                step + 1
+            );
         } else {
             breaks += !prefix as usize;
         }
@@ -809,54 +1465,131 @@ fn shrinking_in_batches_keeps_the_prefix_stable_between_batches() {
     assert_eq!(breaks, (steps - 4) / 4, "the prefix breaks only once per batch");
     // Never fewer than four steps verbatim, never more than seven.
     for request in &messages {
-        let whole = request.iter().filter(|m| m["role"] == "tool" && !m["content"].as_str().unwrap().contains("more bytes of this earlier result")).count();
+        let whole = request
+            .iter()
+            .filter(|m| {
+                m["role"] == "tool"
+                    && !m["content"]
+                        .as_str()
+                        .unwrap()
+                        .contains("more bytes of this earlier result")
+            })
+            .count();
         let count = request.iter().filter(|m| m["role"] == "tool").count();
         assert!(whole == count || (4..=7).contains(&whole), "{whole} of {count}");
     }
     // The measured reuse against shrinking one step per step.
-    let (single, _, _) = setup_turn(&wide, &Policy { shrink_batch: 1, ..eager }, steps);
+    let (single, _, _) = setup_turn(
+        &wide,
+        &Policy {
+            shrink_batch: 1,
+            ..eager
+        },
+        steps,
+    );
     let (a, total_a) = prefix_reuse(&single.requests);
     let (b, total_b) = prefix_reuse(&host.requests);
     let (one, four) = (a as f64 * 100.0 / total_a as f64, b as f64 * 100.0 / total_b as f64);
-    println!("prefix reuse over a {steps}-step turn: one step per step {one:.1}% of {total_a} prompt bytes; batches of 4 {four:.1}% of {total_b}");
+    println!(
+        "prefix reuse over a {steps}-step turn: one step per step {one:.1}% of {total_a} prompt bytes; batches of 4 {four:.1}% of {total_b}"
+    );
     assert!(four > one + 10.0, "batched {four:.1}% against {one:.1}%");
 }
 #[test]
 fn requests_stay_append_only_until_the_shrink_threshold_then_shrink_once() {
     // Half the budget falls at step 16 of a 24-step turn; the compaction
     // threshold is never reached.
-    let limits = Limits { context_tokens: 77000, output_tokens: 1024, input_bytes: 28000, output_bytes: 8192 };
+    let limits = Limits {
+        context_tokens: 77000,
+        output_tokens: 1024,
+        input_bytes: 28000,
+        output_bytes: 8192,
+    };
     let budget = limits.context_tokens - limits.output_tokens;
     let steps = 24;
     let (host, outcome, used) = setup_turn(&limits, &Policy::default(), steps);
     assert_eq!(outcome.unwrap().compactions, 0);
     let texts: Vec<String> = host.requests.iter().map(rendered).collect();
     let extends = |pair: &[String]| pair[1].len() > pair[0].len() && pair[1].starts_with(&pair[0]);
-    let breaks: Vec<usize> = texts.windows(2).enumerate().filter(|(_, pair)| !extends(pair)).map(|(step, _)| step + 1).collect();
+    let breaks: Vec<usize> = texts
+        .windows(2)
+        .enumerate()
+        .filter(|(_, pair)| !extends(pair))
+        .map(|(step, _)| step + 1)
+        .collect();
     println!("input tokens per request (budget {budget}): {used:?}\nprefix breaks at requests {breaks:?}");
     // Below the threshold each request extends the previous one byte for byte.
     let first = breaks[0];
-    assert!(used[first - 1] * 100 < budget * SHRINK_PERCENT, "no shrink below the threshold");
+    assert!(
+        used[first - 1] * 100 < budget * SHRINK_PERCENT,
+        "no shrink below the threshold"
+    );
     for pair in texts[..first].windows(2) {
         assert!(extends(pair) && !pair[1].contains("more bytes of this earlier result"));
     }
     // Reaching it shrinks every step but the newest four at once, and the
     // shrunk prefix then stays stable for many steps.
-    let results: Vec<&str> = host.requests[first]["messages"].as_array().unwrap().iter()
-        .filter(|m| m["role"] == "tool").map(|m| m["content"].as_str().unwrap()).collect();
-    assert_eq!(results.iter().filter(|r| r.contains("more bytes of this earlier result")).count(), results.len() - 4);
-    assert!(used[first] < used[first - 1] / 2, "the shrink frees context: {} after {}", used[first], used[first - 1]);
+    let results: Vec<&str> = host.requests[first]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| m["content"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| r.contains("more bytes of this earlier result"))
+            .count(),
+        results.len() - 4
+    );
+    assert!(
+        used[first] < used[first - 1] / 2,
+        "the shrink frees context: {} after {}",
+        used[first],
+        used[first - 1]
+    );
     let next = breaks.get(1).copied().unwrap_or(texts.len());
-    assert!(next - first >= 8, "stable for {} requests after the shrink", next - first);
+    assert!(
+        next - first >= 8,
+        "stable for {} requests after the shrink",
+        next - first
+    );
     // Against shrinking in batches of four from step 8 on, as before.
-    let (eager, _, _) = setup_turn(&limits, &Policy { shrink_percent: 0, ..Policy::default() }, steps);
+    let (eager, _, _) = setup_turn(
+        &limits,
+        &Policy {
+            shrink_percent: 0,
+            ..Policy::default()
+        },
+        steps,
+    );
     let ((a, total_a), (b, total_b)) = (prefix_reuse(&eager.requests), prefix_reuse(&host.requests));
     let (batched, stable) = (a as f64 * 100.0 / total_a as f64, b as f64 * 100.0 / total_b as f64);
-    println!("prefix reuse over a {steps}-step turn: batches of 4 {batched:.1}% of {total_a} prompt bytes ({} prefilled); append-only to the threshold {stable:.1}% of {total_b} ({} prefilled)", total_a - a, total_b - b);
-    assert!(stable > batched && total_b - b < total_a - a, "{stable:.1}% against {batched:.1}%");
+    println!(
+        "prefix reuse over a {steps}-step turn: batches of 4 {batched:.1}% of {total_a} prompt bytes ({} prefilled); append-only to the threshold {stable:.1}% of {total_b} ({} prefilled)",
+        total_a - a,
+        total_b - b
+    );
+    assert!(
+        stable > batched && total_b - b < total_a - a,
+        "{stable:.1}% against {batched:.1}%"
+    );
     // Recall is unchanged: steps leave the recent window in batches as before,
     // shrunk or not, and their leaves hold the whole originals.
-    let leaves: Vec<u64> = host.retained.iter().filter(|(block, _)| block.level == 0).map(|(block, _)| block.start).collect();
-    assert_eq!(leaves, (0..(steps - context::window(steps, 4, 4)) as u64).collect::<Vec<_>>());
-    assert!(host.retained.iter().all(|(_, sources)| sources.len() == 1 && sources[0].contains(&host.tool_text[host.tool_text.len() - 400..])));
+    let leaves: Vec<u64> = host
+        .retained
+        .iter()
+        .filter(|(block, _)| block.level == 0)
+        .map(|(block, _)| block.start)
+        .collect();
+    assert_eq!(
+        leaves,
+        (0..(steps - context::window(steps, 4, 4)) as u64).collect::<Vec<_>>()
+    );
+    assert!(
+        host.retained.iter().all(
+            |(_, sources)| sources.len() == 1 && sources[0].contains(&host.tool_text[host.tool_text.len() - 400..])
+        )
+    );
 }

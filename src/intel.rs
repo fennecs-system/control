@@ -64,7 +64,13 @@ struct Tree<'a> {
 }
 impl<'a> Tree<'a> {
     fn new(state: &'a State) -> Self {
-        Self { parent: state.chats.iter().filter_map(|chat| Some((chat.id.as_str(), chat.parent_chat.as_deref()?))).collect() }
+        Self {
+            parent: state
+                .chats
+                .iter()
+                .filter_map(|chat| Some((chat.id.as_str(), chat.parent_chat.as_deref()?)))
+                .collect(),
+        }
     }
     fn root(&self, mut chat: &'a str) -> &'a str {
         for _ in 0..64 {
@@ -86,7 +92,15 @@ fn shorten(text: &str, chars: usize) -> String {
 }
 /// Markdown-inert text: no headings, links or emphasis from untrusted input.
 fn inert(text: &str) -> String {
-    text.chars().map(|c| if matches!(c, '*' | '_' | '`' | '[' | ']' | '#' | '<' | '>' | '|') { ' ' } else { c }).collect()
+    text.chars()
+        .map(|c| {
+            if matches!(c, '*' | '_' | '`' | '[' | ']' | '#' | '<' | '>' | '|') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// One team's figures for the window.
@@ -129,28 +143,87 @@ fn median(values: &mut [u64]) -> Option<u64> {
 
 /// The member table: the lead first, then the most recently active. A
 /// retained peer message (a run with no attempt) is not a turn of its own.
-fn member_table(state: &State, team: &Team<'_>, activity: &HashMap<&str, Member<'_>>, callsigns: &[crate::callsigns::Callsign], at: u64, out: &mut String) {
+fn member_table(
+    state: &State,
+    team: &Team<'_>,
+    activity: &HashMap<&str, Member<'_>>,
+    callsigns: &[crate::callsigns::Callsign],
+    at: u64,
+    out: &mut String,
+) {
     let none = Member::default();
-    let mut rows = team.chats.iter().map(|&i| (&state.chats[i], callsigns[i], activity.get(state.chats[i].id.as_str()).unwrap_or(&none))).collect::<Vec<_>>();
+    let mut rows = team
+        .chats
+        .iter()
+        .map(|&i| {
+            (
+                &state.chats[i],
+                callsigns[i],
+                activity.get(state.chats[i].id.as_str()).unwrap_or(&none),
+            )
+        })
+        .collect::<Vec<_>>();
     // One-off helpers that are not working now would crowd the members out:
     // they are one count, not a row each.
-    let standing = |chat: &crate::chat::Session, member: &Member<'_>| chat.id == team.root || member.judge || member.now.is_some()
-        || state.bots.advises(&chat.id) || state.bots.persists(&chat.id) || !member.live.is_empty() || member.routines > 0;
-    let (helpers, spent) = rows.iter().filter(|(chat, _, member)| !standing(chat, member)).fold((0usize, 0u64), |(count, fresh), (_, _, member)| (count + 1, fresh + member.fresh));
+    let standing = |chat: &crate::chat::Session, member: &Member<'_>| {
+        chat.id == team.root
+            || member.judge
+            || member.now.is_some()
+            || state.bots.advises(&chat.id)
+            || state.bots.persists(&chat.id)
+            || !member.live.is_empty()
+            || member.routines > 0
+    };
+    let (helpers, spent) = rows
+        .iter()
+        .filter(|(chat, _, member)| !standing(chat, member))
+        .fold((0usize, 0u64), |(count, fresh), (_, _, member)| {
+            (count + 1, fresh + member.fresh)
+        });
     rows.retain(|(chat, _, member)| standing(chat, member));
     rows.sort_by_key(|(chat, _, member)| (chat.id != team.root, std::cmp::Reverse(member.last)));
-    out.push_str("- Per member (24 h turns · since last turn · now · claims · routines · median turn/queue · fresh tokens):\n");
+    out.push_str(
+        "- Per member (24 h turns · since last turn · now · claims · routines · median turn/queue · fresh tokens):\n",
+    );
     for (chat, callsign, member) in rows.iter().take(MEMBER_ROWS) {
-        let role = if chat.id == team.root { "lead" } else if member.judge || state.bots.advises(&chat.id) { "advisor" }
-            else if state.bots.persists(&chat.id) { "member" } else { "helper" };
-        let last = member.last.map_or("no turn".into(), |last| format!("{}m ago", at.saturating_sub(last) / 60));
-        let mut claims = member.live.iter().take(2).map(|(key, status)| format!("{} {status}", shorten(&inert(key), 24))).collect::<Vec<_>>();
-        if member.live.len() > 2 { claims.push(format!("+{}", member.live.len() - 2)); }
-        if claims.is_empty() { claims.push("no claim".into()); }
-        if member.done > 0 { claims.push(format!("{} done", member.done)); }
-        let _ = write!(out, "  - {} ({role}): {} turns · {last} · {} · {}", shorten(&inert(&crate::callsigns::label(chat, *callsign)), 24),
-            member.turns, member.now.unwrap_or("idle"), claims.join(", "));
-        if member.routines > 0 { let _ = write!(out, " · {} routine(s)", member.routines); }
+        let role = if chat.id == team.root {
+            "lead"
+        } else if member.judge || state.bots.advises(&chat.id) {
+            "advisor"
+        } else if state.bots.persists(&chat.id) {
+            "member"
+        } else {
+            "helper"
+        };
+        let last = member.last.map_or("no turn".into(), |last| {
+            format!("{}m ago", at.saturating_sub(last) / 60)
+        });
+        let mut claims = member
+            .live
+            .iter()
+            .take(2)
+            .map(|(key, status)| format!("{} {status}", shorten(&inert(key), 24)))
+            .collect::<Vec<_>>();
+        if member.live.len() > 2 {
+            claims.push(format!("+{}", member.live.len() - 2));
+        }
+        if claims.is_empty() {
+            claims.push("no claim".into());
+        }
+        if member.done > 0 {
+            claims.push(format!("{} done", member.done));
+        }
+        let _ = write!(
+            out,
+            "  - {} ({role}): {} turns · {last} · {} · {}",
+            shorten(&inert(&crate::callsigns::label(chat, *callsign)), 24),
+            member.turns,
+            member.now.unwrap_or("idle"),
+            claims.join(", ")
+        );
+        if member.routines > 0 {
+            let _ = write!(out, " · {} routine(s)", member.routines);
+        }
         let (mut seconds_taken, mut waits) = (member.seconds.clone(), member.waits.clone());
         let seconds = |value: Option<u64>| value.map_or("-".into(), |value| format!("{value}s"));
         let (turn, wait) = (median(&mut seconds_taken), median(&mut waits));
@@ -163,7 +236,11 @@ fn member_table(state: &State, team: &Team<'_>, activity: &HashMap<&str, Member<
         let _ = writeln!(out, "  - {} more member(s) not listed", rows.len() - MEMBER_ROWS);
     }
     if helpers > 0 {
-        let _ = writeln!(out, "  - {helpers} finished helper(s): {} tok", crate::history_view::compact(spent));
+        let _ = writeln!(
+            out,
+            "  - {helpers} finished helper(s): {} tok",
+            crate::history_view::compact(spent)
+        );
     }
 }
 
@@ -174,7 +251,11 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
     let since = at.saturating_sub(WINDOW);
     let wanted = match scope {
         Some(chat) => {
-            state.chats.iter().find(|session| session.id == chat).ok_or("Chat not found.")?;
+            state
+                .chats
+                .iter()
+                .find(|session| session.id == chat)
+                .ok_or("Chat not found.")?;
             Some(tree.root(chat))
         }
         None => None,
@@ -187,7 +268,10 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
             continue;
         }
         let index = *slot.entry(root).or_insert_with(|| {
-            teams.push(Team { root, ..Default::default() });
+            teams.push(Team {
+                root,
+                ..Default::default()
+            });
             teams.len() - 1
         });
         let team = &mut teams[index];
@@ -202,32 +286,48 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
     let mut activity: HashMap<&str, Member<'_>> = HashMap::new();
     for run in &state.runtime.runs {
         let Some(chat) = run.chat_id.as_deref() else { continue };
-        let Some(&index) = slot.get(tree.root(chat)) else { continue };
+        let Some(&index) = slot.get(tree.root(chat)) else {
+            continue;
+        };
         let team = &mut teams[index];
         let member = activity.entry(chat).or_default();
         member.judge |= crate::delegation::is_judge(run);
         match run.status.as_str() {
             "running" | "waiting" | "cancelling" => member.now = Some("running"),
-            "queued" => { member.now.get_or_insert("queued"); }
+            "queued" => {
+                member.now.get_or_insert("queued");
+            }
             _ => {}
         }
         if matches!(run.status.as_str(), "queued" | "running" | "waiting") {
             team.active += 1;
         }
-        member.last = member.last.max(run.attempts.iter().map(|attempt| attempt.started_unix).max());
+        member.last = member
+            .last
+            .max(run.attempts.iter().map(|attempt| attempt.started_unix).max());
         // Queue wait: the run's creation (its ID) to its first attempt.
-        if let (Some(first), Some(created)) = (run.attempts.first().filter(|attempt| attempt.started_unix >= since), run.created_ms()) {
-            member.waits.push((first.started_unix * 1000).saturating_sub(created) / 1000);
+        if let (Some(first), Some(created)) = (
+            run.attempts.first().filter(|attempt| attempt.started_unix >= since),
+            run.created_ms(),
+        ) {
+            member
+                .waits
+                .push((first.started_unix * 1000).saturating_sub(created) / 1000);
         }
         for attempt in run.attempts.iter().filter(|attempt| attempt.started_unix >= since) {
             team.turns += 1;
             member.turns += 1;
-            if attempt.elapsed_ms > 0 { member.seconds.push(attempt.elapsed_ms / 1000); }
+            if attempt.elapsed_ms > 0 {
+                member.seconds.push(attempt.elapsed_ms / 1000);
+            }
             if let Some(tokens) = attempt.tokens {
                 team.tokens += tokens.input_tokens.saturating_add(tokens.output_tokens);
                 team.measured += 1;
                 // Fresh tokens, as cost burn counts them: uncached input and output.
-                member.fresh += tokens.input_tokens.saturating_sub(tokens.cached_input_tokens).saturating_add(tokens.output_tokens);
+                member.fresh += tokens
+                    .input_tokens
+                    .saturating_sub(tokens.cached_input_tokens)
+                    .saturating_add(tokens.output_tokens);
             }
         }
     }
@@ -235,7 +335,9 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         activity.entry(watch.chat.as_str()).or_default().routines += 1;
     }
     for claim in &state.collective.claims {
-        let Some(&index) = slot.get(tree.root(&claim.owner)) else { continue };
+        let Some(&index) = slot.get(tree.root(&claim.owner)) else {
+            continue;
+        };
         let member = activity.entry(&claim.owner).or_default();
         match claim.status {
             crate::rooms::claims::Status::Done => member.done += 1,
@@ -245,15 +347,20 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         }
         match claim.status {
             crate::rooms::claims::Status::Done => teams[index].done += 1,
-            crate::rooms::claims::Status::Working | crate::rooms::claims::Status::Blocked if !claim.abandoned => teams[index].open += 1,
+            crate::rooms::claims::Status::Working | crate::rooms::claims::Status::Blocked if !claim.abandoned => {
+                teams[index].open += 1
+            }
             _ => {}
         }
     }
     // A node brief lists teams active in the window: members, turns or a
     // pending request. Antibody trees are the observers, not a team.
     if wanted.is_none() {
-        teams.retain(|team| (team.members > 0 || team.turns > 0) && (team.turns > 0 || team.active > 0 || team.requests != (0, 0, 0))
-            && !crate::bots::antibody_offered(state, team.root));
+        teams.retain(|team| {
+            (team.members > 0 || team.turns > 0)
+                && (team.turns > 0 || team.active > 0 || team.requests != (0, 0, 0))
+                && !crate::bots::antibody_offered(state, team.root)
+        });
     }
     teams.sort_by(|a, b| b.tokens.cmp(&a.tokens).then(a.root.cmp(b.root)));
     let listed = teams.len();
@@ -266,33 +373,72 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
     };
     let _ = writeln!(out, "# Intel brief · {} · {heading}\n", date(at));
     let tokens = teams.iter().map(|team| team.tokens).sum::<u64>();
-    let requests = teams.iter().map(|team| team.requests.0 + team.requests.1 + team.requests.2).sum::<usize>();
-    let _ = writeln!(out, "Last 24 hours (UTC). Teams: {listed} · model turns: {} · tokens: {tokens} · open operator requests: {requests}\n",
-        teams.iter().map(|team| team.turns).sum::<usize>());
+    let requests = teams
+        .iter()
+        .map(|team| team.requests.0 + team.requests.1 + team.requests.2)
+        .sum::<usize>();
+    let _ = writeln!(
+        out,
+        "Last 24 hours (UTC). Teams: {listed} · model turns: {} · tokens: {tokens} · open operator requests: {requests}\n",
+        teams.iter().map(|team| team.turns).sum::<usize>()
+    );
     if teams.is_empty() {
         out.push_str("No team activity.\n");
     }
-    let callsigns = if teams.is_empty() { Vec::new() } else { crate::callsigns::all(&state.chats) };
+    let callsigns = if teams.is_empty() {
+        Vec::new()
+    } else {
+        crate::callsigns::all(&state.chats)
+    };
     for team in &teams {
         let session = state.chats.iter().find(|session| session.id == team.root);
         let title = inert(&crate::callsigns::name_or_id(&state.chats, team.root));
         let _ = writeln!(out, "## {title} ({})\n", team.root);
-        if let Some(goal) = session.and_then(|session| session.messages.iter().find(|message| !message.text.trim_start().starts_with('/'))).map(|message| shorten(&inert(&message.text), 200)) {
+        if let Some(goal) = session
+            .and_then(|session| {
+                session
+                    .messages
+                    .iter()
+                    .find(|message| !message.text.trim_start().starts_with('/'))
+            })
+            .map(|message| shorten(&inert(&message.text), 200))
+        {
             let _ = writeln!(out, "- Goal: {goal}");
         }
-        let _ = writeln!(out, "- Members: {} · active runs: {} · model turns: {}", team.members, team.active, team.turns);
+        let _ = writeln!(
+            out,
+            "- Members: {} · active runs: {} · model turns: {}",
+            team.members, team.active, team.turns
+        );
         let mut progress = format!("claims done {} · open {}", team.done, team.open);
-        for probe in state.scores.iter().filter(|probe| tree.root(&probe.chat) == team.root).take(4) {
+        for probe in state
+            .scores
+            .iter()
+            .filter(|probe| tree.root(&probe.chat) == team.root)
+            .take(4)
+        {
             let mut window = probe.samples.iter().filter(|sample| sample.unix >= since);
-            let (Some(first), last) = (window.next(), probe.samples.back()) else { continue };
+            let (Some(first), last) = (window.next(), probe.samples.back()) else {
+                continue;
+            };
             let last = last.unwrap_or(first);
             for (key, value) in last.values.iter().take(4) {
                 let start = first.values.get(key).copied().unwrap_or(*value);
-                let _ = write!(progress, " · {}.{} {value} ({:+})", inert(&probe.name), inert(key), value - start);
+                let _ = write!(
+                    progress,
+                    " · {}.{} {value} ({:+})",
+                    inert(&probe.name),
+                    inert(key),
+                    value - start
+                );
             }
         }
         let _ = writeln!(out, "- Progress: {progress}");
-        let _ = writeln!(out, "- Cost: {} tokens over {} measured attempt(s)", team.tokens, team.measured);
+        let _ = writeln!(
+            out,
+            "- Cost: {} tokens over {} measured attempt(s)",
+            team.tokens, team.measured
+        );
         // The node-wide brief lists every team of the day: only one asked for
         // by name, or one working now, gets its per-member table.
         if scope.is_some() || team.active > 0 {
@@ -300,14 +446,24 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         }
         match crate::bots::conditions(state, team.root) {
             Some(found) if found.is_empty() => out.push_str("- Pathologies: none observed\n"),
-            Some(found) => { let _ = writeln!(out, "- Pathologies: {}", inert(&found.join("; "))); }
+            Some(found) => {
+                let _ = writeln!(out, "- Pathologies: {}", inert(&found.join("; ")));
+            }
             None => out.push_str("- Pathologies: not observed (no advisor or antibody watches this team)\n"),
         }
         let (questions, bots, ports) = team.requests;
         if questions + bots + ports > 0 {
-            let _ = writeln!(out, "- Waiting on the operator: {questions} question(s), {bots} bot request(s), {ports} port request(s)");
+            let _ = writeln!(
+                out,
+                "- Waiting on the operator: {questions} question(s), {bots} bot request(s), {ports} port request(s)"
+            );
         }
-        let notices = state.bots.notices.iter().filter(|notice| notice.unix >= since && notice.team.as_deref() == Some(team.root)).count();
+        let notices = state
+            .bots
+            .notices
+            .iter()
+            .filter(|notice| notice.unix >= since && notice.team.as_deref() == Some(team.root))
+            .count();
         if notices > 0 {
             let _ = writeln!(out, "- Operator notices: {notices}");
         }
@@ -336,11 +492,20 @@ pub fn save(markdown: &str, at: u64, scope: Option<&str>) -> Result<String, &'st
 pub fn tool(state: &State, arguments: &Value) -> Result<Value, &'static str> {
     let scope = match arguments.get("chat") {
         None | Some(Value::Null) => None,
-        Some(value) => Some(value.as_str().filter(|id| crate::chat::valid_id(id)).ok_or("Invalid chat ID.")?),
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|id| crate::chat::valid_id(id))
+                .ok_or("Invalid chat ID.")?,
+        ),
     };
     let at = now();
     let markdown = brief(state, scope, at)?;
-    let path = if arguments["save"] == true { Some(save(&markdown, at, scope.map(|chat| Tree::new(state).root(chat)))?) } else { None };
+    let path = if arguments["save"] == true {
+        Some(save(&markdown, at, scope.map(|chat| Tree::new(state).root(chat)))?)
+    } else {
+        None
+    };
     Ok(json!({"date":date(at),"markdown":markdown,"path":path}))
 }
 
@@ -355,23 +520,51 @@ pub fn pending_json_tree(state: &State, root: &str) -> Vec<Value> {
 }
 pub fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
     let cutoff = now().saturating_sub(NOTICE_SECONDS);
-    state.bots.notices.iter().filter(move |notice| notice.unix >= cutoff).map(|notice| notice.chat.as_str())
+    state
+        .bots
+        .notices
+        .iter()
+        .filter(move |notice| notice.unix >= cutoff)
+        .map(|notice| notice.chat.as_str())
 }
 
 /// Records a notice from `chat` after the opt-in, rate and duplicate checks.
-pub(crate) fn notify(state: &mut State, chat: &str, team: Option<&str>, text: &str, id: &str, at: u64) -> Result<Notice, &'static str> {
+pub(crate) fn notify(
+    state: &mut State,
+    chat: &str,
+    team: Option<&str>,
+    text: &str,
+    id: &str,
+    at: u64,
+) -> Result<Notice, &'static str> {
     let text = text.trim();
     if text.is_empty() || text.chars().count() > NOTICE_CHARS {
         return Err("text must be 1–600 characters");
     }
     let tree = Tree::new(state);
     let own = tree.root(chat);
-    if !crate::lens_library::offers(state, &crate::chat::selected_lenses(state.chats.iter().find(|session| session.id == own).ok_or("Chat not found")?), NOTIFY_TOOL) {
-        return Err("Operator notices are opt-in: the root chat's lenses must offer operator.notify (the antibody lens does)");
+    if !crate::lens_library::offers(
+        state,
+        &crate::chat::selected_lenses(
+            state
+                .chats
+                .iter()
+                .find(|session| session.id == own)
+                .ok_or("Chat not found")?,
+        ),
+        NOTIFY_TOOL,
+    ) {
+        return Err(
+            "Operator notices are opt-in: the root chat's lenses must offer operator.notify (the antibody lens does)",
+        );
     }
     let team = match team {
         Some(team) => {
-            state.chats.iter().find(|session| session.id == team && session.parent_chat.is_none()).ok_or("team must be a top-level chat")?;
+            state
+                .chats
+                .iter()
+                .find(|session| session.id == team && session.parent_chat.is_none())
+                .ok_or("team must be a top-level chat")?;
             Some(team.to_owned())
         }
         None => None,
@@ -380,14 +573,34 @@ pub(crate) fn notify(state: &mut State, chat: &str, team: Option<&str>, text: &s
         return Ok(existing.clone());
     }
     let cutoff = at.saturating_sub(NOTICE_SECONDS);
-    if state.bots.notices.iter().any(|notice| notice.unix >= cutoff && notice.chat == chat && notice.text == text) {
+    if state
+        .bots
+        .notices
+        .iter()
+        .any(|notice| notice.unix >= cutoff && notice.chat == chat && notice.text == text)
+    {
         return Err("This notice was already sent; notices are never repeated");
     }
     let limit = state.runtime.execution.operator_notices_per_hour;
-    if state.bots.notices.iter().filter(|notice| !notice.id.starts_with(POLICY_PREFIX) && notice.unix + 3600 > at).count() >= limit {
-        return Err("The operator notice limit for this hour is reached; record the evidence and try again later only if it still matters");
+    if state
+        .bots
+        .notices
+        .iter()
+        .filter(|notice| !notice.id.starts_with(POLICY_PREFIX) && notice.unix + 3600 > at)
+        .count()
+        >= limit
+    {
+        return Err(
+            "The operator notice limit for this hour is reached; record the evidence and try again later only if it still matters",
+        );
     }
-    let notice = Notice { id: id.to_owned(), chat: chat.to_owned(), team, text: text.to_owned(), unix: at };
+    let notice = Notice {
+        id: id.to_owned(),
+        chat: chat.to_owned(),
+        team,
+        text: text.to_owned(),
+        unix: at,
+    };
     state.bots.notices.push(notice.clone());
     let excess = state.bots.notices.len().saturating_sub(NOTICES);
     state.bots.notices.drain(..excess);
@@ -407,12 +620,23 @@ const POLICY_PREFIX: &str = "policy-";
 /// `policy-`) from `chat`, unless this hour's policy budget is spent.
 pub(crate) fn policy_notice(state: &mut State, chat: &str, text: &str, id: &str, at: u64) -> bool {
     debug_assert!(id.starts_with(POLICY_PREFIX));
-    let sent = state.bots.notices.iter().filter(|notice| notice.id.starts_with(POLICY_PREFIX) && notice.unix + 3600 > at).count();
+    let sent = state
+        .bots
+        .notices
+        .iter()
+        .filter(|notice| notice.id.starts_with(POLICY_PREFIX) && notice.unix + 3600 > at)
+        .count();
     if sent >= POLICY_NOTICES_PER_HOUR || state.bots.notices.iter().any(|notice| notice.id == id) {
         return false;
     }
     let team = Some(Tree::new(state).root(chat).to_owned());
-    state.bots.notices.push(Notice { id: id.to_owned(), chat: chat.to_owned(), team, text: shorten(text, NOTICE_CHARS), unix: at });
+    state.bots.notices.push(Notice {
+        id: id.to_owned(),
+        chat: chat.to_owned(),
+        team,
+        text: shorten(text, NOTICE_CHARS),
+        unix: at,
+    });
     let excess = state.bots.notices.len().saturating_sub(NOTICES);
     state.bots.notices.drain(..excess);
     true
@@ -448,49 +672,76 @@ struct NotifyInput {
 
 fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, name: &str, args: &Value) -> io::Result<Value> {
     let mut state = host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
-    let run = state.runtime.runs.iter()
-        .find(|run| run.id == attempt.run && run.status == "running" && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
+    let run = state
+        .runtime
+        .runs
+        .iter()
+        .find(|run| {
+            run.id == attempt.run
+                && run.status == "running"
+                && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
+        })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     // Node visibility and operator escalation are the run's standing.
     let standing = crate::personas::of(&state.bots, run);
     let judge = standing.read_only();
-    let chat = run.chat_id.clone().ok_or_else(|| io::Error::other("A chat is required"))?;
+    let chat = run
+        .chat_id
+        .clone()
+        .ok_or_else(|| io::Error::other("A chat is required"))?;
     let antibody = standing.antibody() && state.bots.antibody(&chat);
     match name {
         "control_intel_brief" => {
-            let input = serde_json::from_value::<BriefInput>(args.clone()).map_err(|_| io::Error::other("Expected an optional chat_id"))?;
+            let input = serde_json::from_value::<BriefInput>(args.clone())
+                .map_err(|_| io::Error::other("Expected an optional chat_id"))?;
             let tree = Tree::new(&state);
             let scope = match (input.chat_id.as_deref(), antibody) {
                 (None, true) => None,
                 (None, false) => Some(chat.as_str()),
                 (Some(other), true) => Some(other),
                 (Some(other), false) if tree.root(other) == tree.root(&chat) => Some(other),
-                (Some(_), false) => return Err(io::Error::other("Read the brief of your own team; only an approved antibody reads other teams")),
+                (Some(_), false) => {
+                    return Err(io::Error::other(
+                        "Read the brief of your own team; only an approved antibody reads other teams",
+                    ));
+                }
             };
             let at = now();
             let markdown = brief(&state, scope, at).map_err(io::Error::other)?;
             Ok(json!({"date":date(at),"markdown":markdown}))
         }
         "control_operator_notify" => {
-            let input = serde_json::from_value::<NotifyInput>(args.clone()).map_err(|_| io::Error::other("Expected text and an optional team"))?;
+            let input = serde_json::from_value::<NotifyInput>(args.clone())
+                .map_err(|_| io::Error::other("Expected text and an optional team"))?;
             // A lead (top-level chat) or an approved antibody may notify; a
             // member asks its lead, and other judges only review.
-            let lead = state.chats.iter().any(|session| session.id == chat && session.parent_chat.is_none());
+            let lead = state
+                .chats
+                .iter()
+                .any(|session| session.id == chat && session.parent_chat.is_none());
             if !standing.notifies() || (judge && !antibody) || (!judge && !lead) {
-                return Err(io::Error::other("Only an approved antibody or a team's lead may notify the operator"));
+                return Err(io::Error::other(
+                    "Only an approved antibody or a team's lead may notify the operator",
+                ));
             }
             if !crate::chat::valid_id(attempt.nonce) {
                 return Err(io::Error::other("Invalid request identity"));
             }
-            let id = format!("notice-{}", crate::bots::digest_id(&[attempt.run, attempt.generation, attempt.nonce]));
+            let id = format!(
+                "notice-{}",
+                crate::bots::digest_id(&[attempt.run, attempt.generation, attempt.nonce])
+            );
             let previous = state.bots.notices.clone();
-            let notice = notify(&mut state, &chat, input.team.as_deref(), &input.text, &id, now()).map_err(io::Error::other)?;
+            let notice =
+                notify(&mut state, &chat, input.team.as_deref(), &input.text, &id, now()).map_err(io::Error::other)?;
             if let Err(error) = crate::storage::save(&state) {
                 state.bots.notices = previous;
                 return Err(error);
             }
-            Ok(json!({"notice_id":notice.id,"status":"recorded","note":"Recorded. The operator's channels forward it once; a reply goes to your task tree's steering chat."}))
+            Ok(
+                json!({"notice_id":notice.id,"status":"recorded","note":"Recorded. The operator's channels forward it once; a reply goes to your task tree's steering chat."}),
+            )
         }
         _ => Err(io::Error::other("Unknown intel tool")),
     }

@@ -8,19 +8,47 @@ fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 #[test]
 fn the_toggle_saves_enabled_and_prefix_for_known_channels_only() {
     let mut saved = None;
-    update("POST", &form(&[("channel", "discord"), ("enabled", "yes"), ("prefix", " ? ")]), |name, settings| { saved = Some((name.to_owned(), settings)); Ok(()) }).unwrap();
+    update(
+        "POST",
+        &form(&[("channel", "discord"), ("enabled", "yes"), ("prefix", " ? ")]),
+        |name, settings| {
+            saved = Some((name.to_owned(), settings));
+            Ok(())
+        },
+    )
+    .unwrap();
     let (name, settings) = saved.unwrap();
-    assert_eq!((name.as_str(), settings.enabled, settings.prefix.as_str()), ("discord", true, "?"));
+    assert_eq!(
+        (name.as_str(), settings.enabled, settings.prefix.as_str()),
+        ("discord", true, "?")
+    );
     // An unchecked box turns forwarding off.
     let mut saved = None;
-    update("POST", &form(&[("channel", "discord"), ("prefix", "!")]), |_, settings| { saved = Some(settings); Ok(()) }).unwrap();
+    update(
+        "POST",
+        &form(&[("channel", "discord"), ("prefix", "!")]),
+        |_, settings| {
+            saved = Some(settings);
+            Ok(())
+        },
+    )
+    .unwrap();
     assert!(!saved.unwrap().enabled);
     let never = |_: &str, _| -> Result<(), &'static str> { panic!("must not save") };
-    assert_eq!(update("POST", &form(&[("channel", "telegram")]), never), Err("Unknown channel"));
+    assert_eq!(
+        update("POST", &form(&[("channel", "telegram")]), never),
+        Err("Unknown channel")
+    );
     assert_eq!(update("GET", &form(&[("channel", "discord")]), never), Err("Use POST"));
     assert_eq!(update("POST", &form(&[]), never), Err("Missing channel"));
     // Prefix validation is the shared settings rule.
-    let invalid = channel::save_settings("discord", channel::Settings { prefix: "abc".into(), ..Default::default() });
+    let invalid = channel::save_settings(
+        "discord",
+        channel::Settings {
+            prefix: "abc".into(),
+            ..Default::default()
+        },
+    );
     assert!(invalid.unwrap_err().contains("prefix"));
 }
 

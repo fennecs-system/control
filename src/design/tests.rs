@@ -1,11 +1,5 @@
-
 use super::*;
-pub fn ask_without_io(
-    state: &mut State,
-    id: &str,
-    nonce: &str,
-    input: Input,
-) -> Result<Value, &'static str> {
+pub fn ask_without_io(state: &mut State, id: &str, nonce: &str, input: Input) -> Result<Value, &'static str> {
     ask_with_save(state, id, nonce, input, |_| Ok(()))
 }
 pub fn fixture() -> (State, String) {
@@ -44,18 +38,8 @@ fn questions_from_spawned_descendants_surface_in_the_top_level_chat() {
     let (mut state, child) = paused();
     let root = chat::create(&mut state);
     let middle = chat::create(&mut state);
-    state
-        .chats
-        .iter_mut()
-        .find(|s| s.id == middle)
-        .unwrap()
-        .parent_chat = Some(root.clone());
-    state
-        .chats
-        .iter_mut()
-        .find(|s| s.id == child)
-        .unwrap()
-        .parent_chat = Some(middle.clone());
+    state.chats.iter_mut().find(|s| s.id == middle).unwrap().parent_chat = Some(root.clone());
+    state.chats.iter_mut().find(|s| s.id == child).unwrap().parent_chat = Some(middle.clone());
     let question = state.runtime.runs[0].question.as_ref().unwrap().id.clone();
     assert_eq!(pending(&state, &root).len(), 1);
     assert_eq!(answer_target(&state, &root, &question), Ok(child.as_str()));
@@ -68,17 +52,14 @@ fn question_requires_valid_active_identity_and_durable_admission() {
     let run = state.runtime.runs[0].id.clone();
     let before = serde_json::to_vec(&state).unwrap();
     assert!(
-        ask_with_save(&mut state, &run, "nonce", input(), |_| Err(
-            std::io::Error::other("disk full")
-        ))
+        ask_with_save(&mut state, &run, "nonce", input(), |_| Err(std::io::Error::other(
+            "disk full"
+        )))
         .is_err()
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     let first = ask_with_save(&mut state, &run, "nonce", input(), |_| Ok(())).unwrap();
-    let again = ask_with_save(&mut state, &run, "nonce", input(), |_| {
-        panic!("replay must not write")
-    })
-    .unwrap();
+    let again = ask_with_save(&mut state, &run, "nonce", input(), |_| panic!("replay must not write")).unwrap();
     assert_eq!(first, again);
     assert!(ask_with_save(&mut state, &run, "other", input(), |_| Ok(())).is_err());
     let html = chat::transcript(&state, &chat).unwrap();
@@ -98,19 +79,10 @@ fn question_option_and_recommendation_limits_report_the_actual_field() {
     let run = state.runtime.runs[0].id.clone();
     for (value, expected) in [
         (json!({"question":" ","options":["A","B"]}), "question"),
-        (
-            json!({"question":"é".repeat(1001),"options":["A","B"]}),
-            "question",
-        ),
+        (json!({"question":"é".repeat(1001),"options":["A","B"]}), "question"),
         (json!({"question":"Choose","options":["A"]}), "options"),
-        (
-            json!({"question":"Choose","options":["A","B","C","D","E"]}),
-            "options",
-        ),
-        (
-            json!({"question":"Choose","options":["A","  "]}),
-            "Each option",
-        ),
+        (json!({"question":"Choose","options":["A","B","C","D","E"]}), "options"),
+        (json!({"question":"Choose","options":["A","  "]}), "Each option"),
         (
             json!({"question":"Choose","options":["A","é".repeat(201)]}),
             "Each option",
@@ -136,10 +108,8 @@ fn question_option_and_recommendation_limits_report_the_actual_field() {
         assert!(!error.contains("identity"));
         assert!(state.runtime.runs[0].question.is_none());
     }
-    let input = parse_input(
-        json!({"question":"é".repeat(1000),"options":["A","é".repeat(200)],"recommended":1}),
-    )
-    .unwrap();
+    let input =
+        parse_input(json!({"question":"é".repeat(1000),"options":["A","é".repeat(200)],"recommended":1})).unwrap();
     assert!(ask_without_io(&mut state, &run, "1793455807009221658-5", input).is_ok());
 }
 #[test]
@@ -167,16 +137,9 @@ fn pause_survives_reload_and_answer_keeps_authority_and_workspace_baseline() {
     assert_eq!(next.action, state.runtime.runs[0].action);
     assert_eq!(next.backend, state.runtime.runs[0].backend);
     assert_eq!(next.model, state.runtime.runs[0].model);
+    assert_eq!(next.continuation.as_ref().unwrap().checkpoint, "paused-workspace");
     assert_eq!(
-        next.continuation.as_ref().unwrap().checkpoint,
-        "paused-workspace"
-    );
-    assert_eq!(
-        next.continuation
-            .as_ref()
-            .unwrap()
-            .published_parent
-            .as_deref(),
+        next.continuation.as_ref().unwrap().published_parent.as_deref(),
         Some("last-good")
     );
     assert_eq!(crate::scheduler::next(&state.runtime), Some(3));
@@ -202,7 +165,8 @@ fn answering_a_design_question_preserves_the_existing_team_budget() {
         role: crate::delegation::Role::Worker,
         root: root.clone(),
         depth: 1,
-        parent: Some(root.clone()), bundle: None
+        parent: Some(root.clone()),
+        bundle: None,
     });
     state.runtime.runs.push(used);
     answer(&mut state, &chat, None, "1", "test").unwrap();
@@ -242,36 +206,20 @@ fn answering_preserves_an_existing_judge_persona_exactly() {
         role: crate::delegation::Role::Judge,
         root: "existing-team".into(),
         depth: 1,
-        parent: Some("parent".into()), bundle: None
+        parent: Some("parent".into()),
+        bundle: None,
     };
     state.runtime.runs[0].persona = Some(persona.clone());
     answer(&mut state, &chat, None, "1", "test").unwrap();
-    assert_eq!(
-        state.runtime.runs.last().unwrap().persona.as_ref(),
-        Some(&persona)
-    );
+    assert_eq!(state.runtime.runs.last().unwrap().persona.as_ref(), Some(&persona));
 }
 #[test]
 fn own_direction_is_not_permission_escalation_and_cancel_removes_wait() {
     let (mut state, chat) = paused();
-    chat::send(
-        &mut state,
-        &chat,
-        "Use a compact binary format instead",
-        "test",
-    )
-    .unwrap();
+    chat::send(&mut state, &chat, "Use a compact binary format instead", "test").unwrap();
+    assert_eq!(state.runtime.runs.last().unwrap().action, identity::Action::Task);
     assert_eq!(
-        state.runtime.runs.last().unwrap().action,
-        identity::Action::Task
-    );
-    assert_eq!(
-        state.runtime.runs[0]
-            .question
-            .as_ref()
-            .unwrap()
-            .answer
-            .as_deref(),
+        state.runtime.runs[0].question.as_ref().unwrap().answer.as_deref(),
         Some("Use a compact binary format instead")
     );
     let (mut state, chat) = paused();
@@ -332,9 +280,7 @@ fn multiple_decisions_preserve_original_objective_and_publication_baseline() {
 fn answering_at_capacity_replaces_wait_instead_of_exceeding_admission() {
     let (mut state, chat) = paused();
     for _ in 1..crate::scheduler::MAX_PENDING {
-        state
-            .runtime
-            .enqueue("Other task".into(), RunKind::Task, "test");
+        state.runtime.enqueue("Other task".into(), RunKind::Task, "test");
     }
     assert!(crate::scheduler::admit(&state.runtime).is_err());
     answer(&mut state, &chat, None, "1", "test").unwrap();
@@ -363,9 +309,15 @@ fn node_wide_requests_group_descendant_questions_under_their_top_level_chat() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].id, question);
     // Deciding from the group is the chat command a person types in that chat.
-    let control_client::operator::Command::Send(command) = control_client::operator::reply(&pending[0], "2").unwrap() else { panic!() };
+    let control_client::operator::Command::Send(command) = control_client::operator::reply(&pending[0], "2").unwrap()
+    else {
+        panic!()
+    };
     chat::send(&mut state, &root, &command, "discord:1").unwrap();
-    assert_eq!(state.runtime.runs[0].question.as_ref().unwrap().answer.as_deref(), Some(input().options[1].as_str()));
+    assert_eq!(
+        state.runtime.runs[0].question.as_ref().unwrap().answer.as_deref(),
+        Some(input().options[1].as_str())
+    );
     // A duplicate reply is refused and changes nothing.
     let before = serde_json::to_vec(&state).unwrap();
     assert!(chat::send(&mut state, &root, &command, "discord:2").is_err());

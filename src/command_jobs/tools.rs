@@ -24,7 +24,10 @@ impl AttemptTools for Tools {
         ]
     }
     fn known(&self, name: &str) -> bool {
-        matches!(name, "control_workspace_start" | "control_workspace_status" | "control_workspace_cancel")
+        matches!(
+            name,
+            "control_workspace_start" | "control_workspace_status" | "control_workspace_cancel"
+        )
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         run(cx.host, &cx.attempt, name, args)
@@ -46,7 +49,9 @@ fn decode(name: &str, args: &Value) -> io::Result<JobCall> {
         job_id: String,
     }
     let handle = || {
-        serde_json::from_value::<Handle>(args.clone()).map(|handle| handle.job_id).map_err(|_| io::Error::other("Expected job_id"))
+        serde_json::from_value::<Handle>(args.clone())
+            .map(|handle| handle.job_id)
+            .map_err(|_| io::Error::other("Expected job_id"))
     };
     match name {
         "control_workspace_start" => serde_json::from_value(args.clone())

@@ -91,11 +91,7 @@ impl Capacity {
 
 /// Required instructions remain intact. Optional evidence is selected newest
 /// first; every omitted section stays explicit in the persisted trace.
-pub fn fit(
-    prefix: &str,
-    sections: &[Section<'_>],
-    capacity: Capacity,
-) -> Result<PreparedContext, BudgetExceeded> {
+pub fn fit(prefix: &str, sections: &[Section<'_>], capacity: Capacity) -> Result<PreparedContext, BudgetExceeded> {
     let limit = capacity.input_bytes().unwrap_or(0);
     let required = sections
         .iter()
@@ -161,11 +157,7 @@ impl std::error::Error for BudgetExceeded {}
 /// Preserve the selected history exactly and in order. Required Control
 /// framing has a separate guard; this is not a second history compactor.
 /// In particular, passthrough leaves history compression to the provider.
-pub fn compose(
-    prefix: &str,
-    sections: &[Section<'_>],
-    limit: usize,
-) -> Result<PreparedContext, BudgetExceeded> {
+pub fn compose(prefix: &str, sections: &[Section<'_>], limit: usize) -> Result<PreparedContext, BudgetExceeded> {
     let required = sections
         .iter()
         .filter(|s| s.required)

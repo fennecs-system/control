@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn bounded_reads_reject_links_public_private_files_and_special_files() {
@@ -139,20 +138,35 @@ fn node_configuration_has_explicit_precedence_and_no_checkout_fallback() {
 #[test]
 fn state_directory_has_explicit_precedence() {
     let path = |value: &str| Some(OsString::from(value));
-    assert_eq!(resolve_state(path("/node"), path("/xdg"), path("/home")), Ok(PathBuf::from("/node")));
-    assert_eq!(resolve_state(None, path("/xdg"), path("/home")), Ok(PathBuf::from("/xdg/control")));
-    assert_eq!(resolve_state(None, None, path("/home")), Ok(PathBuf::from("/home/.local/state/control")));
+    assert_eq!(
+        resolve_state(path("/node"), path("/xdg"), path("/home")),
+        Ok(PathBuf::from("/node"))
+    );
+    assert_eq!(
+        resolve_state(None, path("/xdg"), path("/home")),
+        Ok(PathBuf::from("/xdg/control"))
+    );
+    assert_eq!(
+        resolve_state(None, None, path("/home")),
+        Ok(PathBuf::from("/home/.local/state/control"))
+    );
     assert!(resolve_state(None, None, None).is_err());
     assert!(resolve_state(path("relative"), None, None).is_err());
 }
 
 #[test]
 fn test_builds_default_node_directories_to_the_test_root() {
-    let operator = [PathBuf::from("/home/me/.config/control"), PathBuf::from("/home/me/.local/state/control")];
+    let operator = [
+        PathBuf::from("/home/me/.config/control"),
+        PathBuf::from("/home/me/.local/state/control"),
+    ];
     assert_eq!(isolated(None, "state", &operator), Ok(test_root().join("state")));
     assert_eq!(isolated(None, "config", &operator), Ok(test_root().join("config")));
     assert!(test_root().starts_with(std::env::temp_dir()));
-    assert_eq!(isolated(Some("/scratch/state".into()), "state", &operator), Ok(PathBuf::from("/scratch/state")));
+    assert_eq!(
+        isolated(Some("/scratch/state".into()), "state", &operator),
+        Ok(PathBuf::from("/scratch/state"))
+    );
     assert!(isolated(Some("relative".into()), "state", &operator).is_err());
     // This process's environment: unset variables resolve under the test root.
     if std::env::var_os("CONTROL_STATE_DIR").is_none() {
@@ -194,6 +208,10 @@ fn no_path_helper_resolves_operator_node_directories() {
     ];
     for (name, path) in helpers {
         let path = path.unwrap();
-        assert!(!operator.iter().any(|real| path.starts_with(real)), "{name} resolved {}", path.display());
+        assert!(
+            !operator.iter().any(|real| path.starts_with(real)),
+            "{name} resolved {}",
+            path.display()
+        );
     }
 }

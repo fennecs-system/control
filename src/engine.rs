@@ -26,8 +26,8 @@ pub(crate) fn scrubbed() -> std::process::Command {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod fake;
 #[cfg(test)]
 pub(crate) mod golden;
 #[cfg(test)]
-pub(crate) mod fake;
+mod tests;

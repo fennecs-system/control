@@ -1,4 +1,3 @@
-
 use super::super::tests::{fixture, post};
 use super::*;
 
@@ -51,22 +50,13 @@ fn recorded_updates_do_not_spend_listener_turns_or_acknowledge_history() {
     let (mut state, _) = listen_fixture();
     let cursor = state.collective.room_watches[0].cursor;
     for _ in 0..BATCH + 1 {
-        post(
-            &mut state,
-            "research",
-            "Retained audit",
-            Some("peer".into()),
-        );
+        post(&mut state, "research", "Retained audit", Some("peer".into()));
         state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
     }
     let before = state.runtime.runs.len();
     assert!(reconcile(&mut state, 100, &mut |_| Err(std::io::Error::other("disk"))).is_err());
     assert_eq!(
-        state.collective.room_watches[0]
-            .listener
-            .as_ref()
-            .unwrap()
-            .through,
+        state.collective.room_watches[0].listener.as_ref().unwrap().through,
         cursor
     );
     for _ in 0..3 {
@@ -94,26 +84,12 @@ fn batching_cooldown_and_queue_capacity_leave_later_posts_pending() {
         post(&mut state, "research", &format!("update {i}"), None);
     }
     tick(&mut state, 100);
-    assert_eq!(
-        state.collective.room_watches[0]
-            .listener
-            .as_ref()
-            .unwrap()
-            .through,
-        8
-    );
+    assert_eq!(state.collective.room_watches[0].listener.as_ref().unwrap().through, 8);
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     tick(&mut state, 129);
     assert_eq!(state.runtime.runs.len(), 2);
     tick(&mut state, 130);
-    assert_eq!(
-        state.collective.room_watches[0]
-            .listener
-            .as_ref()
-            .unwrap()
-            .through,
-        16
-    );
+    assert_eq!(state.collective.room_watches[0].listener.as_ref().unwrap().through, 16);
     let next = state.runtime.runs.last_mut().unwrap();
     next.status = "completed".into();
     // The regular queue gate remains authoritative.
@@ -133,14 +109,7 @@ fn batching_cooldown_and_queue_capacity_leave_later_posts_pending() {
     let before = state.runtime.runs.len();
     tick(&mut state, 160);
     assert_eq!(state.runtime.runs.len(), before);
-    assert_eq!(
-        state.collective.room_watches[0]
-            .listener
-            .as_ref()
-            .unwrap()
-            .through,
-        16
-    );
+    assert_eq!(state.collective.room_watches[0].listener.as_ref().unwrap().through, 16);
 }
 
 #[test]
@@ -168,10 +137,7 @@ fn owner_can_stop_a_queued_followup_and_models_cannot_replace_intent() {
     tick(&mut state, 100);
     state.runtime.runs.last_mut().unwrap().status = "running".into();
     let run = state.runtime.runs.last().unwrap().id.clone();
-    for args in [
-        json!({"enabled":false}),
-        json!({"enabled":true,"wake":true}),
-    ] {
+    for args in [json!({"enabled":false}), json!({"enabled":true,"wake":true})] {
         assert!(super::super::call(&mut state, &run, "control_room_watch", &args).is_err());
     }
     configure(&mut state, &chat, false).unwrap();
@@ -193,12 +159,7 @@ fn child_lineage_is_preserved_and_changed_room_pauses() {
     state.runtime.runs[0].persona = Some(persona.clone());
     configure(&mut state, &chat, true).unwrap();
     state.runtime.runs[0].status = "completed".into();
-    post(
-        &mut state,
-        "research",
-        "other bot",
-        Some("other-agent".into()),
-    );
+    post(&mut state, "research", "other bot", Some("other-agent".into()));
     tick(&mut state, 100);
     assert_eq!(state.runtime.runs.last().unwrap().persona, Some(persona));
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
@@ -242,8 +203,7 @@ fn acknowledged_posts_during_cooldown_do_not_trigger_redundant_turns() {
         "message handled by active turn",
         Some("teammate".into()),
     );
-    let inbox =
-        super::super::call(&mut state, &id, "control_room_notifications", &json!({})).unwrap();
+    let inbox = super::super::call(&mut state, &id, "control_room_notifications", &json!({})).unwrap();
     assert_eq!(inbox["posts"].as_array().unwrap().len(), 2);
     super::super::call(
         &mut state,
@@ -282,19 +242,11 @@ fn all_ready_chats_progress_in_one_pass_without_retaining_origin_runs() {
             1
         );
     }
-    state
-        .runtime
-        .runs
-        .retain(|run| run.source == "room-listener");
+    state.runtime.runs.retain(|run| run.source == "room-listener");
     for run in &mut state.runtime.runs {
         run.status = "completed".into();
     }
-    post(
-        &mut state,
-        "research",
-        "another assignment",
-        Some("teammate".into()),
-    );
+    post(&mut state, "research", "another assignment", Some("teammate".into()));
     tick(&mut state, 130);
     assert_eq!(state.runtime.runs.len(), 4);
     assert_eq!(status(&state, &first).unwrap()["state"], "listening");

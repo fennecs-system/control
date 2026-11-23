@@ -1,4 +1,3 @@
-
 use super::*;
 use control_core::resources::{ChatId, ImageId, Lease, Owner, Resource, Scope};
 pub(crate) fn pending_fixture() -> (State, String, String) {
@@ -47,11 +46,7 @@ fn requests_from_spawned_descendants_surface_in_the_top_level_chat() {
             .map(|p| p["port_id"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>()
     };
-    assert!(
-        ids(&chat).contains(&"port-grandchild".to_owned()),
-        "{:?}",
-        ids(&chat)
-    );
+    assert!(ids(&chat).contains(&"port-grandchild".to_owned()), "{:?}", ids(&chat));
     assert_eq!(
         ids(&parent),
         ["port-grandchild"],
@@ -167,20 +162,14 @@ fn stopping_many_ports_is_one_save_and_rolls_back_together() {
     state.ports.push(second);
     let before: Vec<Status> = state.ports.iter().map(|p| p.status).collect();
     assert!(stop_all(&mut state, &[0, 1], |_| Err(io::Error::other("disk"))).is_err());
-    assert_eq!(
-        state.ports.iter().map(|p| p.status).collect::<Vec<_>>(),
-        before
-    );
+    assert_eq!(state.ports.iter().map(|p| p.status).collect::<Vec<_>>(), before);
     let saves = std::cell::Cell::new(0);
     let stopped = stop_all(&mut state, &[0, 1], |_| {
         saves.set(saves.get() + 1);
         Ok(())
     })
     .unwrap();
-    assert_eq!(
-        (saves.get(), stopped["stopped"].as_array().unwrap().len()),
-        (1, 2)
-    );
+    assert_eq!((saves.get(), stopped["stopped"].as_array().unwrap().len()), (1, 2));
     assert!(state.ports.iter().all(|p| p.status == Status::Stopping));
 }
 #[test]
@@ -203,9 +192,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
                 std::thread::sleep(Duration::from_millis(10));
                 continue;
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
             let mut first = String::new();
             if reader.read_line(&mut first).is_err() {
@@ -216,8 +203,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
                 if path == "/tools/ports" {
                     http(&mut stream, &state, "GET", path, &[]);
                 } else {
-                    let _ =
-                        stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
                 }
             }
         }
@@ -230,10 +216,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
         }
     }
     let _server = Server(stop, Some(server));
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap();
+    let client = Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
     let driver = std::env::var("CONTROL_WEBDRIVER_URL").unwrap();
     let chrome = std::env::var("CONTROL_QA_BROWSER").is_ok_and(|b| b == "chrome");
     let caps = if chrome {
@@ -248,9 +231,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
         .unwrap()
         .json()
         .unwrap();
-    let id = session["value"]["sessionId"]
-        .as_str()
-        .expect("Browser session");
+    let id = session["value"]["sessionId"].as_str().expect("Browser session");
     let base = format!("{driver}/session/{id}");
     struct Browser(Client, String);
     impl Drop for Browser {
@@ -260,11 +241,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
     }
     let _browser = Browser(client.clone(), base.clone());
     let post = |path: &str, args: Value| -> Value {
-        let response = client
-            .post(format!("{base}{path}"))
-            .json(&args)
-            .send()
-            .unwrap();
+        let response = client.post(format!("{base}{path}")).json(&args).send().unwrap();
         assert!(response.status().is_success(), "WebDriver {path}");
         response.json::<Value>().unwrap()["value"].clone()
     };
@@ -296,10 +273,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
     let b = get(&format!("/element/{deny}/rect"));
     assert_eq!(a["height"], b["height"]);
     assert_eq!(a["width"], b["width"]);
-    assert_eq!(
-        get(&format!("/element/{allow}/css/border-top-left-radius")),
-        "3px"
-    );
+    assert_eq!(get(&format!("/element/{allow}/css/border-top-left-radius")), "3px");
     let checkbox = element(&post(
         "/element",
         json!({"using":"css selector","value":"input[type=checkbox]"}),
@@ -308,10 +282,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
     let before = get(&format!("/element/{checkbox}/css/background-color"));
     post(&format!("/element/{checkbox}/click"), json!({}));
     assert_eq!(get(&format!("/element/{checkbox}/property/checked")), true);
-    assert_ne!(
-        get(&format!("/element/{checkbox}/css/background-color")),
-        before
-    );
+    assert_ne!(get(&format!("/element/{checkbox}/css/background-color")), before);
 }
 #[test]
 fn service_commands_start_collapsed_during_and_after_their_run() {
@@ -320,8 +291,7 @@ fn service_commands_start_collapsed_during_and_after_their_run() {
     second["resource"]["id"] = json!("svc-b");
     state.services.push(serde_json::from_value(second).unwrap());
     for service in ["svc-a", "svc-b"] {
-        crate::services::enqueue_test_command(&mut state, &run, service, service, "echo probe", 60)
-            .unwrap();
+        crate::services::enqueue_test_command(&mut state, &run, service, service, "echo probe", 60).unwrap();
     }
     let live = crate::chat::transcript(&state, &chat).unwrap();
     assert!(live.contains("Commands · 2</summary>"));
@@ -373,23 +343,8 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     .unwrap();
     assert_eq!(state.ports[0].chat, parent_chat);
     assert_eq!(state.ports[0].origin_run, "child-run");
-    assert!(accessible(
-        &state,
-        &state.ports[0],
-        &state.runtime.runs[0],
-        &node
-    ));
-    assert!(
-        crate::services::enqueue_test_command(
-            &mut state,
-            "child-run",
-            "exec",
-            "svc-a",
-            "echo probe",
-            60
-        )
-        .is_ok()
-    );
+    assert!(accessible(&state, &state.ports[0], &state.runtime.runs[0], &node));
+    assert!(crate::services::enqueue_test_command(&mut state, "child-run", "exec", "svc-a", "echo probe", 60).is_ok());
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert!(accessible(
         &restored,
@@ -399,32 +354,19 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     ));
     let mut denied = restored.runtime.runs[1].clone();
     denied.actor = Actor::Unknown;
-    assert!(!crate::services::direct(
-        &restored.services[0],
-        &node,
-        &denied
-    ));
+    assert!(!crate::services::direct(&restored.services[0], &node, &denied));
     denied = restored.runtime.runs[1].clone();
     let mut persona = crate::delegation::lineage(&denied);
     persona.role = crate::delegation::Role::Judge;
     denied.persona = Some(persona);
-    assert!(!crate::services::direct(
-        &restored.services[0],
-        &node,
-        &denied
-    ));
+    assert!(!crate::services::direct(&restored.services[0], &node, &denied));
     assert!(!crate::services::direct(
         &restored.services[0],
         &"other-node".to_owned().try_into().unwrap(),
         &restored.runtime.runs[1]
     ));
     state.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
-    assert!(!accessible(
-        &state,
-        &state.ports[0],
-        &state.runtime.runs[1],
-        &node
-    ));
+    assert!(!accessible(&state, &state.ports[0], &state.runtime.runs[1], &node));
     assert!(!crate::services::direct(
         &state.services[0],
         &node,
@@ -510,10 +452,7 @@ fn an_operator_service_stop_ends_its_approved_ports() {
         "a failed save keeps the service"
     );
     crate::services::stop(&mut state, &service, time, |_| Ok(())).unwrap();
-    assert!(matches!(
-        state.services[0].resource.phase,
-        Phase::Stopping { .. }
-    ));
+    assert!(matches!(state.services[0].resource.phase, Phase::Stopping { .. }));
     assert!(authorized(&state, &state.ports[0], time).is_err());
     crate::services::stop(&mut state, &service, time, |_| panic!("already stopping")).unwrap();
     assert!(crate::services::stop(&mut state, "svc-missing", time, |_| Ok(())).is_err());
@@ -546,16 +485,7 @@ fn approval_clamps_to_service_deadline_after_operator_review() {
     let id = state.ports[0].id.as_str().to_owned();
     let deadline = state.services[0].resource.lease.expires();
     // The form was opened with 312 seconds left; 13 seconds pass before approval.
-    approve(
-        &mut state,
-        &id,
-        312,
-        false,
-        None,
-        deadline - 299,
-        |_| Ok(()),
-    )
-    .unwrap();
+    approve(&mut state, &id, 312, false, None, deadline - 299, |_| Ok(())).unwrap();
     assert_eq!(state.ports[0].approval.as_ref().unwrap().expires, deadline);
     state.ports[0].status = Status::Pending;
     assert!(approve(&mut state, &id, 0, false, None, deadline - 1, |_| Ok(())).is_err());
@@ -604,10 +534,7 @@ fn local_targets_require_exact_literal_operator_approval_and_no_dns_bypass() {
     };
     let local = "127.0.0.1:8080".parse().unwrap();
     assert!(validate_destination(&endpoint, &[local], false).is_err());
-    assert_eq!(
-        validate_destination(&endpoint, &[local], true).unwrap(),
-        local
-    );
+    assert_eq!(validate_destination(&endpoint, &[local], true).unwrap(), local);
     for host in ["localhost", "2130706433", "example.com"] {
         let e = Endpoint {
             host: host.into(),
@@ -632,10 +559,7 @@ fn local_targets_require_exact_literal_operator_approval_and_no_dns_bypass() {
     assert!(
         validate_destination(
             &public,
-            &[
-                "8.8.8.8:443".parse().unwrap(),
-                "127.0.0.1:443".parse().unwrap()
-            ],
+            &["8.8.8.8:443".parse().unwrap(), "127.0.0.1:443".parse().unwrap()],
             false
         )
         .is_err()
@@ -655,9 +579,7 @@ fn peer_fixture() -> (State, String, NodeId, String) {
     let (mut state, run, _) = fixture();
     let mut client = serde_json::to_value(&state.services[0]).unwrap();
     client["resource"]["id"] = json!("svc-b");
-    client["resource"]["phase"] = json!(Phase::Running(
-        ContainerId::try_from("c".repeat(64)).unwrap()
-    ));
+    client["resource"]["phase"] = json!(Phase::Running(ContainerId::try_from("c".repeat(64)).unwrap()));
     state.services.push(serde_json::from_value(client).unwrap());
     let node: NodeId = "node-a".to_owned().try_into().unwrap();
     let ingress = admit(
@@ -721,26 +643,12 @@ fn peer_routes_admit_only_owned_ingress_of_another_service() {
         ("missing", peer_input("port-missing")),
     ] {
         assert!(
-            admit(
-                &mut state,
-                &run,
-                "attempt-a",
-                nonce,
-                request,
-                node.clone(),
-                |_| Ok(())
-            )
-            .is_err(),
+            admit(&mut state, &run, "attempt-a", nonce, request, node.clone(), |_| Ok(())).is_err(),
             "{nonce}"
         );
     }
     let foreign = crate::chat::create(&mut state);
-    state
-        .ports
-        .iter_mut()
-        .find(|p| p.id.as_str() == ingress)
-        .unwrap()
-        .chat = foreign.clone();
+    state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().chat = foreign.clone();
     assert!(
         admit(
             &mut state,
@@ -754,12 +662,7 @@ fn peer_routes_admit_only_owned_ingress_of_another_service() {
         .is_err()
     );
     let owner = state.services[0].resource.owner.chat.as_str().to_owned();
-    state
-        .ports
-        .iter_mut()
-        .find(|p| p.id.as_str() == ingress)
-        .unwrap()
-        .chat = owner;
+    state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().chat = owner;
     let value = admit(
         &mut state,
         &run,
@@ -789,15 +692,8 @@ fn peer_routes_admit_only_owned_ingress_of_another_service() {
         .is_err()
     );
     let route = route(&state, state.ports.last().unwrap());
-    assert!(
-        route.contains("peer ingress echo (service svc-a :31000)"),
-        "{route}"
-    );
-    let peer = state
-        .ports
-        .iter()
-        .position(|p| p.id.as_str() == ingress)
-        .unwrap();
+    assert!(route.contains("peer ingress echo (service svc-a :31000)"), "{route}");
+    let peer = state.ports.iter().position(|p| p.id.as_str() == ingress).unwrap();
     state.ports[peer].status = Status::Stopped;
     assert_eq!(
         admit(
@@ -819,12 +715,7 @@ fn peer_routes_admit_only_owned_ingress_of_another_service() {
         service_port: NonZeroU16::new(25566).unwrap(),
         ..peer_input(&ingress)
     };
-    assert!(
-        admit(&mut state, &run, "attempt-a", "actor", other, node, |_| Ok(
-            ()
-        ))
-        .is_err()
-    );
+    assert!(admit(&mut state, &run, "attempt-a", "actor", other, node, |_| Ok(())).is_err());
 }
 #[test]
 fn peer_route_connects_only_while_the_ingress_listens() {
@@ -841,12 +732,7 @@ fn peer_route_connects_only_while_the_ingress_listens() {
     .unwrap();
     let egress = state.ports.last().unwrap().clone();
     assert!(!peer_listening(&state, &egress));
-    state
-        .ports
-        .iter_mut()
-        .find(|p| p.id.as_str() == ingress)
-        .unwrap()
-        .ready = true;
+    state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().ready = true;
     assert!(peer_listening(&state, &egress));
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert!(!peer_listening(&restored, &egress));
@@ -929,31 +815,9 @@ fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
     let egress = egress["port_id"].as_str().unwrap().to_owned();
     let time = now();
     let listener: SocketAddr = "127.0.0.1:40001".parse().unwrap();
-    assert!(
-        approve(
-            &mut state,
-            &egress,
-            60,
-            false,
-            Some(listener),
-            time,
-            |_| Ok(())
-        )
-        .is_err()
-    );
+    assert!(approve(&mut state, &egress, 60, false, Some(listener), time, |_| Ok(())).is_err());
     approve(&mut state, &ingress, 60, false, None, time, |_| Ok(())).unwrap();
-    assert!(
-        approve(
-            &mut state,
-            &egress,
-            60,
-            false,
-            Some(listener),
-            time,
-            |_| Ok(())
-        )
-        .is_err()
-    );
+    assert!(approve(&mut state, &egress, 60, false, Some(listener), time, |_| Ok(())).is_err());
     state
         .ports
         .iter_mut()
@@ -970,16 +834,8 @@ fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
     ] {
         assert!(approve(&mut state, &egress, 60, true, wrong, time, |_| Ok(())).is_err());
     }
-    approve(&mut state, &egress, 60, true, Some(listener), time, |_| {
-        Ok(())
-    })
-    .unwrap();
-    let port = state
-        .ports
-        .iter()
-        .find(|p| p.id.as_str() == egress)
-        .unwrap()
-        .clone();
+    approve(&mut state, &egress, 60, true, Some(listener), time, |_| Ok(())).unwrap();
+    let port = state.ports.iter().find(|p| p.id.as_str() == egress).unwrap().clone();
     assert!(!port.approval.as_ref().unwrap().allow_loopback);
     assert!(authorized(&state, &port, time).is_ok());
     assert_eq!(intent(&state, &port, &port.node, time), Intent::Serve);

@@ -1,5 +1,5 @@
 //! Local documents and explicit links. Writing does not confer evidence-review status.
-use crate::{escape, State};
+use crate::{State, escape};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -33,11 +33,7 @@ pub fn migrate(state: &mut State) -> bool {
 }
 use crate::config::unix_seconds as now;
 fn key(title: &str) -> String {
-    title
-        .trim()
-        .to_lowercase()
-        .trim_end_matches(".md")
-        .to_owned()
+    title.trim().to_lowercase().trim_end_matches(".md").to_owned()
 }
 fn links(body: &str) -> BTreeSet<String> {
     body.split("[[")
@@ -51,11 +47,9 @@ fn edges(docs: &[Document]) -> BTreeSet<(usize, usize)> {
     docs.iter()
         .enumerate()
         .flat_map(|(from, doc)| {
-            links(&doc.body).into_iter().filter_map(move |target| {
-                docs.iter()
-                    .position(|d| key(&d.title) == target)
-                    .map(|to| (from, to))
-            })
+            links(&doc.body)
+                .into_iter()
+                .filter_map(move |target| docs.iter().position(|d| key(&d.title) == target).map(|to| (from, to)))
         })
         .collect()
 }
@@ -68,13 +62,7 @@ fn save_with(
     let title = fields.get("title").map(|s| s.trim()).unwrap_or("");
     let body = fields.get("body").map(String::as_str).unwrap_or("");
     if title.is_empty()
-        || title.chars().count()
-            + if title.to_lowercase().ends_with(".md") {
-                0
-            } else {
-                3
-            }
-            > 80
+        || title.chars().count() + if title.to_lowercase().ends_with(".md") { 0 } else { 3 } > 80
         || title
             .chars()
             .any(|c| c.is_control() || ['/', '\\', '[', ']', '|', '#', '?', '&'].contains(&c))
@@ -105,11 +93,12 @@ fn save_with(
         )
     };
     if let Some(index) = previous
-        && fields.get("revision").and_then(|r| r.parse::<u64>().ok())
-            != Some(state.documents[index].revision)
-        {
-            return Err("This note changed in another tab. Your text is below; open the current note before merging your changes.");
-        }
+        && fields.get("revision").and_then(|r| r.parse::<u64>().ok()) != Some(state.documents[index].revision)
+    {
+        return Err(
+            "This note changed in another tab. Your text is below; open the current note before merging your changes.",
+        );
+    }
     let old = previous.map(|i| (i, state.documents[i].clone()));
     let new_id = if id.is_empty() {
         format!(
@@ -131,9 +120,7 @@ fn save_with(
             format!("{title}.md")
         },
         body: body.into(),
-        revision: old
-            .as_ref()
-            .map_or(1, |(_, d)| d.revision.saturating_add(1)),
+        revision: old.as_ref().map_or(1, |(_, d)| d.revision.saturating_add(1)),
         saved_at: Some(now()),
     };
     if let Some(index) = previous {
@@ -178,7 +165,14 @@ fn editor(doc: Option<&Document>, submitted: Option<&HashMap<String, String>>) -
             }
         })
         .unwrap_or_else(|| "New note".into());
-    format!("<form class='note-editor' method='post' action='/knowledge/save'><input type='hidden' name='id' value='{}'><input type='hidden' name='revision' value='{}'><div class='note-toolbar'><label class='note-name'>Name<input name='title' required maxlength='80' value='{}' placeholder='Untitled.md'></label><button class='primary'>Save changes ↗</button></div><p class='note-status'>{}</p><label class='note-body-label'>Markdown · connect notes with [[note name]]<textarea class='editor' name='body' maxlength='32000' rows='22' aria-label='Note text'>{}</textarea></label></form>",escape(&id),escape(&revision),escape(&title),escape(&status),escape(&body))
+    format!(
+        "<form class='note-editor' method='post' action='/knowledge/save'><input type='hidden' name='id' value='{}'><input type='hidden' name='revision' value='{}'><div class='note-toolbar'><label class='note-name'>Name<input name='title' required maxlength='80' value='{}' placeholder='Untitled.md'></label><button class='primary'>Save changes ↗</button></div><p class='note-status'>{}</p><label class='note-body-label'>Markdown · connect notes with [[note name]]<textarea class='editor' name='body' maxlength='32000' rows='22' aria-label='Note text'>{}</textarea></label></form>",
+        escape(&id),
+        escape(&revision),
+        escape(&title),
+        escape(&status),
+        escape(&body)
+    )
 }
 fn graph(docs: &[Document]) -> String {
     if docs.is_empty() {
@@ -190,23 +184,17 @@ fn graph(docs: &[Document]) -> String {
         (0..docs.len())
             .map(|i| {
                 let angle = i as f64 * std::f64::consts::TAU / docs.len() as f64;
-                (
-                    400.0 + 250.0 * angle.cos(),
-                    height as f64 / 2.0 + 140.0 * angle.sin(),
-                )
+                (400.0 + 250.0 * angle.cos(), height as f64 / 2.0 + 140.0 * angle.sin())
             })
             .collect()
     } else {
         (0..docs.len())
-            .map(|i| {
-                (
-                    100.0 + (i % 5) as f64 * 150.0,
-                    100.0 + (i / 5) as f64 * 120.0,
-                )
-            })
+            .map(|i| (100.0 + (i % 5) as f64 * 150.0, 100.0 + (i / 5) as f64 * 120.0))
             .collect()
     };
-    let mut html=format!("<p class='muted graph-hint'>Connections come from [[note links]]. Select a node to edit it.</p><svg class='knowledge-graph' viewBox='0 0 800 {height}' role='img' aria-label='Knowledge connections'>");
+    let mut html = format!(
+        "<p class='muted graph-hint'>Connections come from [[note links]]. Select a node to edit it.</p><svg class='knowledge-graph' viewBox='0 0 800 {height}' role='img' aria-label='Knowledge connections'>"
+    );
     for (from, to) in edges(docs) {
         if from != to {
             let (x, y) = positions[from];
@@ -223,18 +211,16 @@ fn graph(docs: &[Document]) -> String {
     html
 }
 pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
-    let doc = state
-        .documents
-        .iter()
-        .find(|d| d.id == selection)
-        .or_else(|| {
-            if ["", "general"].contains(&selection) {
-                state.documents.first()
-            } else {
-                None
-            }
-        });
-    let mut html=String::from("<div class='section-heading knowledge-heading'><h2>Knowledge</h2><a class='primary add-note' href='/knowledge?mode=new' aria-label='Create a note'>＋ <span>New note</span></a></div><div class='tabs knowledge-tabs'><a href='/knowledge'>Documents</a><a href='/knowledge?mode=graph'>Graph</a><a href='/knowledge?mode=review'>Review</a></div><div class='knowledge-workspace'><aside class='note-files' aria-label='Notes'><span class='eyebrow'>DOCUMENTS</span>");
+    let doc = state.documents.iter().find(|d| d.id == selection).or_else(|| {
+        if ["", "general"].contains(&selection) {
+            state.documents.first()
+        } else {
+            None
+        }
+    });
+    let mut html = String::from(
+        "<div class='section-heading knowledge-heading'><h2>Knowledge</h2><a class='primary add-note' href='/knowledge?mode=new' aria-label='Create a note'>＋ <span>New note</span></a></div><div class='tabs knowledge-tabs'><a href='/knowledge'>Documents</a><a href='/knowledge?mode=graph'>Graph</a><a href='/knowledge?mode=review'>Review</a></div><div class='knowledge-workspace'><aside class='note-files' aria-label='Notes'><span class='eyebrow'>DOCUMENTS</span>",
+    );
     for note in &state.documents {
         html.push_str(&format!(
             "<a href='/knowledge?doc={}'{}><span>▤</span> {}</a>",
@@ -262,9 +248,14 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
         );
     } else if selection == "new" || doc.is_some() || state.documents.is_empty() {
         if let Some(doc) = doc
-            && saved == Some(doc.revision) {
-                html.push_str(&format!("<div id='saved' class='save-confirmation' role='status'>✓ Saved {} · revision {}</div>",escape(&doc.title),doc.revision));
-            }
+            && saved == Some(doc.revision)
+        {
+            html.push_str(&format!(
+                "<div id='saved' class='save-confirmation' role='status'>✓ Saved {} · revision {}</div>",
+                escape(&doc.title),
+                doc.revision
+            ));
+        }
         html.push_str(&editor(doc, None));
         if let Some(doc) = doc {
             let outgoing = links(&doc.body);
@@ -283,10 +274,7 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
                             escape(&note.title)
                         ));
                     } else {
-                        html.push_str(&format!(
-                            "<span class='muted'>Unresolved · {}</span>",
-                            escape(&target)
-                        ));
+                        html.push_str(&format!("<span class='muted'>Unresolved · {}</span>", escape(&target)));
                     }
                 }
                 for note in incoming {
@@ -323,18 +311,48 @@ pub fn handle(
     body: &[u8],
 ) -> bool {
     if ["/propose", "/review"].contains(&path) && method == "POST" {
-        let fields=crate::fields(&String::from_utf8_lossy(body));
-        let result = crate::knowledge_tools::review_action(state,path,&fields,crate::storage::save);
-        let status = |error: &str| if error == crate::knowledge_tools::STALE {"409 Conflict"} else {"500 Internal Server Error"};
+        let fields = crate::fields(&String::from_utf8_lossy(body));
+        let result = crate::knowledge_tools::review_action(state, path, &fields, crate::storage::save);
+        let status = |error: &str| {
+            if error == crate::knowledge_tools::STALE {
+                "409 Conflict"
+            } else {
+                "500 Internal Server Error"
+            }
+        };
         // Request replies (`Hive::review_knowledge`) read the outcome as JSON.
         if fields.get("response").is_some_and(|r| r == "json") {
-            let (status,value) = match result {Ok(())=>("200 OK",serde_json::json!({"ok":true})),Err(error)=>(status(error),serde_json::json!({"error":error}))};
-            let _ = control_http::respond(stream,status,"application/json",value.to_string().as_bytes(),"",control_http::Policy::Page);
+            let (status, value) = match result {
+                Ok(()) => ("200 OK", serde_json::json!({"ok":true})),
+                Err(error) => (status(error), serde_json::json!({"error":error})),
+            };
+            let _ = control_http::respond(
+                stream,
+                status,
+                "application/json",
+                value.to_string().as_bytes(),
+                "",
+                control_http::Policy::Page,
+            );
             return true;
         }
         let _ = match result {
-            Ok(())=>control_http::respond(stream, "303 See Other", "text/html; charset=utf-8", b"", "Location: /knowledge?mode=review\r\n", control_http::Policy::Page),
-            Err(message)=>control_http::respond(stream, status(message), "text/html; charset=utf-8", crate::error_page(message,"/knowledge?mode=review").as_bytes(), "", control_http::Policy::Page),
+            Ok(()) => control_http::respond(
+                stream,
+                "303 See Other",
+                "text/html; charset=utf-8",
+                b"",
+                "Location: /knowledge?mode=review\r\n",
+                control_http::Policy::Page,
+            ),
+            Err(message) => control_http::respond(
+                stream,
+                status(message),
+                "text/html; charset=utf-8",
+                crate::error_page(message, "/knowledge?mode=review").as_bytes(),
+                "",
+                control_http::Policy::Page,
+            ),
         };
         return true;
     }
@@ -346,7 +364,14 @@ pub fn handle(
             .unwrap_or("");
         let saved = query.get("saved").and_then(|s| s.parse().ok());
         let page = crate::render(state, "knowledge-page", lens, &render(state, selection, saved));
-        let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Page);
+        let _ = control_http::respond(
+            stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            page.as_bytes(),
+            "",
+            control_http::Policy::Page,
+        );
         return true;
     }
     if ["/knowledge/save", "/save"].contains(&path) && method == "POST" {
@@ -354,7 +379,14 @@ pub fn handle(
         if path == "/save" {
             migrate(state);
             let Some(doc) = state.documents.iter().find(|d| d.id == "scratchpad") else {
-                let _ = control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", b"No draft to save.", "", control_http::Policy::Page);
+                let _ = control_http::respond(
+                    stream,
+                    "400 Bad Request",
+                    "text/html; charset=utf-8",
+                    b"No draft to save.",
+                    "",
+                    control_http::Policy::Page,
+                );
                 return true;
             };
             fields.insert("id".into(), doc.id.clone());
@@ -367,24 +399,34 @@ pub fn handle(
                     "legacy-form".into()
                 },
             );
-            fields.insert(
-                "body".into(),
-                fields.get("note").cloned().unwrap_or_default(),
-            );
+            fields.insert("body".into(), fields.get("note").cloned().unwrap_or_default());
         }
         match save_with(state, &fields, crate::storage::save) {
             Ok(id) => {
-                let revision = state
-                    .documents
-                    .iter()
-                    .find(|d| d.id == id)
-                    .unwrap()
-                    .revision;
-                let _ = control_http::respond(stream, "303 See Other", "text/html; charset=utf-8", b"", &format!("Location: /knowledge?doc={id}&saved={revision}#saved\r\n"), control_http::Policy::Page);
+                let revision = state.documents.iter().find(|d| d.id == id).unwrap().revision;
+                let _ = control_http::respond(
+                    stream,
+                    "303 See Other",
+                    "text/html; charset=utf-8",
+                    b"",
+                    &format!("Location: /knowledge?doc={id}&saved={revision}#saved\r\n"),
+                    control_http::Policy::Page,
+                );
             }
             Err(message) => {
-                let content=format!("<h2>Save needs attention</h2><p class='save-error' role='alert'>{}</p><a href='/knowledge'>Open current notes ↗</a>{}",escape(message),editor(None,Some(&fields)));
-                let _ = control_http::respond(stream, "409 Conflict", "text/html; charset=utf-8", crate::render(state, "knowledge-page", lens, &content).as_bytes(), "", control_http::Policy::Page);
+                let content = format!(
+                    "<h2>Save needs attention</h2><p class='save-error' role='alert'>{}</p><a href='/knowledge'>Open current notes ↗</a>{}",
+                    escape(message),
+                    editor(None, Some(&fields))
+                );
+                let _ = control_http::respond(
+                    stream,
+                    "409 Conflict",
+                    "text/html; charset=utf-8",
+                    crate::render(state, "knowledge-page", lens, &content).as_bytes(),
+                    "",
+                    control_http::Policy::Page,
+                );
             }
         }
         return true;

@@ -1,11 +1,7 @@
-
 use super::*;
 fn snapshot(files: &[(&str, &str)]) -> Snapshot {
     Snapshot {
-        files: files
-            .iter()
-            .map(|(p, t)| (p.to_string(), t.to_string()))
-            .collect(),
+        files: files.iter().map(|(p, t)| (p.to_string(), t.to_string())).collect(),
         ..Snapshot::default()
     }
 }
@@ -16,10 +12,7 @@ fn replacement_has_correct_signs_counts_context_and_hunk_positions() {
         &snapshot(&[("a.rs", "one\nnew\nthree\n")]),
     );
     assert_eq!((diff.files, diff.added, diff.removed), (1, 1, 1));
-    assert!(
-        diff.text
-            .contains("@@ -1,3 +1,3 @@\n one\n-two\n+new\n three\n")
-    );
+    assert!(diff.text.contains("@@ -1,3 +1,3 @@\n one\n-two\n+new\n three\n"));
     assert_eq!(kind("+new"), Kind::Add);
     assert_eq!(kind("-two"), Kind::Remove);
 }
@@ -34,11 +27,7 @@ fn additions_deletions_empty_files_newlines_and_reverts_are_distinct() {
     assert!(deleted.text.contains("+++ /dev/null"));
     assert_eq!(between(&empty, &snapshot(&[("empty.rs", "")])).files, 1);
     assert_eq!(
-        between(
-            &snapshot(&[("a.rs", "same")]),
-            &snapshot(&[("a.rs", "same")])
-        )
-        .files,
+        between(&snapshot(&[("a.rs", "same")]), &snapshot(&[("a.rs", "same")])).files,
         0
     );
 }
@@ -102,11 +91,7 @@ fn file_headers_are_not_changes_and_truncated_hunks_count_only_shown_lines() {
         &snapshot(&[("big.txt", &"line\n".repeat(OUTPUT_LINES + 50))]),
     );
     assert!(preview.omitted > 0);
-    let shown = preview
-        .text
-        .lines()
-        .filter(|l| kind(l) == Kind::Add)
-        .count();
+    let shown = preview.text.lines().filter(|l| kind(l) == Kind::Add).count();
     assert!(
         preview.text.contains(&format!("@@ -0,0 +1,{shown} @@\n")),
         "{}",
@@ -132,12 +117,7 @@ fn unified_hunks_pass_git_apply_check() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(diff.text.as_bytes())
-        .unwrap();
+    child.stdin.take().unwrap().write_all(diff.text.as_bytes()).unwrap();
     let success = child.wait().unwrap().success();
     std::fs::remove_dir_all(root).unwrap();
     assert!(success, "Unified diff did not pass Git's parser");
@@ -146,9 +126,6 @@ fn unified_hunks_pass_git_apply_check() {
 fn discord_preview_is_plain_bounded_and_cannot_escape_a_code_fence() {
     let preview = discord_preview("@@ -1 +1 @@\n-old\n+new\n");
     assert!(preview.starts_with("```text\n") && preview.contains("-old\n+new"));
-    assert_eq!(
-        discord_preview("+```injected\n"),
-        "Changes available in chat."
-    );
+    assert_eq!(discord_preview("+```injected\n"), "Changes available in chat.");
     assert!(discord_preview(&"+x\n".repeat(10000)).chars().count() < 550);
 }

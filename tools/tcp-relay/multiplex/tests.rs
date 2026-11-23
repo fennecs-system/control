@@ -1,4 +1,3 @@
-
 use super::*;
 use std::net::TcpListener;
 fn sockets() -> (TcpStream, TcpStream) {
@@ -55,9 +54,7 @@ fn every_stream_slot_transfers_independently_and_preserves_half_close() {
     let mut servers = Vec::new();
     for index in 0..CONNECTIONS {
         let (client, mut server) = pair.connect();
-        client
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         servers.push(thread::spawn(move || {
             let mut data = Vec::new();
             server.read_to_end(&mut data).unwrap();
@@ -67,10 +64,7 @@ fn every_stream_slot_transfers_independently_and_preserves_half_close() {
         }));
         clients.push(client);
     }
-    assert!(
-        !pair.listener.has_capacity(),
-        "a full transport admits no more streams"
-    );
+    assert!(!pair.listener.has_capacity(), "a full transport admits no more streams");
     let (_, overflow) = sockets();
     assert!(pair.listener.open(overflow).is_err());
     let clients = clients
@@ -120,9 +114,7 @@ fn a_blocked_stream_does_not_block_other_streams_or_heartbeats() {
     });
     thread::sleep(Duration::from_millis(150));
     let (mut client, mut server) = pair.connect();
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     server.write_all(b"responsive").unwrap();
     server.shutdown(Shutdown::Write).unwrap();
     let mut reply = Vec::new();
@@ -150,9 +142,7 @@ fn a_stream_transfers_more_than_its_credit_window() {
             server.write_all(&payload).unwrap();
             server.shutdown(Shutdown::Write).unwrap();
         });
-        client
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut received = Vec::new();
         client.read_to_end(&mut received).unwrap();
         sender.join().unwrap();
@@ -163,12 +153,7 @@ fn a_stream_transfers_more_than_its_credit_window() {
 fn malformed_or_uncredited_frames_close_the_transport() {
     for (id, kind) in [(0u32, Kind::Open), (1, Kind::Data), (1, Kind::Credit)] {
         let mut bytes = id.to_be_bytes().to_vec();
-        protocol::write(
-            &mut bytes,
-            kind,
-            if kind == Kind::Data { b"x" } else { b"" },
-        )
-        .unwrap();
+        protocol::write(&mut bytes, kind, if kind == Kind::Data { b"x" } else { b"" }).unwrap();
         let (link, _, reader) = Transport::start(std::io::Cursor::new(bytes), Vec::new(), true);
         reader.join().unwrap();
         assert!(!link.alive());
@@ -193,8 +178,7 @@ fn a_stream_beyond_the_limit_is_closed_alone() {
         protocol::write(&mut bytes, Kind::Open, b"").unwrap();
     }
     let output = Shared::default();
-    let (_link, incoming, reader) =
-        Transport::start(std::io::Cursor::new(bytes), output.clone(), true);
+    let (_link, incoming, reader) = Transport::start(std::io::Cursor::new(bytes), output.clone(), true);
     reader.join().unwrap();
     assert_eq!(
         incoming.try_iter().count(),
@@ -216,9 +200,7 @@ fn closing_one_connection_keeps_the_listener_and_other_streams_alive() {
     drop(server);
     upstream.write_all(b"still-live").unwrap();
     upstream.shutdown(Shutdown::Write).unwrap();
-    other
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    other.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let mut reply = Vec::new();
     other.read_to_end(&mut reply).unwrap();
     assert_eq!(reply, b"still-live");

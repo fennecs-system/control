@@ -1,4 +1,3 @@
-
 use super::*;
 use std::process::Command;
 
@@ -20,10 +19,7 @@ fn in_child(test: &str, role: &str) -> bool {
 }
 fn handler(signal: libc::c_int) -> usize {
     let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
-    assert_eq!(
-        unsafe { libc::sigaction(signal, std::ptr::null(), &mut current) },
-        0
-    );
+    assert_eq!(unsafe { libc::sigaction(signal, std::ptr::null(), &mut current) }, 0);
     current.sa_sigaction
 }
 

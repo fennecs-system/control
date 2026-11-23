@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -9,11 +8,7 @@ fn frames_round_trip_and_processes_cannot_forge_frames() {
         event: Event::Line(hostile.clone()),
     }
     .encode();
-    assert_eq!(
-        line.iter().filter(|&&b| b == b'\n').count(),
-        1,
-        "one frame per line"
-    );
+    assert_eq!(line.iter().filter(|&&b| b == b'\n').count(), 1, "one frame per line");
     assert_eq!(
         Frame::decode(&line[..line.len() - 1]),
         Some((
@@ -34,20 +29,14 @@ fn frames_round_trip_and_processes_cannot_forge_frames() {
         },
     };
     let encoded = exit.encode();
-    assert_eq!(
-        Frame::decode(&encoded[..encoded.len() - 1]),
-        Some((exit, false))
-    );
+    assert_eq!(Frame::decode(&encoded[..encoded.len() - 1]), Some((exit, false)));
     let notice = Frame {
         seq: 9,
         event: Event::Notification(b"task-2\tX\t0 - 0 1\ncomplete\\n".to_vec()),
     };
     let encoded = notice.encode();
     assert_eq!(encoded.iter().filter(|&&b| b == b'\n').count(), 1);
-    assert_eq!(
-        Frame::decode(&encoded[..encoded.len() - 1]),
-        Some((notice, false))
-    );
+    assert_eq!(Frame::decode(&encoded[..encoded.len() - 1]), Some((notice, false)));
     let long = Frame {
         seq: 10,
         event: Event::Notification(vec![b'n'; MAX_LINE + 1]),
@@ -117,9 +106,7 @@ fn specs_ids_and_backoff_are_bounded() {
     assert!(Spec::decode("transient notify-v2\ntask").is_none());
     assert_eq!(Spec::decode("sometimes\nls"), None);
     assert_eq!(Spec::decode("transient\n  "), None);
-    assert!(
-        valid_id("alice-chat") && !valid_id("../x") && !valid_id("") && !valid_id(&"a".repeat(33))
-    );
+    assert!(valid_id("alice-chat") && !valid_id("../x") && !valid_id("") && !valid_id(&"a".repeat(33)));
     assert_eq!(
         (0..9).map(backoff).collect::<Vec<_>>(),
         [1, 2, 4, 8, 16, 32, 60, 60, 60]

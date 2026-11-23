@@ -2,7 +2,7 @@
 //! reply, error and tool-result shapes every Control transport answers with.
 //! No state, I/O, authorization or tools: each transport keeps its framing
 //! and authentication, and each audience supplies its own tools.
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// MCP protocol revisions this node speaks, newest first.
 pub const VERSIONS: [&str; 2] = ["2025-11-25", "2025-03-26"];
@@ -10,7 +10,10 @@ pub const LATEST: &str = VERSIONS[0];
 /// The revision answered to `initialize`: the client's own when supported,
 /// otherwise the latest.
 pub fn negotiate(requested: Option<&str>) -> &'static str {
-    VERSIONS.into_iter().find(|version| Some(*version) == requested).unwrap_or(LATEST)
+    VERSIONS
+        .into_iter()
+        .find(|version| Some(*version) == requested)
+        .unwrap_or(LATEST)
 }
 pub fn supported(version: &str) -> bool {
     VERSIONS.contains(&version)
@@ -72,7 +75,11 @@ pub fn call(request: &Value) -> Option<Call<'_>> {
     (method(request) == Method::ToolsCall).then(|| named(request))
 }
 fn named(request: &Value) -> Call<'_> {
-    Call { name: request["params"]["name"].as_str().unwrap_or(""), arguments: &request["params"]["arguments"], params: &request["params"] }
+    Call {
+        name: request["params"]["name"].as_str().unwrap_or(""),
+        arguments: &request["params"]["arguments"],
+        params: &request["params"],
+    }
 }
 
 /// A successful reply.
@@ -141,7 +148,9 @@ pub fn batch(requests: &[Value], mut single: impl FnMut(usize, &Value) -> Value)
     if requests.is_empty() {
         return error(&Value::Null, INVALID_REQUEST, "Empty JSON-RPC batch");
     }
-    let replies: Vec<Value> = requests.iter().enumerate()
+    let replies: Vec<Value> = requests
+        .iter()
+        .enumerate()
         .map(|(index, request)| {
             if !request.is_object() || !is_v2(request) || !request["method"].is_string() {
                 error(&Value::Null, INVALID_REQUEST, "Invalid JSON-RPC batch element")
@@ -151,7 +160,11 @@ pub fn batch(requests: &[Value], mut single: impl FnMut(usize, &Value) -> Value)
         })
         .filter(|reply| !reply.is_null())
         .collect();
-    if replies.is_empty() { Value::Null } else { Value::Array(replies) }
+    if replies.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(replies)
+    }
 }
 
 /// How one server names itself and words its two protocol faults. The
@@ -182,7 +195,11 @@ pub fn serve(server: &Server<'_>, request: &Value, tools: &mut impl Tools) -> Va
     }
     let result = match method(request) {
         Method::Initialize => {
-            let mut result = initialize(negotiate(request["params"]["protocolVersion"].as_str()), server.name, server.version);
+            let mut result = initialize(
+                negotiate(request["params"]["protocolVersion"].as_str()),
+                server.name,
+                server.version,
+            );
             if let Some(instructions) = server.instructions {
                 result["instructions"] = json!(instructions);
             }

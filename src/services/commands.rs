@@ -2,12 +2,7 @@
 //! engine options enter the request. Uncertain effects are never replayed.
 use super::*;
 use control_effect::sync::{CancelToken, Changes, Recv};
-use std::{
-    io::Read,
-    process::Child,
-    thread::JoinHandle,
-    time::Instant,
-};
+use std::{io::Read, process::Child, thread::JoinHandle, time::Instant};
 mod routine;
 
 /// Finished command outputs retained per service. Active commands are bounded
@@ -128,16 +123,39 @@ impl Execution {
     }
     /// The first line of a command still running, for operator views.
     pub(super) fn running_label(&self) -> Option<String> {
-        let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };
-        matches!(self.status, Status::Running).then(|| command.lines().next().unwrap_or_default().chars().take(80).collect())
+        let command = if self.display_command.is_empty() {
+            &self.command
+        } else {
+            &self.display_command
+        };
+        matches!(self.status, Status::Running)
+            .then(|| command.lines().next().unwrap_or_default().chars().take(80).collect())
     }
     /// One line naming an active request for a refusal: its handle, status,
     /// owning chat (or run) and command.
     fn holder(&self, state: &State) -> String {
-        let owner = state.runtime.runs.iter().find(|r| r.id == self.run).and_then(|r| r.chat_id.as_deref()).map_or_else(|| format!("run {}", self.run), |chat| format!("chat {chat}"));
-        let command = if self.display_command.is_empty() { &self.command } else { &self.display_command };
+        let owner = state
+            .runtime
+            .runs
+            .iter()
+            .find(|r| r.id == self.run)
+            .and_then(|r| r.chat_id.as_deref())
+            .map_or_else(|| format!("run {}", self.run), |chat| format!("chat {chat}"));
+        let command = if self.display_command.is_empty() {
+            &self.command
+        } else {
+            &self.display_command
+        };
         let label: String = command.lines().next().unwrap_or_default().chars().take(60).collect();
-        format!("{} ({}, {owner}: {label})", handle(&self.id), if self.status == Status::Running { "running" } else { "waiting" })
+        format!(
+            "{} ({}, {owner}: {label})",
+            handle(&self.id),
+            if self.status == Status::Running {
+                "running"
+            } else {
+                "waiting"
+            }
+        )
     }
     /// Status fields that are set, under the short execution handle.
     pub(super) fn brief(&self) -> Value {
@@ -176,8 +194,18 @@ fn names(id: &str, given: &str) -> bool {
 }
 /// The one retained execution or receipt `given` names on `service`.
 fn lookup<'a>(service: &'a Service, given: &str) -> io::Result<Option<Recorded<'a>>> {
-    let mut found = service.executions.iter().filter(|e| names(&e.id, given)).map(Recorded::Execution)
-        .chain(service.command_receipts.iter().filter(|r| names(&r.id, given)).map(Recorded::Receipt));
+    let mut found = service
+        .executions
+        .iter()
+        .filter(|e| names(&e.id, given))
+        .map(Recorded::Execution)
+        .chain(
+            service
+                .command_receipts
+                .iter()
+                .filter(|r| names(&r.id, given))
+                .map(Recorded::Receipt),
+        );
     let first = found.next();
     if found.next().is_some() {
         return Err(fail("Execution handle is ambiguous; pass the full execution_id"));
@@ -266,13 +294,20 @@ pub(crate) struct Finished<'a> {
 /// Every service's retained finished commands (at most `MAX_EXECUTIONS` per
 /// service), oldest first per service. No engine calls or log reads.
 pub(crate) fn finished(state: &State) -> impl Iterator<Item = Finished<'_>> {
-    state.services.iter().flat_map(|service| &service.executions)
+    state
+        .services
+        .iter()
+        .flat_map(|service| &service.executions)
         .filter(|execution| execution.copy.is_none() && !execution.status.active())
         .map(|execution| Finished {
             run: &execution.run,
             id: &execution.id,
             // A launched command keeps only its display text (`command` is cleared).
-            command: if execution.display_command.is_empty() { &execution.command } else { &execution.display_command },
+            command: if execution.display_command.is_empty() {
+                &execution.command
+            } else {
+                &execution.display_command
+            },
             failed: !matches!(execution.status, Status::Completed) || execution.exit_code.is_some_and(|code| code != 0),
         })
 }
@@ -372,13 +407,7 @@ pub(super) fn hash(value: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-pub(super) fn owned(
-    state: &State,
-    run: &str,
-    generation: &str,
-    node: &NodeId,
-    service: &str,
-) -> io::Result<usize> {
+pub(super) fn owned(state: &State, run: &str, generation: &str, node: &NodeId, service: &str) -> io::Result<usize> {
     let (active, _) = caller(state, run, generation)?;
     state
         .services
@@ -386,7 +415,14 @@ pub(super) fn owned(
         .position(|s| s.resource.id.as_str() == service && accessible(state, s, node, active))
         .ok_or_else(|| fail("Service is not owned by this chat or its team"))
 }
-pub(super) fn exec(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, node: &NodeId, input: Input) -> io::Result<Value> {
+pub(super) fn exec(
+    shared: &Arc<Mutex<State>>,
+    run: &str,
+    generation: &str,
+    nonce: &str,
+    node: &NodeId,
+    input: Input,
+) -> io::Result<Value> {
     // An invalid wait refuses the request before anything is submitted.
     let wait = wait_bound(input.wait_seconds)?;
     let service_id = input.service_id.clone();
@@ -398,7 +434,19 @@ pub(super) fn exec(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonc
     };
     let execution_id = admitted["execution_id"].as_str().unwrap_or_default().to_owned();
     // settle keeps admitted fields, so inline results also carry the hint.
-    Ok(settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, admitted, wait, &crate::shutdown::token()))
+    Ok(settle(
+        shared,
+        Waiter {
+            run,
+            generation,
+            node,
+            service_id: &service_id,
+        },
+        &execution_id,
+        admitted,
+        wait,
+        &crate::shutdown::token(),
+    ))
 }
 /// The caller whose access is rechecked on every wake while waiting.
 #[derive(Clone, Copy)]
@@ -413,13 +461,31 @@ pub(super) struct Waiter<'a> {
 /// stops, and returns its latest summary. Fields of `admitted` that the
 /// summary lacks (a copy's tally) are kept. Waiting never creates or replays
 /// an effect, so a retried request simply waits on the same execution.
-pub(super) fn settle(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_id: &str, admitted: Value, wait: Duration, token: &CancelToken) -> Value {
-    let active = |value: &Value| value["status"].as_str().is_some_and(|s| matches!(s, "requested" | "running"));
+pub(super) fn settle(
+    shared: &Arc<Mutex<State>>,
+    waiter: Waiter<'_>,
+    execution_id: &str,
+    admitted: Value,
+    wait: Duration,
+    token: &CancelToken,
+) -> Value {
+    let active = |value: &Value| {
+        value["status"]
+            .as_str()
+            .is_some_and(|s| matches!(s, "requested" | "running"))
+    };
     let service_id = waiter.service_id;
     let mut value = if wait.is_zero() || !active(&admitted) {
         admitted
     } else {
-        let mut value = wait_until(shared, waiter, execution_id, admitted.clone(), Instant::now() + wait, token);
+        let mut value = wait_until(
+            shared,
+            waiter,
+            execution_id,
+            admitted.clone(),
+            Instant::now() + wait,
+            token,
+        );
         if let (Some(value), Some(admitted)) = (value.as_object_mut(), admitted.as_object()) {
             for (key, field) in admitted {
                 value.entry(key.clone()).or_insert_with(|| field.clone());
@@ -433,24 +499,39 @@ pub(super) fn settle(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_i
         if finished {
             object.insert("final".into(), json!(true));
         } else {
-            object.entry("wait").or_insert_with(|| json!(still_running(service_id, execution_id)));
+            object
+                .entry("wait")
+                .or_insert_with(|| json!(still_running(service_id, execution_id)));
         }
     }
     value
 }
 /// The callable next step for a request still running after its wait.
 fn still_running(service_id: &str, execution_id: &str) -> String {
-    format!("Still running: call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} for its result.", handle(execution_id))
+    format!(
+        "Still running: call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} for its result.",
+        handle(execution_id)
+    )
 }
 /// When the caller's attempt must have its reply, as a local instant.
 fn turn_end(state: &State, run: &str) -> Option<Instant> {
     let run = state.runtime.runs.iter().find(|r| r.id == run)?;
     let attempt = run.attempts.last()?;
     let limit = crate::attempt_control::deadline(state, run, attempt)?;
-    let end = attempt.started_unix.saturating_add(limit).saturating_sub(DEADLINE_MARGIN);
+    let end = attempt
+        .started_unix
+        .saturating_add(limit)
+        .saturating_sub(DEADLINE_MARGIN);
     Some(Instant::now() + Duration::from_secs(end.saturating_sub(now())))
 }
-fn wait_until(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_id: &str, mut last: Value, until: Instant, token: &CancelToken) -> Value {
+fn wait_until(
+    shared: &Arc<Mutex<State>>,
+    waiter: Waiter<'_>,
+    execution_id: &str,
+    mut last: Value,
+    until: Instant,
+    token: &CancelToken,
+) -> Value {
     let signal = changes();
     loop {
         // Read the generation before the state so no completion is missed.
@@ -458,7 +539,9 @@ fn wait_until(shared: &Arc<Mutex<State>>, waiter: Waiter<'_>, execution_id: &str
         let limit = {
             let Ok(state) = shared.lock() else { return last };
             // An ended run or replaced attempt stops waiting with what it saw.
-            let Ok(index) = owned(&state, waiter.run, waiter.generation, waiter.node, waiter.service_id) else { return last };
+            let Ok(index) = owned(&state, waiter.run, waiter.generation, waiter.node, waiter.service_id) else {
+                return last;
+            };
             let service = &state.services[index];
             match lookup(service, execution_id) {
                 Ok(Some(Recorded::Execution(execution))) => {
@@ -490,13 +573,37 @@ pub struct Handle {
     wait_seconds: u64,
 }
 /// Reads a request's status, waiting up to `wait_seconds` for it to finish.
-pub(super) fn status_wait(shared: &Arc<Mutex<State>>, run: &str, generation: &str, node: &NodeId, input: Handle) -> io::Result<Value> {
+pub(super) fn status_wait(
+    shared: &Arc<Mutex<State>>,
+    run: &str,
+    generation: &str,
+    node: &NodeId,
+    input: Handle,
+) -> io::Result<Value> {
     let wait = wait_bound(input.wait_seconds)?;
     let (service_id, execution_id) = (input.service_id.clone(), input.execution_id.clone());
     let value = status(shared, run, generation, node, input)?;
-    Ok(settle(shared, Waiter { run, generation, node, service_id: &service_id }, &execution_id, value, wait, &crate::shutdown::token()))
+    Ok(settle(
+        shared,
+        Waiter {
+            run,
+            generation,
+            node,
+            service_id: &service_id,
+        },
+        &execution_id,
+        value,
+        wait,
+        &crate::shutdown::token(),
+    ))
 }
-pub(super) fn status(shared: &Arc<Mutex<State>>, run: &str, generation: &str, node: &NodeId, input: Handle) -> io::Result<Value> {
+pub(super) fn status(
+    shared: &Arc<Mutex<State>>,
+    run: &str,
+    generation: &str,
+    node: &NodeId,
+    input: Handle,
+) -> io::Result<Value> {
     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let index = owned(&state, run, generation, node, &input.service_id)?;
     lookup(&state.services[index], &input.execution_id)?
@@ -534,22 +641,25 @@ fn admit(
     admit_work(state, run, generation, nonce, node, work, save)
 }
 fn valid_nonce(nonce: &str) -> io::Result<()> {
-    if nonce.is_empty()
-        || nonce.len() > 128
-        || !nonce
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
+    if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err(fail("Invalid service command identity"));
     }
     Ok(())
 }
 /// The durable execution ID of one tool request; shared by commands and copies.
 fn identity(service_id: &str, run: &str, generation: &str, nonce: &str) -> io::Result<String> {
-    Ok(hash(&serde_json::to_vec(&(service_id, run, generation, nonce)).map_err(fail)?))
+    Ok(hash(
+        &serde_json::to_vec(&(service_id, run, generation, nonce)).map_err(fail)?,
+    ))
 }
 /// The recorded outcome of an already-admitted request, never a new effect.
-pub(super) fn previous(service: &Service, run: &str, generation: &str, nonce: &str, digest: &str) -> io::Result<Option<Value>> {
+pub(super) fn previous(
+    service: &Service,
+    run: &str,
+    generation: &str,
+    nonce: &str,
+    digest: &str,
+) -> io::Result<Option<Value>> {
     valid_nonce(nonce)?;
     let id = identity(service.resource.id.as_str(), run, generation, nonce)?;
     let found = service
@@ -590,19 +700,23 @@ pub(super) fn admit_work(
     if let Some(value) = previous(service, run, generation, nonce, &digest)? {
         return Ok(value);
     }
-    if !matches!(service.resource.phase, Phase::Running(_)) || service.resource.lease.expired(now())
-    {
+    if !matches!(service.resource.phase, Phase::Running(_)) || service.resource.lease.expired(now()) {
         return Err(fail("Wait for a running service with a live lease"));
     }
     // Commands run concurrently up to the node limit. A copy takes the service
     // exclusively: it waits for running commands, and nothing new is admitted
     // until it finishes, so no command observes a partial copy.
-    let active = service.executions.iter().filter(|e| e.status.active()).collect::<Vec<_>>();
+    let active = service
+        .executions
+        .iter()
+        .filter(|e| e.status.active())
+        .collect::<Vec<_>>();
     let service_id = service.resource.id.as_str();
     if let Some(copy) = active.iter().find(|e| e.copy.is_some()) {
         return Err(fail(format!(
             "Service {service_id} is reserved for copy {}; nothing was submitted. Call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} and retry after it finishes.",
-            copy.holder(state), handle(&copy.id)
+            copy.holder(state),
+            handle(&copy.id)
         )));
     }
     let ceiling = concurrency();
@@ -610,13 +724,17 @@ pub(super) fn admit_work(
     if work.copy.is_none() && active.len() >= limit {
         let holders = active.iter().map(|e| e.holder(state)).collect::<Vec<_>>().join("; ");
         let bound = if limit < ceiling.0 {
-            format!("the service's process limit of {}; replace it with a larger shape for more", service.pids_limit())
+            format!(
+                "the service's process limit of {}; replace it with a larger shape for more",
+                service.pids_limit()
+            )
         } else {
             format!("node setting service-commands-max={limit}")
         };
         return Err(fail(format!(
             "Service {service_id} is running {} of {limit} concurrent commands ({bound}); nothing was submitted. Active: {holders}. Call control_service_exec_status {{\"service_id\":\"{service_id}\",\"execution_id\":\"{}\",\"wait_seconds\":30}} until one finishes, then retry; run long-lived programs as watches (control_watch_start), or use another service.",
-            active.len(), active.first().map_or("", |e| handle(&e.id))
+            active.len(),
+            active.first().map_or("", |e| handle(&e.id))
         )));
     }
     let waiting = if work.copy.is_some() { active.len() } else { 0 };
@@ -627,9 +745,7 @@ pub(super) fn admit_work(
         let e = &state.services[index].executions[i];
         live_attempt(state, &e.run, &e.attempt).then(|| Receipt::from_execution(e))
     });
-    let old_receipts = if receipt.is_some()
-        && state.services[index].command_receipts.len() >= MAX_RECEIPTS
-    {
+    let old_receipts = if receipt.is_some() && state.services[index].command_receipts.len() >= MAX_RECEIPTS {
         let retained = state.services[index]
             .command_receipts
             .iter()
@@ -641,10 +757,7 @@ pub(super) fn admit_work(
                 "Active command receipt budget exhausted; finish this model turn before running more commands",
             ));
         }
-        Some(std::mem::replace(
-            &mut state.services[index].command_receipts,
-            retained,
-        ))
+        Some(std::mem::replace(&mut state.services[index].command_receipts, retained))
     } else {
         None
     };
@@ -666,7 +779,9 @@ pub(super) fn admit_work(
         truncated: false,
         exit_code: None,
         diagnostic: if waiting > 0 {
-            format!("Waiting for {waiting} running command(s) to finish; new commands are refused until this copy completes.")
+            format!(
+                "Waiting for {waiting} running command(s) to finish; new commands are refused until this copy completes."
+            )
         } else {
             String::new()
         },
@@ -770,7 +885,11 @@ fn capture_fed(
     if timeout.is_zero() || cancel() {
         return Err(fail("Service command is no longer eligible"));
     }
-    let mut child = start(Streams::new(if feed.is_some() { Stream::Piped } else { Stream::Null }, Stream::Piped, Stream::Null))?;
+    let mut child = start(Streams::new(
+        if feed.is_some() { Stream::Piped } else { Stream::Null },
+        Stream::Piped,
+        Stream::Null,
+    ))?;
     let writer = match (feed, child.stdin.take()) {
         (Some(feed), Some(stdin)) => Some(std::thread::spawn(move || feed(stdin))),
         _ => None,
@@ -821,7 +940,8 @@ fn capture_fed(
             timed_out = Instant::now() >= deadline;
             interrupted = !timed_out;
             watched.kill();
-            break exited(watched.wait(None, &CancelToken::new())).unwrap_or_else(|| Err(fail("Service command did not exit")));
+            break exited(watched.wait(None, &CancelToken::new()))
+                .unwrap_or_else(|| Err(fail("Service command did not exit")));
         }
         if let Ok(output) = output.lock() {
             progress(&output);
@@ -862,24 +982,49 @@ impl ProbeOutput {
 /// command still running at `timeout` is stopped inside the service under a
 /// marker derived from `owner`, which should be unique to concurrent probes.
 /// Queries the engine: call without the state lock.
-pub(crate) fn probe(isolation: &dyn Isolation, service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<ProbeOutput> {
+pub(crate) fn probe(
+    isolation: &dyn Isolation,
+    service: &Service,
+    command: &str,
+    owner: &str,
+    timeout: Duration,
+) -> io::Result<ProbeOutput> {
     let (id, user) = super::exec_target(isolation, service)?;
     let marker = format!("probe-{}", &hash(owner.as_bytes())[..32]);
-    let run = in_service(id, user, &[(MARKER, marker.as_str())], control_isolation::Input::Closed, &launch(command));
+    let run = in_service(
+        id,
+        user,
+        &[(MARKER, marker.as_str())],
+        control_isolation::Input::Closed,
+        &launch(command),
+    );
     let result = capture(|streams| isolation.exec(&run, streams), timeout, || false, |_| {})?;
     if result.timed_out || result.interrupted || result.exit_code.is_none() {
         reap(isolation, service, &marker);
     }
-    Ok(ProbeOutput { text: result.output.text(), exit_code: result.exit_code, timed_out: result.timed_out })
+    Ok(ProbeOutput {
+        text: result.output.text(),
+        exit_code: result.exit_code,
+        timed_out: result.timed_out,
+    })
 }
 /// A snapshot of service `id` that `usable` accepts, to probe without the
 /// state lock. Observations and score probes check the service each time
 /// they run, not when they were declared.
 pub(crate) fn probe_target(state: &State, id: &str, usable: impl Fn(&Service) -> bool) -> Option<Service> {
-    state.services.iter().find(|service| service.resource.id.as_str() == id && usable(service)).map(Service::binding_snapshot)
+    state
+        .services
+        .iter()
+        .find(|service| service.resource.id.as_str() == id && usable(service))
+        .map(Service::binding_snapshot)
 }
 pub(super) fn logs(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<String> {
-    let result = capture(|_| isolation.logs(&id.as_str().into(), 80), Duration::from_secs(5), || false, |_| {})?;
+    let result = capture(
+        |_| isolation.logs(&id.as_str().into(), 80),
+        Duration::from_secs(5),
+        || false,
+        |_| {},
+    )?;
     if result.exit_code != Some(0) || result.timed_out {
         return Err(fail("Could not retain service logs"));
     }
@@ -893,9 +1038,11 @@ fn update(
     persist: bool,
 ) -> io::Result<()> {
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let Some(index) = state.services.iter().position(|s| {
-        s.resource.id == service.resource.id && s.resource.generation == service.resource.generation
-    }) else {
+    let Some(index) = state
+        .services
+        .iter()
+        .position(|s| s.resource.id == service.resource.id && s.resource.generation == service.resource.generation)
+    else {
         return Err(fail("Service generation changed"));
     };
     let execution = state.services[index]
@@ -905,18 +1052,9 @@ fn update(
         .ok_or_else(|| fail("Service command missing"))?;
     let previous = persist.then(|| execution.clone());
     let previous_status = execution.status;
-    let previous_output = (
-        execution.output.len(),
-        execution.truncated,
-        execution.status,
-    );
+    let previous_output = (execution.output.len(), execution.truncated, execution.status);
     change(execution);
-    let changed = previous_output
-        != (
-            execution.output.len(),
-            execution.truncated,
-            execution.status,
-        );
+    let changed = previous_output != (execution.output.len(), execution.truncated, execution.status);
     let run = execution.run.clone();
     let transitioned = execution.status != previous_status;
     if persist && let Err(error) = crate::storage::save(&state) {
@@ -950,9 +1088,11 @@ fn update(
 }
 fn stop(shared: &Arc<Mutex<State>>, service: &Service) -> io::Result<()> {
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    if let Some(index) = state.services.iter().position(|s| {
-        s.resource.id == service.resource.id && s.resource.generation == service.resource.generation
-    }) {
+    if let Some(index) = state
+        .services
+        .iter()
+        .position(|s| s.resource.id == service.resource.id && s.resource.generation == service.resource.generation)
+    {
         transition(
             &mut state,
             index,
@@ -974,41 +1114,64 @@ fn launch(command: &str) -> String {
 /// marker, and succeeds only once none remains. Exited processes awaiting
 /// their reaper do not count, and no marker means nothing is running.
 fn reap_script(execution: &str) -> String {
-    format!(r#"m={MARKER}={execution}
+    format!(
+        r#"m={MARKER}={execution}
 members() {{ for d in /proc/[0-9]*; do read -r s 2>/dev/null < "$d/stat" || continue; s=${{s##*) }}; [ "${{s%% *}}" = Z ] && continue; while IFS= read -r -d '' v; do [ "$v" = "$m" ] && {{ echo "${{d#/proc/}}"; break; }}; done 2>/dev/null < "$d/environ"; done; }}
 signal() {{ for p in $(members); do kill -"$1" "$p" 2>/dev/null; done; }}
 signal TERM
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(members)" ] && exit 0; sleep 0.2; done
 signal KILL
 sleep 0.2
-[ -z "$(members)" ]"#)
+[ -z "$(members)" ]"#
+    )
 }
 /// A `bash` script in a verified service as `user` from `/workspace`, with `env` set.
-fn in_service(container: control_isolation::ContainerId, user: User, env: &[(&str, &str)], input: control_isolation::Input, script: &str) -> ExecSpec {
+fn in_service(
+    container: control_isolation::ContainerId,
+    user: User,
+    env: &[(&str, &str)],
+    input: control_isolation::Input,
+    script: &str,
+) -> ExecSpec {
     ExecSpec {
         container,
         user: Some(user),
         workdir: Some("/workspace".into()),
-        env: env.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())).collect(),
+        env: env
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
         input,
         argv: ["bash", "-c", script].map(str::to_owned).to_vec(),
     }
 }
 fn reap(isolation: &dyn Isolation, service: &Service, execution: &str) -> bool {
-    let Some(id) = service.resource.phase.container() else { return false };
+    let Some(id) = service.resource.phase.container() else {
+        return false;
+    };
     let command = ExecSpec {
         container: id.as_str().into(),
         user: Some(service.user()),
         argv: ["bash", "-c", &reap_script(execution)].map(str::to_owned).to_vec(),
         ..ExecSpec::default()
     };
-    capture(|streams| isolation.exec(&command, streams), Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
+    capture(
+        |streams| isolation.exec(&command, streams),
+        Duration::from_secs(10),
+        || false,
+        |_| {},
+    )
+    .is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
 }
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
     let isolation = crate::engine::isolation();
     // A copy reads its requesting attempt's live workspace. A source that is
     // gone, unsafe or over its bounds fails before anything enters the service.
-    let copy = match execution.copy.as_ref().map(|transfer| copy::Job::prepare(&shared, &service, &execution.run, &execution.attempt, transfer)) {
+    let copy = match execution
+        .copy
+        .as_ref()
+        .map(|transfer| copy::Job::prepare(&shared, &service, &execution.run, &execution.attempt, transfer))
+    {
         None => None,
         Some(Ok(job)) => Some(job),
         Some(Err(error)) => {
@@ -1039,13 +1202,37 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         }
         let user = service.user();
         // Approved egress also brings the service's HTTPS_PROXY settings.
-        let proxy = shared.lock().map(|state| crate::ports::proxy_env(&state, &service)).unwrap_or_default();
-        let marker = [(MARKER, execution.id.as_str())].into_iter().chain(proxy.iter().copied()).collect::<Vec<_>>();
+        let proxy = shared
+            .lock()
+            .map(|state| crate::ports::proxy_env(&state, &service))
+            .unwrap_or_default();
+        let marker = [(MARKER, execution.id.as_str())]
+            .into_iter()
+            .chain(proxy.iter().copied())
+            .collect::<Vec<_>>();
         // Both run as the service user under the same marker, so a copy that
         // outlives its client is reaped exactly like a command.
         let (command, feed) = match &copy {
-            Some(job) => (in_service(id.as_str().into(), user, &marker, control_isolation::Input::Attached, copy::EXTRACT), Some(job.feed())),
-            None => (in_service(id.as_str().into(), user, &marker, control_isolation::Input::Closed, &launch(&execution.command)), None),
+            Some(job) => (
+                in_service(
+                    id.as_str().into(),
+                    user,
+                    &marker,
+                    control_isolation::Input::Attached,
+                    copy::EXTRACT,
+                ),
+                Some(job.feed()),
+            ),
+            None => (
+                in_service(
+                    id.as_str().into(),
+                    user,
+                    &marker,
+                    control_isolation::Input::Closed,
+                    &launch(&execution.command),
+                ),
+                None,
+            ),
         };
         let checked = std::cell::Cell::new(Instant::now());
         let authorized = std::cell::Cell::new(true);
@@ -1063,9 +1250,9 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                 }
                 crate::shutdown::requested()
                     || !authorized.get()
-                    || shared.lock().map_or(true, |s| {
-                        !s.services.iter().any(|s| s.resource == service.resource)
-                    })
+                    || shared
+                        .lock()
+                        .map_or(true, |s| !s.services.iter().any(|s| s.resource == service.resource))
             },
             |output| {
                 let _ = update(
@@ -1124,7 +1311,8 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                             e.output = text;
                         }
                         Some(Some(Ok(_))) => {
-                            e.diagnostic = "Extraction in the service failed; see output. Files already extracted remain.".into();
+                            e.diagnostic =
+                                "Extraction in the service failed; see output. Files already extracted remain.".into();
                         }
                         Some(stopped) => {
                             if e.status == Status::Completed {
@@ -1132,32 +1320,30 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                             }
                             e.diagnostic = format!(
                                 "Copy stopped: {}. Files already extracted remain in the service.",
-                                stopped.and_then(Result::err).unwrap_or_else(|| "the archive was not streamed".into())
+                                stopped
+                                    .and_then(Result::err)
+                                    .unwrap_or_else(|| "the archive was not streamed".into())
                             );
                         }
                         None => {}
                     }
                     if uncertain {
-                        e.diagnostic =
-                            "Service stop requested because command completion was uncertain"
-                                .into();
+                        e.diagnostic = "Service stop requested because command completion was uncertain".into();
                     } else if reaped {
                         e.diagnostic = "The command was stopped inside the service, which keeps running. Run long work as a watch (control_watch_start) instead.".into();
                     }
                 }
                 Err(_) => {
                     e.status = Status::Interrupted;
-                    e.diagnostic="Service command could not complete; inspect service diagnostics. It was not replayed.".into();
+                    e.diagnostic =
+                        "Service command could not complete; inspect service diagnostics. It was not replayed.".into();
                 }
             }
         },
         true,
     );
 }
-pub(super) fn recover(
-    shared: &Arc<Mutex<State>>,
-    save: impl Fn(&State) -> io::Result<()>,
-) -> io::Result<()> {
+pub(super) fn recover(shared: &Arc<Mutex<State>>, save: impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     for index in 0..state.services.len() {
         if !state.services[index]
@@ -1172,17 +1358,12 @@ pub(super) fn recover(
             if execution.status == Status::Running {
                 execution.status = Status::Interrupted;
                 execution.command.clear();
-                execution.diagnostic="Control restarted before command completion; service stop requested, no replay".into();
+                execution.diagnostic =
+                    "Control restarted before command completion; service stop requested, no replay".into();
             }
         }
         let resource = &state.services[index].resource;
-        let decision = decide(
-            resource,
-            resource.stamp(),
-            Event::Stop(StopReason::Requested),
-            now(),
-        )
-        .map_err(fail)?;
+        let decision = decide(resource, resource.stamp(), Event::Stop(StopReason::Requested), now()).map_err(fail)?;
         state.services[index].resource.phase = decision.phase;
         if let Err(error) = save(&state) {
             state.services[index] = old;
@@ -1213,10 +1394,7 @@ fn launchable(executions: &[Execution]) -> Vec<&Execution> {
     }
     ready
 }
-pub(super) fn dispatch(
-    shared: &Arc<Mutex<State>>,
-    threads: &mut Vec<JoinHandle<()>>,
-) -> io::Result<()> {
+pub(super) fn dispatch(shared: &Arc<Mutex<State>>, threads: &mut Vec<JoinHandle<()>>) -> io::Result<()> {
     let mut index = 0;
     while index < threads.len() {
         if threads[index].is_finished() {
@@ -1247,8 +1425,7 @@ pub(super) fn dispatch(
             |e| {
                 e.status = Status::Interrupted;
                 e.command.clear();
-                e.diagnostic =
-                    "Service ended before the command started; no command launched".into();
+                e.diagnostic = "Service ended before the command started; no command launched".into();
             },
             true,
         )?;
@@ -1258,9 +1435,7 @@ pub(super) fn dispatch(
         state
             .services
             .iter()
-            .filter(|s| {
-                matches!(s.resource.phase, Phase::Running(_)) && !s.resource.lease.expired(now())
-            })
+            .filter(|s| matches!(s.resource.phase, Phase::Running(_)) && !s.resource.lease.expired(now()))
             .flat_map(|s| {
                 launchable(&s.executions)
                     .into_iter()
@@ -1297,9 +1472,7 @@ pub(super) fn dispatch(
                     &execution.id,
                     |e| {
                         e.status = Status::Interrupted;
-                        e.diagnostic =
-                            "Could not start service command supervisor; no command launched"
-                                .into();
+                        e.diagnostic = "Could not start service command supervisor; no command launched".into();
                     },
                     true,
                 )?;

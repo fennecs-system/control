@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::chat;
 #[test]
@@ -13,10 +12,7 @@ fn recent_threads_contain_their_children_and_keep_order_after_restart() {
     state.chats.last_mut().unwrap().parent_chat = Some(second.clone());
     let entries = ordered(&state);
     assert_eq!(
-        entries
-            .iter()
-            .map(|e| e.session.id.as_str())
-            .collect::<Vec<_>>(),
+        entries.iter().map(|e| e.session.id.as_str()).collect::<Vec<_>>(),
         [first.as_str(), second.as_str(), child.as_str()]
     );
     assert_eq!(entries[2].depth, 1);
@@ -67,14 +63,7 @@ fn malformed_parents_never_hide_chats_or_cross_identity_boundaries() {
     state.chats[0].actor = crate::identity::Actor::Unknown;
     let entries = ordered(&state);
     assert_eq!(entries.len(), 2);
-    assert!(
-        entries
-            .iter()
-            .find(|e| e.session.id == b)
-            .unwrap()
-            .parent
-            .is_none()
-    );
+    assert!(entries.iter().find(|e| e.session.id == b).unwrap().parent.is_none());
     let html = crate::navigation::conversations(&state, &b);
     assert!(!html.contains(&format!("/dm/{a}")));
 }

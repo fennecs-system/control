@@ -25,23 +25,43 @@ use std::io;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Lens {
-    Rename { from: String, to: String },
+    Rename {
+        from: String,
+        to: String,
+    },
     /// Adds a member, filled with `default` where missing.
-    Add { name: String, default: Value },
+    Add {
+        name: String,
+        default: Value,
+    },
     /// Removes a member; reversing it restores `default`.
-    Remove { name: String, default: Value },
+    Remove {
+        name: String,
+        default: Value,
+    },
     /// A scalar member becomes a one-element array (null becomes empty).
-    Wrap { name: String },
+    Wrap {
+        name: String,
+    },
     /// An array member becomes its first element (empty becomes null).
-    Head { name: String },
+    Head {
+        name: String,
+    },
     /// Applies lenses inside one member.
-    In { name: String, lens: Vec<Lens> },
+    In {
+        name: String,
+        lens: Vec<Lens>,
+    },
     /// Applies lenses to every element of an array.
-    Map { lens: Vec<Lens> },
+    Map {
+        lens: Vec<Lens>,
+    },
     /// Part of `name` moved out of the document (for example into archive
     /// files). Reading forward needs nothing; there is no way back, so an
     /// older reader refuses rather than silently missing that part.
-    External { name: String },
+    External {
+        name: String,
+    },
 }
 
 /// The schema a document was written with: its version and, for each step
@@ -56,12 +76,24 @@ pub struct Schema {
 impl Lens {
     pub fn reverse(&self) -> Lens {
         match self {
-            Self::Rename { from, to } => Self::Rename { from: to.clone(), to: from.clone() },
-            Self::Add { name, default } => Self::Remove { name: name.clone(), default: default.clone() },
-            Self::Remove { name, default } => Self::Add { name: name.clone(), default: default.clone() },
+            Self::Rename { from, to } => Self::Rename {
+                from: to.clone(),
+                to: from.clone(),
+            },
+            Self::Add { name, default } => Self::Remove {
+                name: name.clone(),
+                default: default.clone(),
+            },
+            Self::Remove { name, default } => Self::Add {
+                name: name.clone(),
+                default: default.clone(),
+            },
             Self::Wrap { name } => Self::Head { name: name.clone() },
             Self::Head { name } => Self::Wrap { name: name.clone() },
-            Self::In { name, lens } => Self::In { name: name.clone(), lens: reverse(lens) },
+            Self::In { name, lens } => Self::In {
+                name: name.clone(),
+                lens: reverse(lens),
+            },
             Self::Map { lens } => Self::Map { lens: reverse(lens) },
             Self::External { name } => Self::External { name: name.clone() },
         }
@@ -131,7 +163,10 @@ impl Lens {
         match self {
             Self::Rename { from, to } if named(from) => path[0] = Value::String(to.clone()),
             Self::Add { name, default } if named(name) && path.len() == 1 && change == Change::Remove => {
-                return Some(Edit { path, change: Change::Set(default.clone()) });
+                return Some(Edit {
+                    path,
+                    change: Change::Set(default.clone()),
+                });
             }
             Self::Remove { name, .. } if named(name) => return None,
             Self::Wrap { name } if named(name) => {
@@ -163,14 +198,32 @@ impl Lens {
                 path.remove(1);
             }
             Self::In { name, lens } if named(name) => {
-                let inner = edit(lens, Edit { path: path.split_off(1), change })?;
+                let inner = edit(
+                    lens,
+                    Edit {
+                        path: path.split_off(1),
+                        change,
+                    },
+                )?;
                 path.extend(inner.path);
-                return Some(Edit { path, change: inner.change });
+                return Some(Edit {
+                    path,
+                    change: inner.change,
+                });
             }
             Self::Map { lens } if first.is_u64() => {
-                let inner = edit(lens, Edit { path: path.split_off(1), change })?;
+                let inner = edit(
+                    lens,
+                    Edit {
+                        path: path.split_off(1),
+                        change,
+                    },
+                )?;
                 path.extend(inner.path);
-                return Some(Edit { path, change: inner.change });
+                return Some(Edit {
+                    path,
+                    change: inner.change,
+                });
             }
             _ => {}
         }
@@ -204,16 +257,38 @@ pub fn edit(lenses: &[Lens], edit: Edit) -> Option<Edit> {
 /// the reader's own steps, or backward through the steps the newer writer
 /// recorded.
 pub fn route(from: &Schema, to: &Schema) -> io::Result<Vec<Lens>> {
-    let missing = || io::Error::new(io::ErrorKind::InvalidData, format!("No lenses from state schema {} to {}", from.version, to.version));
-    let (low, high) = (from.version.min(to.version) as usize, from.version.max(to.version) as usize);
-    let steps = if from.version <= to.version { &to.lenses } else { &from.lenses };
+    let missing = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("No lenses from state schema {} to {}", from.version, to.version),
+        )
+    };
+    let (low, high) = (
+        from.version.min(to.version) as usize,
+        from.version.max(to.version) as usize,
+    );
+    let steps = if from.version <= to.version {
+        &to.lenses
+    } else {
+        &from.lenses
+    };
     let lenses: Vec<Lens> = steps.get(low..high).ok_or_else(missing)?.concat();
     if from.version > to.version
         && let Some(Lens::External { name }) = lenses.iter().find(|lens| matches!(lens, Lens::External { .. }))
     {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("State schema {} keeps part of {name} outside the state; schema {} cannot read it", from.version, to.version)));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "State schema {} keeps part of {name} outside the state; schema {} cannot read it",
+                from.version, to.version
+            ),
+        ));
     }
-    Ok(if from.version <= to.version { lenses } else { reverse(&lenses) })
+    Ok(if from.version <= to.version {
+        lenses
+    } else {
+        reverse(&lenses)
+    })
 }
 
 #[cfg(test)]

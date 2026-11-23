@@ -1,17 +1,12 @@
 //! Compatibility oracle and synthetic timing; never reads personal node state.
-use crate::runtime::RunKind;
 use super::*;
+use crate::runtime::RunKind;
 use std::{collections::HashSet, hint::black_box, time::Instant};
 fn reference_admit(runtime: &Runtime) -> Result<(), &'static str> {
     if runtime
         .runs
         .iter()
-        .filter(|r| {
-            matches!(
-                r.status.as_str(),
-                "queued" | "running" | "cancelling" | "waiting"
-            )
-        })
+        .filter(|r| matches!(r.status.as_str(), "queued" | "running" | "cancelling" | "waiting"))
         .count()
         >= MAX_PENDING
     {
@@ -36,8 +31,7 @@ fn reference_next(runtime: &Runtime) -> Option<usize> {
         .filter(|r| {
             matches!(r.status.as_str(), "running" | "cancelling")
                 || (r.status == "waiting"
-                    && (r.delegation.is_some()
-                        || r.question.as_ref().is_some_and(|q| q.answer.is_none())))
+                    && (r.delegation.is_some() || r.question.as_ref().is_some_and(|q| q.answer.is_none())))
         })
         .filter_map(|r| r.chat_id.as_deref())
         .collect::<HashSet<_>>();
@@ -46,11 +40,7 @@ fn reference_next(runtime: &Runtime) -> Option<usize> {
         .iter()
         .enumerate()
         .filter(|(_, r)| r.status == "queued")
-        .filter(|(_, r)| {
-            r.chat_id
-                .as_deref()
-                .is_none_or(|chat| !blocked.contains(chat))
-        })
+        .filter(|(_, r)| r.chat_id.as_deref().is_none_or(|chat| !blocked.contains(chat)))
         .min_by_key(|(index, r)| (r.queue_order, *index))
         .map(|(index, _)| index)
 }
@@ -106,7 +96,7 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
             if draw() % 5 == 0 {
                 run.delegation = Some(crate::delegation::Delegation {
                     input: crate::delegation::Input {
-                        model:None,
+                        model: None,
                         objective: "Review".into(),
                         role: crate::delegation::Role::Worker,
                     },

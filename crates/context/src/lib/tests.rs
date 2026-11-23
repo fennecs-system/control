@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn available_tools_have_unique_discovery_metadata() {
@@ -19,8 +18,14 @@ fn available_tools_have_unique_discovery_metadata() {
             // Every worker tool can be found from the deferred index.
             let worker = name.starts_with("control_");
             assert_eq!(worker, !entry.phrase.is_empty(), "{name}: index phrase");
-            assert!(entry.phrase.split_whitespace().count() <= 8, "{name}: phrase over eight words");
-            assert!(worker || (entry.core == 0 && entry.judge == Judge::Denied && entry.brief.is_empty()), "{name}");
+            assert!(
+                entry.phrase.split_whitespace().count() <= 8,
+                "{name}: phrase over eight words"
+            );
+            assert!(
+                worker || (entry.core == 0 && entry.judge == Judge::Denied && entry.brief.is_empty()),
+                "{name}"
+            );
         }
     }
     assert!(tool_for_mcp("control_agent_delegate").is_none());
@@ -37,7 +42,14 @@ fn worker_spellings_derive_from_one_family_registration() {
 #[test]
 fn role_core_sets_are_catalog_metadata() {
     use Audience::*;
-    for name in ["control_turn_handoff", "control_service_exec", "control_agent_spawn", "control_bot_request", "control_room_post", "control_tool_search"] {
+    for name in [
+        "control_turn_handoff",
+        "control_service_exec",
+        "control_agent_spawn",
+        "control_bot_request",
+        "control_room_post",
+        "control_tool_search",
+    ] {
         assert!(loaded(name, Member) && loaded(name, Lead), "{name}");
     }
     assert!(loaded("control_room_plan", Lead) && !loaded("control_room_plan", Member));
@@ -51,28 +63,19 @@ fn role_core_sets_are_catalog_metadata() {
 fn selection_is_deterministic_and_does_not_expand_unknown_lenses() {
     assert_eq!(lens("engineering", &TOOLS), lens("engineering", &TOOLS));
     assert!(lens("missing", &TOOLS).is_empty());
-    assert!(
-        !lens("research", &TOOLS)
-            .iter()
-            .any(|t| t.name == "repo.patch")
-    );
+    assert!(!lens("research", &TOOLS).iter().any(|t| t.name == "repo.patch"));
 }
 #[test]
 fn selected_tools_still_need_authority() {
     assert!(inspect("engineering", &[]).contains("not authorized"));
-    assert!(
-        inspect("engineering", &["context.inspect"]).contains("permitted in this local example")
-    );
+    assert!(inspect("engineering", &["context.inspect"]).contains("permitted in this local example"));
     assert!(inspect("engineering", &["repo.patch"]).contains("not connected"));
 }
 #[test]
 fn composition_is_deduplicated_and_order_independent() {
     let combined = compose(&["engineering", "research"], &TOOLS);
     assert_eq!(combined.len(), 5);
-    assert_eq!(
-        combined,
-        compose(&["research", "engineering", "research"], &TOOLS)
-    );
+    assert_eq!(combined, compose(&["research", "engineering", "research"], &TOOLS));
     assert!(compose(&[], &TOOLS).is_empty());
     assert!(inspect_composed(&["engineering", "research"], &[]).contains("not authorized"));
 }

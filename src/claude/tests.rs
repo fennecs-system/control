@@ -1,4 +1,3 @@
-
 use super::*;
 use std::process::{Command, Stdio};
 #[test]
@@ -10,10 +9,7 @@ fn command_admission_survives_reload_without_replaying_an_effect() {
     fs::write(workspace.join("effect.txt"), b"first execution").unwrap();
     // A new caller after an ambiguous acknowledgement still finds durable intent.
     assert!(claim(&workspace, "request-1").is_err());
-    assert_eq!(
-        fs::read(workspace.join("effect.txt")).unwrap(),
-        b"first execution"
-    );
+    assert_eq!(fs::read(workspace.join("effect.txt")).unwrap(), b"first execution");
     claim(&workspace, "request-2").unwrap();
     fs::remove_dir_all(root).unwrap();
 }
@@ -92,10 +88,7 @@ fn live_shutdown_stops_offline_workspace_command() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert_eq!(
-        unsafe { libc::kill(probe.child.id() as libc::pid_t, libc::SIGTERM) },
-        0
-    );
+    assert_eq!(unsafe { libc::kill(probe.child.id() as libc::pid_t, libc::SIGTERM) }, 0);
     let start = Instant::now();
     loop {
         if let Some(status) = probe.child.try_wait().unwrap() {
@@ -154,10 +147,18 @@ fn failures_name_the_result_subtype_and_bad_tools_abort_early() {
     let flag = std::sync::atomic::AtomicBool::new(false);
     let bad = init.replace("mcp__control__control_workspace_run", "Bash");
     assert!(
-        capture_with(bad.as_bytes(), control_ai::claude::Claude::new(&control_context::worker_mcp_names()), "Claude", |_| {}, |_| {}, &flag).0
-            .unwrap_err()
-            .to_string()
-            .contains("tool configuration")
+        capture_with(
+            bad.as_bytes(),
+            control_ai::claude::Claude::new(&control_context::worker_mcp_names()),
+            "Claude",
+            |_| {},
+            |_| {},
+            &flag
+        )
+        .0
+        .unwrap_err()
+        .to_string()
+        .contains("tool configuration")
     );
     assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
     assert!(diagnose(b"429 rate limit reached").contains("rate limit"));
@@ -182,18 +183,14 @@ fn stream_requires_valid_init_and_final_and_normalizes_caches() {
     );
     assert!(
         capture(
-            bytes
-                .replace("mcp__control__control_workspace_run", "Bash")
-                .as_bytes(),
+            bytes.replace("mcp__control__control_workspace_run", "Bash").as_bytes(),
             |_| {}
         )
         .is_err()
     );
     assert!(
         capture(
-            bytes
-                .replace("\"is_error\":false", "\"is_error\":true")
-                .as_bytes(),
+            bytes.replace("\"is_error\":false", "\"is_error\":true").as_bytes(),
             |_| {}
         )
         .is_err()
@@ -206,17 +203,66 @@ fn stream_requires_valid_init_and_final_and_normalizes_caches() {
 fn claude_launch_vectors_are_pinned() {
     use crate::engine::golden::{fill, pin_equivalent, run};
     let (root, auth) = (Path::new("/golden/root"), Path::new("/golden/auth/.credentials.json"));
-    let tools = control_context::worker_mcp_names().into_iter().map(|name| format!("mcp__control__{name}")).collect::<Vec<_>>().join(",");
+    let tools = control_context::worker_mcp_names()
+        .into_iter()
+        .map(|name| format!("mcp__control__{name}"))
+        .collect::<Vec<_>>()
+        .join(",");
     let values = [("tools", tools.as_str())];
-    let text = text_container("sha256:img", "control-summary-1", &root.join("workspace"), "node-1", "sonnet", auth, User { uid: 501, gid: 20 }).unwrap();
+    let text = text_container(
+        "sha256:img",
+        "control-summary-1",
+        &root.join("workspace"),
+        "node-1",
+        "sonnet",
+        auth,
+        User { uid: 501, gid: 20 },
+    )
+    .unwrap();
     pin_equivalent(&run(&text), &fill(TEXT, &values));
-    let shell = shell_container("sha256:img", "control-run-1-shell", "node-1", &root.join("workspace"), "cargo test", false, true, User { uid: 501, gid: 20 }).unwrap();
+    let shell = shell_container(
+        "sha256:img",
+        "control-run-1-shell",
+        "node-1",
+        &root.join("workspace"),
+        "cargo test",
+        false,
+        true,
+        User { uid: 501, gid: 20 },
+    )
+    .unwrap();
     pin_equivalent(&run(&shell), &fill(SHELL, &values));
-    let writable = shell_container("sha256:img", "control-run-1-shell", "node-1", &root.join("workspace"), "cargo test", true, false, User { uid: 501, gid: 20 }).unwrap();
+    let writable = shell_container(
+        "sha256:img",
+        "control-run-1-shell",
+        "node-1",
+        &root.join("workspace"),
+        "cargo test",
+        true,
+        false,
+        User { uid: 501, gid: 20 },
+    )
+    .unwrap();
     pin_equivalent(&run(&writable), &fill(SHELL_FULL_ROOT, &values));
-    let turn = turn_container("control-run-1", "node-1", User { uid: 501, gid: 20 }, auth, &root.join("claude-mailbox"), "sha256:img", "opus").unwrap();
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        User { uid: 501, gid: 20 },
+        auth,
+        &root.join("claude-mailbox"),
+        "sha256:img",
+        "opus",
+    )
+    .unwrap();
     pin_equivalent(&run(&turn), &fill(TURN, &values));
-    let login = login_container("control-claude-login-7", "node-1", User { uid: 501, gid: 20 }, Path::new("/golden/auth"), "sha256:img").unwrap();
+    let login = login_container(
+        "control-claude-login-7",
+        "node-1",
+        User { uid: 501, gid: 20 },
+        Path::new("/golden/auth"),
+        "sha256:img",
+    )
+    .unwrap();
     pin_equivalent(&run(&login), &fill(LOGIN, &values));
 }
 const TEXT: &[&str] = &[

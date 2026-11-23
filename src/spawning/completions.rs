@@ -1,7 +1,7 @@
 //! Child results enter the ordinary parent queue. No suspended parent workspace
 //! is restored, and no conversation is reserved while a spawned child runs.
-use crate::runtime::RunKind;
 use super::*;
+use crate::runtime::RunKind;
 
 const WINDOW: usize = 8;
 
@@ -11,11 +11,7 @@ pub(super) struct Receipt {
     response: String,
 }
 
-fn ready<'a>(
-    state: &'a State,
-    parent: &runtime::Run,
-    batch: &Batch,
-) -> Result<Vec<&'a runtime::Run>, &'static str> {
+fn ready<'a>(state: &'a State, parent: &runtime::Run, batch: &Batch) -> Result<Vec<&'a runtime::Run>, &'static str> {
     let mut ready = Vec::new();
     let lineage = delegation::lineage(parent);
     for id in &batch.children {
@@ -86,10 +82,7 @@ pub(super) fn reconcile(
             if state.runtime.runs.iter().any(|run| {
                 run.kind == RunKind::AgentCompletion
                     && run.chat_id == parent.chat_id
-                    && matches!(
-                        run.status.as_str(),
-                        "queued" | "running" | "waiting" | "cancelling"
-                    )
+                    && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
             }) {
                 continue;
             }
@@ -124,11 +117,7 @@ pub(super) fn reconcile(
         .runs
         .iter()
         .rev()
-        .find(|run| {
-            run.chat_id.as_deref() == Some(&chat)
-                && run.actor == parent.actor
-                && run.action == parent.action
-        })
+        .find(|run| run.chat_id.as_deref() == Some(&chat) && run.actor == parent.actor && run.action == parent.action)
         .unwrap_or(parent);
     // The parent's authority, lineage and grants; the chat's latest model settings.
     let mut follow_up = chat::FollowUp::from(state, parent);
@@ -158,17 +147,19 @@ pub(super) fn reconcile(
     let messages_len = state.chats[chat_index].messages.len();
     let revision = state.chats[chat_index].revision;
     let notice = state.runtime.notice.clone();
-    let response = follow_up.enqueue(state, &chat, objective, RunKind::AgentCompletion, "agent-completion")?.id.clone();
+    let response = follow_up
+        .enqueue(state, &chat, objective, RunKind::AgentCompletion, "agent-completion")?
+        .id
+        .clone();
     let batch = &mut state.runtime.runs[index].spawns[batch_index];
     let receipts_len = batch.completions.len();
-    batch
-        .completions
-        .extend(ids.into_iter().map(|child| Receipt {
-            child,
-            response: response.clone(),
-        }));
+    batch.completions.extend(ids.into_iter().map(|child| Receipt {
+        child,
+        response: response.clone(),
+    }));
     let session = &mut state.chats[chat_index];
-    session.messages.push(chat::Message { speaker: Default::default(),
+    session.messages.push(chat::Message {
+        speaker: Default::default(),
         text: "Background agents finished".into(),
         run_id: Some(response),
         reply: String::new(),

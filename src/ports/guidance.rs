@@ -20,7 +20,10 @@ impl Port {
                     80 => format!("http://{host}/…"),
                     _ => format!("https://{host}:{port}/…"),
                 };
-                format!("Use the real host name: {} For example curl -fsSLO {url}. Non-HTTP clients connect to {local} instead; it relays to {host}:{port}.", super::proxy::usage())
+                format!(
+                    "Use the real host name: {} For example curl -fsSLO {url}. Non-HTTP clients connect to {local} instead; it relays to {host}:{port}.",
+                    super::proxy::usage()
+                )
             }
             None => format!("Connect to {local} inside the service; the relay forwards to the peer ingress."),
         })
@@ -42,8 +45,13 @@ impl Port {
 
 /// The chat requested `port` or owns its service, as the same actor.
 fn related(state: &State, port: &Port, chat: &str, actor: &Actor) -> bool {
-    &port.actor == actor && (port.chat == chat
-        || state.runtime.runs.iter().any(|run| run.id == port.origin_run && run.chat_id.as_deref() == Some(chat)))
+    &port.actor == actor
+        && (port.chat == chat
+            || state
+                .runtime
+                .runs
+                .iter()
+                .any(|run| run.id == port.origin_run && run.chat_id.as_deref() == Some(chat)))
 }
 
 /// Resolves a `port:<id>` wait for `chat`. `Ok` when the request is still
@@ -51,23 +59,50 @@ fn related(state: &State, port: &Port, chat: &str, actor: &Actor) -> bool {
 /// needed. `Err((decided, message))` otherwise; `decided` means the decision
 /// is already known and the agent should act on it rather than wait.
 pub(crate) fn wait_topic(state: &State, chat: &str, id: &str) -> Result<(), (bool, String)> {
-    let actor = state.chats.iter().find(|session| session.id == chat).map(|session| session.actor.clone());
-    let Some(port) = state.ports.iter().find(|port| port.id.as_str() == id && actor.as_ref().is_some_and(|actor| related(state, port, chat, actor))) else {
-        return Err((false, format!("No port request {id} of this chat; control_port_status lists them")));
+    let actor = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .map(|session| session.actor.clone());
+    let Some(port) = state
+        .ports
+        .iter()
+        .find(|port| port.id.as_str() == id && actor.as_ref().is_some_and(|actor| related(state, port, chat, actor)))
+    else {
+        return Err((
+            false,
+            format!("No port request {id} of this chat; control_port_status lists them"),
+        ));
     };
     match port.status {
         Status::Pending => Ok(()),
-        _ => Err((true, format!("Port request {id} was already {}; act on it instead of waiting{}", port.decided(),
-            port.usage().filter(|_| port.status == Status::Approved).map(|usage| format!(". {usage}")).unwrap_or_default()))),
+        _ => Err((
+            true,
+            format!(
+                "Port request {id} was already {}; act on it instead of waiting{}",
+                port.decided(),
+                port.usage()
+                    .filter(|_| port.status == Status::Approved)
+                    .map(|usage| format!(". {usage}"))
+                    .unwrap_or_default()
+            ),
+        )),
     }
 }
 
 /// Text of a command that could not reach a host: name resolution or
 /// connection failures as curl, wget, getaddrinfo and common runtimes report them.
 const UNREACHABLE: [&str; 10] = [
-    "could not resolve host", "name or service not known", "temporary failure in name resolution",
-    "nodename nor servname", "no address associated with hostname", "unknownhostexception",
-    "getaddrinfo", "connection refused", "network is unreachable", "failed to connect to",
+    "could not resolve host",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "nodename nor servname",
+    "no address associated with hostname",
+    "unknownhostexception",
+    "getaddrinfo",
+    "connection refused",
+    "network is unreachable",
+    "failed to connect to",
 ];
 
 /// A one-line hint when a command's `output` (with its `command` text) failed
@@ -82,20 +117,32 @@ pub(crate) fn egress_hint(state: &State, run_id: &str, command: &str, output: &s
     let run = state.runtime.runs.iter().find(|run| run.id == run_id)?;
     let chat = run.chat_id.as_deref()?;
     let command = command.to_ascii_lowercase();
-    let port = state.ports.iter().rev()
+    let port = state
+        .ports
+        .iter()
+        .rev()
         .filter(|port| port.direction == Direction::Egress && matches!(port.status, Status::Pending | Status::Approved))
         .filter(|port| related(state, port, chat, &run.actor))
-        .find(|port| port.target.as_ref().is_some_and(|target| {
-            let host = target.host.to_ascii_lowercase();
-            lower.contains(&host) || command.contains(&host)
-        }))?;
+        .find(|port| {
+            port.target.as_ref().is_some_and(|target| {
+                let host = target.host.to_ascii_lowercase();
+                lower.contains(&host) || command.contains(&host)
+            })
+        })?;
     let target = port.target.as_ref()?;
     let (host, id) = (format!("{}:{}", target.host, target.port), port.id.as_str());
     let local = format!("127.0.0.1:{}", port.service_port);
     Some(match port.status {
-        Status::Pending => format!("Egress to {host} is pending operator approval (port request {id}): hand off with control_turn_handoff {{\"disposition\":{{\"kind\":\"wait\",\"topics\":[\"port:{id}\"]}}}} and wait on it rather than retrying."),
-        _ if command.contains(&local) => format!("The egress relay for {host} (port {id}) at {local} did not connect: check control_port_status {{\"port_id\":\"{id}\"}} for ready and diagnostic before retrying."),
-        _ => format!("Egress to {host} is approved as port {id}, but this process did not use its proxy. {}", port.usage()?),
+        Status::Pending => format!(
+            "Egress to {host} is pending operator approval (port request {id}): hand off with control_turn_handoff {{\"disposition\":{{\"kind\":\"wait\",\"topics\":[\"port:{id}\"]}}}} and wait on it rather than retrying."
+        ),
+        _ if command.contains(&local) => format!(
+            "The egress relay for {host} (port {id}) at {local} did not connect: check control_port_status {{\"port_id\":\"{id}\"}} for ready and diagnostic before retrying."
+        ),
+        _ => format!(
+            "Egress to {host} is approved as port {id}, but this process did not use its proxy. {}",
+            port.usage()?
+        ),
     })
 }
 

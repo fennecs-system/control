@@ -16,7 +16,10 @@ pub const MAX_WATCHES: usize = 8;
 pub const MAX_COMMAND: usize = 16000;
 
 pub fn valid_id(id: &str) -> bool {
-    (1..=32).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    (1..=32).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,17 +38,31 @@ pub struct Spec {
 }
 impl Spec {
     pub fn encode(&self) -> String {
-        format!("{}{}\n{}", match self.restart { Restart::Transient => "transient", Restart::Permanent => "permanent" }, if self.notifications { " notify-v1" } else { "" }, self.command)
+        format!(
+            "{}{}\n{}",
+            match self.restart {
+                Restart::Transient => "transient",
+                Restart::Permanent => "permanent",
+            },
+            if self.notifications { " notify-v1" } else { "" },
+            self.command
+        )
     }
     pub fn decode(text: &str) -> Option<Self> {
         let (mode, command) = text.split_once('\n')?;
-        let (restart, notifications) = mode.strip_suffix(" notify-v1").map_or((mode, false), |restart| (restart, true));
+        let (restart, notifications) = mode
+            .strip_suffix(" notify-v1")
+            .map_or((mode, false), |restart| (restart, true));
         let restart = match restart {
             "transient" => Restart::Transient,
             "permanent" => Restart::Permanent,
             _ => return None,
         };
-        (!command.trim().is_empty() && command.len() <= MAX_COMMAND).then(|| Self { restart, notifications, command: command.into() })
+        (!command.trim().is_empty() && command.len() <= MAX_COMMAND).then(|| Self {
+            restart,
+            notifications,
+            command: command.into(),
+        })
     }
 }
 
@@ -57,7 +74,12 @@ pub enum Event {
     Notification(Vec<u8>),
     /// `code` is `None` when a signal ended the process. `gave_up` marks the
     /// last exit of a permanent watch that restarted too often.
-    Exit { code: Option<i32>, signal: Option<i32>, restarts: u32, gave_up: bool },
+    Exit {
+        code: Option<i32>,
+        signal: Option<i32>,
+        restarts: u32,
+        gave_up: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,7 +92,11 @@ impl Frame {
         let mut out = format!("{}\t", self.seq).into_bytes();
         match &self.event {
             Event::Line(bytes) | Event::Notification(bytes) => {
-                out.extend_from_slice(if matches!(self.event, Event::Notification(_)) { b"N\t" } else { b"L\t" });
+                out.extend_from_slice(if matches!(self.event, Event::Notification(_)) {
+                    b"N\t"
+                } else {
+                    b"L\t"
+                });
                 for &b in bytes.iter().take(MAX_LINE) {
                     match b {
                         b'\\' => out.extend_from_slice(b"\\\\"),
@@ -84,9 +110,22 @@ impl Frame {
                     out.extend_from_slice(b"\\.");
                 }
             }
-            Event::Exit { code, signal, restarts, gave_up } => {
+            Event::Exit {
+                code,
+                signal,
+                restarts,
+                gave_up,
+            } => {
                 let field = |value: Option<i32>| value.map_or("-".to_owned(), |v| v.to_string());
-                out.extend_from_slice(format!("X\t{} {} {restarts} {}", field(*code), field(*signal), u8::from(*gave_up)).as_bytes());
+                out.extend_from_slice(
+                    format!(
+                        "X\t{} {} {restarts} {}",
+                        field(*code),
+                        field(*signal),
+                        u8::from(*gave_up)
+                    )
+                    .as_bytes(),
+                );
             }
         }
         out.push(b'\n');
@@ -118,17 +157,48 @@ impl Frame {
                         _ => return None,
                     }
                 }
-                (bytes.len() <= MAX_LINE).then_some((Self { seq, event: if kind == b"N" { Event::Notification(bytes) } else { Event::Line(bytes) } }, truncated))
+                (bytes.len() <= MAX_LINE).then_some((
+                    Self {
+                        seq,
+                        event: if kind == b"N" {
+                            Event::Notification(bytes)
+                        } else {
+                            Event::Line(bytes)
+                        },
+                    },
+                    truncated,
+                ))
             }
             b"X" => {
                 let text = std::str::from_utf8(payload).ok()?;
                 let mut fields = text.split(' ');
-                let number = |field: &str| if field == "-" { Some(None) } else { field.parse().ok().map(Some) };
+                let number = |field: &str| {
+                    if field == "-" {
+                        Some(None)
+                    } else {
+                        field.parse().ok().map(Some)
+                    }
+                };
                 let code = number(fields.next()?)?;
                 let signal = number(fields.next()?)?;
                 let restarts = fields.next()?.parse().ok()?;
-                let gave_up = match fields.next()? { "0" => false, "1" => true, _ => return None };
-                fields.next().is_none().then_some((Self { seq, event: Event::Exit { code, signal, restarts, gave_up } }, false))
+                let gave_up = match fields.next()? {
+                    "0" => false,
+                    "1" => true,
+                    _ => return None,
+                };
+                fields.next().is_none().then_some((
+                    Self {
+                        seq,
+                        event: Event::Exit {
+                            code,
+                            signal,
+                            restarts,
+                            gave_up,
+                        },
+                    },
+                    false,
+                ))
             }
             _ => None,
         }

@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn heatmap_spans_whole_weeks_and_shades_relative_to_the_busiest_day() {
@@ -12,10 +11,7 @@ fn heatmap_spans_whole_weeks_and_shades_relative_to_the_busiest_day() {
         25 * 7 + 3,
         "cells excluding the legend"
     );
-    assert!(
-        html.contains("title='2026-11-03: 400 tokens'")
-            && html.contains("class='l4' title='2026-11-03")
-    );
+    assert!(html.contains("title='2026-11-03: 400 tokens'") && html.contains("class='l4' title='2026-11-03"));
     assert!(
         html.contains("class='l1' title='2026-11-02: 100 tokens'"),
         "older out-of-range days do not set the scale"
@@ -37,13 +33,10 @@ fn outcomes_keep_statuses_exact_and_bound_visible_models() {
         "blocked",
         "unknown",
     ] {
-        models
-            .entry("Claude · '<model>'".into())
-            .or_default()
-            .add(&Attempt {
-                status: status.into(),
-                ..Attempt::default()
-            });
+        models.entry("Claude · '<model>'".into()).or_default().add(&Attempt {
+            status: status.into(),
+            ..Attempt::default()
+        });
     }
     let html = outcomes(&models);
     assert!(html.contains("2 completed, 1 failed, 1 interrupted, 3 other attempts"));
@@ -100,7 +93,9 @@ fn structured_activity_keeps_tools_bounded_and_excludes_reasoning() {
         serde_json::json!({"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":4,"output_tokens":8}})
     );
     let mut activity = Vec::new();
-    let tokens = capture_with(events.as_bytes(), |event| activity.push(event)).tokens.unwrap();
+    let tokens = capture_with(events.as_bytes(), |event| activity.push(event))
+        .tokens
+        .unwrap();
     assert_eq!(tokens.output_tokens, 8);
     assert_eq!(activity.len(), 2);
     assert_eq!(activity[0].text, "cargo check");
@@ -195,17 +190,11 @@ fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {
                 )
                 .replace(
                     "<link rel='stylesheet' href='/collective.css'>",
-                    &format!(
-                        "<style>{}</style>",
-                        include_str!("../../assets/collective.css")
-                    ),
+                    &format!("<style>{}</style>", include_str!("../../assets/collective.css")),
                 )
                 .replace(
                     "<link rel='stylesheet' href='/runtime.css'>",
-                    &format!(
-                        "<style>{}</style>",
-                        include_str!("../../assets/runtime.css")
-                    ),
+                    &format!("<style>{}</style>", include_str!("../../assets/runtime.css")),
                 );
             std::fs::write(std::path::Path::new(&directory).join(file), page).unwrap();
         }
@@ -242,12 +231,31 @@ fn days_and_legacy_attempts_keep_unknown_distinct_from_zero() {
 /// call when the provider never started. Unknown never becomes zero.
 #[test]
 fn attempts_record_usage_provenance_for_every_ending() {
-    let tokens = Some(Tokens { input_tokens: 10, cached_input_tokens: 4, output_tokens: 2 });
+    let tokens = Some(Tokens {
+        input_tokens: 10,
+        cached_input_tokens: 4,
+        output_tokens: 2,
+    });
     let mut attempt = Attempt::default();
-    attempt.record_usage(control_ai::Usage { tokens, complete: true, model: Some("claude-x".into()) });
-    assert_eq!((attempt.accounting, attempt.tokens, attempt.reported_model.as_deref()), (Accounting::Reported, tokens, Some("claude-x")));
-    attempt.record_usage(control_ai::Usage { tokens, complete: false, model: None });
-    assert_eq!((attempt.accounting, attempt.reported_model.as_deref()), (Accounting::Partial, Some("claude-x")), "a model already reported is kept");
+    attempt.record_usage(control_ai::Usage {
+        tokens,
+        complete: true,
+        model: Some("claude-x".into()),
+    });
+    assert_eq!(
+        (attempt.accounting, attempt.tokens, attempt.reported_model.as_deref()),
+        (Accounting::Reported, tokens, Some("claude-x"))
+    );
+    attempt.record_usage(control_ai::Usage {
+        tokens,
+        complete: false,
+        model: None,
+    });
+    assert_eq!(
+        (attempt.accounting, attempt.reported_model.as_deref()),
+        (Accounting::Partial, Some("claude-x")),
+        "a model already reported is kept"
+    );
     attempt.record_usage(control_ai::Usage::default());
     assert_eq!((attempt.accounting, attempt.tokens), (Accounting::Unknown, None));
     let json = serde_json::to_value(&attempt).unwrap();
@@ -256,9 +264,19 @@ fn attempts_record_usage_provenance_for_every_ending() {
     assert!(legacy.accounting.is_unrecorded() && serde_json::to_value(&legacy).unwrap().get("accounting").is_none());
 
     let mut sum = Summary::default();
-    for accounting in [Accounting::Reported, Accounting::Partial, Accounting::Unknown, Accounting::NotLaunched, Accounting::Unrecorded] {
+    for accounting in [
+        Accounting::Reported,
+        Accounting::Partial,
+        Accounting::Unknown,
+        Accounting::NotLaunched,
+        Accounting::Unrecorded,
+    ] {
         let measured = matches!(accounting, Accounting::Reported | Accounting::Partial);
-        sum.add(&Attempt { accounting, tokens: measured.then_some(tokens).flatten(), ..Attempt::default() });
+        sum.add(&Attempt {
+            accounting,
+            tokens: measured.then_some(tokens).flatten(),
+            ..Attempt::default()
+        });
     }
     assert_eq!((sum.attempts, sum.measured, sum.partial, sum.no_call), (5, 3, 1, 1));
     assert_eq!(sum.tokens.input_tokens, 20);

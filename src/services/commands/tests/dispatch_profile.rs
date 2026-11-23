@@ -31,7 +31,17 @@ fn state(services: usize, running: usize) -> State {
         service.resource.id = format!("svc-{s:032x}").try_into().unwrap();
         // `running` active records plus a full retention of finished ones.
         service.executions = (0..running + MAX_EXECUTIONS)
-            .map(|n| execution(s, n, if n < running { Status::Running } else { Status::Completed }))
+            .map(|n| {
+                execution(
+                    s,
+                    n,
+                    if n < running {
+                        Status::Running
+                    } else {
+                        Status::Completed
+                    },
+                )
+            })
             .collect();
         state.services.push(service);
     }
@@ -41,7 +51,11 @@ fn state(services: usize, running: usize) -> State {
 #[test]
 #[ignore = "profile: cargo test --release --locked --bin control services::commands::tests::dispatch_profile -- --ignored --nocapture"]
 fn dispatch_profile() {
-    let rounds = std::env::var("CONTROL_PROFILE_ROUNDS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(2000).clamp(1, 1_000_000);
+    let rounds = std::env::var("CONTROL_PROFILE_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(2000)
+        .clamp(1, 1_000_000);
     for services in [8, 128] {
         for running in [0, 1, 8, 64] {
             let shared = Arc::new(Mutex::new(state(services, running)));

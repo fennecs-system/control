@@ -4,10 +4,10 @@
 //! tool call gets an isError result, other methods a JSON-RPC error. It never
 //! exits: exiting would close the provider's MCP session and
 //! fail every later tool call in the turn. Only a closed stdin or stdout ends it.
-#[path = "../platform-flags.rs"]
-mod platform_flags;
 #[path = "../mailbox-limits.rs"]
 mod mailbox_limits;
+#[path = "../platform-flags.rs"]
+mod platform_flags;
 use std::{
     fs,
     io::{self, BufRead, Read, Write},
@@ -74,16 +74,23 @@ fn member(text: &str, key: &str) -> Option<String> {
                         let mut end = rest.len();
                         for (j, b) in rest.bytes().enumerate() {
                             if quoted {
-                                if escaped { escaped = false; }
-                                else if b == b'\\' { escaped = true; }
-                                else if b == b'"' { quoted = false; }
+                                if escaped {
+                                    escaped = false;
+                                } else if b == b'\\' {
+                                    escaped = true;
+                                } else if b == b'"' {
+                                    quoted = false;
+                                }
                             } else {
                                 match b {
                                     b'"' => quoted = true,
                                     b'{' | b'[' => level += 1,
                                     b'}' | b']' => {
                                         level = level.saturating_sub(1);
-                                        if level == 0 { end = j + 1; break; }
+                                        if level == 0 {
+                                            end = j + 1;
+                                            break;
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -132,15 +139,24 @@ fn wire_summary(text: &str) -> String {
     } else if error.is_some() {
         "error"
     } else if member(text, "\"method\"").is_some() {
-        if request_id(text).is_some() { "request" } else { "notification" }
+        if request_id(text).is_some() {
+            "request"
+        } else {
+            "notification"
+        }
     } else if member(text, "\"result\"").is_some() {
         "response"
     } else {
         "unknown"
     };
-    let code = error.and_then(|error| member(&error, "\"code\""))
+    let code = error
+        .and_then(|error| member(&error, "\"code\""))
         .and_then(|code| code.parse::<i64>().ok());
-    format!("kind={kind} bytes={} error_code={}", text.len(), code.map_or_else(|| "-".into(), |code| code.to_string()))
+    format!(
+        "kind={kind} bytes={} error_code={}",
+        text.len(),
+        code.map_or_else(|| "-".into(), |code| code.to_string())
+    )
 }
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -160,7 +176,9 @@ fn escape(text: &str) -> String {
 fn error_reply(request: &str, id: &str, message: &str) -> String {
     let message = escape(message);
     if member(request, "\"method\"").as_deref() == Some("\"tools/call\"") {
-        format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{message}\"}}],\"isError\":true}}}}")
+        format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{message}\"}}],\"isError\":true}}}}"
+        )
     } else {
         format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"error\":{{\"code\":-32000,\"message\":\"{message}\"}}}}")
     }
@@ -175,20 +193,28 @@ fn delivery_error(request: &str, message: &str) -> Option<String> {
     let mut replies = Vec::new();
     for (i, byte) in request.bytes().enumerate() {
         if quoted {
-            if escaped { escaped = false; }
-            else if byte == b'\\' { escaped = true; }
-            else if byte == b'"' { quoted = false; }
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
             continue;
         }
         match byte {
             b'"' => quoted = true,
             b'{' | b'[' => {
-                if depth == 1 { start = i; }
+                if depth == 1 {
+                    start = i;
+                }
                 depth += 1;
             }
             b'}' | b']' => {
                 depth = depth.saturating_sub(1);
-                if depth == 1 && let Some(id) = request_id(&request[start..=i]) {
+                if depth == 1
+                    && let Some(id) = request_id(&request[start..=i])
+                {
                     replies.push(error_reply(&request[start..=i], &id, message));
                 }
             }
@@ -220,8 +246,16 @@ fn journal(message: &str) {
 }
 fn trace(step: &str) {
     journal(step);
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
-    if let Ok(mut file) = fs::OpenOptions::new().write(true).create(true).truncate(true).custom_flags(platform_flags::SAFE_READ).open(TRACE) {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(platform_flags::SAFE_READ)
+        .open(TRACE)
+    {
         let _ = writeln!(file, "{stamp} {step}");
     }
 }
@@ -271,10 +305,7 @@ fn reply(stdout: &mut impl Write, line: &str) -> io::Result<()> {
     stdout.flush()
 }
 fn main() -> io::Result<()> {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let mut input = io::stdin().lock();
     let mut stdout = io::stdout().lock();
     let mut count = 0u64;
@@ -282,7 +313,12 @@ fn main() -> io::Result<()> {
     let result = (|| -> io::Result<()> {
         loop {
             let mut raw = Vec::new();
-            if input.by_ref().take(MAX_REQUEST as u64 + 1).read_until(b'\n', &mut raw)? == 0 {
+            if input
+                .by_ref()
+                .take(MAX_REQUEST as u64 + 1)
+                .read_until(b'\n', &mut raw)?
+                == 0
+            {
                 return Ok(());
             }
             let line = String::from_utf8_lossy(&raw).into_owned();
@@ -290,20 +326,40 @@ fn main() -> io::Result<()> {
             if raw.len() > MAX_REQUEST && raw.last() != Some(&b'\n') {
                 skip_line(&mut input)?;
                 note(&format!("request {count} exceeded {MAX_REQUEST} bytes"));
-                if let Some(error) = delivery_error(line.trim(), "MCP request too large for the Control tool bridge; send smaller arguments or write large content to a file first") {
+                if let Some(error) = delivery_error(
+                    line.trim(),
+                    "MCP request too large for the Control tool bridge; send smaller arguments or write large content to a file first",
+                ) {
                     reply(&mut stdout, &error)?;
                 }
                 continue;
             }
             let _ = fs::remove_file(RESPONSE);
             let id = request_id(line.trim());
-            let method = member(line.trim(), "\"method\"").unwrap_or_else(|| if line.trim_start().starts_with('[') { "batch".to_owned() } else { String::new() });
-            let tool = member(line.trim(), "\"params\"").and_then(|params| member(&params, "\"name\"")).unwrap_or_default();
-            trace(&format!("received {count} {method} {tool} id={} {}", id.as_deref().unwrap_or("-"), wire_summary(line.trim())));
+            let method = member(line.trim(), "\"method\"").unwrap_or_else(|| {
+                if line.trim_start().starts_with('[') {
+                    "batch".to_owned()
+                } else {
+                    String::new()
+                }
+            });
+            let tool = member(line.trim(), "\"params\"")
+                .and_then(|params| member(&params, "\"name\""))
+                .unwrap_or_default();
+            trace(&format!(
+                "received {count} {method} {tool} id={} {}",
+                id.as_deref().unwrap_or("-"),
+                wire_summary(line.trim())
+            ));
             let nonce = format!("\"{stamp}-{count}\"");
             let envelope = format!("{{\"version\":1,\"nonce\":{nonce},\"request\":{}}}", line.trim());
             if let Err(error) = send(&envelope, stamp, count, &mut tries) {
-                if let Some(error) = delivery_error(line.trim(), &format!("Control tool bridge could not deliver this request ({error}); it was not sent, so retrying is safe")) {
+                if let Some(error) = delivery_error(
+                    line.trim(),
+                    &format!(
+                        "Control tool bridge could not deliver this request ({error}); it was not sent, so retrying is safe"
+                    ),
+                ) {
                     reply(&mut stdout, &error)?;
                 }
                 continue;
@@ -317,7 +373,12 @@ fn main() -> io::Result<()> {
                     };
                     if response.trim() != "null" {
                         reply(&mut stdout, response.trim())?;
-                        trace(&format!("replied {count} {method} id={} wire_id={} {}", id.as_deref().unwrap_or("-"), request_id(response.trim()).as_deref().unwrap_or("-"), wire_summary(response.trim())));
+                        trace(&format!(
+                            "replied {count} {method} id={} wire_id={} {}",
+                            id.as_deref().unwrap_or("-"),
+                            request_id(response.trim()).as_deref().unwrap_or("-"),
+                            wire_summary(response.trim())
+                        ));
                     } else {
                         trace(&format!("acknowledged {count} {method} {}", wire_summary(line.trim())));
                     }
@@ -325,8 +386,17 @@ fn main() -> io::Result<()> {
                 }
                 if start.elapsed() > HOST_TIMEOUT {
                     // Keep serving: answer this request with an error rather than exiting the transport.
-                    note(&format!("request {count} had no host reply within {} s", HOST_TIMEOUT.as_secs()));
-                    if let Some(error) = delivery_error(line.trim(), &format!("Control tool host did not respond within {} s; its effect may have happened, so inspect status before retrying", HOST_TIMEOUT.as_secs())) {
+                    note(&format!(
+                        "request {count} had no host reply within {} s",
+                        HOST_TIMEOUT.as_secs()
+                    ));
+                    if let Some(error) = delivery_error(
+                        line.trim(),
+                        &format!(
+                            "Control tool host did not respond within {} s; its effect may have happened, so inspect status before retrying",
+                            HOST_TIMEOUT.as_secs()
+                        ),
+                    ) {
                         reply(&mut stdout, &error)?;
                     }
                     break;

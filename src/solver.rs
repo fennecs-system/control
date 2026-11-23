@@ -70,8 +70,15 @@ pub static SOLVERS: &[Solver] = &[
         formats: &["lp", "mps"],
         result_file: Some("/tmp/solution.txt"),
         command: |run| {
-            vec!["highs".into(), "--model_file".into(), run.model.into(), "--time_limit".into(), run.time_limit_seconds.to_string(),
-                "--solution_file".into(), "/tmp/solution.txt".into()]
+            vec![
+                "highs".into(),
+                "--model_file".into(),
+                run.model.into(),
+                "--time_limit".into(),
+                run.time_limit_seconds.to_string(),
+                "--solution_file".into(),
+                "/tmp/solution.txt".into(),
+            ]
         },
         parse: highs,
     },
@@ -81,8 +88,14 @@ pub static SOLVERS: &[Solver] = &[
         formats: &["smt2"],
         result_file: None,
         command: |run| {
-            vec!["z3".into(), "-smt2".into(), format!("-t:{}", run.time_limit_seconds * 1000), format!("-T:{}", run.time_limit_seconds + 2),
-                format!("-memory:{}", run.memory_mb * 3 / 4), run.model.into()]
+            vec![
+                "z3".into(),
+                "-smt2".into(),
+                format!("-t:{}", run.time_limit_seconds * 1000),
+                format!("-T:{}", run.time_limit_seconds + 2),
+                format!("-memory:{}", run.memory_mb * 3 / 4),
+                run.model.into(),
+            ]
         },
         parse: smtlib,
     },
@@ -99,9 +112,22 @@ pub static SOLVERS: &[Solver] = &[
 /// MiniZinc solver needs only its package and a registry entry using this.
 fn minizinc_command(backend: &str, run: &Invocation<'_>) -> Vec<String> {
     let solve_ms = run.time_limit_seconds * 1000;
-    vec!["minizinc".into(), "--solver".into(), backend.into(), "--json-stream".into(), "--output-mode".into(), "json".into(),
-        "--output-objective".into(), "--solver-time-limit".into(), solve_ms.to_string(), "--time-limit".into(), (solve_ms + 3000).to_string(),
-        "-p".into(), run.threads.to_string(), run.model.into()]
+    vec![
+        "minizinc".into(),
+        "--solver".into(),
+        backend.into(),
+        "--json-stream".into(),
+        "--output-mode".into(),
+        "json".into(),
+        "--output-objective".into(),
+        "--solver-time-limit".into(),
+        solve_ms.to_string(),
+        "--time-limit".into(),
+        (solve_ms + 3000).to_string(),
+        "-p".into(),
+        run.threads.to_string(),
+        run.model.into(),
+    ]
 }
 pub fn lookup(id: &str) -> Option<&'static Solver> {
     SOLVERS.iter().find(|solver| solver.id == id)
@@ -179,7 +205,11 @@ fn fail(message: impl Into<String>) -> io::Error {
 
 pub fn definition() -> Value {
     let solvers: Vec<&str> = SOLVERS.iter().map(|solver| solver.id).collect();
-    let catalogue = SOLVERS.iter().map(|solver| format!("{} ({}): {}", solver.id, solver.formats.join("/"), solver.summary)).collect::<Vec<_>>().join("; ");
+    let catalogue = SOLVERS
+        .iter()
+        .map(|solver| format!("{} ({}): {}", solver.id, solver.formats.join("/"), solver.summary))
+        .collect::<Vec<_>>()
+        .join("; ");
     json!({"name":"control.solve","description":format!("Solve an optimisation or constraint model with an exact solver instead of reasoning it out in tokens: assignment, scheduling, packing, routing, allocation and consistency checks. Runs in a fresh offline container; returns status (optimal, feasible, infeasible, unbounded, infeasible_or_unbounded, timeout, unknown or error), objective, a bounded variable assignment and solver provenance. Solvers: {catalogue}. Model text up to 256 KiB inline; time limit up to {MAX_TIME_LIMIT} s. Larger or longer solves: control_workspace_start with environment solver. Requires the pinned solver image."),
         "inputSchema":{"type":"object","properties":{
             "solver":{"type":"string","enum":solvers},
@@ -194,26 +224,54 @@ pub fn definition() -> Value {
 
 pub fn validate(input: Input) -> io::Result<Request> {
     let solver = lookup(&input.solver).ok_or_else(|| {
-        fail(format!("Unknown solver {:?}; available: {}", input.solver, SOLVERS.iter().map(|s| s.id).collect::<Vec<_>>().join(", ")))
+        fail(format!(
+            "Unknown solver {:?}; available: {}",
+            input.solver,
+            SOLVERS.iter().map(|s| s.id).collect::<Vec<_>>().join(", ")
+        ))
     })?;
     let format = match input.format.as_deref() {
         None => solver.formats[0],
-        Some(format) => solver.formats.iter().copied().find(|known| *known == format).ok_or_else(|| {
-            fail(format!("Solver {} accepts formats {}; got {format:?}", solver.id, solver.formats.join(", ")))
-        })?,
+        Some(format) => solver
+            .formats
+            .iter()
+            .copied()
+            .find(|known| *known == format)
+            .ok_or_else(|| {
+                fail(format!(
+                    "Solver {} accepts formats {}; got {format:?}",
+                    solver.id,
+                    solver.formats.join(", ")
+                ))
+            })?,
     };
     if input.model.trim().is_empty() || input.model.len() > MAX_MODEL_BYTES || input.model.contains('\0') {
-        return Err(fail(format!("Model must be non-empty text of at most {MAX_MODEL_BYTES} bytes")));
+        return Err(fail(format!(
+            "Model must be non-empty text of at most {MAX_MODEL_BYTES} bytes"
+        )));
     }
     let time_limit_seconds = input.time_limit_seconds.unwrap_or(DEFAULT_TIME_LIMIT);
     if !(1..=MAX_TIME_LIMIT).contains(&time_limit_seconds) {
-        return Err(fail(format!("time_limit_seconds must be 1–{MAX_TIME_LIMIT}; use control_workspace_start with environment solver for longer solves")));
+        return Err(fail(format!(
+            "time_limit_seconds must be 1–{MAX_TIME_LIMIT}; use control_workspace_start with environment solver for longer solves"
+        )));
     }
     let memory_mb = input.memory_mb.unwrap_or(DEFAULT_MEMORY_MB);
     if !MEMORY_MB.contains(&memory_mb) {
-        return Err(fail(format!("memory_mb must be {}–{}", MEMORY_MB.start(), MEMORY_MB.end())));
+        return Err(fail(format!(
+            "memory_mb must be {}–{}",
+            MEMORY_MB.start(),
+            MEMORY_MB.end()
+        )));
     }
-    Ok(Request { solver, format, model: input.model, time_limit_seconds, memory_mb, nonzero_only: input.nonzero_only })
+    Ok(Request {
+        solver,
+        format,
+        model: input.model,
+        time_limit_seconds,
+        memory_mb,
+        nonzero_only: input.nonzero_only,
+    })
 }
 
 /// The operator-pinned solver image, if one is configured.
@@ -221,7 +279,9 @@ pub(crate) fn image() -> io::Result<Option<String>> {
     let value = match std::env::var("CONTROL_SOLVER_IMAGE") {
         Ok(value) => Some(value),
         Err(_) => {
-            let path = crate::config::directory().map_err(io::Error::other)?.join("solver-image-id");
+            let path = crate::config::directory()
+                .map_err(io::Error::other)?
+                .join("solver-image-id");
             match crate::config::read_regular(&path, 256, true) {
                 Ok(bytes) => Some(String::from_utf8(bytes).map_err(io::Error::other)?),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -244,13 +304,19 @@ fn pinned_image() -> io::Result<String> {
 }
 /// The image's `dev.control.solvers` label: solver ID to package and version.
 fn label(isolation: &dyn Isolation, image: &str) -> io::Result<String> {
-    let mut labels = isolation
-        .image_labels(&image.into())
-        .map_err(|_| fail(format!("The pinned solver image is not loaded in the container engine; run `{REBUILD}`")))?;
+    let mut labels = isolation.image_labels(&image.into()).map_err(|_| {
+        fail(format!(
+            "The pinned solver image is not loaded in the container engine; run `{REBUILD}`"
+        ))
+    })?;
     Ok(labels.remove("dev.control.solvers").unwrap_or_default())
 }
 fn registry(label: &str) -> io::Result<Map<String, Value>> {
-    serde_json::from_str(label.trim()).map_err(|_| fail(format!("The solver image lacks its solver registry label; rebuild it with `{REBUILD}`")))
+    serde_json::from_str(label.trim()).map_err(|_| {
+        fail(format!(
+            "The solver image lacks its solver registry label; rebuild it with `{REBUILD}`"
+        ))
+    })
 }
 /// Registered solvers the image provides; an error names any it lacks.
 pub(crate) fn installed(isolation: &dyn Isolation, image: &str) -> io::Result<String> {
@@ -258,19 +324,27 @@ pub(crate) fn installed(isolation: &dyn Isolation, image: &str) -> io::Result<St
 }
 pub fn check_installed(label: &str) -> io::Result<String> {
     let solvers = registry(label)?;
-    let missing: Vec<&str> = SOLVERS.iter().map(|solver| solver.id).filter(|id| !solvers.contains_key(*id)).collect();
+    let missing: Vec<&str> = SOLVERS
+        .iter()
+        .map(|solver| solver.id)
+        .filter(|id| !solvers.contains_key(*id))
+        .collect();
     if !missing.is_empty() {
-        return Err(fail(format!("The pinned solver image lacks {}; rebuild it with `{REBUILD}`", missing.join(", "))));
+        return Err(fail(format!(
+            "The pinned solver image lacks {}; rebuild it with `{REBUILD}`",
+            missing.join(", ")
+        )));
     }
     Ok(SOLVERS.iter().map(|solver| solver.id).collect::<Vec<_>>().join(", "))
 }
 /// Provenance for one solver from the image's `dev.control.solvers` label.
 pub fn provenance(label: &str, image: &str, id: &str) -> io::Result<Value> {
     let solvers = registry(label)?;
-    let entry = solvers
-        .get(id)
-        .and_then(Value::as_object)
-        .ok_or_else(|| fail(format!("The pinned solver image does not provide {id}; rebuild it with `{REBUILD}`")))?;
+    let entry = solvers.get(id).and_then(Value::as_object).ok_or_else(|| {
+        fail(format!(
+            "The pinned solver image does not provide {id}; rebuild it with `{REBUILD}`"
+        ))
+    })?;
     let mut provenance = Map::new();
     provenance.insert("image".into(), json!(image));
     for key in ["package", "version", "frontend"] {
@@ -282,8 +356,9 @@ pub fn provenance(label: &str, image: &str, id: &str) -> io::Result<Value> {
 }
 
 pub fn call(args: &Value) -> io::Result<Value> {
-    let input: Input = serde_json::from_value(args.clone())
-        .map_err(|_| fail("Expected solver, model and optional format, time_limit_seconds, memory_mb and nonzero_only"))?;
+    let input: Input = serde_json::from_value(args.clone()).map_err(|_| {
+        fail("Expected solver, model and optional format, time_limit_seconds, memory_mb and nonzero_only")
+    })?;
     let request = validate(input)?;
     let _slot = Slot::acquire()?;
     let image = pinned_image()?;
@@ -298,9 +373,15 @@ struct Slot;
 impl Slot {
     fn acquire() -> io::Result<Self> {
         ACTIVE
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| (active < MAX_CONCURRENT).then_some(active + 1))
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < MAX_CONCURRENT).then_some(active + 1)
+            })
             .map(|_| Self)
-            .map_err(|_| fail(format!("Solver tool is busy ({MAX_CONCURRENT} solves running); retry shortly")))
+            .map_err(|_| {
+                fail(format!(
+                    "Solver tool is busy ({MAX_CONCURRENT} solves running); retry shortly"
+                ))
+            })
     }
 }
 impl Drop for Slot {
@@ -325,30 +406,45 @@ fn container(image: &str, name: &str, request: &Request) -> RunSpec {
         entrypoint: Some("/bin/bash".into()),
         user: Some(User { uid: 65534, gid: 65534 }),
         workdir: Some("/tmp".into()),
-        limits: Limits { pids: Some(128), memory: Some(memory), memory_swap: Some(memory), cpus: Some(u64::from(CPUS)) },
+        limits: Limits {
+            pids: Some(128),
+            memory: Some(memory),
+            memory_swap: Some(memory),
+            cpus: Some(u64::from(CPUS)),
+        },
         network: Network::None,
         logs: Logs::None,
         input: control_isolation::Input::Attached,
         ..RunSpec::default()
     }
     .label("dev.control.tool", "solver")
-    .tmpfs(Tmpfs { nodev: true, exec: Exec::Deny, ..Tmpfs::new("/tmp", Size::Mib(scratch)) })
+    .tmpfs(Tmpfs {
+        nodev: true,
+        exec: Exec::Deny,
+        ..Tmpfs::new("/tmp", Size::Mib(scratch))
+    })
     .env("HOME", "/tmp")
     .args(["-c", STAGE, &model, request.solver.result_file.unwrap_or("")])
     .args(command)
 }
 
 fn run(isolation: &dyn Isolation, image: &str, request: &Request) -> io::Result<Raw> {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let name = format!("control-solve-{stamp}-{}", SEQUENCE.fetch_add(1, Ordering::Relaxed));
-    let finished = crate::engine::ephemeral::run(isolation, crate::engine::ephemeral::Spec {
-        run: container(image, &name, request),
-        input: request.model.clone().into_bytes(),
-        deadline: Duration::from_secs(request.time_limit_seconds) + GRACE,
-        stdout_bytes: STDOUT_BYTES,
-        stderr_bytes: Some(STDERR_BYTES),
-        unavailable: "Could not start the container engine for the solver",
-    })?;
+    let finished = crate::engine::ephemeral::run(
+        isolation,
+        crate::engine::ephemeral::Spec {
+            run: container(image, &name, request),
+            input: request.model.clone().into_bytes(),
+            deadline: Duration::from_secs(request.time_limit_seconds) + GRACE,
+            stdout_bytes: STDOUT_BYTES,
+            stderr_bytes: Some(STDERR_BYTES),
+            unavailable: "Could not start the container engine for the solver",
+        },
+    )?;
     Ok(Raw {
         stdout: String::from_utf8_lossy(&finished.stdout).into_owned(),
         stdout_truncated: finished.stdout_truncated,
@@ -359,7 +455,9 @@ fn run(isolation: &dyn Isolation, image: &str, request: &Request) -> io::Result<
     })
 }
 fn clean(text: &str) -> String {
-    text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
+    text.chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect()
 }
 fn last_chars(text: &str, limit: usize) -> String {
     let text = clean(text.trim());
@@ -367,7 +465,10 @@ fn last_chars(text: &str, limit: usize) -> String {
     if count <= limit {
         return text;
     }
-    format!("[earlier diagnostics omitted]\n{}", text.chars().skip(count - limit).collect::<String>())
+    format!(
+        "[earlier diagnostics omitted]\n{}",
+        text.chars().skip(count - limit).collect::<String>()
+    )
 }
 fn is_zero(value: &Value) -> bool {
     value.as_f64().is_some_and(|v| v.abs() < 1e-9) || *value == Value::Bool(false)
@@ -379,34 +480,49 @@ pub fn shape(request: &Request, raw: &Raw, provenance: Value) -> Value {
     let mut parsed = (request.solver.parse)(&raw.stdout);
     let limit_reached = raw.elapsed >= Duration::from_secs(request.time_limit_seconds);
     let status = if raw.deadline_exceeded {
-        parsed.messages.push(format!("Stopped after {} s: the solver did not finish within its time limit plus start-up grace", raw.elapsed.as_secs()));
+        parsed.messages.push(format!(
+            "Stopped after {} s: the solver did not finish within its time limit plus start-up grace",
+            raw.elapsed.as_secs()
+        ));
         Status::Timeout
     } else {
         match (parsed.status, raw.exit_code) {
             (Some(Status::Unknown), _) if limit_reached => Status::Timeout,
             (Some(status), _) => status,
             (None, Some(137)) => {
-                parsed.messages.push(format!("The solver was killed, most likely for exceeding memory_mb={}", request.memory_mb));
+                parsed.messages.push(format!(
+                    "The solver was killed, most likely for exceeding memory_mb={}",
+                    request.memory_mb
+                ));
                 Status::Error
             }
             (None, Some(96)) => {
-                parsed.messages.push("Could not stage the model inside the solver container".into());
+                parsed
+                    .messages
+                    .push("Could not stage the model inside the solver container".into());
                 Status::Error
             }
             (None, Some(125..=127)) => {
-                parsed.messages.push(format!("The container engine could not run the solver; rebuild the image with `{REBUILD}`"));
+                parsed.messages.push(format!(
+                    "The container engine could not run the solver; rebuild the image with `{REBUILD}`"
+                ));
                 Status::Error
             }
             (None, Some(0)) if limit_reached => Status::Timeout,
             (None, Some(0)) => {
-                parsed.messages.push("The solver returned no verdict; check that the model requests one (for SMT-LIB, (check-sat))".into());
+                parsed.messages.push(
+                    "The solver returned no verdict; check that the model requests one (for SMT-LIB, (check-sat))"
+                        .into(),
+                );
                 Status::Unknown
             }
             (None, _) => Status::Error,
         }
     };
     if raw.stdout_truncated {
-        parsed.messages.push(format!("Solver output exceeded {STDOUT_BYTES} bytes and was truncated; use nonzero_only or a smaller output"));
+        parsed.messages.push(format!(
+            "Solver output exceeded {STDOUT_BYTES} bytes and was truncated; use nonzero_only or a smaller output"
+        ));
     }
     let total = parsed.variables.len();
     let has_solution = parsed.objective.is_some() || total > 0;
@@ -425,9 +541,17 @@ pub fn shape(request: &Request, raw: &Raw, provenance: Value) -> Value {
         bytes += size;
         variables.insert(name, value);
     }
-    let mut messages: Vec<Value> = parsed.messages.iter().take(MAX_MESSAGES).map(|m| json!(last_chars(m, 1000))).collect();
+    let mut messages: Vec<Value> = parsed
+        .messages
+        .iter()
+        .take(MAX_MESSAGES)
+        .map(|m| json!(last_chars(m, 1000)))
+        .collect();
     if parsed.messages.len() > MAX_MESSAGES {
-        messages.push(json!(format!("{} more messages omitted", parsed.messages.len() - MAX_MESSAGES)));
+        messages.push(json!(format!(
+            "{} more messages omitted",
+            parsed.messages.len() - MAX_MESSAGES
+        )));
     }
     let mut result = json!({
         "solver": request.solver.id,
@@ -449,7 +573,11 @@ pub fn shape(request: &Request, raw: &Raw, provenance: Value) -> Value {
     if request.nonzero_only {
         result["variables_omitted_zero"] = json!(omitted_zero);
     }
-    if !matches!(status, Status::Optimal | Status::Feasible | Status::Infeasible | Status::Unbounded) && !raw.stderr.trim().is_empty() {
+    if !matches!(
+        status,
+        Status::Optimal | Status::Feasible | Status::Infeasible | Status::Unbounded
+    ) && !raw.stderr.trim().is_empty()
+    {
         result["diagnostics"] = json!(last_chars(&raw.stderr, DIAGNOSTIC_CHARS));
     }
     for (key, value) in parsed.extra {

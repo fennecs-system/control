@@ -1,5 +1,5 @@
 pub mod bridge;
-mod permissions;
-mod delivery;
 mod components;
+mod delivery;
 mod gateway;
+mod permissions;

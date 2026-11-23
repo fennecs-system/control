@@ -17,19 +17,28 @@ pub(super) struct Capacity {
     pub pids_max: u64,
 }
 impl Capacity {
-    pub(super) const DEFAULT: Self = Self { memory_bytes: 20 * GIB, cpus: 8, cpu_oversubscription: 2, pids_per_gib: 64, pids_max: 1024 };
+    pub(super) const DEFAULT: Self = Self {
+        memory_bytes: 20 * GIB,
+        cpus: 8,
+        cpu_oversubscription: 2,
+        pids_per_gib: 64,
+        pids_max: 1024,
+    };
     /// Node settings `service-memory-gib`, `service-cpus`,
     /// `service-cpu-oversubscription`, and the process-limit scale
     /// `service-pids-per-gib` and ceiling `service-pids-max`; invalid or absent
     /// values keep defaults.
     pub(super) fn from_settings(setting: impl Fn(&str) -> Option<String>) -> Self {
         let read = |name: &str, range: std::ops::RangeInclusive<u64>| {
-            setting(name).and_then(|value| value.trim().parse::<u64>().ok()).filter(|value| range.contains(value))
+            setting(name)
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|value| range.contains(value))
         };
         Self {
             memory_bytes: read("service-memory-gib", 1..=4096).map_or(Self::DEFAULT.memory_bytes, |gib| gib * GIB),
             cpus: read("service-cpus", 1..=1024).unwrap_or(Self::DEFAULT.cpus),
-            cpu_oversubscription: read("service-cpu-oversubscription", 1..=8).unwrap_or(Self::DEFAULT.cpu_oversubscription),
+            cpu_oversubscription: read("service-cpu-oversubscription", 1..=8)
+                .unwrap_or(Self::DEFAULT.cpu_oversubscription),
             pids_per_gib: read("service-pids-per-gib", 1..=4096).unwrap_or(Self::DEFAULT.pids_per_gib),
             pids_max: read("service-pids-max", 128..=65536).unwrap_or(Self::DEFAULT.pids_max),
         }
@@ -99,7 +108,10 @@ impl Shape {
 /// check share one recorded value and setting changes never touch live services.
 pub(super) fn pids_limit(memory_bytes: u64, profile: crate::worker_profile::Profile, capacity: Capacity) -> u64 {
     let scaled = u128::from(memory_bytes) * u128::from(capacity.pids_per_gib) / u128::from(GIB);
-    u64::try_from(scaled).unwrap_or(u64::MAX).min(capacity.pids_max).max(profile.service_pids())
+    u64::try_from(scaled)
+        .unwrap_or(u64::MAX)
+        .min(capacity.pids_max)
+        .max(profile.service_pids())
 }
 
 pub(super) fn limits(shape: Option<Shape>, profile: crate::worker_profile::Profile) -> Limits {
@@ -110,22 +122,19 @@ pub(super) fn limits(shape: Option<Shape>, profile: crate::worker_profile::Profi
 }
 
 pub(super) fn reserved(services: &[Service]) -> Limits {
-    services
-        .iter()
-        .filter(|s| s.resource.phase.reserves_capacity())
-        .fold(
+    services.iter().filter(|s| s.resource.phase.reserves_capacity()).fold(
+        Limits {
+            memory_bytes: 0,
+            cpus: 0,
+        },
+        |total, service| {
+            let limits = service.limits();
             Limits {
-                memory_bytes: 0,
-                cpus: 0,
-            },
-            |total, service| {
-                let limits = service.limits();
-                Limits {
-                    memory_bytes: total.memory_bytes.saturating_add(limits.memory_bytes),
-                    cpus: total.cpus.saturating_add(limits.cpus),
-                }
-            },
-        )
+                memory_bytes: total.memory_bytes.saturating_add(limits.memory_bytes),
+                cpus: total.cpus.saturating_add(limits.cpus),
+            }
+        },
+    )
 }
 
 /// Stopping and fenced resources keep capacity until cleanup releases it.
@@ -135,16 +144,25 @@ pub(super) fn admit_within(services: &[Service], requested: Limits, capacity: Ca
         || used.cpus.saturating_add(requested.cpus) > capacity.admitted_cpus()
     {
         // Reservations that are not running are easy to miss: name their phases.
-        let pending = services.iter()
+        let pending = services
+            .iter()
             .filter(|s| s.resource.phase.reserves_capacity() && !matches!(s.resource.phase, Phase::Running(_)))
             .map(|s| s.phase_name())
             .collect::<Vec<_>>();
-        let held = if pending.is_empty() { String::new() } else {
-            format!(" {} reserving service(s) are not running ({}); control_service_status shows yours and their diagnostics.", pending.len(), pending.join(", "))
+        let held = if pending.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " {} reserving service(s) are not running ({}); control_service_status shows yours and their diagnostics.",
+                pending.len(),
+                pending.join(", ")
+            )
         };
         return Err(fail(format!(
             "Service compute capacity reached ({} GiB, {} CPUs x{} oversubscription per node); stop a service and wait for Stopped, or request a smaller shape.{held}",
-            capacity.memory_bytes / GIB, capacity.cpus, capacity.cpu_oversubscription,
+            capacity.memory_bytes / GIB,
+            capacity.cpus,
+            capacity.cpu_oversubscription,
         )));
     }
     Ok(())

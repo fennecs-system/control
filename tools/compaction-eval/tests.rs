@@ -20,11 +20,7 @@ fn comparisons_measure_recursive_calls_and_unknown_usage() {
     assert_eq!(scores[0].calls, 1);
     assert_eq!(scores[1].calls, 7);
     assert_eq!(scores[1].tokens.unwrap().output_tokens, 35);
-    assert!(
-        scores
-            .iter()
-            .all(|s| s.missing.is_empty() && !s.canary_present)
-    );
+    assert!(scores.iter().all(|s| s.missing.is_empty() && !s.canary_present));
     let scores = evaluate(&model, &fixture, |_, _, _| {
         Ok(Response {
             text: fixture.canary.clone(),
@@ -33,9 +29,9 @@ fn comparisons_measure_recursive_calls_and_unknown_usage() {
     })
     .unwrap();
     assert!(
-        scores.iter().all(|s| s.tokens.is_none()
-            && s.canary_present
-            && s.missing.len() == fixture.facts.len())
+        scores
+            .iter()
+            .all(|s| s.tokens.is_none() && s.canary_present && s.missing.len() == fixture.facts.len())
     );
 }
 

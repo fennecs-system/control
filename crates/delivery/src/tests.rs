@@ -1,4 +1,3 @@
-
 use super::*;
 use std::io::Write;
 
@@ -19,12 +18,7 @@ fn followers_read_whole_events_from_their_cursor_and_notice_rewrites() {
         })
         .unwrap()
     };
-    let runs = |events: &[(Delivery, Cursor)]| {
-        events
-            .iter()
-            .map(|(e, _)| e.run.clone())
-            .collect::<Vec<_>>()
-    };
+    let runs = |events: &[(Delivery, Cursor)]| events.iter().map(|(e, _)| e.run.clone()).collect::<Vec<_>>();
     std::fs::write(
         &path,
         format!(
@@ -58,5 +52,9 @@ fn followers_read_whole_events_from_their_cursor_and_notice_rewrites() {
 fn path_never_resolves_operator_node_directories() {
     let operator = control_config::operator_directories();
     let path = path().unwrap();
-    assert!(!operator.iter().any(|real| path.starts_with(real)), "outbox::path resolved {}", path.display());
+    assert!(
+        !operator.iter().any(|real| path.starts_with(real)),
+        "outbox::path resolved {}",
+        path.display()
+    );
 }

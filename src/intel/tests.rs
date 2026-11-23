@@ -6,11 +6,24 @@ fn team(state: &mut State, goal: &str) -> (String, String) {
     crate::chat::send(state, &root, goal, "test").unwrap();
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     let worker = crate::chat::create(state);
-    state.chats.iter_mut().find(|chat| chat.id == worker).unwrap().parent_chat = Some(root.clone());
+    state
+        .chats
+        .iter_mut()
+        .find(|chat| chat.id == worker)
+        .unwrap()
+        .parent_chat = Some(root.clone());
     crate::chat::send(state, &worker, "Build the wall", "test").unwrap();
     let run = state.runtime.runs.last_mut().unwrap();
     run.status = "completed".into();
-    run.attempts = vec![crate::usage::Attempt { started_unix: now(), tokens: Some(control_ai::Tokens { input_tokens: 1_200, output_tokens: 300, ..Default::default() }), ..Default::default() }];
+    run.attempts = vec![crate::usage::Attempt {
+        started_unix: now(),
+        tokens: Some(control_ai::Tokens {
+            input_tokens: 1_200,
+            output_tokens: 300,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }];
     (root, worker)
 }
 
@@ -26,14 +39,35 @@ fn a_node_brief_summarises_each_active_team_without_trusting_its_text() {
     let mut state = State::default();
     let (root, worker) = team(&mut state, "Build a **stone** wall [here](http://x) # now");
     let (quiet, _) = team(&mut state, "Old work");
-    state.runtime.runs.iter_mut().filter(|run| run.chat_id.as_deref().is_some_and(|chat| chat != root && chat != worker)).for_each(|run| run.attempts.clear());
+    state
+        .runtime
+        .runs
+        .iter_mut()
+        .filter(|run| {
+            run.chat_id
+                .as_deref()
+                .is_some_and(|chat| chat != root && chat != worker)
+        })
+        .for_each(|run| run.attempts.clear());
     state.scores.push(serde_json::from_value(json!({"chat":root,"name":"wall","service":"svc","generation":1,"command":"x","interval_seconds":300,"declared_unix":1,
         "samples":[{"unix":now() - 60,"trigger":"schedule","values":{"blocks":10.0}},{"unix":now(),"trigger":"schedule","values":{"blocks":25.0}}]})).unwrap());
     let markdown = brief(&state, None, now()).unwrap();
-    assert!(markdown.starts_with(&format!("# Intel brief · {} · node", date(now()))), "{markdown}");
-    assert!(markdown.contains("Teams: 1 ·") && markdown.contains("tokens: 1500"), "{markdown}");
-    assert!(markdown.contains(&format!("({root})")) && !markdown.contains(&format!("({quiet})")), "teams without activity in the window are omitted");
-    assert!(markdown.contains("- Goal: Build a stone wall here (http://x) now"), "untrusted text is made Markdown-inert: {markdown}");
+    assert!(
+        markdown.starts_with(&format!("# Intel brief · {} · node", date(now()))),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("Teams: 1 ·") && markdown.contains("tokens: 1500"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains(&format!("({root})")) && !markdown.contains(&format!("({quiet})")),
+        "teams without activity in the window are omitted"
+    );
+    assert!(
+        markdown.contains("- Goal: Build a stone wall here (http://x) now"),
+        "untrusted text is made Markdown-inert: {markdown}"
+    );
     assert!(markdown.contains("wall.blocks 25 (+15)"), "{markdown}");
     assert!(markdown.contains("Pathologies: not observed"), "{markdown}");
     // One team, from any of its chats.
@@ -47,19 +81,41 @@ fn notices_are_opt_in_rate_limited_and_never_repeated() {
     let mut state = State::default();
     let (root, _) = team(&mut state, "Watch");
     let at = 10_000;
-    assert!(notify(&mut state, &root, None, "Team stuck", "n1", at).unwrap_err().contains("opt-in"));
+    assert!(
+        notify(&mut state, &root, None, "Team stuck", "n1", at)
+            .unwrap_err()
+            .contains("opt-in")
+    );
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(vec!["antibody".into()]);
-    assert!(notify(&mut state, &root, Some("missing"), "Team stuck", "n1", at).is_err(), "a named team must be a top-level chat");
+    assert!(
+        notify(&mut state, &root, Some("missing"), "Team stuck", "n1", at).is_err(),
+        "a named team must be a top-level chat"
+    );
     let first = notify(&mut state, &root, Some(&root), "Team stuck", "n1", at).unwrap();
-    assert_eq!(notify(&mut state, &root, None, "Team stuck", "n1", at).unwrap(), first, "a retried request returns the same notice");
-    assert!(notify(&mut state, &root, None, "Team stuck", "n2", at + 1).unwrap_err().contains("never repeated"));
+    assert_eq!(
+        notify(&mut state, &root, None, "Team stuck", "n1", at).unwrap(),
+        first,
+        "a retried request returns the same notice"
+    );
+    assert!(
+        notify(&mut state, &root, None, "Team stuck", "n2", at + 1)
+            .unwrap_err()
+            .contains("never repeated")
+    );
     assert!(notify(&mut state, &root, None, " ", "n3", at).is_err());
     state.runtime.execution.operator_notices_per_hour = 2;
     notify(&mut state, &root, None, "Second", "n4", at + 2).unwrap();
-    assert!(notify(&mut state, &root, None, "Third", "n5", at + 3).unwrap_err().contains("limit"));
+    assert!(
+        notify(&mut state, &root, None, "Third", "n5", at + 3)
+            .unwrap_err()
+            .contains("limit")
+    );
     notify(&mut state, &root, None, "Third", "n6", at + 3_601).unwrap();
     state.runtime.execution.operator_notices_per_hour = 0;
-    assert!(notify(&mut state, &root, None, "Off", "n7", at + 9_000).is_err(), "0 disables notices");
+    assert!(
+        notify(&mut state, &root, None, "Off", "n7", at + 9_000).is_err(),
+        "0 disables notices"
+    );
 }
 
 #[test]
@@ -72,11 +128,25 @@ fn notices_show_as_pending_in_their_tree_for_a_day() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0]["text"], "Member saw a loop");
     let requests = crate::chat::pending_requests(&state);
-    let group = requests.as_array().unwrap().iter().find(|group| group["chat_id"] == root.as_str()).unwrap();
+    let group = requests
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["chat_id"] == root.as_str())
+        .unwrap();
     assert_eq!(group["pending_notices"][0]["notice_id"], "n1");
-    assert_eq!(control_client::operator::pending(group).iter().filter(|p| p.kind == control_client::operator::Kind::Notice).count(), 1);
+    assert_eq!(
+        control_client::operator::pending(group)
+            .iter()
+            .filter(|p| p.kind == control_client::operator::Kind::Notice)
+            .count(),
+        1
+    );
     state.bots.notices[0].unix = now() - NOTICE_SECONDS - 1;
-    assert!(pending_json_tree(&state, &root).is_empty() && crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
+    assert!(
+        pending_json_tree(&state, &root).is_empty()
+            && crate::chat::pending_requests(&state).as_array().unwrap().is_empty()
+    );
 }
 
 #[test]
@@ -86,25 +156,46 @@ fn the_operator_call_saves_the_brief_under_the_state_directory() {
     let value = tool(&state, &json!({"save":true})).unwrap();
     let path = value["path"].as_str().unwrap();
     assert!(path.ends_with(&format!("intel/brief-{}.md", value["date"].as_str().unwrap())));
-    assert_eq!(std::fs::read_to_string(path).unwrap(), value["markdown"].as_str().unwrap());
-    assert!(tool(&state, &json!({})).unwrap()["path"].is_null(), "reading does not write");
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        value["markdown"].as_str().unwrap()
+    );
+    assert!(
+        tool(&state, &json!({})).unwrap()["path"].is_null(),
+        "reading does not write"
+    );
     assert!(tool(&state, &json!({"chat":"../x"})).is_err());
 }
 
 /// A member chat of `root` whose one turn started `ago` seconds before now.
 fn member(state: &mut State, root: &str, ago: u64) -> String {
     let chat = crate::chat::create(state);
-    state.chats.iter_mut().find(|session| session.id == chat).unwrap().parent_chat = Some(root.to_owned());
+    state
+        .chats
+        .iter_mut()
+        .find(|session| session.id == chat)
+        .unwrap()
+        .parent_chat = Some(root.to_owned());
     crate::chat::send(state, &chat, "Work", "test").unwrap();
     let run = state.runtime.runs.last_mut().unwrap();
     run.status = "completed".into();
     run.id = format!("{:x}-t", u128::from(now() - ago - 40) * 1_000_000_000);
-    run.attempts = vec![crate::usage::Attempt { started_unix: now() - ago, elapsed_ms: 90_000,
-        tokens: Some(control_ai::Tokens { input_tokens: 5_000, cached_input_tokens: 4_000, output_tokens: 500 }), ..Default::default() }];
+    run.attempts = vec![crate::usage::Attempt {
+        started_unix: now() - ago,
+        elapsed_ms: 90_000,
+        tokens: Some(control_ai::Tokens {
+            input_tokens: 5_000,
+            cached_input_tokens: 4_000,
+            output_tokens: 500,
+        }),
+        ..Default::default()
+    }];
     chat
 }
 fn claim(state: &mut State, owner: &str, key: &str, status: &str) {
-    state.collective.claims.push(serde_json::from_value(json!({"room":"general","key":key,"owner":owner,"status":status,"revision":1})).unwrap());
+    state.collective.claims.push(
+        serde_json::from_value(json!({"room":"general","key":key,"owner":owner,"status":status,"revision":1})).unwrap(),
+    );
 }
 
 #[test]
@@ -126,21 +217,52 @@ fn a_team_brief_lists_each_member_s_activity() {
     let markdown = brief(&state, Some(&root), now()).unwrap();
     let line = |chat: &str| {
         let name = crate::callsigns::name_or_id(&state.chats, chat).into_owned();
-        markdown.lines().find(|line| line.starts_with(&format!("  - {name} ("))).unwrap_or_else(|| panic!("{name}: {markdown}")).to_owned()
+        markdown
+            .lines()
+            .find(|line| line.starts_with(&format!("  - {name} (")))
+            .unwrap_or_else(|| panic!("{name}: {markdown}"))
+            .to_owned()
     };
-    assert!(line(&root).contains("(lead): 0 turns · no turn · idle · no claim"), "{markdown}");
-    assert_eq!(line(&active), format!("  - {} (helper): 1 turns · 1m ago · running · wall working · 90s/40s · 1.5k tok", crate::callsigns::name_or_id(&state.chats, &active)));
-    assert!(line(&holder).contains(": 1 turns · 15m ago · idle · gate working · 90s/40s"), "a peer message is not a turn: {markdown}");
-    assert!(line(&free).contains(": 1 turns · 20m ago · idle · no claim, 1 done · 1 routine(s) ·"), "{markdown}");
+    assert!(
+        line(&root).contains("(lead): 0 turns · no turn · idle · no claim"),
+        "{markdown}"
+    );
+    assert_eq!(
+        line(&active),
+        format!(
+            "  - {} (helper): 1 turns · 1m ago · running · wall working · 90s/40s · 1.5k tok",
+            crate::callsigns::name_or_id(&state.chats, &active)
+        )
+    );
+    assert!(
+        line(&holder).contains(": 1 turns · 15m ago · idle · gate working · 90s/40s"),
+        "a peer message is not a turn: {markdown}"
+    );
+    assert!(
+        line(&free).contains(": 1 turns · 20m ago · idle · no claim, 1 done · 1 routine(s) ·"),
+        "{markdown}"
+    );
     // The lead first, then the most recently active.
     let order = [&root, &active, &holder, &free].map(|chat| markdown.find(&line(chat)).unwrap());
     assert!(order.is_sorted(), "{markdown}");
     // It stays small: models read it on every patrol.
-    claim(&mut state, &free, "a-long-deliverable-name-for-the-north-tower", "working");
+    claim(
+        &mut state,
+        &free,
+        "a-long-deliverable-name-for-the-north-tower",
+        "working",
+    );
     member(&mut state, &root, 300);
     let markdown = brief(&state, Some(&root), now()).unwrap();
-    let table = markdown.lines().filter(|line| line.starts_with("- Per member") || line.starts_with("  - ")).map(|line| line.len() + 1).sum::<usize>();
-    assert!(markdown.matches("\n  - ").count() == 5 && table < 1_200, "{table} bytes: {markdown}");
+    let table = markdown
+        .lines()
+        .filter(|line| line.starts_with("- Per member") || line.starts_with("  - "))
+        .map(|line| line.len() + 1)
+        .sum::<usize>();
+    assert!(
+        markdown.matches("\n  - ").count() == 5 && table < 1_200,
+        "{table} bytes: {markdown}"
+    );
     // A helper with nothing live is a count, not a row.
     assert!(markdown.contains("\n  - 2 finished helper(s): 3.0k tok"), "{markdown}");
 }

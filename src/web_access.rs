@@ -24,8 +24,7 @@ pub struct Origin(String);
 impl TryFrom<String> for Origin {
     type Error = &'static str;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        let url = checked_url(&value)
-            .map_err(|_| "Expected a public HTTP(S) origin, e.g. https://example.com")?;
+        let url = checked_url(&value).map_err(|_| "Expected a public HTTP(S) origin, e.g. https://example.com")?;
         if url.path() != "/" || url.query().is_some() {
             return Err("An origin cannot contain a path or query");
         }
@@ -100,12 +99,7 @@ fn addresses(url: &Url, resolved: Vec<SocketAddr>) -> io::Result<Vec<SocketAddr>
     let port = url
         .port_or_known_default()
         .ok_or_else(|| io::Error::other("Missing port"))?;
-    if resolved.is_empty()
-        || resolved.len() > 32
-        || resolved
-            .iter()
-            .any(|a| a.port() != port || !public_ip(a.ip()))
-    {
+    if resolved.is_empty() || resolved.len() > 32 || resolved.iter().any(|a| a.port() != port || !public_ip(a.ip())) {
         return Err(io::Error::other(
             "Destination must resolve entirely to public unicast addresses",
         ));
@@ -118,9 +112,7 @@ struct FetchSlot<'a>(&'a AtomicUsize);
 impl<'a> FetchSlot<'a> {
     fn acquire(counter: &'a AtomicUsize) -> io::Result<Self> {
         counter
-            .try_update(Ordering::AcqRel, Ordering::Relaxed, |n| {
-                (n < 4).then_some(n + 1)
-            })
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |n| (n < 4).then_some(n + 1))
             .map(|_| Self(counter))
             .map_err(|_| io::Error::other("Web fetch is busy; retry later"))
     }
@@ -132,9 +124,7 @@ impl Drop for FetchSlot<'_> {
 }
 pub(crate) fn resolve(url: &Url) -> io::Result<Vec<SocketAddr>> {
     if DNS_ACTIVE
-        .try_update(Ordering::AcqRel, Ordering::Relaxed, |n| {
-            (n < 4).then_some(n + 1)
-        })
+        .try_update(Ordering::AcqRel, Ordering::Relaxed, |n| (n < 4).then_some(n + 1))
         .is_err()
     {
         return Err(io::Error::other("DNS resolver is busy"));
@@ -155,9 +145,7 @@ pub(crate) fn resolve(url: &Url) -> io::Result<Vec<SocketAddr>> {
             }
         }
         let _slot = Slot;
-        let result = (host.as_str(), port)
-            .to_socket_addrs()
-            .map(|a| a.take(33).collect());
+        let result = (host.as_str(), port).to_socket_addrs().map(|a| a.take(33).collect());
         let _ = tx.send(result);
     });
     rx.recv_timeout(Duration::from_secs(2))
@@ -208,8 +196,8 @@ pub fn capture_tool(args: &Value) -> io::Result<Value> {
         width: Option<u16>,
         height: Option<u16>,
     }
-    let input: Input = serde_json::from_value(args.clone())
-        .map_err(|_| io::Error::other("Expected HTML and optional viewport"))?;
+    let input: Input =
+        serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Expected HTML and optional viewport"))?;
     if input.html.is_empty() || input.html.len() > 16000 {
         return Err(io::Error::other("Expected 1–16000 bytes of HTML"));
     }
@@ -289,17 +277,11 @@ impl Transport for Http {
         if (300..400).contains(&status) {
             return Ok((status, mime, location, Vec::new()));
         }
-        if !matches!(
-            mime.as_str(),
-            "text/html" | "text/plain" | "application/xhtml+xml"
-        ) {
+        if !matches!(mime.as_str(), "text/html" | "text/plain" | "application/xhtml+xml") {
             return Err(io::Error::other("Only HTML and plain text pages are supported"));
         }
         let mut body = Vec::new();
-        response
-            .by_ref()
-            .take(BODY_LIMIT as u64 + 1)
-            .read_to_end(&mut body)?;
+        response.by_ref().take(BODY_LIMIT as u64 + 1).read_to_end(&mut body)?;
         Ok((status, mime, location, body))
     }
 }
@@ -335,10 +317,7 @@ fn fetch(
             if !(200..300).contains(&status) {
                 return Err(io::Error::other("Remote page returned a non-success status"));
             }
-            if !matches!(
-                mime.as_str(),
-                "text/html" | "text/plain" | "application/xhtml+xml"
-            ) {
+            if !matches!(mime.as_str(), "text/html" | "text/plain" | "application/xhtml+xml") {
                 return Err(io::Error::other("Expected HTML/plain text"));
             }
             let truncated = body.len() > BODY_LIMIT;
@@ -367,14 +346,8 @@ fn fetch(
 }
 fn permitted(state: &State, chat: &str, actor: &Actor, url: &Url, time: u64) -> io::Result<()> {
     crate::identity::authorize(actor, crate::identity::Action::Task).map_err(io::Error::other)?;
-    if !state
-        .chats
-        .iter()
-        .any(|c| c.id == chat && &c.actor == actor)
-        || !state
-            .web_grants
-            .iter()
-            .any(|g| g.permits(chat, actor, url, time))
+    if !state.chats.iter().any(|c| c.id == chat && &c.actor == actor)
+        || !state.web_grants.iter().any(|g| g.permits(chat, actor, url, time))
     {
         return Err(io::Error::other(
             "Origin not approved for this chat. Ask the operator to grant access at /tools/browser.",
@@ -383,8 +356,8 @@ fn permitted(state: &State, chat: &str, actor: &Actor, url: &Url, time: u64) -> 
     Ok(())
 }
 pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Result<Value> {
-    let input: Input = serde_json::from_value(args.clone())
-        .map_err(|_| io::Error::other("Expected URL and optional capture"))?;
+    let input: Input =
+        serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Expected URL and optional capture"))?;
     let (chat, actor, generation) = {
         let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let run = state
@@ -489,11 +462,7 @@ fn evidence(page: Page, capture: bool) -> io::Result<Value> {
     let mut result = json!({"url":page.url.as_str(),"status":page.status,"title":title,"text":text,"links":links,"untrusted":true,"body_bytes":page.body.len(),"body_limit":BODY_LIMIT,"body_truncated":page.truncated,"text_truncated":text_truncated,"truncated":page.truncated||text_truncated,"text_limit":TEXT_LIMIT,"remote_assets_loaded":false});
     if capture {
         let rendering = if page.mime == "text/plain" {
-            capture_html(
-                &format!("<pre>{}</pre>", crate::escape(&page.body)),
-                1280,
-                800,
-            )
+            capture_html(&format!("<pre>{}</pre>", crate::escape(&page.body)), 1280, 800)
         } else {
             capture_html(&page.body, 1280, 800)
         };
@@ -505,9 +474,8 @@ fn evidence(page: Page, capture: bool) -> io::Result<Value> {
                 ))
             }
             Err(_) => {
-                result["capture_error"] = json!(
-                    "Offline capture unavailable; check the pinned browser image and artifact quota"
-                )
+                result["capture_error"] =
+                    json!("Offline capture unavailable; check the pinned browser image and artifact quota")
             }
         }
     }
@@ -533,8 +501,7 @@ fn change_access(
             .actor
             .clone();
         crate::identity::authorize(&actor, crate::identity::Action::Task).map_err(io::Error::other)?;
-        let origin =
-            Origin::try_from(fields.get("origin").cloned().unwrap_or_default()).map_err(io::Error::other)?;
+        let origin = Origin::try_from(fields.get("origin").cloned().unwrap_or_default()).map_err(io::Error::other)?;
         let seconds = fields
             .get("seconds")
             .and_then(|n| n.parse::<u64>().ok())

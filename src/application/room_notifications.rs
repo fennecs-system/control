@@ -86,12 +86,14 @@ pub(crate) fn queue(
             .unwrap_or(&origin.id)
             .clone(),
         depth: 0,
-        parent: None, bundle: None
+        parent: None,
+        bundle: None,
     });
     Ok(Change::Queue(Box::new(Delivery {
         run,
         target,
-        message: Message { speaker: Default::default(),
+        message: Message {
+            speaker: Default::default(),
             text: format!("Room #{room} updated"),
             run_id: Some(id),
             reply: String::new(),

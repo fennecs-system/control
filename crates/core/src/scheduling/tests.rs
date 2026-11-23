@@ -1,4 +1,3 @@
-
 use super::*;
 fn run(phase: Phase, chat: Option<&str>, order: u64) -> Run<'_> {
     Run {
@@ -13,9 +12,7 @@ fn independent_chats_share_slots_but_waits_and_cancellation_reserve_their_chat()
     for blocker in [
         Phase::Running,
         Phase::Cancelling,
-        Phase::Waiting {
-            reserves_chat: true,
-        },
+        Phase::Waiting { reserves_chat: true },
     ] {
         let runs = [
             run(blocker, Some("a"), 0),
@@ -25,13 +22,7 @@ fn independent_chats_share_slots_but_waits_and_cancellation_reserve_their_chat()
         assert_eq!(next(runs.iter(), capacity, false), Some(2));
     }
     let runs = [
-        run(
-            Phase::Waiting {
-                reserves_chat: false,
-            },
-            Some("a"),
-            0,
-        ),
+        run(Phase::Waiting { reserves_chat: false }, Some("a"), 0),
         run(Phase::Queued, Some("a"), 1),
     ];
     assert_eq!(next(runs.iter(), capacity, false), Some(1));
@@ -52,9 +43,7 @@ fn queue_order_and_stable_ties_apply_to_anonymous_work_too() {
 #[test]
 fn pause_does_not_inspect_history_and_capacity_limits_remain_bounded() {
     let capacity = Capacity::new(1).unwrap();
-    let poison = std::iter::from_fn(|| -> Option<&'static Run<'static>> {
-        panic!("paused queue inspected")
-    });
+    let poison = std::iter::from_fn(|| -> Option<&'static Run<'static>> { panic!("paused queue inspected") });
     assert_eq!(next(poison, capacity, true), None);
     static BUSY: Run<'static> = Run {
         phase: Phase::Running,
@@ -67,13 +56,7 @@ fn pause_does_not_inspect_history_and_capacity_limits_remain_bounded() {
     assert!(!has_capacity(std::iter::repeat_n(&queued, MAX_PENDING + 1)));
     assert!(has_capacity(std::iter::repeat_n(&queued, MAX_PENDING - 1)));
     let inactive = run(Phase::Inactive, None, 0);
-    let waiting = run(
-        Phase::Waiting {
-            reserves_chat: false,
-        },
-        None,
-        0,
-    );
+    let waiting = run(Phase::Waiting { reserves_chat: false }, None, 0);
     assert!(has_capacity(
         std::iter::repeat_n(&inactive, 100).chain(std::iter::once(&waiting))
     ));
@@ -86,13 +69,7 @@ fn current_generation_requires_an_active_phase_and_matching_latest_attempt() {
     };
     assert!(current_attempt(Phase::Running, Some(stamp), stamp));
     assert!(current_attempt(Phase::Cancelling, Some(stamp), stamp));
-    for phase in [
-        Phase::Inactive,
-        Phase::Queued,
-        Phase::Waiting {
-            reserves_chat: true,
-        },
-    ] {
+    for phase in [Phase::Inactive, Phase::Queued, Phase::Waiting { reserves_chat: true }] {
         assert!(!current_attempt(phase, Some(stamp), stamp));
     }
     assert!(!current_attempt(Phase::Running, None, stamp));

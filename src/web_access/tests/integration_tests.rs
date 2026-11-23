@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn operator_grants_persist_revoke_and_rollback_without_cross_chat_authority() {
@@ -23,8 +22,7 @@ fn operator_grants_persist_revoke_and_rollback_without_cross_chat_authority() {
     assert!(permitted(&state, &chat, &Actor::LocalOperator, &url, 101).is_ok());
     assert!(permitted(&state, &other, &Actor::LocalOperator, &url, 101).is_err());
     assert!(permitted(&state, &chat, &Actor::LocalOperator, &url, 1000).is_err());
-    let revoke =
-        std::collections::HashMap::from([("revoke".into(), state.web_grants[0].id.clone())]);
+    let revoke = std::collections::HashMap::from([("revoke".into(), state.web_grants[0].id.clone())]);
     assert!(change_access(&mut state, &revoke, 101, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(state.web_grants.len(), 1);
     change_access(&mut state, &revoke, 101, |_| Ok(())).unwrap();
@@ -82,9 +80,7 @@ fn live_worker_capture_returns_viewable_offline_artifact() {
     let data = result["content"][1]["data"]
         .as_str()
         .expect("simple page should fit inline evidence budget");
-    let png = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .unwrap();
+    let png = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 640);
     assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 480);

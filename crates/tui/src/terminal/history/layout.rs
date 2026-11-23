@@ -63,15 +63,9 @@ impl Cache {
                     byte += span.content[byte..]
                         .find(grapheme.symbol)
                         .expect("grapheme belongs to its source span");
-                    let point = Point {
-                        span: span_index,
-                        byte,
-                    };
+                    let point = Point { span: span_index, byte };
                     byte += grapheme.symbol.len();
-                    let next = Point {
-                        span: span_index,
-                        byte,
-                    };
+                    let next = Point { span: span_index, byte };
                     let cells = Span::raw(grapheme.symbol).width();
                     while width > 0 && columns > 0 && columns + cells > usize::from(width) {
                         let (boundary, used) = last_break.take().unwrap_or((point, columns));
@@ -85,9 +79,7 @@ impl Cache {
                     }
                     columns += cells;
                     end = next;
-                    if grapheme.symbol != "\u{a0}"
-                        && grapheme.symbol.chars().all(char::is_whitespace)
-                    {
+                    if grapheme.symbol != "\u{a0}" && grapheme.symbol.chars().all(char::is_whitespace) {
                         last_break = Some((next, columns));
                     }
                 }
@@ -116,11 +108,7 @@ impl Cache {
                         .skip(row.start.span)
                         .take(row.end.span.saturating_sub(row.start.span) + 1)
                     {
-                        let start = if index == row.start.span {
-                            row.start.byte
-                        } else {
-                            0
-                        };
+                        let start = if index == row.start.span { row.start.byte } else { 0 };
                         let end = if index == row.end.span {
                             row.end.byte
                         } else {

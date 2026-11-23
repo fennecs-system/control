@@ -35,7 +35,10 @@ fn tokens(usage: &Value) -> Option<Tokens> {
     })
 }
 fn model(value: &Value) -> Option<String> {
-    value.as_str().filter(|m| !m.is_empty()).map(|m| m.chars().filter(|c| !c.is_control()).take(100).collect())
+    value
+        .as_str()
+        .filter(|m| !m.is_empty())
+        .map(|m| m.chars().filter(|c| !c.is_control()).take(100).collect())
 }
 impl Claude<'_> {
     fn event(&mut self, value: &Value) -> Option<Activity> {
@@ -149,7 +152,9 @@ impl Claude<'_> {
         if let Some(model) = model(&message["model"]) {
             self.model = Some(model);
         }
-        let (Some(id), Some(usage)) = (message["id"].as_str(), tokens(&message["usage"])) else { return };
+        let (Some(id), Some(usage)) = (message["id"].as_str(), tokens(&message["usage"])) else {
+            return;
+        };
         match &mut self.call {
             // Later blocks of the same call carry its latest counts.
             Some((current, latest)) if current == id => *latest = usage,
@@ -177,25 +182,53 @@ impl Claude<'_> {
         for block in value["message"]["content"].as_array().into_iter().flatten() {
             let (id, name, output, status) = match (user, block["type"].as_str()) {
                 (false, Some("tool_use")) => {
-                    let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) else { continue };
+                    let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) else {
+                        continue;
+                    };
                     let name = name.strip_prefix("mcp__control__").unwrap_or(name);
                     // A deferred tool's activity is recorded under the tool it called.
-                    let name = if name == "control_call" { block["input"]["tool"].as_str().unwrap_or(name) } else { name };
+                    let name = if name == "control_call" {
+                        block["input"]["tool"].as_str().unwrap_or(name)
+                    } else {
+                        name
+                    };
                     let name = clean(std::iter::once(name), 2000);
-                    if self.tools.len() >= 64 { self.tools.remove(0); }
+                    if self.tools.len() >= 64 {
+                        self.tools.remove(0);
+                    }
                     self.tools.push((id.to_owned(), name.clone()));
                     (id, name, String::new(), "in_progress")
                 }
                 (true, Some("tool_result")) => {
-                    let Some(id) = block["tool_use_id"].as_str() else { continue };
-                    let Some(index) = self.tools.iter().position(|(known, _)| known == id) else { continue };
+                    let Some(id) = block["tool_use_id"].as_str() else {
+                        continue;
+                    };
+                    let Some(index) = self.tools.iter().position(|(known, _)| known == id) else {
+                        continue;
+                    };
                     let name = self.tools.remove(index).1;
                     let content = &block["content"];
                     let output = match content.as_str() {
                         Some(text) => clean(std::iter::once(text), 1000),
-                        None => clean(content.as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()), 1000),
+                        None => clean(
+                            content
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|c| c["text"].as_str()),
+                            1000,
+                        ),
                     };
-                    (id, name, output, if block["is_error"] == true { "failed" } else { "completed" })
+                    (
+                        id,
+                        name,
+                        output,
+                        if block["is_error"] == true {
+                            "failed"
+                        } else {
+                            "completed"
+                        },
+                    )
                 }
                 _ => continue,
             };
@@ -254,13 +287,21 @@ impl Decoder for Claude<'_> {
     fn usage(&self) -> Usage {
         let model = self.model.clone();
         if let Some(total) = self.reported {
-            return Usage { tokens: Some(total), complete: true, model };
+            return Usage {
+                tokens: Some(total),
+                complete: true,
+                model,
+            };
         }
         let mut calls = self.calls;
         if let Some((_, current)) = &self.call {
             calls.get_or_insert_with(Tokens::default).add(*current);
         }
-        Usage { tokens: calls, complete: false, model }
+        Usage {
+            tokens: calls,
+            complete: false,
+            model,
+        }
     }
     fn finish(self) -> io::Result<Output> {
         let (text, tokens) = self.finish_result()?;

@@ -5,12 +5,7 @@ fn a_bot_turn_stays_open_until_its_continuation_finishes() {
     state.runtime.runs[0].status = "completed".into();
     let chat = state.chats[0].id.clone();
     crate::bots::command(&mut state, &chat, "on").unwrap();
-    post(
-        &mut state,
-        "research",
-        "operator: can any agent check the logs?",
-        None,
-    );
+    post(&mut state, "research", "operator: can any agent check the logs?", None);
     crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
     let turn = state
         .runtime
@@ -24,26 +19,17 @@ fn a_bot_turn_stays_open_until_its_continuation_finishes() {
     post(&mut state, "research", "another message", None);
     crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
     assert!(
-        crate::bots::status(&state, &chat)
-            .unwrap()
-            .contains("queued"),
+        crate::bots::status(&state, &chat).unwrap().contains("queued"),
         "the queued continuation keeps the turn open without claiming execution"
     );
     assert_eq!(
-        state
-            .runtime
-            .runs
-            .iter()
-            .filter(|run| run.bot_turn.is_some())
-            .count(),
+        state.runtime.runs.iter().filter(|run| run.bot_turn.is_some()).count(),
         1
     );
     state.runtime.runs[continuation].status = "completed".into();
     crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
     assert!(
-        crate::bots::status(&state, &chat)
-            .unwrap()
-            .contains("sleeping"),
+        crate::bots::status(&state, &chat).unwrap().contains("sleeping"),
         "the finished leaf releases the bot"
     );
 }
@@ -53,36 +39,13 @@ fn a_bot_owned_inbox_cannot_be_removed_by_its_agent() {
     let (mut state, run) = fixture();
     let chat = state.chats[0].id.clone();
     crate::bots::command(&mut state, &chat, "on").unwrap();
+    assert!(state.collective.room_watches.iter().any(|watch| watch.chat == chat));
+    assert!(call(&mut state, &run, "control_room_watch", &json!({"enabled": false})).is_err());
     assert!(
-        state
-            .collective
-            .room_watches
-            .iter()
-            .any(|watch| watch.chat == chat)
-    );
-    assert!(
-        call(
-            &mut state,
-            &run,
-            "control_room_watch",
-            &json!({"enabled": false})
-        )
-        .is_err()
-    );
-    assert!(
-        state
-            .collective
-            .room_watches
-            .iter()
-            .any(|watch| watch.chat == chat),
+        state.collective.room_watches.iter().any(|watch| watch.chat == chat),
         "the inbox survives"
     );
-    post(
-        &mut state,
-        "research",
-        "operator: can any agent check the logs?",
-        None,
-    );
+    post(&mut state, "research", "operator: can any agent check the logs?", None);
     let read = call(&mut state, &run, "control_room_notifications", &json!({})).unwrap();
     assert!(read.to_string().contains("check the logs"));
 }
@@ -103,13 +66,7 @@ pub(super) fn fixture() -> (State, String) {
     (state, id)
 }
 fn watch(state: &mut State, run: &str, wake: bool) {
-    call(
-        state,
-        run,
-        "control_room_watch",
-        &json!({"enabled":true,"wake":wake}),
-    )
-    .unwrap();
+    call(state, run, "control_room_watch", &json!({"enabled":true,"wake":wake})).unwrap();
 }
 pub(super) fn post(state: &mut State, room: &str, text: &str, chat: Option<String>) {
     state.collective.posts.push(super::super::Post {
@@ -155,13 +112,7 @@ fn inbox_is_fifo_bounded_explicitly_acknowledged_and_durable() {
     );
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(
-        call(
-            &mut restored,
-            &run,
-            "control_room_notifications",
-            &json!({})
-        )
-        .unwrap(),
+        call(&mut restored, &run, "control_room_notifications", &json!({})).unwrap(),
         before
     );
     for _ in 0..2 {
@@ -180,13 +131,7 @@ fn inbox_is_fifo_bounded_explicitly_acknowledged_and_durable() {
         .map(|post| post["text"].as_str().unwrap().to_owned())
         .collect();
     loop {
-        let next = call(
-            &mut restored,
-            &run,
-            "control_room_notifications",
-            &json!({}),
-        )
-        .unwrap();
+        let next = call(&mut restored, &run, "control_room_notifications", &json!({})).unwrap();
         assert_eq!(next["skipped"], 0);
         if next["posts"].as_array().unwrap().is_empty() {
             break;
@@ -207,26 +152,12 @@ fn inbox_is_fifo_bounded_explicitly_acknowledged_and_durable() {
         .unwrap();
         restored = serde_json::from_slice(&serde_json::to_vec(&restored).unwrap()).unwrap();
     }
-    assert_eq!(
-        received,
-        (0..20).map(|i| format!("update {i}")).collect::<Vec<_>>()
-    );
+    assert_eq!(received, (0..20).map(|i| format!("update {i}")).collect::<Vec<_>>());
     for i in 0..WINDOW {
-        post(
-            &mut restored,
-            "engineering",
-            &format!("unrelated {i}"),
-            None,
-        );
+        post(&mut restored, "engineering", &format!("unrelated {i}"), None);
     }
     post(&mut restored, "research", "last matching update", None);
-    let window = call(
-        &mut restored,
-        &run,
-        "control_room_notifications",
-        &json!({}),
-    )
-    .unwrap();
+    let window = call(&mut restored, &run, "control_room_notifications", &json!({})).unwrap();
     assert_eq!(window["more"], true);
     assert_eq!(window["skipped"], 0);
     assert!(window["posts"].as_array().unwrap().is_empty());
@@ -247,13 +178,7 @@ fn inbox_is_fifo_bounded_explicitly_acknowledged_and_durable() {
     )
     .unwrap();
     assert_eq!(
-        call(
-            &mut restored,
-            &run,
-            "control_room_notifications",
-            &json!({})
-        )
-        .unwrap()["posts"]
+        call(&mut restored, &run, "control_room_notifications", &json!({})).unwrap()["posts"]
             .as_array()
             .unwrap()
             .len(),
@@ -262,13 +187,16 @@ fn inbox_is_fifo_bounded_explicitly_acknowledged_and_durable() {
 }
 
 fn shared_service(state: &mut State) -> crate::services::Grant {
-    state.services.push(serde_json::from_value(json!({
+    state.services.push(
+        serde_json::from_value(json!({
             "resource":{"id":"svc-shared","owner":{"node":"node-a","chat":"other-owner"},"generation":1,
                 "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},
                 "lease":[1,u64::MAX],"phase":"Requested"},
             "origin":{"run":"owner-run","attempt":"owner-attempt"},
             "actor":{"type":"local_operator"},"command":"sleep 60","uid":502,"gid":20
-        })).unwrap());
+        }))
+        .unwrap(),
+    );
     state.services.last().unwrap().grant()
 }
 
@@ -278,15 +206,8 @@ fn one_shot_retains_grants_received_after_arming() {
     let chat = state.chats[0].id.clone();
     watch(&mut state, &run, true);
     let grant = shared_service(&mut state);
-    let continuation = crate::chat::continuation(
-        &state,
-        &chat,
-        0,
-        "Service ready".into(),
-        RunKind::AgentMessage,
-        "test",
-    )
-    .unwrap();
+    let continuation =
+        crate::chat::continuation(&state, &chat, 0, "Service ready".into(), RunKind::AgentMessage, "test").unwrap();
     state.runtime.runs.push(continuation);
     state.runtime.runs[1].resource_grants.push(grant);
     for run in &mut state.runtime.runs {
@@ -313,23 +234,11 @@ fn recorded_updates_preserve_one_shot_budget_and_unread_evidence() {
     watch(&mut state, &run, true);
     state.runtime.runs[0].status = "completed".into();
     for _ in 0..WINDOW + 1 {
-        post(
-            &mut state,
-            "research",
-            "Retained observation",
-            Some("peer".into()),
-        );
+        post(&mut state, "research", "Retained observation", Some("peer".into()));
         state.collective.posts.last_mut().unwrap().delivery = super::super::Delivery::Record;
     }
     assert!(reconcile(&mut state, fail).is_err());
-    assert_eq!(
-        state.collective.room_watches[0]
-            .wake
-            .as_ref()
-            .unwrap()
-            .scanned,
-        0
-    );
+    assert_eq!(state.collective.room_watches[0].wake.as_ref().unwrap().scanned, 0);
     for _ in 0..3 {
         reconcile(&mut state, |_| Ok(())).unwrap();
     }
@@ -384,15 +293,8 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         run,
         "automatic notifications must retain the original team's budget"
     );
-    assert_eq!(
-        state.runtime.runs[1].model.as_deref(),
-        Some("captured-model")
-    );
-    assert!(
-        !state.runtime.runs[1]
-            .objective
-            .contains("A concise discovery")
-    );
+    assert_eq!(state.runtime.runs[1].model.as_deref(), Some("captured-model"));
+    assert!(!state.runtime.runs[1].objective.contains("A concise discovery"));
     let delivered = state.collective.room_watches[0].delivered.clone();
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     reconcile(&mut restored, |_| panic!("consumed wake must be idle")).unwrap();
@@ -408,12 +310,10 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         "room wakes cannot gain replacement generations"
     );
     restored.runtime.runs[1].status = "running".into();
-    restored.runtime.runs[1]
-        .attempts
-        .push(crate::usage::Attempt {
-            workspace_id: Some("notification-attempt".into()),
-            ..Default::default()
-        });
+    restored.runtime.runs[1].attempts.push(crate::usage::Attempt {
+        workspace_id: Some("notification-attempt".into()),
+        ..Default::default()
+    });
     let notification = restored.runtime.runs[1].id.clone();
     assert!(
         call(
@@ -455,10 +355,7 @@ fn cancellation_revocation_scope_changes_and_stale_generation_disarm_wakes() {
         let count = state.runtime.runs.len();
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), count);
-        assert!(
-            state.collective.room_watches[0].wake.is_none(),
-            "scenario {scenario}"
-        );
+        assert!(state.collective.room_watches[0].wake.is_none(), "scenario {scenario}");
     }
 }
 
@@ -466,9 +363,7 @@ fn cancellation_revocation_scope_changes_and_stale_generation_disarm_wakes() {
 fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack() {
     let (mut state, run) = fixture();
     let request = rpc("control_room_watch", json!({"enabled":true,"wake":true}));
-    assert!(
-        crate::toolbox::failure_text(&super::super::checkpoint(&mut state, &run, &request, fail)).is_some()
-    );
+    assert!(crate::toolbox::failure_text(&super::super::checkpoint(&mut state, &run, &request, fail)).is_some());
     assert!(state.collective.room_watches.is_empty());
     assert!(!state.runtime.runs[0].room_wake_used);
     assert!(
@@ -486,7 +381,8 @@ fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack()
             &run,
             &rpc("control_room_ack", json!({"through":1})),
             fail
-        )).is_some()
+        ))
+        .is_some()
     );
     assert_eq!(state.collective.room_watches[0].cursor, 0);
     assert!(
@@ -495,7 +391,8 @@ fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack()
             &run,
             &rpc("control_room_watch", json!({"enabled":false})),
             fail
-        )).is_some()
+        ))
+        .is_some()
     );
     assert_eq!(state.collective.room_watches.len(), 1);
     assert!(state.collective.room_watches[0].wake.is_some());
@@ -506,14 +403,7 @@ fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack()
         state.collective.room_watches[0].cursor, 0,
         "wake scanning is not an inbox acknowledgement"
     );
-    assert_eq!(
-        state.collective.room_watches[0]
-            .wake
-            .as_ref()
-            .unwrap()
-            .scanned,
-        1
-    );
+    assert_eq!(state.collective.room_watches[0].wake.as_ref().unwrap().scanned, 1);
     assert!(state.collective.room_watches[0].wake.is_some());
 }
 
@@ -521,13 +411,7 @@ fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack()
 fn budget_cannot_be_refilled_by_disabling_or_by_child_personas() {
     let (mut state, run) = fixture();
     watch(&mut state, &run, true);
-    call(
-        &mut state,
-        &run,
-        "control_room_watch",
-        &json!({"enabled":false}),
-    )
-    .unwrap();
+    call(&mut state, &run, "control_room_watch", &json!({"enabled":false})).unwrap();
     assert!(
         call(
             &mut state,
@@ -542,7 +426,8 @@ fn budget_cannot_be_refilled_by_disabling_or_by_child_personas() {
         role: crate::delegation::Role::Worker,
         root: "notification-root".into(),
         depth: 1,
-        parent: Some("notification-parent".into()), bundle: None
+        parent: Some("notification-parent".into()),
+        bundle: None,
     });
     assert!(
         call(
@@ -554,26 +439,10 @@ fn budget_cannot_be_refilled_by_disabling_or_by_child_personas() {
         .is_err()
     );
     state.runtime.runs[0].persona.as_mut().unwrap().role = crate::delegation::Role::Judge;
-    assert!(
-        call(
-            &mut state,
-            &run,
-            "control_room_watch",
-            &json!({"enabled":true})
-        )
-        .is_err()
-    );
+    assert!(call(&mut state, &run, "control_room_watch", &json!({"enabled":true})).is_err());
     state.runtime.runs[0].persona = None;
     state.chats[0].actor = identity::Actor::Unknown;
-    assert!(
-        call(
-            &mut state,
-            &run,
-            "control_room_watch",
-            &json!({"enabled":true})
-        )
-        .is_err()
-    );
+    assert!(call(&mut state, &run, "control_room_watch", &json!({"enabled":true})).is_err());
 }
 
 fn running_attempt(state: &mut State, index: usize, generation: &str) {
@@ -614,7 +483,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     parent.attempts[0].artifact = Some("parent-checkpoint".into());
     parent.delegation = Some(crate::delegation::Delegation {
         input: crate::delegation::Input {
-            model:None,
+            model: None,
             objective: "Inspect source".into(),
             role: crate::delegation::Role::Worker,
         },
@@ -678,19 +547,11 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
         post(&mut state, "research", "Task for lead", None);
         match scenario {
             0 => state.runtime.runs[leaf].status = "cancelled".into(),
-            1 => state.runtime.runs[leaf]
-                .attempts
-                .push(crate::usage::Attempt {
-                    workspace_id: Some("retry-generation".into()),
-                    ..Default::default()
-                }),
-            2 => {
-                state.runtime.runs[first]
-                    .question
-                    .as_mut()
-                    .unwrap()
-                    .generation = "stale-generation".into()
-            }
+            1 => state.runtime.runs[leaf].attempts.push(crate::usage::Attempt {
+                workspace_id: Some("retry-generation".into()),
+                ..Default::default()
+            }),
+            2 => state.runtime.runs[first].question.as_mut().unwrap().generation = "stale-generation".into(),
             3 => state.runtime.runs[leaf].chat_id = Some("sibling-chat".into()),
             4 => state.runtime.runs[leaf].model = Some("different-model".into()),
             5 => {
@@ -714,10 +575,7 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
         let count = state.runtime.runs.len();
         reconcile(&mut state, |_| Ok(())).unwrap();
         assert_eq!(state.runtime.runs.len(), count, "scenario {scenario}");
-        assert!(
-            state.collective.room_watches[0].wake.is_none(),
-            "scenario {scenario}"
-        );
+        assert!(state.collective.room_watches[0].wake.is_none(), "scenario {scenario}");
     }
 }
 
@@ -734,7 +592,8 @@ fn nonblocking_spawn_does_not_delay_the_idle_leads_room_wake() {
         role: crate::delegation::Role::Worker,
         root: root.clone(),
         depth: 1,
-        parent: Some(root), bundle: None
+        parent: Some(root),
+        bundle: None,
     });
     state.runtime.runs.push(child);
     state.runtime.runs[0].status = "completed".into();
@@ -757,18 +616,7 @@ fn existing_design_continuation_without_persona_keeps_its_armed_watch() {
     post(&mut state, "research", "Pending assignment", None);
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
-    assert_eq!(
-        state
-            .runtime
-            .runs
-            .last()
-            .unwrap()
-            .persona
-            .as_ref()
-            .unwrap()
-            .root,
-        root
-    );
+    assert_eq!(state.runtime.runs.last().unwrap().persona.as_ref().unwrap().root, root);
 }
 
 #[test]
@@ -790,10 +638,7 @@ fn full_regular_queue_retains_pending_wake_without_saving_or_overflowing() {
             .unwrap();
     }
     let count = state.runtime.runs.len();
-    reconcile(&mut state, |_| {
-        panic!("a full queue must not mutate the watch")
-    })
-    .unwrap();
+    reconcile(&mut state, |_| panic!("a full queue must not mutate the watch")).unwrap();
     assert_eq!(state.runtime.runs.len(), count);
     assert!(state.collective.room_watches[0].wake.is_some());
 }
@@ -818,12 +663,7 @@ fn profile_room_publication() {
             run.queue_order = index as u64;
             state.runtime.runs.push(run);
         }
-        post(
-            &mut state,
-            "research",
-            "Peer needs action",
-            Some("peer".into()),
-        );
+        post(&mut state, "research", "Peer needs action", Some("peer".into()));
         let watch = state.collective.room_watches[0].clone();
         let notice = state.runtime.notice.clone();
         let revision = state.chats[0].revision;
@@ -851,10 +691,7 @@ fn profile_room_publication() {
         assert_eq!(saves.get(), 10 * iterations);
         samples.remove(0);
         samples.sort_unstable();
-        println!(
-            "room publication: retained_runs={retained}, median_ns={}",
-            samples[4]
-        );
+        println!("room publication: retained_runs={retained}, median_ns={}", samples[4]);
     }
 }
 

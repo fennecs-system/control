@@ -6,7 +6,13 @@ use serde_json::{Value, json};
 /// A JSON number for a solver value: integral values become integers.
 pub fn number(value: f64) -> Value {
     if !value.is_finite() {
-        return json!(if value.is_nan() { "nan" } else if value > 0.0 { "inf" } else { "-inf" });
+        return json!(if value.is_nan() {
+            "nan"
+        } else if value > 0.0 {
+            "inf"
+        } else {
+            "-inf"
+        });
     }
     if value.fract() == 0.0 && value.abs() < 9.0e15 {
         json!(value as i64)
@@ -51,9 +57,16 @@ pub fn highs(text: &str) -> Parsed {
         "Unbounded" => Some(Status::Unbounded),
         "Primal infeasible or unbounded" => Some(Status::InfeasibleOrUnbounded),
         "Time limit reached" => Some(Status::Timeout),
-        "Bound on objective reached" | "Target for objective reached" | "Solution limit reached" if primal_feasible => Some(Status::Feasible),
+        "Bound on objective reached" | "Target for objective reached" | "Solution limit reached" if primal_feasible => {
+            Some(Status::Feasible)
+        }
         "Iteration limit reached" | "Interrupted by user" | "Unknown" | "Empty" => Some(Status::Unknown),
-        _ if parsed.solver_status.ends_with("error") || parsed.solver_status == "Not Set" || parsed.solver_status == "Memory limit reached" => Some(Status::Error),
+        _ if parsed.solver_status.ends_with("error")
+            || parsed.solver_status == "Not Set"
+            || parsed.solver_status == "Memory limit reached" =>
+        {
+            Some(Status::Error)
+        }
         _ => Some(Status::Unknown),
     };
     if parsed.status == Some(Status::Infeasible) {
@@ -71,17 +84,33 @@ pub fn minizinc(text: &str) -> Parsed {
     let mut status = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
-            parsed.messages.push(format!("Unparsed output: {}", line.chars().take(300).collect::<String>()));
+            parsed.messages.push(format!(
+                "Unparsed output: {}",
+                line.chars().take(300).collect::<String>()
+            ));
             continue;
         };
         match message["type"].as_str() {
             Some("solution") => solution = message["output"]["json"].as_object().cloned(),
             Some("status") => status = message["status"].as_str().map(str::to_owned),
             Some(kind @ ("error" | "warning")) => {
-                let location = if message["location"].is_object() { &message["location"] } else { &message["stack"][0]["location"] };
-                let line = location["firstLine"].as_u64().map(|line| format!(" (line {line})")).unwrap_or_default();
-                let what = message["what"].as_str().map(|what| format!("{what}: ")).unwrap_or_default();
-                parsed.messages.push(format!("{kind}: {what}{}{line}", message["message"].as_str().unwrap_or("")));
+                let location = if message["location"].is_object() {
+                    &message["location"]
+                } else {
+                    &message["stack"][0]["location"]
+                };
+                let line = location["firstLine"]
+                    .as_u64()
+                    .map(|line| format!(" (line {line})"))
+                    .unwrap_or_default();
+                let what = message["what"]
+                    .as_str()
+                    .map(|what| format!("{what}: "))
+                    .unwrap_or_default();
+                parsed.messages.push(format!(
+                    "{kind}: {what}{}{line}",
+                    message["message"].as_str().unwrap_or("")
+                ));
                 if kind == "error" {
                     status.get_or_insert_with(|| "ERROR".to_owned());
                 }
@@ -200,7 +229,10 @@ pub fn sexps(text: &str) -> Vec<Sexp> {
 pub fn smt_value(value: &Sexp) -> Value {
     fn numeric(value: &Sexp) -> Option<f64> {
         match value {
-            Sexp::Atom(atom) => atom.parse::<f64>().ok().filter(|_| atom.bytes().all(|b| b.is_ascii_digit() || b == b'.')),
+            Sexp::Atom(atom) => atom
+                .parse::<f64>()
+                .ok()
+                .filter(|_| atom.bytes().all(|b| b.is_ascii_digit() || b == b'.')),
             Sexp::List(items) => match items.as_slice() {
                 [op, x] if op.atom() == Some("-") => numeric(x).map(|x| -x),
                 [op, a, b] if op.atom() == Some("/") => Some(numeric(a)? / numeric(b)?),
@@ -214,11 +246,18 @@ pub fn smt_value(value: &Sexp) -> Value {
         Sexp::Atom(atom) if !atom.is_empty() && atom.bytes().all(|b| b.is_ascii_digit()) => {
             atom.parse::<i64>().map(|v| json!(v)).unwrap_or_else(|_| json!(atom))
         }
-        Sexp::List(items) if matches!(items.as_slice(), [op, Sexp::Atom(x)] if op.atom() == Some("-") && x.bytes().all(|b| b.is_ascii_digit())) => {
+        Sexp::List(items) if matches!(items.as_slice(), [op, Sexp::Atom(x)] if op.atom() == Some("-") && x.bytes().all(|b| b.is_ascii_digit())) =>
+        {
             let digits = items[1].atom().unwrap();
-            digits.parse::<i64>().map(|v| json!(-v)).unwrap_or_else(|_| json!(value.render()))
+            digits
+                .parse::<i64>()
+                .map(|v| json!(-v))
+                .unwrap_or_else(|_| json!(value.render()))
         }
-        _ => numeric(value).filter(|v| v.is_finite()).map(number).unwrap_or_else(|| json!(value.render())),
+        _ => numeric(value)
+            .filter(|v| v.is_finite())
+            .map(number)
+            .unwrap_or_else(|| json!(value.render())),
     }
 }
 fn define_fun(item: &Sexp) -> Option<(String, Value)> {
@@ -226,7 +265,11 @@ fn define_fun(item: &Sexp) -> Option<(String, Value)> {
     match parts.as_slice() {
         [head, name, Sexp::List(args), _sort, body] if head.atom() == Some("define-fun") => {
             let name = name.atom()?.to_owned();
-            Some(if args.is_empty() { (name, smt_value(body)) } else { (name, json!(item.render())) })
+            Some(if args.is_empty() {
+                (name, smt_value(body))
+            } else {
+                (name, json!(item.render()))
+            })
         }
         _ => None,
     }
@@ -239,10 +282,15 @@ pub fn smtlib(text: &str) -> Parsed {
     let mut objectives = Vec::new();
     for item in sexps(text) {
         match &item {
-            Sexp::Atom(atom) if matches!(atom.as_str(), "sat" | "unsat" | "unknown" | "timeout") => verdict = Some(atom.clone()),
+            Sexp::Atom(atom) if matches!(atom.as_str(), "sat" | "unsat" | "unknown" | "timeout") => {
+                verdict = Some(atom.clone())
+            }
             Sexp::Atom(_) => {}
             Sexp::List(items) => match item.head() {
-                Some("error") => parsed.messages.push(format!("error: {}", items.get(1).map(Sexp::render).unwrap_or_default().trim_matches('"'))),
+                Some("error") => parsed.messages.push(format!(
+                    "error: {}",
+                    items.get(1).map(Sexp::render).unwrap_or_default().trim_matches('"')
+                )),
                 Some("objectives") => {
                     for objective in &items[1..] {
                         if let Sexp::List(pair) = objective
@@ -276,7 +324,12 @@ pub fn smtlib(text: &str) -> Parsed {
     if objectives.len() > 1 {
         parsed.extra.insert(
             "objectives".into(),
-            Value::Array(objectives.iter().map(|(term, value)| json!({"term": term, "value": smt_value(value)})).collect()),
+            Value::Array(
+                objectives
+                    .iter()
+                    .map(|(term, value)| json!({"term": term, "value": smt_value(value)}))
+                    .collect(),
+            ),
         );
     }
     parsed.status = verdict.as_deref().map(|verdict| match verdict {

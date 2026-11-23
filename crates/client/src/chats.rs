@@ -33,12 +33,17 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/genes", "List the genes /use can select"),
     ("/use GENE…", "Set this DM's DNA for future messages; /use none clears"),
     ("/personas", "List the personas /persona can select"),
-    ("/persona NAME", "Give this DM a persona (purpose, DNA, standing, model); /persona none clears"),
+    (
+        "/persona NAME",
+        "Give this DM a persona (purpose, DNA, standing, model); /persona none clears",
+    ),
 ];
 pub fn navigation(text: &str) -> Option<Navigation> {
     let text = text.trim();
     if let Some(arguments) = use_arguments(text) {
-        return Some(Navigation::Use(lenses(arguments).map(|names| names.into_iter().map(str::to_owned).collect())));
+        return Some(Navigation::Use(
+            lenses(arguments).map(|names| names.into_iter().map(str::to_owned).collect()),
+        ));
     }
     if let Some(name) = control_context::commands::tail(text, control_context::commands::Kind::Rename) {
         return Some(Navigation::Rename(name.trim().into()));
@@ -49,7 +54,11 @@ pub fn navigation(text: &str) -> Option<Navigation> {
         "/genes" | "/lenses" => Some(Navigation::Genes),
         "/personas" | "/persona" => Some(Navigation::Personas),
         text if text.starts_with("/persona ") => Some(Navigation::Persona(text["/persona ".len()..].trim().to_owned())),
-        text => text.strip_prefix("/resume ").map(str::trim).filter(|id| !id.is_empty() && !id.contains(char::is_whitespace)).map(|id| Navigation::Open(id.into())),
+        text => text
+            .strip_prefix("/resume ")
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && !id.contains(char::is_whitespace))
+            .map(|id| Navigation::Open(id.into())),
     }
 }
 
@@ -92,12 +101,20 @@ pub fn unknown<'a>(names: &[&'a str], known: impl Fn(&str) -> bool) -> Vec<&'a s
 /// resolves them, so invalid names change nothing. Returns the library.
 pub fn check_lenses(hive: &mut super::Hive, lenses: &[impl AsRef<str>]) -> std::io::Result<Value> {
     let library = hive.tool("control.lenses.list", serde_json::json!({}))?;
-    let ids = library.as_array().ok_or_else(|| std::io::Error::other("Invalid lens library response."))?
-        .iter().filter_map(|d| d["id"].as_str()).collect::<std::collections::HashSet<_>>();
+    let ids = library
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("Invalid lens library response."))?
+        .iter()
+        .filter_map(|d| d["id"].as_str())
+        .collect::<std::collections::HashSet<_>>();
     let names = lenses.iter().map(AsRef::as_ref).collect::<Vec<_>>();
     let missing = unknown(&names, |id| ids.contains(id));
     if !missing.is_empty() {
-        return Err(std::io::Error::other(format!("Unknown {}: {}. Nothing changed; /genes lists them.", if missing.len() == 1 { "gene" } else { "genes" }, missing.join(", "))));
+        return Err(std::io::Error::other(format!(
+            "Unknown {}: {}. Nothing changed; /genes lists them.",
+            if missing.len() == 1 { "gene" } else { "genes" },
+            missing.join(", ")
+        )));
     }
     hive.tool("control.lenses.resolve", serde_json::json!({"lenses":names}))?;
     Ok(library)
@@ -126,13 +143,15 @@ pub struct Entry<'a> {
 }
 /// Rows of `control.chats.list`, in its order.
 pub fn entries(rows: &[Value]) -> Vec<Entry<'_>> {
-    rows.iter().map(|chat| Entry {
-        id: chat["id"].as_str().unwrap_or(""),
-        title: chat["title"].as_str().unwrap_or("Chat"),
-        depth: chat["depth"].as_u64().unwrap_or(0).min(8) as usize,
-        activity: chat["activity_order"].as_u64().unwrap_or(0),
-        revision: &chat["revision"],
-    }).collect()
+    rows.iter()
+        .map(|chat| Entry {
+            id: chat["id"].as_str().unwrap_or(""),
+            title: chat["title"].as_str().unwrap_or("Chat"),
+            depth: chat["depth"].as_u64().unwrap_or(0).min(8) as usize,
+            activity: chat["activity_order"].as_u64().unwrap_or(0),
+            revision: &chat["revision"],
+        })
+        .collect()
 }
 /// The most recently active chats first.
 pub fn recent<'a>(entries: &[Entry<'a>], limit: usize) -> Vec<Entry<'a>> {
@@ -143,16 +162,32 @@ pub fn recent<'a>(entries: &[Entry<'a>], limit: usize) -> Vec<Entry<'a>> {
 }
 /// Each chat with the command that opens it.
 pub fn resume_list(entries: &[Entry<'_>]) -> String {
-    entries.iter().map(|entry| format!("{}\n  /resume {}", entry.title, entry.id)).collect::<Vec<_>>().join("\n\n")
+    entries
+        .iter()
+        .map(|entry| format!("{}\n  /resume {}", entry.title, entry.id))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 /// `/genes`: each gene in a `control.lenses.list` view with its version and
 /// the genes it includes, after how to select them.
 pub fn gene_list(library: &Value) -> String {
     let mut lines = vec!["Genes. Set a DM's DNA with /use engineering evidence; clear with /use none.".to_owned()];
     for gene in library.as_array().into_iter().flatten() {
-        lines.push(format!("{} · {} · v{}", gene["id"].as_str().unwrap_or("?"), gene["name"].as_str().unwrap_or("?"), gene["revision"].as_u64().unwrap_or(0)));
+        lines.push(format!(
+            "{} · {} · v{}",
+            gene["id"].as_str().unwrap_or("?"),
+            gene["name"].as_str().unwrap_or("?"),
+            gene["revision"].as_u64().unwrap_or(0)
+        ));
         if let Some(includes) = gene["includes"].as_array().filter(|a| !a.is_empty()) {
-            lines.push(format!("  includes {}", includes.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")));
+            lines.push(format!(
+                "  includes {}",
+                includes
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            ));
         }
     }
     lines.join("\n")
@@ -160,7 +195,11 @@ pub fn gene_list(library: &Value) -> String {
 
 /// Selects (or with `none` clears) a DM's persona, for every client.
 pub fn use_persona(hive: &mut super::Hive, chat: &str, persona: &str) -> std::io::Result<Value> {
-    let persona = if persona == "none" { Value::Null } else { Value::String(persona.to_owned()) };
+    let persona = if persona == "none" {
+        Value::Null
+    } else {
+        Value::String(persona.to_owned())
+    };
     hive.tool("control.chat.persona", serde_json::json!({"id":chat,"persona":persona}))
 }
 /// `/personas`: each persona in a `control.personas.list` view with its
@@ -168,10 +207,21 @@ pub fn use_persona(hive: &mut super::Hive, chat: &str, persona: &str) -> std::io
 pub fn persona_list(library: &Value) -> String {
     let mut lines = vec!["Personas. Give a DM one with /persona lead; clear with /persona none. Agents spawn them with control_agent_spawn {persona}.".to_owned()];
     for persona in library.as_array().into_iter().flatten() {
-        let genes = persona["lenses"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default();
+        let genes = persona["lenses"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + "))
+            .unwrap_or_default();
         let standing = &persona["standing"];
-        lines.push(format!("{} · {} · v{} · DNA {} · sees {} · steers {} · answers to {}", persona["id"].as_str().unwrap_or("?"), persona["name"].as_str().unwrap_or("?"), persona["revision"].as_u64().unwrap_or(0),
-            if genes.is_empty() { "none".into() } else { genes }, standing["sees"].as_str().unwrap_or("team"), standing["steers"].as_str().unwrap_or("team"), standing["answers_to"].as_str().unwrap_or("lead")));
+        lines.push(format!(
+            "{} · {} · v{} · DNA {} · sees {} · steers {} · answers to {}",
+            persona["id"].as_str().unwrap_or("?"),
+            persona["name"].as_str().unwrap_or("?"),
+            persona["revision"].as_u64().unwrap_or(0),
+            if genes.is_empty() { "none".into() } else { genes },
+            standing["sees"].as_str().unwrap_or("team"),
+            standing["steers"].as_str().unwrap_or("team"),
+            standing["answers_to"].as_str().unwrap_or("lead")
+        ));
     }
     lines.join("\n")
 }
@@ -198,7 +248,11 @@ pub fn replies(detail: &Value, from: usize) -> (Vec<Reply<'_>>, usize) {
             break;
         }
         if control_delivery::DELIVERABLE.contains(&status) {
-            replies.push(Reply { index, status, text: message["reply"].as_str().unwrap_or("") });
+            replies.push(Reply {
+                index,
+                status,
+                text: message["reply"].as_str().unwrap_or(""),
+            });
         }
         next = index + 1;
     }

@@ -81,9 +81,7 @@ fn checkpoint_failure_or_unwind_restores_publication_without_dispatch() {
 
 #[test]
 fn blocking_and_tokio_interpreters_share_results_and_ordered_effects() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     for fail in [false, true] {
         let mut blocking = fixture();
         let mut asynchronous: State = serde_json::from_slice(&snapshot(&blocking)).unwrap();

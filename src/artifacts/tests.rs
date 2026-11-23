@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn live_diff_reads_stay_inside_pinned_directories_and_skip_private_outputs() {
@@ -39,12 +38,7 @@ fn live_diff_reads_stay_inside_pinned_directories_and_skip_private_outputs() {
         .unwrap();
     assert_eq!(text, "inside\n");
     let snapshot = diff_snapshot(&workspace).unwrap();
-    assert!(
-        snapshot
-            .files
-            .values()
-            .all(|text| !text.contains("outside-fixture"))
-    );
+    assert!(snapshot.files.values().all(|text| !text.contains("outside-fixture")));
     assert!(diff_snapshot(&workspace.join("src")).is_err());
     fs::remove_dir_all(root).unwrap();
 }
@@ -105,8 +99,7 @@ fn artifact_tools_keep_chat_authority_and_reject_actor_overrides() {
 }
 #[test]
 fn followup_restores_published_files_and_detects_corruption() {
-    let directory =
-        std::env::temp_dir().join(format!("control-artifact-lineage-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("control-artifact-lineage-{}", std::process::id()));
     fs::create_dir_all(directory.join("first/src")).unwrap();
     fs::write(directory.join("first/src/main.rs"), "first turn").unwrap();
     let outputs = directory.join("outputs");
@@ -124,10 +117,7 @@ fn followup_restores_published_files_and_detects_corruption() {
         "second turn"
     );
     let first = manifest_in(&outputs, "attempt-1").unwrap();
-    assert_eq!(
-        read_in(&outputs, &first, "src/main.rs").unwrap(),
-        b"first turn"
-    );
+    assert_eq!(read_in(&outputs, &first, "src/main.rs").unwrap(), b"first turn");
     fs::write(outputs.join("attempt-1/files/src/main.rs"), "changed").unwrap();
     assert!(read_in(&outputs, &first, "src/main.rs").is_err());
     fs::remove_dir_all(directory).unwrap();
@@ -182,17 +172,13 @@ fn publication_is_bounded_sorted_and_never_promotes_symlinks_or_private_files() 
     assert!(error.contains("16 MiB total limit"));
     assert!(!root.join("output/test-4").exists());
     restore_in(&root.join("output"), "test-1", &root.join("restored")).unwrap();
-    assert_eq!(
-        fs::read(root.join("restored/src/main.rs")).unwrap(),
-        b"fn main() {}\n"
-    );
+    assert_eq!(fs::read(root.join("restored/src/main.rs")).unwrap(), b"fn main() {}\n");
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn incomplete_turn_never_replaces_the_restorable_project_checkpoint() {
-    let root =
-        std::env::temp_dir().join(format!("control-checkpoint-limits-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("control-checkpoint-limits-{}", std::process::id()));
     let source = root.join("source");
     let outputs = root.join("outputs");
     fs::create_dir_all(&source).unwrap();
@@ -206,10 +192,7 @@ fn incomplete_turn_never_replaces_the_restorable_project_checkpoint() {
         .unwrap()
         .set_len(FILE_BYTES + 1)
         .unwrap();
-    let error = publish_in(&outputs, &workspace, "oversized")
-        .err()
-        .unwrap()
-        .to_string();
+    let error = publish_in(&outputs, &workspace, "oversized").err().unwrap().to_string();
     assert!(error.contains("project.txt") && error.contains("incomplete workspace checkpoint"));
     assert!(!outputs.join("oversized").exists());
     assert_eq!(
@@ -220,17 +203,11 @@ fn incomplete_turn_never_replaces_the_restorable_project_checkpoint() {
     for n in 0..FILE_COUNT {
         fs::write(workspace.join(format!("file-{n:04}")), "x").unwrap();
     }
-    let error = publish_in(&outputs, &workspace, "too-many")
-        .err()
-        .unwrap()
-        .to_string();
+    let error = publish_in(&outputs, &workspace, "too-many").err().unwrap().to_string();
     assert!(error.contains("512-file limit"));
     assert!(!outputs.join("too-many").exists());
     let next = root.join("next-turn");
     restore_in(&outputs, "before", &next).unwrap();
-    assert_eq!(
-        fs::read(next.join("project.txt")).unwrap(),
-        b"original project data"
-    );
+    assert_eq!(fs::read(next.join("project.txt")).unwrap(), b"original project data");
     fs::remove_dir_all(root).unwrap();
 }

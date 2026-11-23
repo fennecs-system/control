@@ -5,27 +5,89 @@ use super::*;
 /// rely on their default fix, which dispatch appends.
 const TURN: &[(&str, &str)] = &[
     ("turn_context/tools.rs", include_str!("../../turn_context/tools.rs")),
-    ("turn_mailbox.rs", include_str!("../../../crates/context/src/turn_mailbox.rs")),
-    ("working_state.rs", include_str!("../../../crates/context/src/working_state.rs")),
+    (
+        "turn_mailbox.rs",
+        include_str!("../../../crates/context/src/turn_mailbox.rs"),
+    ),
+    (
+        "working_state.rs",
+        include_str!("../../../crates/context/src/working_state.rs"),
+    ),
 ];
 const FAMILIES: &[(&str, &str, &str)] = &[
     ("control_service_exec", "services.rs", include_str!("../../services.rs")),
-    ("control_service_exec", "services/commands.rs", include_str!("../../services/commands.rs")),
-    ("control_service_copy", "services/copy.rs", include_str!("../../services/copy.rs")),
-    ("control_service_start", "services/page.rs", include_str!("../../services/page.rs")),
-    ("control_service_status", "services/tools.rs", include_str!("../../services/tools.rs")),
-    ("control_service_exec", "services/workspace.rs", include_str!("../../services/workspace.rs")),
+    (
+        "control_service_exec",
+        "services/commands.rs",
+        include_str!("../../services/commands.rs"),
+    ),
+    (
+        "control_service_copy",
+        "services/copy.rs",
+        include_str!("../../services/copy.rs"),
+    ),
+    (
+        "control_service_start",
+        "services/page.rs",
+        include_str!("../../services/page.rs"),
+    ),
+    (
+        "control_service_status",
+        "services/tools.rs",
+        include_str!("../../services/tools.rs"),
+    ),
+    (
+        "control_service_exec",
+        "services/workspace.rs",
+        include_str!("../../services/workspace.rs"),
+    ),
     ("control_room_post", "rooms.rs", include_str!("../../rooms.rs")),
-    ("control_room_read", "rooms/address.rs", include_str!("../../rooms/address.rs")),
-    ("control_room_claim", "rooms/claims.rs", include_str!("../../rooms/claims.rs")),
-    ("control_room_notifications", "rooms/notifications.rs", include_str!("../../rooms/notifications.rs")),
+    (
+        "control_room_read",
+        "rooms/address.rs",
+        include_str!("../../rooms/address.rs"),
+    ),
+    (
+        "control_room_claim",
+        "rooms/claims.rs",
+        include_str!("../../rooms/claims.rs"),
+    ),
+    (
+        "control_room_notifications",
+        "rooms/notifications.rs",
+        include_str!("../../rooms/notifications.rs"),
+    ),
     ("control_watch_start", "watches.rs", include_str!("../../watches.rs")),
-    ("control_watch_events", "watches/delivery.rs", include_str!("../../watches/delivery.rs")),
-    ("control_watch_events", "watches/ops.rs", include_str!("../../watches/ops.rs")),
-    ("control_watch_start", "watches/policy.rs", include_str!("../../watches/policy.rs")),
-    ("control_watch_status", "watches/tools.rs", include_str!("../../watches/tools.rs")),
-    ("control_agent_message", "agent_message.rs", include_str!("../../agent_message.rs")),
-    ("control_agent_message", "application/messages.rs", include_str!("../../application/messages.rs")),
+    (
+        "control_watch_events",
+        "watches/delivery.rs",
+        include_str!("../../watches/delivery.rs"),
+    ),
+    (
+        "control_watch_events",
+        "watches/ops.rs",
+        include_str!("../../watches/ops.rs"),
+    ),
+    (
+        "control_watch_start",
+        "watches/policy.rs",
+        include_str!("../../watches/policy.rs"),
+    ),
+    (
+        "control_watch_status",
+        "watches/tools.rs",
+        include_str!("../../watches/tools.rs"),
+    ),
+    (
+        "control_agent_message",
+        "agent_message.rs",
+        include_str!("../../agent_message.rs"),
+    ),
+    (
+        "control_agent_message",
+        "application/messages.rs",
+        include_str!("../../application/messages.rs"),
+    ),
 ];
 
 /// String literals passed to an error constructor (`err(`, `fail(`, `Err(`,
@@ -77,7 +139,11 @@ fn every_turn_handoff_rejection_names_a_callable_fix() {
             checked += 1;
         }
     }
-    assert!(missing.is_empty(), "rejections without a callable fix:\n{}", missing.join("\n"));
+    assert!(
+        missing.is_empty(),
+        "rejections without a callable fix:\n{}",
+        missing.join("\n")
+    );
     eprintln!("turn rejections checked: {checked}");
     assert!(checked >= 30, "the scanner stopped finding rejections ({checked})");
 }
@@ -93,7 +159,10 @@ fn every_service_room_watch_and_message_rejection_reaches_the_model_with_a_fix()
             total += 1;
             let shown = actionable(tool, &literal);
             assert!(names_fix(&shown), "{file}: {literal:?} -> {shown:?}");
-            assert!(shown.starts_with(literal.trim_end()), "the host's own message is kept first");
+            assert!(
+                shown.starts_with(literal.trim_end()),
+                "the host's own message is kept first"
+            );
         }
     }
     eprintln!("service/room/watch/message rejections checked: {total}, {own} with their own fix");
@@ -103,15 +172,21 @@ fn every_service_room_watch_and_message_rejection_reaches_the_model_with_a_fix()
 
 #[test]
 fn messages_with_their_own_fix_are_unchanged_and_others_get_the_family_default() {
-    let own = "Service s is busy. Call control_service_exec_status {\"service_id\":\"s\",\"execution_id\":\"e\"} and retry.";
+    let own =
+        "Service s is busy. Call control_service_exec_status {\"service_id\":\"s\",\"execution_id\":\"e\"} and retry.";
     assert_eq!(actionable("control_service_exec", own), own);
     let operator = "Not permitted; ask the operator via control_design_ask";
     assert_eq!(actionable("control_room_post", operator), operator);
     let bare = actionable("control_watch_stop", "Unknown watch");
-    assert!(bare.starts_with("Unknown watch. Next: call control_watch_status {}"), "{bare}");
+    assert!(
+        bare.starts_with("Unknown watch. Next: call control_watch_status {}"),
+        "{bare}"
+    );
     // Naming a tool without its arguments is not a concrete call.
     assert!(!names_fix("Poll control_service_exec_status until it finishes"));
-    assert!(names_fix("then retry control_turn_handoff {\"disposition\":{\"kind\":\"done\"}}"));
+    assert!(names_fix(
+        "then retry control_turn_handoff {\"disposition\":{\"kind\":\"done\"}}"
+    ));
     // Tools outside the contract are left alone.
     assert!(!covered("control_web_search"));
     assert_eq!(actionable("control_web_search", "x"), "x");

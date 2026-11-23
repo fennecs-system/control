@@ -1,13 +1,7 @@
 use super::*;
 use crate::services::tests::{admit_fixture, fixture, inspection};
 
-fn request(
-    state: &mut State,
-    run: &str,
-    time: u64,
-    nonce: &str,
-    shape: Option<Shape>,
-) -> io::Result<Value> {
+fn request(state: &mut State, run: &str, time: u64, nonce: &str, shape: Option<Shape>) -> io::Result<Value> {
     super::super::admit(
         state,
         Request {
@@ -41,7 +35,10 @@ fn admission_counts_pending_and_fenced_resources_retries_do_not_charge_again() {
     let before = serde_json::to_vec(&state).unwrap();
     let refused = request(&mut state, &run, time, "three", None).unwrap_err().to_string();
     assert!(refused.contains("compute capacity"));
-    assert!(refused.contains("3 reserving service(s) are not running (Requested, Requested, Requested)"), "{refused}");
+    assert!(
+        refused.contains("3 reserving service(s) are not running (Requested, Requested, Requested)"),
+        "{refused}"
+    );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     state.services[0].resource.phase = Phase::Fenced {
         fault: Fault::UnexpectedEngineState,
@@ -96,23 +93,42 @@ fn defaults_keep_legacy_limits_and_named_shapes_are_independent_of_image_capabil
         service.shape = None;
     }
     assert!(serde_json::from_value::<Input>(json!({"command":"true","shape":"huge"})).is_err());
-    assert!(
-        serde_json::from_value::<Input>(json!({"command":"true","memory_bytes":u64::MAX})).is_err()
-    );
+    assert!(serde_json::from_value::<Input>(json!({"command":"true","memory_bytes":u64::MAX})).is_err());
 }
 
 #[test]
 fn five_default_workers_and_an_eight_gib_server_fit_the_pool() {
-    for profile in [crate::worker_profile::Profile::Lite, crate::worker_profile::Profile::Full] {
+    for profile in [
+        crate::worker_profile::Profile::Lite,
+        crate::worker_profile::Profile::Full,
+    ] {
         let (mut state, run, _, time) = fixture();
         for slot in 0..6 {
-            admit_profile(&mut state,
-                Request { run: &run, generation: "attempt-a", nonce: &format!("service-{slot}") },
-                Input { command: "sleep 30".to_owned().try_into().unwrap(), shape: (slot == 5).then_some(Shape::Large), lease_seconds: 60, storage_limit_mb: None },
-                "node-a".to_owned().try_into().unwrap(), time, profile, |_| Ok(())).unwrap();
+            admit_profile(
+                &mut state,
+                Request {
+                    run: &run,
+                    generation: "attempt-a",
+                    nonce: &format!("service-{slot}"),
+                },
+                Input {
+                    command: "sleep 30".to_owned().try_into().unwrap(),
+                    shape: (slot == 5).then_some(Shape::Large),
+                    lease_seconds: 60,
+                    storage_limit_mb: None,
+                },
+                "node-a".to_owned().try_into().unwrap(),
+                time,
+                profile,
+                |_| Ok(()),
+            )
+            .unwrap();
         }
         assert_eq!(status(&state.services)["capacity"]["reserved"]["cpus"], 7);
-        assert_eq!(status(&state.services)["capacity"]["reserved"]["memory_bytes"], 5 * profile.service_memory() + 8 * GIB);
+        assert_eq!(
+            status(&state.services)["capacity"]["reserved"]["memory_bytes"],
+            5 * profile.service_memory() + 8 * GIB
+        );
     }
 }
 
@@ -137,9 +153,7 @@ fn concurrent_requests_cannot_oversubscribe_the_memory_pool() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        jobs.into_iter()
-            .map(|j| usize::from(j.join().unwrap()))
-            .sum::<usize>(),
+        jobs.into_iter().map(|j| usize::from(j.join().unwrap())).sum::<usize>(),
         2
     );
     assert_eq!(
@@ -158,9 +172,7 @@ fn live_docker_enforces_all_shapes_without_changing_image_capabilities() {
         request(&mut state, &run, time, "probe", Some(shape)).unwrap();
         let service = &mut state.services[0];
         service.resource.image = image.clone().try_into().unwrap();
-        service.resource.owner.node = format!("qa-shapes-{}-{time}", std::process::id())
-            .try_into()
-            .unwrap();
+        service.resource.owner.node = format!("qa-shapes-{}-{time}", std::process::id()).try_into().unwrap();
         service.profile = profile;
         service.resource.phase = Phase::Creating;
         struct Cleanup {
@@ -178,39 +190,87 @@ fn live_docker_enforces_all_shapes_without_changing_image_capabilities() {
             container: container.clone(),
             volume: workspace::Workspace::of(service).unwrap().name().to_owned(),
         };
-        let inventory = inventory(crate::engine::isolation(), service.resource.owner.node.as_str())
-            .unwrap();
+        let inventory = inventory(crate::engine::isolation(), service.resource.owner.node.as_str()).unwrap();
         let observed = &inventory[container.as_str()];
         verify(service, observed).unwrap();
         assert_eq!(observed.memory, shape.limits().memory_bytes);
         assert_eq!(observed.cpu, shape.limits().cpus * 1_000_000_000);
         assert_eq!(observed.pids, service.pids_limit());
-        assert_eq!(observed.pids, pids_limit(shape.limits().memory_bytes, profile, Capacity::DEFAULT));
+        assert_eq!(
+            observed.pids,
+            pids_limit(shape.limits().memory_bytes, profile, Capacity::DEFAULT)
+        );
     }
 }
 
 #[test]
 fn cpu_limits_oversubscribe_while_memory_stays_a_strict_sum() {
     let capacity = Capacity::DEFAULT;
-    let cpus = |cpus| Limits { memory_bytes: GIB, cpus };
-    assert!(admit_within(&[], cpus(12), capacity).is_ok(), "CPU caps beyond the 8 physical CPUs are admitted");
+    let cpus = |cpus| Limits {
+        memory_bytes: GIB,
+        cpus,
+    };
+    assert!(
+        admit_within(&[], cpus(12), capacity).is_ok(),
+        "CPU caps beyond the 8 physical CPUs are admitted"
+    );
     assert!(admit_within(&[], cpus(16), capacity).is_ok());
-    assert!(admit_within(&[], cpus(17), capacity).unwrap_err().to_string().contains("x2 oversubscription"));
-    assert!(admit_within(&[], Limits { memory_bytes: 21 * GIB, cpus: 1 }, capacity).is_err(), "memory is never oversubscribed");
-    let strict = Capacity { cpu_oversubscription: 1, ..capacity };
+    assert!(
+        admit_within(&[], cpus(17), capacity)
+            .unwrap_err()
+            .to_string()
+            .contains("x2 oversubscription")
+    );
+    assert!(
+        admit_within(
+            &[],
+            Limits {
+                memory_bytes: 21 * GIB,
+                cpus: 1
+            },
+            capacity
+        )
+        .is_err(),
+        "memory is never oversubscribed"
+    );
+    let strict = Capacity {
+        cpu_oversubscription: 1,
+        ..capacity
+    };
     assert!(admit_within(&[], cpus(9), strict).is_err());
 }
 
 #[test]
 fn node_settings_size_the_pool_and_invalid_values_keep_defaults() {
-    let settings = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| {
-        pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value).to_owned())
+    let settings = |pairs: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        }
     };
     assert_eq!(Capacity::from_settings(|_| None), Capacity::DEFAULT);
-    let sized = Capacity::from_settings(settings(&[("service-memory-gib", "40\n"), ("service-cpus", "14"), ("service-cpu-oversubscription", "3")]));
-    assert_eq!(sized, Capacity { memory_bytes: 40 * GIB, cpus: 14, cpu_oversubscription: 3, ..Capacity::DEFAULT });
+    let sized = Capacity::from_settings(settings(&[
+        ("service-memory-gib", "40\n"),
+        ("service-cpus", "14"),
+        ("service-cpu-oversubscription", "3"),
+    ]));
+    assert_eq!(
+        sized,
+        Capacity {
+            memory_bytes: 40 * GIB,
+            cpus: 14,
+            cpu_oversubscription: 3,
+            ..Capacity::DEFAULT
+        }
+    );
     assert_eq!(sized.admitted_cpus(), 42);
-    let invalid = Capacity::from_settings(settings(&[("service-memory-gib", "0"), ("service-cpus", "many"), ("service-cpu-oversubscription", "100")]));
+    let invalid = Capacity::from_settings(settings(&[
+        ("service-memory-gib", "0"),
+        ("service-cpus", "many"),
+        ("service-cpu-oversubscription", "100"),
+    ]));
     assert_eq!(invalid, Capacity::DEFAULT);
 }
 
@@ -228,17 +288,45 @@ fn process_limits_scale_with_memory_between_profile_floor_and_ceiling() {
     assert_eq!(pids_limit(Shape::Large.limits().memory_bytes, Full, capacity), 512);
     // Ceiling: large memory and extreme inputs stop at pids_max.
     assert_eq!(pids_limit(64 * GIB, Full, capacity), 1024);
-    assert_eq!(pids_limit(u64::MAX, Full, Capacity { pids_per_gib: 4096, ..capacity }), 1024);
+    assert_eq!(
+        pids_limit(
+            u64::MAX,
+            Full,
+            Capacity {
+                pids_per_gib: 4096,
+                ..capacity
+            }
+        ),
+        1024
+    );
     // The floor wins over a low scale.
-    assert_eq!(pids_limit(8 * GIB, Full, Capacity { pids_per_gib: 1, ..capacity }), 128);
+    assert_eq!(
+        pids_limit(
+            8 * GIB,
+            Full,
+            Capacity {
+                pids_per_gib: 1,
+                ..capacity
+            }
+        ),
+        128
+    );
 }
 
 #[test]
 fn node_settings_override_process_scale_and_ceiling() {
-    let settings = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| {
-        pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value).to_owned())
+    let settings = |pairs: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        }
     };
-    let sized = Capacity::from_settings(settings(&[("service-pids-per-gib", "256"), ("service-pids-max", "1536\n")]));
+    let sized = Capacity::from_settings(settings(&[
+        ("service-pids-per-gib", "256"),
+        ("service-pids-max", "1536\n"),
+    ]));
     assert_eq!((sized.pids_per_gib, sized.pids_max), (256, 1536));
     assert_eq!(pids_limit(4 * GIB, crate::worker_profile::Profile::Lite, sized), 1024);
     assert_eq!(pids_limit(8 * GIB, crate::worker_profile::Profile::Lite, sized), 1536);
@@ -261,7 +349,10 @@ fn admission_captures_process_limit_and_create_and_verify_share_it() {
     assert_eq!(observed.pids, 512);
     assert!(verify(service, &observed).is_ok());
     observed.pids = 128;
-    assert!(verify(service, &observed).is_err(), "a container with a different limit is not this service");
+    assert!(
+        verify(service, &observed).is_err(),
+        "a container with a different limit is not this service"
+    );
     // The captured value survives restart and is independent of later settings.
     let restored: Service = serde_json::from_value(serde_json::to_value(&*service).unwrap()).unwrap();
     assert_eq!(restored.pids_limit(), 512);
@@ -287,8 +378,14 @@ fn drift_check_accepts_live_services_created_under_the_profile_rule() {
     observed.tmpfs = tmpfs(&legacy);
     // The old rule gave every Full service 128, whatever its shape.
     assert_eq!(observed.pids, 128);
-    assert!(verify(&legacy, &observed).is_ok(), "a live legacy service is not fenced by the new formula");
-    assert!(serde_json::to_value(&legacy).unwrap().get("pids_limit").is_none(), "legacy records are not rewritten");
+    assert!(
+        verify(&legacy, &observed).is_ok(),
+        "a live legacy service is not fenced by the new formula"
+    );
+    assert!(
+        serde_json::to_value(&legacy).unwrap().get("pids_limit").is_none(),
+        "legacy records are not rewritten"
+    );
     observed.pids = 512;
     assert!(verify(&legacy, &observed).is_err());
 }

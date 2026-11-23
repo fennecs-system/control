@@ -1,6 +1,6 @@
 //! Fail-closed lifecycle operations. Docker names discover intent; verified IDs
 //! authorize termination. Never stop an arbitrary container from a label alone.
-use crate::{identity::Actor, runtime::Runtime, usage::Attempt, State};
+use crate::{State, identity::Actor, runtime::Runtime, usage::Attempt};
 use control_isolation::{ContainerId, Isolation, Observed, Select, States, Target};
 use std::{
     path::PathBuf,
@@ -8,11 +8,7 @@ use std::{
 };
 
 pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<(), &'static str> {
-    let run = runtime
-        .runs
-        .iter_mut()
-        .find(|r| r.id == id)
-        .ok_or("Run not found.")?;
+    let run = runtime.runs.iter_mut().find(|r| r.id == id).ok_or("Run not found.")?;
     if actor != &Actor::LocalOperator && actor != &run.actor {
         return Err("Cannot cancel another actor's run.");
     }
@@ -21,7 +17,12 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
         "queued" | "waiting" => {
             let was_waiting = run.status == "waiting";
             run.status = "cancelled".into();
-            run.result = if was_waiting { "Cancelled while waiting. The previous published workspace is unchanged." } else { "Cancelled before execution." }.into();
+            run.result = if was_waiting {
+                "Cancelled while waiting. The previous published workspace is unchanged."
+            } else {
+                "Cancelled before execution."
+            }
+            .into();
         }
         "running" => {
             run.status = "cancelling".into();
@@ -32,25 +33,36 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
     }
     // Cancelling a paused supervisor also cancels its bounded descendants;
     // independent human-created chats are not part of this lineage.
-    let children:Vec<_>=runtime.runs.iter().filter(|r|r.persona.as_ref().is_some_and(|p|p.parent.as_deref()==Some(id))
-        && matches!(r.status.as_str(),"queued"|"waiting"|"running"|"cancelling")).map(|r|r.id.clone()).collect();
-    for child in children {request_cancel(runtime,&child,actor)?;}
+    let children: Vec<_> = runtime
+        .runs
+        .iter()
+        .filter(|r| {
+            r.persona.as_ref().is_some_and(|p| p.parent.as_deref() == Some(id))
+                && matches!(r.status.as_str(), "queued" | "waiting" | "running" | "cancelling")
+        })
+        .map(|r| r.id.clone())
+        .collect();
+    for child in children {
+        request_cancel(runtime, &child, actor)?;
+    }
     Ok(())
 }
 
 pub fn cancelled(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
-    crate::shutdown::requested() || bridge.is_some_and(|(state, id)| {
-        state.lock().map_or(true, |s| {
-            !s.runtime
-                .runs
-                .iter()
-                .any(|r| r.id == id && r.status == "running")
+    crate::shutdown::requested()
+        || bridge.is_some_and(|(state, id)| {
+            state.lock().map_or(true, |s| {
+                !s.runtime.runs.iter().any(|r| r.id == id && r.status == "running")
+            })
         })
-    })
 }
 
 pub fn current(run: &crate::runtime::Run, attempt: &Attempt) -> bool {
-    control_core::scheduling::current_attempt(crate::scheduler::phase(run), run.attempts.last().map(crate::scheduler::stamp), crate::scheduler::stamp(attempt))
+    control_core::scheduling::current_attempt(
+        crate::scheduler::phase(run),
+        run.attempts.last().map(crate::scheduler::stamp),
+        crate::scheduler::stamp(attempt),
+    )
 }
 
 /// The ownership facts of one inspected container.
@@ -78,7 +90,9 @@ fn container(observed: Observed) -> Option<Container> {
 }
 /// The single container `name` inspects as; `None` if the engine reported another shape.
 fn inspected(isolation: &dyn Isolation, name: &str) -> std::io::Result<Option<Container>> {
-    Ok(<[Observed; 1]>::try_from(isolation.inspect(&[Target::Name(name)])?).ok().and_then(|[observed]| container(observed)))
+    Ok(<[Observed; 1]>::try_from(isolation.inspect(&[Target::Name(name)])?)
+        .ok()
+        .and_then(|[observed]| container(observed)))
 }
 
 fn expected(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str> {
@@ -92,7 +106,9 @@ fn expected_path(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str>
         .ok_or("Missing persisted workspace identity.")?;
     let main = format!("control-{id}");
     let workspace = crate::runtime::workspace(id)?;
-    if let Some(job)=attempt.command_jobs.iter().find(|job|job.name()==name) {return job.workspace().map_err(|_|"Missing command workspace");}
+    if let Some(job) = attempt.command_jobs.iter().find(|job| job.name() == name) {
+        return job.workspace().map_err(|_| "Missing command workspace");
+    }
     if name == main {
         return Ok(match attempt.backend.agent().mailbox() {
             Some(mailbox) => workspace.parent().unwrap().join(mailbox),
@@ -102,9 +118,14 @@ fn expected_path(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str>
     if name == format!("{main}-tool") {
         return Ok(workspace);
     }
-    if name==format!("{main}-preview") && attempt.project.is_some() {return Ok(workspace);}
+    if name == format!("{main}-preview") && attempt.project.is_some() {
+        return Ok(workspace);
+    }
     if name == format!("{main}-probe") {
-        return Ok(workspace.parent().unwrap().join(attempt.backend.agent().probe_workspace()));
+        return Ok(workspace
+            .parent()
+            .unwrap()
+            .join(attempt.backend.agent().probe_workspace()));
     }
     Err("Container is not an exact persisted attempt resource.")
 }
@@ -137,15 +158,29 @@ fn verified_resource(
 }
 /// Every container's name with its node and purpose labels (empty when absent).
 fn names(isolation: &dyn Isolation) -> Result<Vec<(String, String, String)>, &'static str> {
-    let label = |labels: &std::collections::BTreeMap<String, String>, key: &str| labels.get(key).cloned().unwrap_or_default();
+    let label =
+        |labels: &std::collections::BTreeMap<String, String>, key: &str| labels.get(key).cloned().unwrap_or_default();
     isolation
         .list(States::All, &Select::Any)
-        .map(|listed| listed.into_iter().map(|c| (label(&c.labels, "dev.control.node"), label(&c.labels, "dev.control.purpose"), c.name)).map(|(node, purpose, name)| (name, node, purpose)).collect())
+        .map(|listed| {
+            listed
+                .into_iter()
+                .map(|c| {
+                    (
+                        label(&c.labels, "dev.control.node"),
+                        label(&c.labels, "dev.control.purpose"),
+                        c.name,
+                    )
+                })
+                .map(|(node, purpose, name)| (name, node, purpose))
+                .collect()
+        })
         .map_err(|_| "Container inspection unavailable; affected work remains fenced.")
 }
 fn stop_named(isolation: &dyn Isolation, attempt: &Attempt, name: &str) -> Result<(), &'static str> {
-    if let Some(job)=attempt.command_jobs.iter().find(|job|job.name()==name) {
-        return crate::command_jobs::stop(isolation, job).map_err(|_|"Could not stop exact command job; work remains fenced.");
+    if let Some(job) = attempt.command_jobs.iter().find(|job| job.name() == name) {
+        return crate::command_jobs::stop(isolation, job)
+            .map_err(|_| "Could not stop exact command job; work remains fenced.");
     }
     stop_named_with(isolation, attempt, name)
 }
@@ -169,7 +204,8 @@ fn stop_named_with(isolation: &dyn Isolation, attempt: &Attempt, name: &str) -> 
 }
 fn stop_container(isolation: &dyn Isolation, container: &Container) -> Result<(), &'static str> {
     if container.running {
-        isolation.kill(&container.id)
+        isolation
+            .kill(&container.id)
             .map_err(|_| "Could not stop the verified worker; work remains fenced.")?;
     }
     // Query by immutable ID. Empty output proves no running writer, including --rm.
@@ -222,17 +258,19 @@ pub fn stop_resource_id(
 }
 
 pub fn stop_attempt(isolation: &dyn Isolation, attempt: &Attempt) -> Result<(), &'static str> {
-    let _node = attempt
-        .node_id
-        .as_deref()
-        .ok_or("Missing persisted node identity.")?;
+    let _node = attempt.node_id.as_deref().ok_or("Missing persisted node identity.")?;
     let id = attempt
         .workspace_id
         .as_deref()
         .ok_or("Missing persisted workspace identity.")?;
     let prefix = format!("control-{id}");
     for (name, _, _) in names(isolation)? {
-        if name == prefix || name == format!("{prefix}-tool") || name == format!("{prefix}-probe") || (attempt.project.is_some() && name == format!("{prefix}-preview")) || attempt.command_jobs.iter().any(|job|job.name()==name) {
+        if name == prefix
+            || name == format!("{prefix}-tool")
+            || name == format!("{prefix}-probe")
+            || (attempt.project.is_some() && name == format!("{prefix}-preview"))
+            || attempt.command_jobs.iter().any(|job| job.name() == name)
+        {
             stop_named(isolation, attempt, &name)?;
         }
     }
@@ -245,7 +283,9 @@ pub const CHECK_LABEL: &str = "dev.control.purpose=check";
 /// Labels a check supervised by its own command, or a run's container, which
 /// run reconciliation owns.
 pub(crate) fn label_purpose(spec: control_isolation::RunSpec, check: bool) -> control_isolation::RunSpec {
-    let (name, value) = if check { CHECK_LABEL } else { "dev.control.purpose=run" }.split_once('=').unwrap();
+    let (name, value) = if check { CHECK_LABEL } else { "dev.control.purpose=run" }
+        .split_once('=')
+        .unwrap();
     spec.label(name, value)
 }
 /// Identity-only snapshot of every attempt (no activity), taken under the state lock.
@@ -258,30 +298,47 @@ pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
         .filter(|r| !r.attempts.is_empty())
         .map(|r| Owner {
             active: ["running", "cancelling"].contains(&r.status.as_str()),
-            attempts: r.attempts.iter().map(|a| {
-                let mut identity = Attempt::new();
-                identity.backend = a.backend;
-                identity.image.clone_from(&a.image);
-                identity.node_id.clone_from(&a.node_id);
-                identity.workspace_id.clone_from(&a.workspace_id);
-                identity.started_unix = a.started_unix;
-                identity.project.clone_from(&a.project);
-                identity.command_jobs=a.command_jobs.iter().map(crate::command_jobs::Job::identity).collect();
-                identity
-            }).collect(),
+            attempts: r
+                .attempts
+                .iter()
+                .map(|a| {
+                    let mut identity = Attempt::new();
+                    identity.backend = a.backend;
+                    identity.image.clone_from(&a.image);
+                    identity.node_id.clone_from(&a.node_id);
+                    identity.workspace_id.clone_from(&a.workspace_id);
+                    identity.started_unix = a.started_unix;
+                    identity.project.clone_from(&a.project);
+                    identity.command_jobs = a.command_jobs.iter().map(crate::command_jobs::Job::identity).collect();
+                    identity
+                })
+                .collect(),
         })
         .collect()
 }
 /// Reconcile after restart outside the state lock. Active attempts belong to
 /// execution supervisors; any attempt of a finished run is eligible for cleanup.
-pub fn reconcile(isolation: &dyn Isolation, owners: &[Owner], services: &[crate::services::Service]) -> Result<(), String> {
+pub fn reconcile(
+    isolation: &dyn Isolation,
+    owners: &[Owner],
+    services: &[crate::services::Service],
+) -> Result<(), String> {
     let node = crate::config::node_id()?;
     let mut listed = names(isolation)?;
-    if listed.iter().any(|(_,owner,purpose)|owner==&node&&purpose=="service") {
-        let verified = crate::services::verified_names(isolation,services,&node).map_err(|e|e.to_string())?;
-        listed.retain(|(name,owner,purpose)|!(owner==&node&&purpose=="service"&&verified.contains(name)));
+    if listed
+        .iter()
+        .any(|(_, owner, purpose)| owner == &node && purpose == "service")
+    {
+        let verified = crate::services::verified_names(isolation, services, &node).map_err(|e| e.to_string())?;
+        listed.retain(|(name, owner, purpose)| !(owner == &node && purpose == "service" && verified.contains(name)));
     }
-    reconcile_with(owners, &node, listed, |attempt, name| stop_named(isolation, attempt, name), |name, attempt| crate::previews::verify(isolation, name, attempt))
+    reconcile_with(
+        owners,
+        &node,
+        listed,
+        |attempt, name| stop_named(isolation, attempt, name),
+        |name, attempt| crate::previews::verify(isolation, name, attempt),
+    )
 }
 fn reconcile_with(
     owners: &[Owner],
@@ -295,7 +352,11 @@ fn reconcile_with(
     let mut generations = std::collections::HashMap::<&str, Vec<(usize, usize)>>::new();
     for (o, owner) in owners.iter().enumerate() {
         for (a, attempt) in owner.attempts.iter().enumerate() {
-            for generation in attempt.workspace_id.iter().chain(attempt.command_jobs.iter().map(|job| &job.generation)) {
+            for generation in attempt
+                .workspace_id
+                .iter()
+                .chain(attempt.command_jobs.iter().map(|job| &job.generation))
+            {
                 let candidates = generations.entry(generation).or_default();
                 if candidates.last() != Some(&(o, a)) {
                     candidates.push((o, a));
@@ -311,7 +372,11 @@ fn reconcile_with(
         // it still decides, in the original owner/attempt order.
         let rest = name.strip_prefix("control-").unwrap_or_default();
         let owner = std::iter::once(rest)
-            .chain(["-tool", "-probe", "-preview"].into_iter().filter_map(|suffix| rest.strip_suffix(suffix)))
+            .chain(
+                ["-tool", "-probe", "-preview"]
+                    .into_iter()
+                    .filter_map(|suffix| rest.strip_suffix(suffix)),
+            )
             .chain(rest.match_indices("-job-").map(|(end, _)| &rest[..end]))
             .filter_map(|generation| generations.get(generation))
             .flatten()
@@ -324,11 +389,18 @@ fn reconcile_with(
             continue;
         }
         match owner {
-            Some((_,attempt)) if purpose=="preview"=>preview(&name,attempt).map_err(|_|format!("Preview {name} does not match its persisted attempt; inspect it before resuming."))?,
-            Some((owner, attempt)) if !owner.active => stop(attempt, &name)
-                .map_err(|m| format!("{m} Container {name}: inspect it, then run `docker rm -f {name}` to resume dispatch."))?,
+            Some((_, attempt)) if purpose == "preview" => preview(&name, attempt).map_err(|_| {
+                format!("Preview {name} does not match its persisted attempt; inspect it before resuming.")
+            })?,
+            Some((owner, attempt)) if !owner.active => stop(attempt, &name).map_err(|m| {
+                format!("{m} Container {name}: inspect it, then run `docker rm -f {name}` to resume dispatch.")
+            })?,
             Some(_) => {}
-            None => return Err(format!("Unrecognized Control container {name} on this node; dispatch is paused. Inspect it, then run `docker rm -f {name}` to resume.")),
+            None => {
+                return Err(format!(
+                    "Unrecognized Control container {name} on this node; dispatch is paused. Inspect it, then run `docker rm -f {name}` to resume."
+                ));
+            }
         }
     }
     Ok(())

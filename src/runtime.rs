@@ -50,20 +50,45 @@ pub(crate) struct RunStatusCheckpoint {
 }
 impl RunStatusCheckpoint {
     pub(crate) fn capture(runtime: &Runtime, matches: impl Fn(&Run) -> bool) -> Self {
-        let mut selected=runtime.runs.iter().filter(|r|matches(r)).map(|r|r.id.as_str()).collect::<std::collections::HashSet<_>>();
+        let mut selected = runtime
+            .runs
+            .iter()
+            .filter(|r| matches(r))
+            .map(|r| r.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
         loop {
-            let before=selected.len();
+            let before = selected.len();
             for run in &runtime.runs {
-                if run.persona.as_ref().and_then(|p|p.parent.as_deref()).is_some_and(|parent|selected.contains(parent)) {
+                if run
+                    .persona
+                    .as_ref()
+                    .and_then(|p| p.parent.as_deref())
+                    .is_some_and(|parent| selected.contains(parent))
+                {
                     selected.insert(run.id.as_str());
                 }
             }
-            if before==selected.len(){break;}
+            if before == selected.len() {
+                break;
+            }
         }
         Self {
-            runs: runtime.runs.iter()
-                .filter(|run| ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()) && selected.contains(run.id.as_str()))
-                .map(|run| (run.id.clone(), run.status.clone(), run.result.to_string(), run.question.clone())).collect(),
+            runs: runtime
+                .runs
+                .iter()
+                .filter(|run| {
+                    ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str())
+                        && selected.contains(run.id.as_str())
+                })
+                .map(|run| {
+                    (
+                        run.id.clone(),
+                        run.status.clone(),
+                        run.result.to_string(),
+                        run.question.clone(),
+                    )
+                })
+                .collect(),
             notice: runtime.notice.clone(),
         }
     }
@@ -77,7 +102,11 @@ impl RunStatusCheckpoint {
         }
         runtime.notice = self.notice;
     }
-    pub(crate) fn save(self, state: &mut crate::State, save: impl FnOnce(&crate::State) -> std::io::Result<()>) -> std::io::Result<()> {
+    pub(crate) fn save(
+        self,
+        state: &mut crate::State,
+        save: impl FnOnce(&crate::State) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
         if let Err(error) = save(state) {
             self.restore(&mut state.runtime);
             return Err(error);
@@ -89,9 +118,7 @@ impl RunStatusCheckpoint {
 pub fn worker_image() -> Option<String> {
     std::env::var("CONTROL_WORKER_IMAGE")
         .ok()
-        .or_else(|| {
-            fs::read_to_string(crate::config::directory().ok()?.join("worker-image-id")).ok()
-        })
+        .or_else(|| fs::read_to_string(crate::config::directory().ok()?.join("worker-image-id")).ok())
         .map(|s| s.trim().to_owned())
         .filter(|s| pinned_image(s))
 }
@@ -122,9 +149,7 @@ impl Runtime {
         } else {
             Action::Task
         };
-        if let Err(message) =
-            self.enqueue_for(objective, kind, source, Actor::LocalOperator, action)
-        {
+        if let Err(message) = self.enqueue_for(objective, kind, source, Actor::LocalOperator, action) {
             self.notice = message.into();
         }
     }
@@ -145,10 +170,26 @@ impl Runtime {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let request = Submission { objective, kind, source: source.into(), actor, action };
-        self.runs.push(request.into_run(format!("{stamp:x}-{}", self.runs.len()),
-            self.runs.iter().map(|r| r.queue_order).max().unwrap_or(0).saturating_add(1),
-            self.backend, Some(self.configured_model())));
+        let request = Submission {
+            objective,
+            kind,
+            source: source.into(),
+            actor,
+            action,
+        };
+        self.runs.push(
+            request.into_run(
+                format!("{stamp:x}-{}", self.runs.len()),
+                self.runs
+                    .iter()
+                    .map(|r| r.queue_order)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1),
+                self.backend,
+                Some(self.configured_model()),
+            ),
+        );
         self.notice = "Run queued.".into();
         crate::worker::wake();
         Ok(())
@@ -178,9 +219,7 @@ impl Runtime {
                 .unwrap_or(0)
                 .saturating_add(1);
             if let Some(run) = self.runs.iter_mut().find(|r| {
-                r.id == id
-                    && crate::application::runs::status::resumable(&r.status)
-                    && !crate::design::asked(r)
+                r.id == id && crate::application::runs::status::resumable(&r.status) && !crate::design::asked(r)
             }) {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
@@ -204,9 +243,7 @@ impl Runtime {
                             h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p></article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can run tasks and request source changes for local review."}else{"Can run tasks. Cannot change Control, access settings, or deploy."}));
                         }
                     }
-                    Err(message) => {
-                        h.push_str(&format!("<div class='callout'>{}</div>", escape(message)))
-                    }
+                    Err(message) => h.push_str(&format!("<div class='callout'>{}</div>", escape(message))),
                 }
                 h.push_str("<div class='callout'>Bind IDs locally with <code>cargo run -- --bind-discord &lt;label&gt; &lt;ID&gt;</code>. Access settings cannot be changed through Discord.</div>");
                 Some(h)
@@ -215,11 +252,7 @@ impl Runtime {
                 // The Bots page process tree shows active turns; only queued work
                 // that has not started is listed here.
                 let mut h = String::new();
-                let mut queued = self
-                    .runs
-                    .iter()
-                    .filter(|r| r.status == "queued")
-                    .collect::<Vec<_>>();
+                let mut queued = self.runs.iter().filter(|r| r.status == "queued").collect::<Vec<_>>();
                 queued.sort_by_key(|r| r.queue_order);
                 if !queued.is_empty() {
                     h.push_str("<h3 class='form-title'>Queued</h3>");
@@ -237,29 +270,74 @@ impl Runtime {
 
 /// Attempts and provider-reported tokens for one run, when any were measured.
 pub(crate) fn usage(run: &Run) -> String {
-    let (input, cached, output, measured) = run.attempts.iter().filter_map(|attempt| attempt.tokens).fold((0, 0, 0, 0), |(i, c, o, n), t| (i + t.input_tokens, c + t.cached_input_tokens, o + t.output_tokens, n + 1));
+    let (input, cached, output, measured) =
+        run.attempts
+            .iter()
+            .filter_map(|attempt| attempt.tokens)
+            .fold((0, 0, 0, 0), |(i, c, o, n), t| {
+                (
+                    i + t.input_tokens,
+                    c + t.cached_input_tokens,
+                    o + t.output_tokens,
+                    n + 1,
+                )
+            });
     let running = run.attempts.last().is_some_and(crate::usage::Attempt::running);
-    let partial = run.attempts.iter().any(|attempt| attempt.accounting == crate::usage::Accounting::Partial);
-    let bound = if running { " so far" } else if partial { " at least" } else { "" };
+    let partial = run
+        .attempts
+        .iter()
+        .any(|attempt| attempt.accounting == crate::usage::Accounting::Partial);
+    let bound = if running {
+        " so far"
+    } else if partial {
+        " at least"
+    } else {
+        ""
+    };
     match (run.attempts.len(), measured) {
         (0, _) => String::new(),
         (attempts, 0) => format!(" · {attempts} attempt(s) · tokens unknown"),
-        (attempts, _) => format!(" · {attempts} attempt(s) · {input} input ({cached} cached) · {output} output tokens{bound} ({measured}/{attempts} measured)"),
+        (attempts, _) => format!(
+            " · {attempts} attempt(s) · {input} input ({cached} cached) · {output} output tokens{bound} ({measured}/{attempts} measured)"
+        ),
     }
 }
 fn run_record(run: &Run) -> String {
-    let mut html = format!("<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}{}</p>", escape(&run.status), escape(run.kind.as_str()), escape(&run.source), escape(&run.objective), escape(&run.id), escape(run.backend.label()), run.model.as_ref().map(|m| format!(" · {}", escape(m))).unwrap_or_default(), usage(run));
-    if let Some(persona)=&run.persona {
-        html.push_str(&format!("<span class='tag'>{} · depth {}</span>",if persona.role==crate::delegation::Role::Judge{"judge · read only"}else{"worker"},persona.depth));
-        if let Some(bundle)=&persona.bundle {
-            html.push_str(&format!("<a class='tag' href='/personas?id={}'>persona {}@{}</a>",escape(&bundle.id),escape(&bundle.id),bundle.revision));
+    let mut html = format!(
+        "<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}{}</p>",
+        escape(&run.status),
+        escape(run.kind.as_str()),
+        escape(&run.source),
+        escape(&run.objective),
+        escape(&run.id),
+        escape(run.backend.label()),
+        run.model
+            .as_ref()
+            .map(|m| format!(" · {}", escape(m)))
+            .unwrap_or_default(),
+        usage(run)
+    );
+    if let Some(persona) = &run.persona {
+        html.push_str(&format!(
+            "<span class='tag'>{} · depth {}</span>",
+            if persona.role == crate::delegation::Role::Judge {
+                "judge · read only"
+            } else {
+                "worker"
+            },
+            persona.depth
+        ));
+        if let Some(bundle) = &persona.bundle {
+            html.push_str(&format!(
+                "<a class='tag' href='/personas?id={}'>persona {}@{}</a>",
+                escape(&bundle.id),
+                escape(&bundle.id),
+                bundle.revision
+            ));
         }
     }
     if !run.result.is_empty() {
-        html.push_str(&format!(
-            "<pre class='run-result'>{}</pre>",
-            escape(&run.result)
-        ));
+        html.push_str(&format!("<pre class='run-result'>{}</pre>", escape(&run.result)));
     }
     if let Some(chat) = run.chat_id.as_ref().filter(|id| crate::chat::valid_id(id)) {
         html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(chat)));
@@ -303,7 +381,7 @@ pub fn snapshot(source: &Path, destination: &Path) -> std::io::Result<()> {
         let from = source.join(name);
         match fs::symlink_metadata(&from) {
             Ok(_) => copy_source(&from, &destination.join(name))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
     }
@@ -320,9 +398,7 @@ fn copy_source(from: &Path, to: &Path) -> std::io::Result<()> {
             let entry = entry?;
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with('.')
-                || ["target", "dist", "node_modules", "pkg"].contains(&name_str.as_ref())
-            {
+            if name_str.starts_with('.') || ["target", "dist", "node_modules", "pkg"].contains(&name_str.as_ref()) {
                 continue;
             }
             copy_source(&entry.path(), &to.join(name))?;
@@ -356,28 +432,33 @@ fn integrations() -> String {
     } else {
         "offline / starting"
     };
-    let profile=status["bot_id"].as_str().and_then(|s|s.parse::<identity::DiscordId>().ok()).map(|id|format!("<p><a href='https://discord.com/users/{id}' rel='noreferrer'>Open Control in Discord ↗</a></p>")).unwrap_or_default();
+    let profile = status["bot_id"]
+        .as_str()
+        .and_then(|s| s.parse::<identity::DiscordId>().ok())
+        .map(|id| {
+            format!("<p><a href='https://discord.com/users/{id}' rel='noreferrer'>Open Control in Discord ↗</a></p>")
+        })
+        .unwrap_or_default();
     let backends: String = crate::backend::Backend::hosted()
-    .map(|backend| {
-        // The product name: the label without its vendor.
-        let name = backend.label().rsplit(" / ").next().unwrap_or_default();
-        let login = backend.agent().credentials_ready().is_ok();
-        format!(
-            "<div class='record'><h3>{name}</h3><p>{} · {}</p></div>",
-            if backend.image().is_some() {
-                "Image pinned"
-            } else {
-                "Image missing"
-            },
-            if login {
-                "Login present"
-            } else {
-                "Login missing"
-            }
-        )
-    })
-    .collect();
-    format!("<h2>Connections</h2><div class='record'><h3>Local service</h3><p>Running on this laptop</p></div><div class='section-heading'><h3>Agent backends</h3><a href='/?view=providers'>Models &amp; providers ↗</a></div>{backends}<div class='record'><h3>Control MCP</h3><p>Local stdio · <code>control mcp</code></p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3>{profile}<p class='muted'>Only approved users can chat. DMs are not shared with rooms.</p>{}<a href='/?view=discord-access'>Manage access ↗</a></div>", crate::channel_settings::panel())
+        .map(|backend| {
+            // The product name: the label without its vendor.
+            let name = backend.label().rsplit(" / ").next().unwrap_or_default();
+            let login = backend.agent().credentials_ready().is_ok();
+            format!(
+                "<div class='record'><h3>{name}</h3><p>{} · {}</p></div>",
+                if backend.image().is_some() {
+                    "Image pinned"
+                } else {
+                    "Image missing"
+                },
+                if login { "Login present" } else { "Login missing" }
+            )
+        })
+        .collect();
+    format!(
+        "<h2>Connections</h2><div class='record'><h3>Local service</h3><p>Running on this laptop</p></div><div class='section-heading'><h3>Agent backends</h3><a href='/?view=providers'>Models &amp; providers ↗</a></div>{backends}<div class='record'><h3>Control MCP</h3><p>Local stdio · <code>control mcp</code></p></div><div class='record'><span class='tag'>{label}</span><h3>Discord · direct messages</h3>{profile}<p class='muted'>Only approved users can chat. DMs are not shared with rooms.</p>{}<a href='/?view=discord-access'>Manage access ↗</a></div>",
+        crate::channel_settings::panel()
+    )
 }
 
 #[cfg(test)]

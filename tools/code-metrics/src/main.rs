@@ -32,9 +32,7 @@ fn check_snapshot(path: &Path) -> Result<()> {
                 entry.file_name().to_str(),
                 Some(".git" | "target" | "dist" | "node_modules")
             ) {
-                return Err(
-                    "use a git archive snapshot, without generated/build directories".into(),
-                );
+                return Err("use a git archive snapshot, without generated/build directories".into());
             }
             check_snapshot(&entry.path())?;
         }
@@ -70,11 +68,9 @@ impl<'ast> Visit<'ast> for TestScopes {
         };
         if attrs.iter().any(|a| {
             a.path().segments.last().is_some_and(|s| s.ident == "test")
-                || (a.path().is_ident("cfg")
-                    && a.parse_args::<syn::Ident>().is_ok_and(|i| i == "test"))
+                || (a.path().is_ident("cfg") && a.parse_args::<syn::Ident>().is_ok_and(|i| i == "test"))
         }) {
-            self.0
-                .push((item.span().start().line, item.span().end().line));
+            self.0.push((item.span().start().line, item.span().end().line));
         }
         syn::visit::visit_item(self, item);
     }
@@ -84,12 +80,8 @@ fn functions(space: &Value, file: &str, tests: &[(usize, usize)], output: &mut V
     let name = space["name"].as_str().unwrap_or("");
     let line = space["start_line"].as_u64().unwrap_or(0) as usize;
     let test = file.split('/').any(|part| part == "tests")
-        || Path::new(file)
-            .file_name()
-            .is_some_and(|name| name == "tests.rs")
-        || tests
-            .iter()
-            .any(|&(start, end)| (start..=end).contains(&line));
+        || Path::new(file).file_name().is_some_and(|name| name == "tests.rs")
+        || tests.iter().any(|&(start, end)| (start..=end).contains(&line));
     if space["kind"] == "function" && name != "<anonymous>" {
         output.push(json!({
             "file": file.trim_start_matches("./"), "name": name,
@@ -138,11 +130,7 @@ fn scan(source: &Path, output: &Path) -> Result<()> {
     fs::create_dir_all(output.join("complexity"))?;
     fs::write(
         output.join("loc.json"),
-        run(
-            "tokei",
-            &["--hidden", "--no-ignore", "--output", "json", "."],
-            source,
-        )?,
+        run("tokei", &["--hidden", "--no-ignore", "--output", "json", "."], source)?,
     )?;
     run(
         "rust-code-analysis-cli",
@@ -157,10 +145,7 @@ fn scan(source: &Path, output: &Path) -> Result<()> {
             "-O",
             "json",
             "-o",
-            output
-                .join("complexity")
-                .to_str()
-                .ok_or("output path is not UTF-8")?,
+            output.join("complexity").to_str().ok_or("output path is not UTF-8")?,
         ],
         source,
     )?;
@@ -189,9 +174,7 @@ fn scan(source: &Path, output: &Path) -> Result<()> {
         source,
     )?;
     let loc = read(&output.join("loc.json"))?;
-    let rust = loc["Rust"]["reports"]
-        .as_array()
-        .ok_or("no Rust files counted")?;
+    let rust = loc["Rust"]["reports"].as_array().ok_or("no Rust files counted")?;
     let mut groups = BTreeMap::<String, u64>::new();
     for file in rust {
         *groups
@@ -232,18 +215,13 @@ fn scan(source: &Path, output: &Path) -> Result<()> {
         "rust_code_lines": loc["Rust"]["code"], "rust_files": rust.len(), "groups": groups,
         "named_functions": items.len(), "test_scope_functions": items.iter().filter(|f| f["test_scope"] == true).count(),
         "clones": clones["statistics"]["total"], "functions": items});
-    fs::write(
-        output.join("summary.json"),
-        serde_json::to_vec_pretty(&summary)?,
-    )?;
+    fs::write(output.join("summary.json"), serde_json::to_vec_pretty(&summary)?)?;
     Ok(())
 }
 
 fn compare(before: &Value, after: &Value) -> Result<()> {
     if before["schema"] != after["schema"] || before["versions"] != after["versions"] {
-        return Err(
-            "metrics schema/tool versions differ; rescan both revisions with the same tools".into(),
-        );
+        return Err("metrics schema/tool versions differ; rescan both revisions with the same tools".into());
     }
     println!(
         "## Codebase metrics\n\nAdvisory observations, not quality scores or merge thresholds. Rust LOC includes inline tests.\n"
@@ -263,9 +241,7 @@ fn compare(before: &Value, after: &Value) -> Result<()> {
         "| Rust clone pairs (≥12 lines, ≥100 tokens) | {} | {} | |",
         before["clones"]["clones"], after["clones"]["clones"]
     );
-    println!(
-        "\nRust code lines by boundary (inline tests included):\n\n| Boundary | Base | Head |\n|---|---:|---:|"
-    );
+    println!("\nRust code lines by boundary (inline tests included):\n\n| Boundary | Base | Head |\n|---|---:|---:|");
     let mut groups = BTreeMap::new();
     for report in [before, after] {
         for name in report["groups"].as_object().ok_or("missing groups")?.keys() {
@@ -314,7 +290,9 @@ fn main() -> Result<()> {
     match args.as_slice() {
         [_, mode, source, output] if mode == "scan" => scan(&fs::canonicalize(source)?, &fs::canonicalize(output)?),
         [_, mode, before, after] if mode == "compare" => compare(&read(Path::new(before))?, &read(Path::new(after))?),
-        _ => Err("usage: control-code-metrics scan SNAPSHOT EXISTING_OUTPUT_DIR | compare BASE_SUMMARY HEAD_SUMMARY".into()),
+        _ => Err(
+            "usage: control-code-metrics scan SNAPSHOT EXISTING_OUTPUT_DIR | compare BASE_SUMMARY HEAD_SUMMARY".into(),
+        ),
     }
 }
 

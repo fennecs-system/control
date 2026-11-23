@@ -17,7 +17,11 @@ pub(crate) fn run(spec: &control_isolation::RunSpec) -> Vec<String> {
 pub(crate) fn fill(golden: &[&str], values: &[(&str, &str)]) -> Vec<String> {
     golden
         .iter()
-        .map(|word| values.iter().fold((*word).to_owned(), |word, (key, value)| word.replace(&format!("{{{key}}}"), value)))
+        .map(|word| {
+            values.iter().fold((*word).to_owned(), |word, (key, value)| {
+                word.replace(&format!("{{{key}}}"), value)
+            })
+        })
         .collect()
 }
 /// Byte-for-byte equality.
@@ -33,10 +37,19 @@ pub(crate) fn pin(actual: &[String], golden: &[String]) {
 /// `--restart=no`, the engine default, equals its absence.
 #[track_caller]
 pub(crate) fn pin_equivalent(actual: &[String], golden: &[String]) {
-    assert_eq!(parse(actual), parse(golden), "engine arguments changed:\n{}", literal(actual));
+    assert_eq!(
+        parse(actual),
+        parse(golden),
+        "engine arguments changed:\n{}",
+        literal(actual)
+    );
 }
 fn literal(actual: &[String]) -> String {
-    actual.iter().map(|word| format!("{word:?},")).collect::<Vec<_>>().join("\n")
+    actual
+        .iter()
+        .map(|word| format!("{word:?},"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Debug, PartialEq)]
@@ -48,12 +61,40 @@ struct Parsed {
     rest: Vec<String>,
 }
 const SWITCHES: [&str; 6] = ["rm", "interactive", "tty", "read-only", "init", "detach"];
-const LISTS: [&str; 8] = ["label", "tmpfs", "mount", "env", "security-opt", "log-opt", "storage-opt", "cap-drop"];
-const SCALARS: [&str; 12] = ["name", "user", "workdir", "network", "pids-limit", "memory", "memory-swap", "cpus", "log-driver", "entrypoint", "restart", "pull"];
+const LISTS: [&str; 8] = [
+    "label",
+    "tmpfs",
+    "mount",
+    "env",
+    "security-opt",
+    "log-opt",
+    "storage-opt",
+    "cap-drop",
+];
+const SCALARS: [&str; 12] = [
+    "name",
+    "user",
+    "workdir",
+    "network",
+    "pids-limit",
+    "memory",
+    "memory-swap",
+    "cpus",
+    "log-driver",
+    "entrypoint",
+    "restart",
+    "pull",
+];
 
 fn parse(words: &[String]) -> Parsed {
     let (subcommand, mut words) = words.split_first().expect("empty engine arguments");
-    let mut parsed = Parsed { subcommand: subcommand.clone(), switches: BTreeSet::new(), scalars: BTreeMap::new(), lists: BTreeMap::new(), rest: Vec::new() };
+    let mut parsed = Parsed {
+        subcommand: subcommand.clone(),
+        switches: BTreeSet::new(),
+        scalars: BTreeMap::new(),
+        lists: BTreeMap::new(),
+        rest: Vec::new(),
+    };
     let mut switches = BTreeMap::new();
     while let Some((word, tail)) = words.split_first() {
         words = tail;
@@ -78,7 +119,10 @@ fn parse(words: &[String]) -> Parsed {
         if flag == "--restart=no" {
             continue;
         }
-        assert!(LISTS.contains(&name) || SCALARS.contains(&name), "unknown engine flag {flag}");
+        assert!(
+            LISTS.contains(&name) || SCALARS.contains(&name),
+            "unknown engine flag {flag}"
+        );
         let value = match inline {
             Some(value) => value,
             None => {
@@ -94,7 +138,11 @@ fn parse(words: &[String]) -> Parsed {
             parsed.lists.entry(name.to_owned()).or_default().push(value);
         }
     }
-    parsed.switches = switches.into_iter().filter(|(_, on)| *on).map(|(name, _)| name).collect();
+    parsed.switches = switches
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| name)
+        .collect();
     for (name, values) in &mut parsed.lists {
         if name != "env" {
             values.sort();
@@ -112,8 +160,15 @@ fn tmpfs(value: &str) -> String {
 #[test]
 fn equivalence_ignores_spelling_and_order_but_not_values() {
     let words = |text: &str| text.split(' ').map(str::to_owned).collect::<Vec<_>>();
-    let golden = words("run --rm -i --name n --label b=2 --label a=1 --memory=2g --tmpfs /tmp:rw,nosuid,size=1m --read-only --read-only=false --env A=1 --env B=2 img sh -c x");
-    pin_equivalent(&words("run --interactive --rm --name=n --label a=1 --label=b=2 --memory 2g --tmpfs /tmp:nosuid,rw,size=1m --env A=1 --env B=2 img sh -c x"), &golden);
+    let golden = words(
+        "run --rm -i --name n --label b=2 --label a=1 --memory=2g --tmpfs /tmp:rw,nosuid,size=1m --read-only --read-only=false --env A=1 --env B=2 img sh -c x",
+    );
+    pin_equivalent(
+        &words(
+            "run --interactive --rm --name=n --label a=1 --label=b=2 --memory 2g --tmpfs /tmp:nosuid,rw,size=1m --env A=1 --env B=2 img sh -c x",
+        ),
+        &golden,
+    );
     for changed in [
         "run --rm --interactive --name n --label b=2 --label a=1 --memory=4g --tmpfs /tmp:rw,nosuid,size=1m --env A=1 --env B=2 img sh -c x",
         "run --rm --interactive --name n --label b=2 --label a=1 --memory=2g --tmpfs /tmp:rw,nosuid,size=1m --read-only --env A=1 --env B=2 img sh -c x",

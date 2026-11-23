@@ -1,4 +1,3 @@
-
 use super::*;
 use std::collections::VecDeque;
 fn grant() -> Grant {
@@ -74,22 +73,14 @@ fn special_addresses_and_mixed_dns_answers_are_denied() {
     ] {
         assert!(!public_ip(ip.parse().unwrap()), "{ip}");
     }
-    for ip in [
-        "8.8.8.8",
-        "1.1.1.1",
-        "2001:4860:4860::8888",
-        "2606:4700:4700::1111",
-    ] {
+    for ip in ["8.8.8.8", "1.1.1.1", "2001:4860:4860::8888", "2606:4700:4700::1111"] {
         assert!(public_ip(ip.parse().unwrap()), "{ip}");
     }
     let url = Url::parse("https://example.com/").unwrap();
     assert!(
         addresses(
             &url,
-            vec![
-                "8.8.8.8:443".parse().unwrap(),
-                "127.0.0.1:443".parse().unwrap()
-            ]
+            vec!["8.8.8.8:443".parse().unwrap(), "127.0.0.1:443".parse().unwrap()]
         )
         .is_err()
     );
@@ -147,22 +138,13 @@ fn redirects_and_dns_rebinding_cannot_escape_the_grant() {
     );
     assert_eq!(transport.requests.len(), 1);
     let mut transport = Fixture::new(vec![redirect("/second"), html("unexpected")]);
-    transport
-        .dns
-        .push_back(vec!["8.8.8.8:443".parse().unwrap()]);
-    transport
-        .dns
-        .push_back(vec!["127.0.0.1:443".parse().unwrap()]);
+    transport.dns.push_back(vec!["8.8.8.8:443".parse().unwrap()]);
+    transport.dns.push_back(vec!["127.0.0.1:443".parse().unwrap()]);
     assert!(fetch(&mut transport, "https://example.com/", |_| Ok(())).is_err());
     let mut transport = Fixture::new((0..5).map(|_| redirect("/again")).collect());
     assert!(fetch(&mut transport, "https://example.com/", |_| Ok(())).is_err());
     assert_eq!(transport.requests.len(), 5);
-    let mut transport = Fixture::new(vec![(
-        200,
-        "application/octet-stream".into(),
-        None,
-        b"binary".to_vec(),
-    )]);
+    let mut transport = Fixture::new(vec![(200, "application/octet-stream".into(), None, b"binary".to_vec())]);
     assert!(fetch(&mut transport, "https://example.com/", |_| Ok(())).is_err());
     assert_eq!(transport.requests.len(), 1);
     let mut transport = Fixture::new(vec![redirect("file:///etc/passwd")]);
@@ -227,10 +209,7 @@ fn bounded_evidence_excludes_scripts_and_normalizes_links() {
         truncated: false,
     };
     assert_eq!(
-        evidence(page, false).unwrap()["text"]
-            .as_str()
-            .unwrap()
-            .len(),
+        evidence(page, false).unwrap()["text"].as_str().unwrap().len(),
         TEXT_LIMIT
     );
 }
@@ -284,12 +263,7 @@ fn oversized_prefix_is_explicit_and_never_fabricates_a_partial_utf8_character() 
         let mut transport = Fixture::new(vec![(200, "text/plain".into(), None, bytes)]);
         assert!(fetch(&mut transport, "https://example.com/", |_| Ok(())).is_err());
     }
-    let mut transport = Fixture::new(vec![(
-        200,
-        "text/plain".into(),
-        None,
-        vec![b'x'; BODY_LIMIT],
-    )]);
+    let mut transport = Fixture::new(vec![(200, "text/plain".into(), None, vec![b'x'; BODY_LIMIT])]);
     let page = fetch(&mut transport, "https://example.com/", |_| Ok(())).unwrap();
     assert!(!page.truncated);
 }
@@ -369,9 +343,7 @@ fn actual_http_transport_is_pinned_bounded_and_does_not_follow_redirects() {
     let addr = server.local_addr().unwrap();
     let thread = std::thread::spawn(move || {
         let (mut stream, _) = server.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut request = [0; 4096];
         let n = stream.read(&mut request).unwrap();
         let request = String::from_utf8_lossy(&request[..n]);
@@ -393,16 +365,17 @@ fn actual_http_transport_reads_only_the_bounded_prefix_of_a_large_page() {
     let address = server.local_addr().unwrap();
     let thread = std::thread::spawn(move || {
         let (mut stream, _) = server.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut request = [0; 4096];
         let count = stream.read(&mut request).unwrap();
         assert!(count > 0);
-        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",BODY_LIMIT*10).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            BODY_LIMIT * 10
+        )
+        .unwrap();
         // Intentionally do not complete the advertised body: the reader
         // must stop after its bounded probe, without draining the response.
         let _ = stream.write_all(&vec![b'x'; BODY_LIMIT * 2]);

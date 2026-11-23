@@ -3,7 +3,7 @@
 //! request projects every dead chat; only one page of rows is formatted.
 //! `GET /bots/graveyard` returns the next page as an HTML fragment for the
 //! client's scroll loader; without the client the same cursor is a link.
-use crate::{escape, State};
+use crate::{State, escape};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
@@ -23,7 +23,10 @@ pub struct Query {
 impl Query {
     pub fn from(fields: &HashMap<String, String>) -> Self {
         Self {
-            search: fields.get("q").map(|q| q.trim().chars().take(QUERY_CHARS).collect()).unwrap_or_default(),
+            search: fields
+                .get("q")
+                .map(|q| q.trim().chars().take(QUERY_CHARS).collect())
+                .unwrap_or_default(),
             older: fields.get("older").filter(|id| crate::chat::valid_id(id)).cloned(),
         }
     }
@@ -98,21 +101,40 @@ pub fn dead<'a>(state: &'a State, search: &str) -> Vec<Grave<'a>> {
     }
     let needle = search.to_lowercase();
     let callsigns = crate::callsigns::all(&state.chats);
-    let mut graves: Vec<_> = state.chats.iter().zip(callsigns).filter_map(|(chat, callsign)| {
-        let bot = bots.contains(chat.id.as_str());
-        let run = latest.get(chat.id.as_str()).copied();
-        // An agent chat that never ran has nothing to remember.
-        if !(bot || (chat.parent_chat.is_some() && run.is_some())) || crate::bots::defined(state, &chat.id)
-            || run.is_some_and(|(_, run)| crate::application::runs::status::active(&run.status)) {
-            return None;
-        }
-        let name = crate::callsigns::label(chat, callsign);
-        if !needle.is_empty() && !name.to_lowercase().contains(&needle) && !chat.title.to_lowercase().contains(&needle) {
-            return None;
-        }
-        let stopped = run.and_then(|(_, run)| run.attempts.last()).map(|attempt| attempt.started_unix.saturating_add(attempt.elapsed_ms / 1000));
-        Some(Grave { chat, name, bot, reason: Reason::of(run.map(|(_, run)| run), bot), stopped, order: run.map_or(0, |(index, _)| index + 1) })
-    }).collect();
+    let mut graves: Vec<_> = state
+        .chats
+        .iter()
+        .zip(callsigns)
+        .filter_map(|(chat, callsign)| {
+            let bot = bots.contains(chat.id.as_str());
+            let run = latest.get(chat.id.as_str()).copied();
+            // An agent chat that never ran has nothing to remember.
+            if !(bot || (chat.parent_chat.is_some() && run.is_some()))
+                || crate::bots::defined(state, &chat.id)
+                || run.is_some_and(|(_, run)| crate::application::runs::status::active(&run.status))
+            {
+                return None;
+            }
+            let name = crate::callsigns::label(chat, callsign);
+            if !needle.is_empty()
+                && !name.to_lowercase().contains(&needle)
+                && !chat.title.to_lowercase().contains(&needle)
+            {
+                return None;
+            }
+            let stopped = run
+                .and_then(|(_, run)| run.attempts.last())
+                .map(|attempt| attempt.started_unix.saturating_add(attempt.elapsed_ms / 1000));
+            Some(Grave {
+                chat,
+                name,
+                bot,
+                reason: Reason::of(run.map(|(_, run)| run), bot),
+                stopped,
+                order: run.map_or(0, |(index, _)| index + 1),
+            })
+        })
+        .collect();
     graves.sort_unstable_by_key(|grave| std::cmp::Reverse((grave.stopped, grave.order)));
     graves
 }
@@ -120,12 +142,19 @@ pub fn dead<'a>(state: &'a State, search: &str) -> Vec<Grave<'a>> {
 /// The rows after `query.older`, at most [`PAGE`], and the next page's cursor
 /// with the number of rows after this page.
 pub fn page<'g, 'a>(graves: &'g [Grave<'a>], query: &Query) -> (&'g [Grave<'a>], Option<(&'g str, usize)>) {
-    let start = query.older.as_deref()
+    let start = query
+        .older
+        .as_deref()
         .and_then(|id| graves.iter().position(|grave| grave.chat.id == id))
         .map_or(0, |index| index + 1);
     let end = start.saturating_add(PAGE).min(graves.len());
     let rows = &graves[start..end];
-    (rows, (end < graves.len()).then(|| rows.last().map(|grave| (grave.chat.id.as_str(), graves.len() - end))).flatten())
+    (
+        rows,
+        (end < graves.len())
+            .then(|| rows.last().map(|grave| (grave.chat.id.as_str(), graves.len() - end)))
+            .flatten(),
+    )
 }
 
 fn link(base: &str, query: &[(&str, &str)]) -> String {
@@ -144,11 +173,20 @@ fn link(base: &str, query: &[(&str, &str)]) -> String {
 
 fn when(seconds: u64) -> String {
     let day = seconds % 86_400;
-    format!("{} {:02}:{:02} UTC", crate::usage::day_label(seconds), day / 3600, day % 3600 / 60)
+    format!(
+        "{} {:02}:{:02} UTC",
+        crate::usage::day_label(seconds),
+        day / 3600,
+        day % 3600 / 60
+    )
 }
 
 fn clip(text: &str, limit: usize) -> String {
-    let line = text.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default();
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
     if line.chars().count() <= limit {
         line.to_owned()
     } else {
@@ -166,11 +204,25 @@ fn row(grave: &Grave<'_>) -> String {
     let name = escape(&grave.name);
     let objective = clip(&grave.chat.title, 120);
     let kind = if grave.bot { "bot" } else { "agent" };
-    let about = if objective.is_empty() { format!("{name} ({kind}) · no objective recorded") } else { format!("{name} ({kind}) · {}", escape(&objective)) };
-    let date = grave.stopped.map_or_else(|| "<span class='grave-when'>never ran</span>".to_owned(),
-        |seconds| format!("<time class='grave-when' datetime='{seconds}' title='{}'>{}</time>", when(seconds), crate::usage::day_label(seconds)));
+    let about = if objective.is_empty() {
+        format!("{name} ({kind}) · no objective recorded")
+    } else {
+        format!("{name} ({kind}) · {}", escape(&objective))
+    };
+    let date = grave.stopped.map_or_else(
+        || "<span class='grave-when'>never ran</span>".to_owned(),
+        |seconds| {
+            format!(
+                "<time class='grave-when' datetime='{seconds}' title='{}'>{}</time>",
+                when(seconds),
+                crate::usage::day_label(seconds)
+            )
+        },
+    );
     let reason = grave.reason.label();
-    format!("<li class='grave' data-reason='{reason}'><svg class='grave-skull' viewBox='0 0 64 64' aria-hidden='true'><use href='#{SKULL}'/></svg><a class='grave-name' href='/dm/{id}' title='{about}'>{name}</a><span class='grave-reason'>{reason}</span>{date}<a class='grave-revive' href='/dm/{id}' title='{REVIVE}'>revive ↗</a></li>")
+    format!(
+        "<li class='grave' data-reason='{reason}'><svg class='grave-skull' viewBox='0 0 64 64' aria-hidden='true'><use href='#{SKULL}'/></svg><a class='grave-name' href='/dm/{id}' title='{about}'>{name}</a><span class='grave-reason'>{reason}</span>{date}<a class='grave-revive' href='/dm/{id}' title='{REVIVE}'>revive ↗</a></li>"
+    )
 }
 
 /// The page's stones followed by the next-page slot, if any: the fragment the
@@ -186,7 +238,12 @@ pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
     if let Some((next, remaining)) = next {
         let fetch = link("/bots/graveyard", &[("older", next), ("q", &query.search)]);
         let page = link("/", &[("view", "agents"), ("older", next), ("q", &query.search)]);
-        html.push_str(&format!("<li class='graveyard-more' data-more='{}'><a href='{}#graveyard'>Show {} more ↓</a></li>", escape(&fetch), escape(&page), PAGE.min(remaining)));
+        html.push_str(&format!(
+            "<li class='graveyard-more' data-more='{}'><a href='{}#graveyard'>Show {} more ↓</a></li>",
+            escape(&fetch),
+            escape(&page),
+            PAGE.min(remaining)
+        ));
     }
     html
 }
@@ -212,16 +269,32 @@ pub fn render(state: &State, query: &Query) -> String {
     let graves = dead(state, &query.search);
     let total = graves.len();
     let found = if query.search.is_empty() {
-        format!("{total} dead {} · newest first", if total == 1 { "bot" } else { "bots" })
+        format!(
+            "{total} dead {} · newest first",
+            if total == 1 { "bot" } else { "bots" }
+        )
     } else {
-        format!("{total} dead {} for “{}”", if total == 1 { "match" } else { "matches" }, escape(&query.search))
+        format!(
+            "{total} dead {} for “{}”",
+            if total == 1 { "match" } else { "matches" },
+            escape(&query.search)
+        )
     };
     let list = if graves.is_empty() {
-        format!("<p class='graveyard-empty'>{}</p>", if query.search.is_empty() { "No dead bots. Stopped bots and finished agents rest here." } else { "No dead bots match that search." })
+        format!(
+            "<p class='graveyard-empty'>{}</p>",
+            if query.search.is_empty() {
+                "No dead bots. Stopped bots and finished agents rest here."
+            } else {
+                "No dead bots match that search."
+            }
+        )
     } else {
         format!("<ol class='graveyard-grid'>{}</ol>", rows(&graves, query))
     };
-    format!("<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'>{SKULL_SYMBOL}<div class='graveyard-ground'><h2 id='graveyard-title'>Graveyard</h2><span>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></span><a href='/bots/history'>Full history ↗</a></div>{list}</section>")
+    format!(
+        "<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'>{SKULL_SYMBOL}<div class='graveyard-ground'><h2 id='graveyard-title'>Graveyard</h2><span>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></span><a href='/bots/history'>Full history ↗</a></div>{list}</section>"
+    )
 }
 
 #[cfg(test)]

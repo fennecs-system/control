@@ -1,7 +1,7 @@
 //! Local host tools: read-only Hive access, web search, and bounded offline execution.
+use base64::{Engine, engine::general_purpose::STANDARD};
 use control_client::Hive;
-use base64::{engine::general_purpose::STANDARD, Engine};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{self, BufRead, Read, Write},
@@ -10,36 +10,27 @@ use std::{
 fn image() -> io::Result<String> {
     let image = std::env::var("CONTROL_BROWSER_IMAGE")
         .ok()
-        .or_else(|| {
-            fs::read_to_string(crate::config::directory().ok()?.join("browser-image-id")).ok()
-        })
+        .or_else(|| fs::read_to_string(crate::config::directory().ok()?.join("browser-image-id")).ok())
         .unwrap_or_default()
         .trim()
         .to_owned();
     if !crate::browser::valid_image(&image) {
-        return Err(io::Error::other("No pinned browser image. Run `nix run .#setup -- --browser` to build it and record browser-image-id in the node configuration directory."));
+        return Err(io::Error::other(
+            "No pinned browser image. Run `nix run .#setup -- --browser` to build it and record browser-image-id in the node configuration directory.",
+        ));
     }
     Ok(image)
 }
 pub(crate) fn source(root: &Path, input: &str) -> io::Result<PathBuf> {
     let resolved = fs::canonicalize(root.join(input))?;
-    if !resolved.starts_with(root)
-        || !matches!(
-            resolved.extension().and_then(|s| s.to_str()),
-            Some("html" | "htm")
-        )
-    {
+    if !resolved.starts_with(root) || !matches!(resolved.extension().and_then(|s| s.to_str()), Some("html" | "htm")) {
         return Err(io::Error::other(
             "Select an HTML preview inside the configured tool root",
         ));
     }
     Ok(resolved)
 }
-pub(crate) fn render_preview(
-    input: &Path,
-    width: u16,
-    height: u16,
-) -> io::Result<crate::browser::Capture> {
+pub(crate) fn render_preview(input: &Path, width: u16, height: u16) -> io::Result<crate::browser::Capture> {
     render_preview_with_timeout(input, width, height, std::time::Duration::from_secs(60))
 }
 pub(crate) fn render_preview_with_timeout(
@@ -105,11 +96,7 @@ fn capture(root: &Path, args: &Value) -> io::Result<Value> {
     let args: Input = serde_json::from_value(args.clone())
         .map_err(|_| io::Error::other("Expected input HTML path and optional width/height"))?;
     let input = source(root, &args.input)?;
-    let result = render_preview(
-        &input,
-        args.width.unwrap_or(1280),
-        args.height.unwrap_or(800),
-    )?;
+    let result = render_preview(&input, args.width.unwrap_or(1280), args.height.unwrap_or(800))?;
     let bytes = fs::read(&result.path)?;
     Ok(
         json!({"content":[{"type":"text","text":format!("Screenshot: {} ({}×{})",result.path.display(),result.width,result.height)},{"type":"image","mimeType":"image/png","data":STANDARD.encode(bytes)}],"structuredContent":{"path":result.path,"bytes":result.bytes,"width":result.width,"height":result.height},"isError":false}),
@@ -121,7 +108,9 @@ fn hive(connection: &mut Option<Hive>) -> io::Result<&mut Hive> {
     }
     Ok(connection.as_mut().unwrap())
 }
-pub(crate) fn local_definitions() -> Vec<Value> {crate::tool_registry::local_definitions()}
+pub(crate) fn local_definitions() -> Vec<Value> {
+    crate::tool_registry::local_definitions()
+}
 const BRIDGE: control_mcp::Server = control_mcp::Server {
     name: "control-local-tools",
     version: env!("CARGO_PKG_VERSION"),
@@ -163,7 +152,9 @@ impl control_mcp::Tools for Bridge<'_> {
         } else if crate::tool_registry::bridge_forward(name) {
             hive(self.connection).and_then(|h| h.rpc("tools/call", call.params.clone()))
         } else {
-            Err(io::Error::other("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures, Rust snippets and solvers"))
+            Err(io::Error::other(
+                "Tool unavailable: this bridge exposes read-only Control access, web search, offline captures, Rust snippets and solvers",
+            ))
         };
         result.unwrap_or_else(|e| control_mcp::failure(&e.to_string()))
     }
@@ -174,11 +165,13 @@ fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Valu
 pub fn run(args: &[String]) -> io::Result<()> {
     let root = match args {
         [] => crate::config::state_directory().map_err(io::Error::other)?,
-        [flag, directory] if flag == "--root" && Path::new(directory).is_absolute() => {
-            fs::canonicalize(directory)?
-        }
+        [flag, directory] if flag == "--root" && Path::new(directory).is_absolute() => fs::canonicalize(directory)?,
         [flag] if flag == "--chat" => return crate::mcp_chat::run(),
-        _ => return Err(io::Error::other("control mcp [--root /absolute/preview/directory | --chat]")),
+        _ => {
+            return Err(io::Error::other(
+                "control mcp [--root /absolute/preview/directory | --chat]",
+            ));
+        }
     };
     // Codex launches this native host application; worker containers never receive its credential.
     let mut connection = None;
@@ -203,7 +196,10 @@ pub(crate) fn serve(mut dispatch: impl FnMut(&Value) -> Value) -> io::Result<()>
                 if buffer.is_empty() {
                     break;
                 }
-                let (used, done) = buffer.iter().position(|b| *b == b'\n').map_or((buffer.len(), false), |i| (i + 1, true));
+                let (used, done) = buffer
+                    .iter()
+                    .position(|b| *b == b'\n')
+                    .map_or((buffer.len(), false), |i| (i + 1, true));
                 input.consume(used);
                 if done {
                     break;
@@ -213,7 +209,11 @@ pub(crate) fn serve(mut dispatch: impl FnMut(&Value) -> Value) -> io::Result<()>
         let request = match (!oversized).then(|| control_mcp::parse(&bytes)).flatten() {
             Some(v) => v,
             None => {
-                let (code, message) = if oversized { (control_mcp::INVALID_REQUEST, "MCP input exceeds 64 KiB") } else { (control_mcp::PARSE_ERROR, "Invalid JSON") };
+                let (code, message) = if oversized {
+                    (control_mcp::INVALID_REQUEST, "MCP input exceeds 64 KiB")
+                } else {
+                    (control_mcp::PARSE_ERROR, "Invalid JSON")
+                };
                 writeln!(output, "{}", control_mcp::error(&Value::Null, code, message))?;
                 output.flush()?;
                 continue;

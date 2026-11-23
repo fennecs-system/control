@@ -14,9 +14,7 @@ fn identifier(s: &str) -> bool {
     !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 fn container(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 macro_rules! identity {
     ($name:ident, $valid:expr) => {
@@ -27,11 +25,7 @@ macro_rules! identity {
         impl TryFrom<String> for $name {
             type Error = Invalid;
             fn try_from(s: String) -> Result<Self, Invalid> {
-                if ($valid)(&s) {
-                    Ok(Self(s))
-                } else {
-                    Err(Invalid)
-                }
+                if ($valid)(&s) { Ok(Self(s)) } else { Err(Invalid) }
             }
         }
         impl $name {
@@ -55,9 +49,7 @@ identity!(ChatId, identifier);
 identity!(RunId, identifier);
 identity!(AttemptId, identifier);
 identity!(ContainerId, container);
-identity!(ImageId, |s: &str| s
-    .strip_prefix("sha256:")
-    .is_some_and(container));
+identity!(ImageId, |s: &str| s.strip_prefix("sha256:").is_some_and(container));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -87,9 +79,13 @@ impl Lease {
     pub fn until_stopped(now: u64) -> Result<Self, Invalid> {
         Self::try_from([now, u64::MAX])
     }
-    pub fn is_until_stopped(self) -> bool { self.expires == u64::MAX }
+    pub fn is_until_stopped(self) -> bool {
+        self.expires == u64::MAX
+    }
     pub fn new(now: u64, seconds: u64) -> Result<Self, Invalid> {
-        if !(1..=Self::MAX_SECONDS).contains(&seconds) { return Err(Invalid); }
+        if !(1..=Self::MAX_SECONDS).contains(&seconds) {
+            return Err(Invalid);
+        }
         let expires = now.checked_add(seconds).ok_or(Invalid)?;
         Self::try_from([now, expires])
     }
@@ -100,15 +96,20 @@ impl Lease {
         self.expires
     }
     pub fn seconds(self) -> u64 {
-        if self.is_until_stopped() { u64::MAX } else { self.expires - self.issued }
+        if self.is_until_stopped() {
+            u64::MAX
+        } else {
+            self.expires - self.issued
+        }
     }
 }
 impl TryFrom<[u64; 2]> for Lease {
     type Error = Invalid;
     fn try_from([issued, expires]: [u64; 2]) -> Result<Self, Invalid> {
-        if (expires == u64::MAX && issued < expires) || expires
-            .checked_sub(issued)
-            .is_some_and(|ttl| (1..=Self::MAX_SECONDS).contains(&ttl))
+        if (expires == u64::MAX && issued < expires)
+            || expires
+                .checked_sub(issued)
+                .is_some_and(|ttl| (1..=Self::MAX_SECONDS).contains(&ttl))
         {
             Ok(Self { issued, expires })
         } else {
@@ -234,10 +235,7 @@ pub enum EngineState {
 pub enum Event {
     Tick,
     Created(ContainerId),
-    Observed {
-        container: ContainerId,
-        state: EngineState,
-    },
+    Observed { container: ContainerId, state: EngineState },
     Missing,
     Stop(StopReason),
     Fence(Fault),
@@ -256,12 +254,7 @@ pub struct Decision {
 }
 /// No record or output clones: only the small phase/identity needed for a
 /// transition. Persist the decision before interpreting its effect.
-pub fn decide(
-    resource: &Resource,
-    stamp: Stamp<'_>,
-    event: Event,
-    now: u64,
-) -> Result<Decision, Invalid> {
+pub fn decide(resource: &Resource, stamp: Stamp<'_>, event: Event, now: u64) -> Result<Decision, Invalid> {
     use Phase::*;
     if stamp != resource.stamp() {
         return Err(Invalid);
@@ -299,8 +292,7 @@ pub fn decide(
             },
         },
         Event::Tick
-            if resource.lease.expired(now)
-                && !matches!(phase, Stopped(_) | Fenced { .. } | Stopping { .. }) =>
+            if resource.lease.expired(now) && !matches!(phase, Stopped(_) | Fenced { .. } | Stopping { .. }) =>
         {
             return decide(resource, stamp, Event::Stop(StopReason::Expired), now);
         }
@@ -351,10 +343,7 @@ pub fn decide(
             if matches!(phase, Stopped(_) | Fenced { .. }) {
                 return Err(Invalid);
             }
-            if phase
-                .container()
-                .is_some_and(|expected| *expected != container)
-            {
+            if phase.container().is_some_and(|expected| *expected != container) {
                 fence(Fault::IdentityMismatch)
             } else {
                 match (phase, state) {
@@ -364,9 +353,7 @@ pub fn decide(
                     },
                     (Creating, _)
                     | (
-                        Stopping {
-                            container: None, ..
-                        },
+                        Stopping { container: None, .. },
                         EngineState::Running | EngineState::Exited | EngineState::Other,
                     ) => fence(Fault::UnrecordedExecution),
                     (Stopping { reason, .. }, _) => Decision {
@@ -376,20 +363,14 @@ pub fn decide(
                         },
                         effect: Some(Effect::Remove),
                     },
-                    (Starting(_), EngineState::Dormant) if !resource.lease.expired(now) => {
-                        Decision {
-                            phase: phase.clone(),
-                            effect: Some(Effect::Start),
-                        }
-                    }
-                    (Starting(_) | Running(_), EngineState::Running)
-                        if !resource.lease.expired(now) =>
-                    {
-                        Decision {
-                            phase: Running(container),
-                            effect: None,
-                        }
-                    }
+                    (Starting(_), EngineState::Dormant) if !resource.lease.expired(now) => Decision {
+                        phase: phase.clone(),
+                        effect: Some(Effect::Start),
+                    },
+                    (Starting(_) | Running(_), EngineState::Running) if !resource.lease.expired(now) => Decision {
+                        phase: Running(container),
+                        effect: None,
+                    },
                     (Starting(_) | Running(_), EngineState::Exited) => Decision {
                         phase: Stopping {
                             container: Some(container),

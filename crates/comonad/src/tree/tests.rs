@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// root ─┬─ a ─┬─ a1
@@ -41,10 +40,7 @@ fn subtrees_walk_preorder_and_stay_inside() {
         names(t.focus(root).unwrap().subtree()),
         ["root", "a", "a1", "a2", "a2x", "b"]
     );
-    assert_eq!(
-        names(t.focus(a).unwrap().subtree()),
-        ["a", "a1", "a2", "a2x"]
-    );
+    assert_eq!(names(t.focus(a).unwrap().subtree()), ["a", "a1", "a2", "a2x"]);
     assert_eq!(names(t.focus(a2x).unwrap().subtree()), ["a2x"]);
     let a = t.focus(a).unwrap();
     assert!(a.contains(a2x) && a.contains(a1) && !a.contains(b) && !a.contains(root));

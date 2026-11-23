@@ -9,9 +9,7 @@ impl FromStr for DiscordId {
         if s.is_empty() || s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()) {
             return Err("Expected a canonical Discord snowflake ID");
         }
-        s.parse::<u64>()
-            .map(Self)
-            .map_err(|_| "Discord ID exceeds 64 bits")
+        s.parse::<u64>().map(Self).map_err(|_| "Discord ID exceeds 64 bits")
     }
 }
 impl fmt::Display for DiscordId {
@@ -26,9 +24,7 @@ impl Serialize for DiscordId {
 }
 impl<'de> Deserialize<'de> for DiscordId {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        String::deserialize(d)?
-            .parse()
-            .map_err(serde::de::Error::custom)
+        String::deserialize(d)?.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -95,8 +91,9 @@ pub struct DmBinding {
 }
 impl DmBindings {
     pub fn load() -> Result<Self, &'static str> {
-        let bytes = control_config::read_regular(&control_config::state("discord-dm-bindings.json")?, 1024 * 1024, true)
-            .map_err(|_| "DM channel bindings unavailable")?;
+        let bytes =
+            control_config::read_regular(&control_config::state("discord-dm-bindings.json")?, 1024 * 1024, true)
+                .map_err(|_| "DM channel bindings unavailable")?;
         serde_json::from_slice(&bytes).map_err(|_| "Invalid DM channel bindings")
     }
     pub fn contains(&self, user: DiscordId, channel: DiscordId) -> bool {
@@ -112,8 +109,7 @@ impl Policy {
     fn read(path: &Path) -> Result<Self, &'static str> {
         let bytes = control_config::read_regular(path, 65536, true)
             .map_err(|_| "Discord access policy must be a private regular file (mode 0600, at most 64 KiB)")?;
-        let policy: Self =
-            serde_json::from_slice(&bytes).map_err(|_| "Invalid Discord access policy")?;
+        let policy: Self = serde_json::from_slice(&bytes).map_err(|_| "Invalid Discord access policy")?;
         policy.validate()?;
         Ok(policy)
     }
@@ -132,7 +128,9 @@ impl Policy {
                 || p.label.trim() != p.label
                 || p.label.chars().any(char::is_control)
             {
-                return Err("Principal labels must contain 1–64 bytes without surrounding whitespace or control characters");
+                return Err(
+                    "Principal labels must contain 1–64 bytes without surrounding whitespace or control characters",
+                );
             }
         }
         Ok(())
@@ -153,13 +151,8 @@ impl Policy {
     ) -> Result<Workspace, &'static str> {
         let role = match actor {
             Actor::LocalOperator => Role::Architect,
-            Actor::Discord { .. } => {
-                return Err("Server-channel access is disabled. Control is DM-only.")
-            }
-            Actor::DiscordDm {
-                user_id,
-                channel_id,
-            } => {
+            Actor::Discord { .. } => return Err("Server-channel access is disabled. Control is DM-only."),
+            Actor::DiscordDm { user_id, channel_id } => {
                 if !dms.contains(*user_id, *channel_id) {
                     return Err("DM recipient/channel binding does not match");
                 }
@@ -169,14 +162,10 @@ impl Policy {
                     .map(|p| p.role)
                     .ok_or("Discord DM sender is not authorized")?
             }
-            Actor::Unknown => {
-                return Err("Run has no trusted actor identity; submit a new request")
-            }
+            Actor::Unknown => return Err("Run has no trusted actor identity; submit a new request"),
         };
         match (role, action) {
-            (Role::User, Action::Improve) => {
-                Err("Only an architect may request Control source changes")
-            }
+            (Role::User, Action::Improve) => Err("Only an architect may request Control source changes"),
             (_, Action::Task) => Ok(Workspace::User),
             (Role::Architect, Action::Improve) => Ok(Workspace::ControlSource),
         }

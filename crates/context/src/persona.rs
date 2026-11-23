@@ -81,14 +81,20 @@ pub struct Standing {
 impl Standing {
     /// One line for prompts and listings.
     pub fn describe(&self) -> String {
-        let sees = match self.sees { Sees::Team => "its own team", Sees::Node => "every team on the node" };
+        let sees = match self.sees {
+            Sees::Team => "its own team",
+            Sees::Node => "every team on the node",
+        };
         let steers = match self.steers {
             Steers::None => "no one",
             Steers::Team => "its descendants and fellow workers",
             Steers::Lead => "its team's lead (evidence notes)",
             Steers::Leads => "other teams' leads (evidence notes)",
         };
-        let answers = match self.answers_to { AnswersTo::Lead => "its lead", AnswersTo::Operator => "the operator" };
+        let answers = match self.answers_to {
+            AnswersTo::Lead => "its lead",
+            AnswersTo::Operator => "the operator",
+        };
         let acts = match &self.acts {
             Acts::Full => "full worker tools".to_owned(),
             Acts::ReadOnly => "read-only judge tools".to_owned(),
@@ -99,7 +105,9 @@ impl Standing {
     fn valid(&self) -> bool {
         let read_only = self.acts.read_only();
         let deny = match &self.acts {
-            Acts::Deny(tools) => !tools.is_empty() && tools.len() <= 64 && tools.iter().all(|t| !t.is_empty() && t.len() <= 64),
+            Acts::Deny(tools) => {
+                !tools.is_empty() && tools.len() <= 64 && tools.iter().all(|t| !t.is_empty() && t.len() <= 64)
+            }
             _ => true,
         };
         // Node visibility and lead steering belong to read-only observers;
@@ -146,7 +154,11 @@ impl Behaviour {
         match self {
             Behaviour::Schedule { every_minutes } => (1..=1440).contains(every_minutes),
             Behaviour::Room => true,
-            Behaviour::Watch { name, command, salience } => text(name, 48) && text(command, 4000) && salience.chars().count() <= 1000,
+            Behaviour::Watch {
+                name,
+                command,
+                salience,
+            } => text(name, 48) && text(command, 4000) && salience.chars().count() <= 1000,
             Behaviour::Observe { command } => text(command, 4000),
             Behaviour::Score { name, command } => text(name, 48) && text(command, 4000),
         }
@@ -154,17 +166,34 @@ impl Behaviour {
     /// One line naming the existing primitive it composes.
     pub fn describe(&self) -> String {
         match self {
-            Behaviour::Schedule { every_minutes } => format!("schedule: wake every {every_minutes} min (bot timer, operator approval)"),
+            Behaviour::Schedule { every_minutes } => {
+                format!("schedule: wake every {every_minutes} min (bot timer, operator approval)")
+            }
             Behaviour::Room => "wake on room posts (bot room subscription, operator approval)".into(),
-            Behaviour::Watch { name, command, salience } => format!("routine {name}: control_watch_start {{name:{name:?}, command:{command:?}{}}}",
-                if salience.is_empty() { String::new() } else { format!(", salience:{salience}") }),
+            Behaviour::Watch {
+                name,
+                command,
+                salience,
+            } => format!(
+                "routine {name}: control_watch_start {{name:{name:?}, command:{command:?}{}}}",
+                if salience.is_empty() {
+                    String::new()
+                } else {
+                    format!(", salience:{salience}")
+                }
+            ),
             Behaviour::Observe { command } => format!("observation: control_observe_set {{command:{command:?}}}"),
-            Behaviour::Score { name, command } => format!("score probe {name}: control_score_probe {{name:{name:?}, command:{command:?}}}"),
+            Behaviour::Score { name, command } => {
+                format!("score probe {name}: control_score_probe {{name:{name:?}, command:{command:?}}}")
+            }
         }
     }
     /// Whether it needs a service the persona starts or was granted.
     pub fn needs_service(&self) -> bool {
-        matches!(self, Behaviour::Watch { .. } | Behaviour::Observe { .. } | Behaviour::Score { .. })
+        matches!(
+            self,
+            Behaviour::Watch { .. } | Behaviour::Observe { .. } | Behaviour::Score { .. }
+        )
     }
 }
 
@@ -236,12 +265,20 @@ impl Captured {
         let (purpose, soul) = if definition.soul.is_empty() {
             (definition.purpose.trim().to_owned(), None)
         } else {
-            let document = documents.iter().find(|d| d.id == definition.soul)
+            let document = documents
+                .iter()
+                .find(|d| d.id == definition.soul)
                 .ok_or_else(|| format!("Missing SOUL.md document: {}.", definition.soul))?;
             if document.body.chars().count() > MAX_SOUL {
-                return Err(format!("SOUL.md {} exceeds {MAX_SOUL} characters; keep it short.", document.id));
+                return Err(format!(
+                    "SOUL.md {} exceeds {MAX_SOUL} characters; keep it short.",
+                    document.id
+                ));
             }
-            (document.body.trim().to_owned(), Some((document.id.clone(), document.revision)))
+            (
+                document.body.trim().to_owned(),
+                Some((document.id.clone(), document.revision)),
+            )
         };
         Ok(Self {
             id: definition.id.clone(),
@@ -257,8 +294,18 @@ impl Captured {
     }
     /// The persona's first instruction: its purpose, standing and behaviours.
     pub fn prompt(&self) -> String {
-        let mut text = format!("Persona {}@{} ({}): {}\nStanding (host-enforced): {}.\n", self.id, self.revision, self.name,
-            if self.purpose.is_empty() { "no stated purpose" } else { self.purpose.as_str() }, self.standing.describe());
+        let mut text = format!(
+            "Persona {}@{} ({}): {}\nStanding (host-enforced): {}.\n",
+            self.id,
+            self.revision,
+            self.name,
+            if self.purpose.is_empty() {
+                "no stated purpose"
+            } else {
+                self.purpose.as_str()
+            },
+            self.standing.describe()
+        );
         let orders = self.behaviours.iter().filter(|b| b.needs_service()).collect::<Vec<_>>();
         if !orders.is_empty() {
             text.push_str("Persona behaviours (standing orders; install each once in a service you own or were granted, with the named tool, then rely on it instead of polling):\n");
@@ -303,7 +350,11 @@ impl Library {
             let installed = self.builtin.get(&definition.id).copied();
             let install = match current {
                 None => self.current().len() < MAX_PERSONAS && self.definitions.len() < MAX_DEFINITIONS,
-                Some(current) => installed == Some(current) && definition.revision > current && self.definitions.len() < MAX_DEFINITIONS,
+                Some(current) => {
+                    installed == Some(current)
+                        && definition.revision > current
+                        && self.definitions.len() < MAX_DEFINITIONS
+                }
             };
             if install {
                 self.builtin.insert(definition.id.clone(), definition.revision);
@@ -314,7 +365,10 @@ impl Library {
         changed
     }
     pub fn get(&self, id: &str) -> Option<&Definition> {
-        self.definitions.iter().filter(|d| d.id == id).max_by_key(|d| d.revision)
+        self.definitions
+            .iter()
+            .filter(|d| d.id == id)
+            .max_by_key(|d| d.revision)
     }
     pub fn revision(&self, id: &str, revision: u64) -> Option<&Definition> {
         self.definitions.iter().find(|d| d.id == id && d.revision == revision)
@@ -337,7 +391,10 @@ impl Library {
         let mut versions = BTreeSet::new();
         for d in &self.definitions {
             if !d.valid() || !versions.insert((&d.id, d.revision)) {
-                return Err(format!("Invalid persona definition {} or duplicate revision. Node visibility and lead steering are for read-only observers; acting personas steer their team or no one; advisors take no schedule; read-only personas start no routines.", d.id));
+                return Err(format!(
+                    "Invalid persona definition {} or duplicate revision. Node visibility and lead steering are for read-only observers; acting personas steer their team or no one; advisors take no schedule; read-only personas start no routines.",
+                    d.id
+                ));
             }
         }
         Ok(())

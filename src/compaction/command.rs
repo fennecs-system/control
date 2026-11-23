@@ -13,13 +13,16 @@ pub(crate) fn summary(state: &State, session: &crate::chat::Session) -> String {
     let url = super::memory_url(&session.id);
     let total = session.messages.len();
     let Some(model) = model else {
-        let next = if reason == "opted out" { "/memory on opts back in" } else { "/memory on [MODEL] opts in" };
+        let next = if reason == "opted out" {
+            "/memory on opts back in"
+        } else {
+            "/memory on [MODEL] opts in"
+        };
         return format!("Memory Tree off for this DM ({reason}): {total} entries, none folded; {next}. {url}");
     };
-    let folded = memory
-        .views
-        .get(&session.id)
-        .map_or(0, |view| view.count.saturating_sub(memory.settings.recent_entries as usize));
+    let folded = memory.views.get(&session.id).map_or(0, |view| {
+        view.count.saturating_sub(memory.settings.recent_entries as usize)
+    });
     let mut text = format!(
         "Memory Tree on for this DM: compactor {} ({reason}). {} entries verbatim, {folded} folded into summaries. {url}",
         model.id,
@@ -62,15 +65,24 @@ pub(crate) fn command_with(
         let configured = |id: &str| memory.models.iter().any(|m| m.id == id);
         let model = match named {
             Some(name) if configured(name) => name.to_owned(),
-            Some(_) => return Err("Unknown text model. Use /memory on MODEL with a text model configured in Manage → Models."),
+            Some(_) => {
+                return Err(
+                    "Unknown text model. Use /memory on MODEL with a text model configured in Manage → Models.",
+                );
+            }
             None => {
                 let wanted = super::local_endpoint(state, session)
                     .map(|m| m.id.clone())
                     .or_else(|| settings.model.clone().filter(|id| configured(id)))
                     .ok_or("No Memory Tree model is configured. Use /memory on MODEL with a configured text model.")?;
                 // One compactor serves every opted-in DM: switching it is explicit.
-                if settings.enabled && !settings.chats.is_empty() && settings.model.as_ref().is_some_and(|m| *m != wanted) {
-                    return Err("Other opted-in DMs share the current Memory Tree model. Use /memory on MODEL to switch it for all of them.");
+                if settings.enabled
+                    && !settings.chats.is_empty()
+                    && settings.model.as_ref().is_some_and(|m| *m != wanted)
+                {
+                    return Err(
+                        "Other opted-in DMs share the current Memory Tree model. Use /memory on MODEL to switch it for all of them.",
+                    );
                 }
                 wanted
             }

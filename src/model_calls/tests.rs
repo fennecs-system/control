@@ -3,8 +3,8 @@ use std::{
     io::{BufRead, Write},
     net::TcpStream,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 pub(crate) fn endpoint() -> Endpoint {
@@ -60,7 +60,12 @@ fn serve(
     (e, server)
 }
 fn reply(mut stream: TcpStream, status: &str, body: &str) {
-    write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
 }
 #[test]
 fn endpoints_cannot_smuggle_credentials_or_redirect_to_cloud() {
@@ -89,8 +94,18 @@ fn a_local_server_receives_one_bounded_text_request() {
         assert_eq!(body["max_tokens"], 1024);
         assert!(body.get("tools").is_none());
         // Summaries never think, whatever the server's default.
-        assert_eq!((body["chat_template_kwargs"]["enable_thinking"].clone(), body["reasoning_budget_tokens"].clone()), (serde_json::json!(false), serde_json::json!(0)));
-        reply(stream, "200 OK", r#"{"choices":[{"finish_reason":"stop","message":{"content":"keep the original constraint"}}],"usage":{"prompt_tokens":20,"completion_tokens":6}}"#);
+        assert_eq!(
+            (
+                body["chat_template_kwargs"]["enable_thinking"].clone(),
+                body["reasoning_budget_tokens"].clone()
+            ),
+            (serde_json::json!(false), serde_json::json!(0))
+        );
+        reply(
+            stream,
+            "200 OK",
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"keep the original constraint"}}],"usage":{"prompt_tokens":20,"completion_tokens":6}}"#,
+        );
     });
     let output = call(&e, "Summarize evidence", "Original constraint").unwrap();
     assert_eq!(output.tokens.unwrap().output_tokens, 6);
@@ -105,7 +120,13 @@ fn generation_reports_usage_provenance_and_the_narrowed_output_limit() {
         let json = r#"{"model":"qwen3.8-27b-q4_k_m","system_fingerprint":"b11669-620d222","choices":[{"finish_reason":"stop","message":{"content":"ready"}}],"usage":{"prompt_tokens":12,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":4}}}"#;
         let (a, b) = json.split_at(40);
         let mut stream = stream;
-        write!(stream,"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{a}\r\n{:x}\r\n{b}\r\n0\r\n\r\n",a.len(),b.len()).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{a}\r\n{:x}\r\n{b}\r\n0\r\n\r\n",
+            a.len(),
+            b.len()
+        )
+        .unwrap();
     });
     let generation = generate(&e, tool::SYSTEM, "Say ready", Some(64), &|| false).unwrap();
     server.join().unwrap();
@@ -124,7 +145,11 @@ fn generation_reports_usage_provenance_and_the_narrowed_output_limit() {
 #[test]
 fn missing_usage_stays_unknown_rather_than_zero() {
     let (e, server) = serve(|stream, _| {
-        reply(stream, "200 OK", r#"{"choices":[{"finish_reason":"stop","message":{"content":"ok"}}]}"#)
+        reply(
+            stream,
+            "200 OK",
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"ok"}}]}"#,
+        )
     });
     let generation = generate(&e, "s", "i", None, &|| false).unwrap();
     server.join().unwrap();
@@ -138,7 +163,9 @@ fn oversized_input_is_refused_before_any_connection() {
     let mut e = endpoint();
     // Nothing listens here; a connection attempt would report unavailability instead.
     e.url = "http://127.0.0.1:9/v1".into();
-    let error = generate(&e, "s", &"x".repeat(28001), None, &|| false).unwrap_err().to_string();
+    let error = generate(&e, "s", &"x".repeat(28001), None, &|| false)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("context budget"), "{error}");
     assert!(generate(&e, "s", "i", Some(0), &|| false).is_err());
 }
@@ -146,10 +173,26 @@ fn oversized_input_is_refused_before_any_connection() {
 fn malformed_truncated_and_tool_bearing_replies_fail_visibly() {
     for (status, body, expected) in [
         ("200 OK", "not json", "Malformed model response"),
-        ("200 OK", r#"{"choices":[{"finish_reason":"length","message":{"content":"half"}}]}"#, "token limit"),
-        ("200 OK", r#"{"choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[{"id":"1"}]}}]}"#, "Tool-bearing"),
-        ("200 OK", r#"{"choices":[{"finish_reason":"stop","message":{"content":""}}]}"#, "Missing or oversized"),
-        ("400 Bad Request", r#"{"error":{"code":400,"message":"the request exceeds the available context size\n(32768 tokens)"}}"#, "HTTP 400): the request exceeds the available context size (32768 tokens)"),
+        (
+            "200 OK",
+            r#"{"choices":[{"finish_reason":"length","message":{"content":"half"}}]}"#,
+            "token limit",
+        ),
+        (
+            "200 OK",
+            r#"{"choices":[{"finish_reason":"tool_calls","message":{"content":null,"tool_calls":[{"id":"1"}]}}]}"#,
+            "Tool-bearing",
+        ),
+        (
+            "200 OK",
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":""}}]}"#,
+            "Missing or oversized",
+        ),
+        (
+            "400 Bad Request",
+            r#"{"error":{"code":400,"message":"the request exceeds the available context size\n(32768 tokens)"}}"#,
+            "HTTP 400): the request exceeds the available context size (32768 tokens)",
+        ),
         ("503 Service Unavailable", "", "HTTP 503"),
     ] {
         let (e, server) = serve(move |stream, _| reply(stream, status, body));
@@ -161,7 +204,11 @@ fn malformed_truncated_and_tool_bearing_replies_fail_visibly() {
 #[test]
 fn oversized_response_bodies_are_rejected() {
     let (e, server) = serve(|mut stream, _| {
-        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", transport::BODY_BYTES + 1);
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            transport::BODY_BYTES + 1
+        );
     });
     let error = generate(&e, "s", "i", None, &|| false).unwrap_err().to_string();
     server.join().unwrap();
@@ -180,8 +227,7 @@ fn cancellation_closes_the_connection_so_the_server_can_stop() {
         }
     });
     let started = Instant::now();
-    let error = generate(&e, "s", "i", None, &|| started.elapsed() > Duration::from_millis(300))
-        .unwrap_err();
+    let error = generate(&e, "s", "i", None, &|| started.elapsed() > Duration::from_millis(300)).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     assert!(started.elapsed() < Duration::from_secs(5));
     server.join().unwrap();
@@ -189,7 +235,10 @@ fn cancellation_closes_the_connection_so_the_server_can_stop() {
     // A call cancelled before it starts makes no request at all.
     let mut idle = endpoint();
     idle.url = "http://127.0.0.1:9/v1".into();
-    assert_eq!(generate(&idle, "s", "i", None, &|| true).unwrap_err().kind(), io::ErrorKind::Interrupted);
+    assert_eq!(
+        generate(&idle, "s", "i", None, &|| true).unwrap_err().kind(),
+        io::ErrorKind::Interrupted
+    );
 }
 #[test]
 fn a_silent_endpoint_hits_the_declared_timeout() {

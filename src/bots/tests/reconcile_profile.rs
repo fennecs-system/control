@@ -18,7 +18,12 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
             let mut run = template.clone();
             run.id = format!("bench-{index}-{turn}");
             run.chat_id = Some(chat.clone());
-            run.status = if (index + turn) % 20 == 0 { "failed" } else { "completed" }.into();
+            run.status = if (index + turn) % 20 == 0 {
+                "failed"
+            } else {
+                "completed"
+            }
+            .into();
             run.attempts = vec![crate::usage::Attempt::default()];
             state.runtime.runs.push(run);
         }
@@ -33,9 +38,17 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
     for index in 0..128 {
         state.collective.claim_seq += 1;
         state.collective.claims.push(crate::rooms::claims::Claim {
-            room: "general".into(), key: format!("deliverable-{index}"), owner: helpers[index % chats].clone(),
-            status: crate::rooms::claims::Status::Working, blocked_on: None, note: String::new(),
-            revision: state.collective.claim_seq, incarnation: state.collective.claim_seq, abandoned: false, blocked_at: 0, advanced_at: 0,
+            room: "general".into(),
+            key: format!("deliverable-{index}"),
+            owner: helpers[index % chats].clone(),
+            status: crate::rooms::claims::Status::Working,
+            blocked_on: None,
+            note: String::new(),
+            revision: state.collective.claim_seq,
+            incarnation: state.collective.claim_seq,
+            abandoned: false,
+            blocked_at: 0,
+            advanced_at: 0,
         });
     }
     command_at(&mut state, &helpers[0], "on", Now(0)).unwrap();
@@ -43,7 +56,11 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
 }
 
 pub(super) fn measure(label: &str, chats: usize, state: &mut State, bot: &str, offered: bool) {
-    let rounds = std::env::var("CONTROL_PROFILE_ROUNDS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(200).clamp(1, 1_000_000);
+    let rounds = std::env::var("CONTROL_PROFILE_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(200)
+        .clamp(1, 1_000_000);
     let mut now = 1_000;
     let mut samples = Vec::new();
     for batch in 0..11 {
@@ -56,12 +73,20 @@ pub(super) fn measure(label: &str, chats: usize, state: &mut State, bot: &str, o
             now += 1;
             reconcile_at(black_box(&mut *state), now, |_| Ok(())).unwrap();
         }
-        if batch > 0 { samples.push(start.elapsed().as_nanos() / rounds as u128); }
+        if batch > 0 {
+            samples.push(start.elapsed().as_nanos() / rounds as u128);
+        }
     }
     samples.sort_unstable();
-    assert!(bot_runs(state).is_empty(), "the profile measures reconciliation, not admitted turns");
-    println!("{}", json!({"workload":"bots_reconcile","case":label,"chats":chats,"runs":state.runtime.runs.len(),
-        "claims":state.collective.claims.len(),"rounds_per_batch":rounds,"median_ns":samples[5],"min_ns":samples[0],"max_ns":samples[9]}));
+    assert!(
+        bot_runs(state).is_empty(),
+        "the profile measures reconciliation, not admitted turns"
+    );
+    println!(
+        "{}",
+        json!({"workload":"bots_reconcile","case":label,"chats":chats,"runs":state.runtime.runs.len(),
+        "claims":state.collective.claims.len(),"rounds_per_batch":rounds,"median_ns":samples[5],"min_ns":samples[0],"max_ns":samples[9]})
+    );
 }
 
 #[test]
@@ -81,19 +106,32 @@ fn reconcile_profile() {
         for offered in [false, true] {
             let (mut state, root, helpers) = large(chats, runs);
             if mode == "blocked" {
-                for (index, claim) in state.collective.claims.iter_mut().enumerate().filter(|(index, _)| index % 4 == 1) {
+                for (index, claim) in state
+                    .collective
+                    .claims
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(index, _)| index % 4 == 1)
+                {
                     claim.status = crate::rooms::claims::Status::Blocked;
                     claim.blocked_on = Some("deliverable-0".into());
                     claim.blocked_at = claim.revision;
-                    claim.note = format!("Host error {index}: the shared service refused connections at 10.0.0.{index}, falling back to routine work");
+                    claim.note = format!(
+                        "Host error {index}: the shared service refused connections at 10.0.0.{index}, falling back to routine work"
+                    );
                 }
             }
             let immune = mode == "antibody";
             if immune {
                 for (service, helper) in helpers.iter().enumerate().take(8) {
-                    let commands = (0..16).map(|index| match index % 4 {
-                        0 => ("./place-wall.sh 10 64", 1), 1 => ("tail -n 20 /tmp/bot.log", 0), 2 => ("cat > lib.js <<EOF\nx\nEOF", 0), _ => ("./run.sh", 0),
-                    }).collect::<Vec<_>>();
+                    let commands = (0..16)
+                        .map(|index| match index % 4 {
+                            0 => ("./place-wall.sh 10 64", 1),
+                            1 => ("tail -n 20 /tmp/bot.log", 0),
+                            2 => ("cat > lib.js <<EOF\nx\nEOF", 0),
+                            _ => ("./run.sh", 0),
+                        })
+                        .collect::<Vec<_>>();
                     let run = format!("bench-{service}-{}", runs - 1);
                     super::antibody::service(&mut state, helper, &run, &commands);
                 }
@@ -109,10 +147,14 @@ fn reconcile_profile() {
                 }
             }
             let label = match (offered, advised, lens_off) {
-                (false, false, _) if immune => "idle_antibody", (true, false, _) if immune => "offered_antibody",
-                (false, false, _) => "idle", (true, false, _) => "offered",
-                (false, true, false) => "idle_advised", (true, true, false) => "offered_advised",
-                (false, true, true) => "idle_lens_off", (true, true, true) => "offered_lens_off",
+                (false, false, _) if immune => "idle_antibody",
+                (true, false, _) if immune => "offered_antibody",
+                (false, false, _) => "idle",
+                (true, false, _) => "offered",
+                (false, true, false) => "idle_advised",
+                (true, true, false) => "offered_advised",
+                (false, true, true) => "idle_lens_off",
+                (true, true, true) => "offered_lens_off",
             };
             measure(label, chats, &mut state, &helpers[0], offered);
         }

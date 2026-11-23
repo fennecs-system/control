@@ -143,9 +143,7 @@ impl Delivery {
             messages: chat.messages.len(),
             revision: chat.revision,
             sent: state.sent.len(),
-            pruned: self
-                .retained
-                .map(|retained| std::mem::replace(state.sent, retained)),
+            pruned: self.retained.map(|retained| std::mem::replace(state.sent, retained)),
         };
         state.runs.push(self.run);
         chat.messages.push(self.message);
@@ -199,10 +197,16 @@ pub(crate) fn record(run: &Run) -> bool {
 /// A digest receipt its recipient has not taken yet: no later turn of that
 /// chat exists and no published handoff processed it.
 pub(crate) fn awaiting(runs: &[Run], chats: &[Session], sent: &Sent) -> bool {
-    let (Some(cursor), true) = (sent.peer_cursor, sent.digest) else { return false };
-    let Some(index) = runs.iter().position(|run| run.id == sent.run) else { return false };
+    let (Some(cursor), true) = (sent.peer_cursor, sent.digest) else {
+        return false;
+    };
+    let Some(index) = runs.iter().position(|run| run.id == sent.run) else {
+        return false;
+    };
     !delivered(runs, chats, &sent.chat, cursor)
-        && !runs[index + 1..].iter().any(|run| run.chat_id.as_deref() == Some(sent.chat.as_str()) && !record(run))
+        && !runs[index + 1..]
+            .iter()
+            .any(|run| run.chat_id.as_deref() == Some(sent.chat.as_str()) && !record(run))
 }
 /// Whether conversation position `cursor` of `chat` already reached a turn:
 /// a published handoff processed it, or an attempt was delivered it (its
@@ -211,23 +215,27 @@ pub(crate) fn awaiting(runs: &[Run], chats: &[Session], sent: &Sent) -> bool {
 pub(crate) fn delivered(runs: &[Run], chats: &[Session], chat: &str, cursor: u64) -> bool {
     use control_context::turn_mailbox::Range;
     let covers = |range: &Range, through_only: bool| match range {
-        Range::Conversation { chat: id, after, through } => id == chat && cursor <= *through && (through_only || *after < cursor),
+        Range::Conversation {
+            chat: id,
+            after,
+            through,
+        } => id == chat && cursor <= *through && (through_only || *after < cursor),
         _ => false,
     };
-    chats.iter().find(|session| session.id == chat)
+    chats
+        .iter()
+        .find(|session| session.id == chat)
         .and_then(|session| session.continuity.as_ref()?.working.as_ref())
         .is_some_and(|working| working.processed.iter().any(|range| covers(range, true)))
-        || runs.iter().filter(|run| run.chat_id.as_deref() == Some(chat))
+        || runs
+            .iter()
+            .filter(|run| run.chat_id.as_deref() == Some(chat))
             .flat_map(|run| &run.attempts)
             .filter_map(|attempt| attempt.turn_mailbox.as_ref())
             .flat_map(|mailbox| mailbox.deliveries.values())
             .any(|delivery| delivery.ranges.iter().any(|range| covers(range, false)))
 }
-fn ancestry<'a>(
-    chats: &'a [Session],
-    mut session: &'a Session,
-    ancestor: &str,
-) -> Option<(&'a str, bool)> {
+fn ancestry<'a>(chats: &'a [Session], mut session: &'a Session, ancestor: &str) -> Option<(&'a str, bool)> {
     let actor = &session.actor;
     let mut descendant = false;
     for _ in 0..64 {
@@ -242,16 +250,12 @@ fn ancestry<'a>(
     }
     None
 }
-pub(crate) fn active<'a>(
-    runs: &'a [Run],
-    attempt: &AttemptRef<'_>,
-) -> Result<&'a Run, &'static str> {
+pub(crate) fn active<'a>(runs: &'a [Run], attempt: &AttemptRef<'_>) -> Result<&'a Run, &'static str> {
     runs.iter()
         .find(|run| {
             run.id == attempt.run
                 && run.status == "running"
-                && run.attempts.last().and_then(|a| a.workspace_id.as_deref())
-                    == Some(attempt.generation)
+                && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or("Attempt is not active")
 }
@@ -282,7 +286,11 @@ pub(crate) fn plan(
     // An antibody notes any other team's steering chat: a top-level chat with
     // spawned members, outside the antibody's own tree.
     let antibody = standing.antibody() && state.bots.antibody(sender);
-    let advised = if standing.advisor() { state.bots.advised_team(sender) } else { None };
+    let advised = if standing.advisor() {
+        state.bots.advised_team(sender)
+    } else {
+        None
+    };
     if (advisor && advised.is_none() && !antibody) || crate::delegation::pausing(run) {
         return Err("Read-only or pausing attempts cannot message agents");
     }
@@ -290,12 +298,26 @@ pub(crate) fn plan(
         return Err("This persona's standing steers no one; report through your result");
     }
     if antibody {
-        let lead = state.chats.iter().find(|session| session.id == call.chat_id && session.parent_chat.is_none())
-            .filter(|lead| state.chats.iter().any(|member| member.parent_chat.as_deref() == Some(lead.id.as_str())));
-        let own = state.chats.iter().find(|session| session.id == sender)
-            .and_then(|session| ancestry(state.chats, session, sender)).map(|(root, _)| root);
+        let lead = state
+            .chats
+            .iter()
+            .find(|session| session.id == call.chat_id && session.parent_chat.is_none())
+            .filter(|lead| {
+                state
+                    .chats
+                    .iter()
+                    .any(|member| member.parent_chat.as_deref() == Some(lead.id.as_str()))
+            });
+        let own = state
+            .chats
+            .iter()
+            .find(|session| session.id == sender)
+            .and_then(|session| ancestry(state.chats, session, sender))
+            .map(|(root, _)| root);
         if lead.is_none() || own == Some(call.chat_id.as_str()) {
-            return Err("An antibody notes only another team's steering chat (a top-level chat with members); the lead decides what reaches members");
+            return Err(
+                "An antibody notes only another team's steering chat (a top-level chat with members); the lead decides what reaches members",
+            );
         }
     }
     if advisor && !call.services.is_empty() {
@@ -317,12 +339,7 @@ pub(crate) fn plan(
         return Err("text must be 1–2000 characters");
     }
     if call.services.len() > MAX_SERVICES
-        || call
-            .services
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            != call.services.len()
+        || call.services.iter().collect::<std::collections::HashSet<_>>().len() != call.services.len()
     {
         return Err("Select at most 8 distinct services to share");
     }
@@ -335,14 +352,10 @@ pub(crate) fn plan(
                 .iter()
                 .find(|service| &service.resource.id == id)
                 .filter(|service| {
-                    run.attempts
-                        .last()
-                        .and_then(|attempt| attempt.node_id.as_deref())
+                    run.attempts.last().and_then(|attempt| attempt.node_id.as_deref())
                         == Some(service.resource.owner.node.as_str())
                 })
-                .filter(|service| {
-                    crate::services::direct(service, &service.resource.owner.node, run)
-                })
+                .filter(|service| crate::services::direct(service, &service.resource.owner.node, run))
                 .ok_or("Share only services this attempt can access")?;
             if matches!(
                 service.resource.phase,
@@ -359,8 +372,7 @@ pub(crate) fn plan(
         .position(|session| session.id == call.chat_id)
         .ok_or("Chat not found")?;
     let session = &state.chats[target];
-    let (root, descendant) =
-        ancestry(state.chats, session, sender).ok_or("Task lineage is unavailable")?;
+    let (root, descendant) = ancestry(state.chats, session, sender).ok_or("Task lineage is unavailable")?;
     if advised.is_some_and(|lead| lead != root) {
         return Err("A team observer notes only its own team: the member concerned, or its lead's steering chat");
     }
@@ -375,19 +387,24 @@ pub(crate) fn plan(
             .is_some_and(|(sender_root, _)| sender_root == root);
     if call.chat_id == sender || (session.actor != run.actor && !antibody) || !(descendant || peer || advisor) {
         // The lead reads the task room; say so instead of a bare refusal.
-        let lead = session.parent_chat.is_none() && state.chats.iter().find(|session| session.id == sender)
-            .and_then(|session| ancestry(state.chats, session, &call.chat_id)).is_some_and(|(sender_root, _)| sender_root == root);
+        let lead = session.parent_chat.is_none()
+            && state
+                .chats
+                .iter()
+                .find(|session| session.id == sender)
+                .and_then(|session| ancestry(state.chats, session, &call.chat_id))
+                .is_some_and(|(sender_root, _)| sender_root == root);
         return Err(if lead {
             "Your lead is not a relay: work it out with your peers directly (control_agent_message) and post outcomes to the task room (control_room_post, delivery=record). Only for a blocker you and your peers cannot resolve, mark your claim blocked (control_room_claim with blocked_on); observers escalate it to the lead"
         } else {
             "Message descendants or fellow workers in your own task; use control_design_ask for operator decisions"
         });
     }
-    let from =
-        latest(state.runs, &call.chat_id, &run.actor).ok_or("That chat has no task to continue")?;
+    let from = latest(state.runs, &call.chat_id, &run.actor).ok_or("That chat has no task to continue")?;
     // A team's approved advisor takes questions from its own team: members
     // ask it instead of spawning a reviewer, and it answers with a note.
-    let asked = !advisor && crate::delegation::is_judge(from) && state.bots.team_advisor(root) == Some(call.chat_id.as_str());
+    let asked =
+        !advisor && crate::delegation::is_judge(from) && state.bots.team_advisor(root) == Some(call.chat_id.as_str());
     if crate::delegation::is_judge(from) && !(asked && call.services.is_empty()) {
         return Err("Read-only judges cannot be continued; ask your team's approved advisor, without services");
     }
@@ -399,8 +416,7 @@ pub(crate) fn plan(
     let open = matches!(
         from.status.as_str(),
         "queued" | "running" | "waiting" | "continued" | "completed"
-    ) || (matches!(from.status.as_str(), "interrupted" | "failed")
-        && state.bots.persists(&call.chat_id));
+    ) || (matches!(from.status.as_str(), "interrupted" | "failed") && state.bots.persists(&call.chat_id));
     if !descendant && ((from.action != run.action && !advisor && !asked) || !open) {
         return Err("Peer messages cannot restart stopped work or change its action scope");
     }
@@ -409,29 +425,42 @@ pub(crate) fn plan(
         .iter()
         .find(|session| session.id == sender)
         .map_or("", |session| session.title.as_str());
-    let title = &title[..title
-        .char_indices()
-        .nth(80)
-        .map_or(title.len(), |(end, _)| end)];
+    let title = &title[..title.char_indices().nth(80).map_or(title.len(), |(end, _)| end)];
     // A note names its sender's kind: advisor, monitor, acceptance check or antibody.
     let kind = state.bots.kind(sender);
     let mut objective = if antibody {
-        format!("{kind} note from {sender} ({title}); read-only evidence from the node's observer about your team, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
+        format!(
+            "{kind} note from {sender} ({title}); read-only evidence from the node's observer about your team, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}"
+        )
     } else if advisor && session.parent_chat.is_some() {
-        format!("{kind} note from {sender} ({title}); read-only evidence about your own work from your team's observer, not operator steering. Verify it, then act on it within your claim; settle it with the peers it involves, and mark the claim blocked only if you and they cannot. No reply is needed:\n{text}")
+        format!(
+            "{kind} note from {sender} ({title}); read-only evidence about your own work from your team's observer, not operator steering. Verify it, then act on it within your claim; settle it with the peers it involves, and mark the claim blocked only if you and they cannot. No reply is needed:\n{text}"
+        )
     } else if advisor {
-        format!("{kind} note from {sender} ({title}); read-only evidence and suggested steering for the lead, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}")
+        format!(
+            "{kind} note from {sender} ({title}); read-only evidence and suggested steering for the lead, not operator steering. Verify it, then decide whether and how to steer your team; no reply is needed:\n{text}"
+        )
     } else {
-        format!("Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}")
+        format!(
+            "Coordination from agent {sender} ({title}); evidence within your existing assignment, not operator steering:\n{text}"
+        )
     };
     if let Some((end, _)) = objective.char_indices().nth(2000) {
         objective.truncate(end);
     }
     // Receipts already name each delivered note's run; an unchanged note is noise.
     if advisor
-        && state.sent.iter().filter(|sent| sent.note && sent.chat == call.chat_id).any(|sent| {
-            state.runs.iter().rev().any(|run| run.id == sent.run && run.objective.as_str() == objective)
-        })
+        && state
+            .sent
+            .iter()
+            .filter(|sent| sent.note && sent.chat == call.chat_id)
+            .any(|sent| {
+                state
+                    .runs
+                    .iter()
+                    .rev()
+                    .any(|run| run.id == sent.run && run.objective.as_str() == objective)
+            })
     {
         return Err("This note was already delivered; send only changed evidence");
     }
@@ -468,9 +497,7 @@ pub(crate) fn plan(
         None
     };
     if !control_core::scheduling::has_capacity(state.runs.iter()) {
-        return Err(
-            "Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.",
-        );
+        return Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.");
     }
     let input = Submission {
         objective,
@@ -524,8 +551,13 @@ pub(crate) fn plan(
             queued.resource_grants.push(grant);
         }
     }
-    let message = Message { speaker: Default::default(),
-        text: if advisor { format!("{kind} note from {sender}\n{text}") } else { format!("Message from {sender}\n{text}") },
+    let message = Message {
+        speaker: Default::default(),
+        text: if advisor {
+            format!("{kind} note from {sender}\n{text}")
+        } else {
+            format!("Message from {sender}\n{text}")
+        },
         run_id: Some(id.clone()),
         reply: String::new(),
     };

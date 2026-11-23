@@ -51,17 +51,13 @@ impl Operation {
             }
             Self::Update { title, body, .. }
                 if (title.is_none() && body.is_none())
-                    || title
-                        .as_ref()
-                        .is_some_and(|s| s.trim().is_empty() || s.len() > 200)
+                    || title.as_ref().is_some_and(|s| s.trim().is_empty() || s.len() > 200)
                     || body.as_ref().is_some_and(|s| s.len() > 16000) =>
             {
                 Err("Supply title (1–200 UTF-8 bytes) or body (0–16000 UTF-8 bytes)")
             }
-            Self::Merge {
-                expected_head_sha, ..
-            } if expected_head_sha.len() != 40
-                || !expected_head_sha.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            Self::Merge { expected_head_sha, .. }
+                if expected_head_sha.len() != 40 || !expected_head_sha.bytes().all(|b| b.is_ascii_hexdigit()) =>
             {
                 Err("Merge requires the exact 40-character PR head SHA")
             }
@@ -76,10 +72,7 @@ pub enum Command {
 }
 impl Command {
     pub fn parse(text: &str) -> Result<Self, &'static str> {
-        let (number, rest) = text
-            .trim()
-            .split_once(char::is_whitespace)
-            .unwrap_or((text.trim(), ""));
+        let (number, rest) = text.trim().split_once(char::is_whitespace).unwrap_or((text.trim(), ""));
         let (action, tail) = rest
             .trim_start()
             .split_once(char::is_whitespace)
@@ -178,9 +171,7 @@ impl Query {
         let query = Self {
             pull_request: words[0].parse().map_err(|_| USAGE)?,
             section,
-            page: words
-                .get(2)
-                .map_or(Ok(1), |word| word.parse().map_err(|_| USAGE))?,
+            page: words.get(2).map_or(Ok(1), |word| word.parse().map_err(|_| USAGE))?,
         };
         query.validate()?;
         Ok(query)

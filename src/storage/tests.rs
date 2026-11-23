@@ -5,10 +5,7 @@ mod profiling;
 
 #[test]
 fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() {
-    let directory = std::env::temp_dir().join(format!(
-        "control-approved-checkpoint-{}",
-        std::process::id()
-    ));
+    let directory = std::env::temp_dir().join(format!("control-approved-checkpoint-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
@@ -44,25 +41,15 @@ fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() 
         }
     }))
     .unwrap();
-    let mut restored: State =
-        serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
+    let mut restored: State = serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
     assert_eq!(restored.runtime.runs.last().unwrap().id, id);
     assert_eq!(
         restored.chats[0].messages.last().unwrap().run_id.as_deref(),
         Some(id.as_str())
     );
-    let counts = (
-        restored.runtime.runs.len(),
-        restored.chats[0].messages.len(),
-    );
+    let counts = (restored.runtime.runs.len(), restored.chats[0].messages.len());
     assert_eq!(decide(&mut restored), crate::approvals::Outcome::Wait);
-    assert_eq!(
-        (
-            restored.runtime.runs.len(),
-            restored.chats[0].messages.len()
-        ),
-        counts
-    );
+    assert_eq!((restored.runtime.runs.len(), restored.chats[0].messages.len()), counts);
     fs::remove_dir_all(directory).unwrap();
 }
 
@@ -74,10 +61,7 @@ fn reconciliation_confirms_exact_bytes_and_never_acknowledges_different_data() {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    let root = Scratch(std::env::temp_dir().join(format!(
-        "control-checkpoint-reconcile-{}",
-        std::process::id()
-    )));
+    let root = Scratch(std::env::temp_dir().join(format!("control-checkpoint-reconcile-{}", std::process::id())));
     fs::create_dir(&root.0).unwrap();
     let published = root.0.join("state.json");
     let calls = std::cell::Cell::new(0);
@@ -95,12 +79,7 @@ fn reconciliation_confirms_exact_bytes_and_never_acknowledges_different_data() {
 
     for different in [b"different".as_slice(), b"candidate-extra", b"short"] {
         fs::write(&published, different).unwrap();
-        assert!(
-            confirm_checkpoint(&root.0, b"candidate", |_| panic!(
-                "mismatch must not confirm"
-            ))
-            .is_err()
-        );
+        assert!(confirm_checkpoint(&root.0, b"candidate", |_| panic!("mismatch must not confirm")).is_err());
         assert_eq!(fs::read(&published).unwrap(), different);
     }
     fs::remove_file(&published).unwrap();
@@ -110,9 +89,7 @@ fn reconciliation_confirms_exact_bytes_and_never_acknowledges_different_data() {
         read_checkpoint(&root.0).is_err(),
         "a dangling symlink is not an initial state"
     );
-    assert!(
-        confirm_checkpoint(&root.0, b"candidate", |_| panic!("no regular checkpoint")).is_err()
-    );
+    assert!(confirm_checkpoint(&root.0, b"candidate", |_| panic!("no regular checkpoint")).is_err());
     fs::remove_file(&published).unwrap();
     fs::create_dir(&published).unwrap();
     assert!(read_checkpoint(&root.0).is_err());
@@ -123,8 +100,14 @@ fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
     const CHILD: &str = "CONTROL_CHECKPOINT_FENCE_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "storage::tests::unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process", "--nocapture"])
-            .env(CHILD, "1").output().unwrap();
+            .args([
+                "--exact",
+                "storage::tests::unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
         assert!(
             output.status.success(),
             "{}\n{}",
@@ -133,18 +116,15 @@ fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
         );
         return;
     }
-    let directory =
-        std::env::temp_dir().join(format!("control-checkpoint-fence-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("control-checkpoint-fence-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
     let state = std::sync::Mutex::new(State::default());
     let intended = std::cell::RefCell::new(Vec::new());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut state = state.lock().unwrap();
-        state.runtime.enqueue(
-            "accepted continuation".into(),
-            RunKind::PortDecision,
-            "test",
-        );
+        state
+            .runtime
+            .enqueue("accepted continuation".into(), RunKind::PortDecision, "test");
         *intended.borrow_mut() = serde_json::to_vec(&*state).unwrap();
         let failure = commit_checkpoint(&directory, &intended.borrow(), |_| {
             Err(io::Error::other("persistent sync failure"))
@@ -159,22 +139,12 @@ fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
         "dispatch and request handlers must not reacquire state"
     );
     let mut response = Vec::new();
-    crate::state_response(&mut response, &state, |_, _| {
-        panic!("fenced request executed")
-    });
-    assert!(
-        String::from_utf8(response)
-            .unwrap()
-            .contains("503 Service Unavailable")
-    );
-    assert_eq!(
-        fs::read(directory.join("state.json")).unwrap(),
-        *intended.borrow()
-    );
+    crate::state_response(&mut response, &state, |_, _| panic!("fenced request executed"));
+    assert!(String::from_utf8(response).unwrap().contains("503 Service Unavailable"));
+    assert_eq!(fs::read(directory.join("state.json")).unwrap(), *intended.borrow());
     // Restart can only load bytes after syncing that file and its directory;
     // it never persists an in-memory rollback over the retained candidate.
-    let restored: State =
-        serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
+    let restored: State = serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
     assert_eq!(restored.runtime.runs.len(), 1);
     assert_eq!(restored.runtime.runs[0].status, "queued");
     fs::remove_dir_all(directory).unwrap();
@@ -188,9 +158,7 @@ fn checkpoint_failures_preserve_the_publication_phase() {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    let root = Scratch(
-        std::env::temp_dir().join(format!("control-checkpoint-phase-{}", std::process::id())),
-    );
+    let root = Scratch(std::env::temp_dir().join(format!("control-checkpoint-phase-{}", std::process::id())));
     fs::create_dir(&root.0).unwrap();
     let published = root.0.join("state.json");
     let temporary = root.0.join("state.json.tmp");
@@ -199,8 +167,7 @@ fn checkpoint_failures_preserve_the_publication_phase() {
     // Failure before rename leaves the published bytes intact, and never calls
     // the directory-sync boundary.
     fs::create_dir(&temporary).unwrap();
-    let error =
-        write_checkpoint_with_sync(&root.0, b"new", |_| panic!("not published")).unwrap_err();
+    let error = write_checkpoint_with_sync(&root.0, b"new", |_| panic!("not published")).unwrap_err();
     assert!(matches!(error, CheckpointError::NotReplaced(_)));
     assert_eq!(fs::read(&published).unwrap(), b"old");
     fs::remove_dir(&temporary).unwrap();
@@ -209,8 +176,7 @@ fn checkpoint_failures_preserve_the_publication_phase() {
     // error (a directory at the target) is known to leave that target intact.
     fs::remove_file(&published).unwrap();
     fs::create_dir(&published).unwrap();
-    let error =
-        write_checkpoint_with_sync(&root.0, b"new", |_| panic!("rename failed")).unwrap_err();
+    let error = write_checkpoint_with_sync(&root.0, b"new", |_| panic!("rename failed")).unwrap_err();
     assert!(matches!(error, CheckpointError::Unconfirmed(_)));
     assert!(published.is_dir());
     fs::remove_dir(&published).unwrap();
@@ -225,11 +191,7 @@ fn checkpoint_failures_preserve_the_publication_phase() {
     })
     .unwrap_err();
     assert!(matches!(error, CheckpointError::Unconfirmed(_)));
-    assert!(
-        error
-            .to_string()
-            .contains("injected directory-sync failure")
-    );
+    assert!(error.to_string().contains("injected directory-sync failure"));
     assert_eq!(fs::read(&published).unwrap(), b"new");
 
     write_checkpoint(&root.0, b"confirmed").unwrap();
@@ -295,12 +257,7 @@ fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
     }
     assert!(interrupt_active(&mut state));
     assert_eq!(
-        state
-            .runtime
-            .runs
-            .iter()
-            .map(|r| r.status.as_str())
-            .collect::<Vec<_>>(),
+        state.runtime.runs.iter().map(|r| r.status.as_str()).collect::<Vec<_>>(),
         vec!["interrupted", "interrupted", "queued", "completed"]
     );
     assert_eq!(state.runtime.runs[1].attempts[0].status, "interrupted");
@@ -308,23 +265,15 @@ fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
         crate::history::activity(
             state.runtime.runs[1].chat_id.as_deref(),
             &state.runtime.runs[1].attempts[0]
-        ).unwrap()[0]
-        .status,
+        )
+        .unwrap()[0]
+            .status,
         "interrupted",
         "recorded in the journal"
     );
-    assert_eq!(
-        state.runtime.runs[2].attempts[0].activity[0].status,
-        "in_progress"
-    );
+    assert_eq!(state.runtime.runs[2].attempts[0].activity[0].status, "in_progress");
     assert!(!interrupt_active(&mut state));
-    assert!(
-        state
-            .runtime
-            .runs
-            .iter()
-            .all(|r| r.attempts[0].artifact.is_none())
-    );
+    assert!(state.runtime.runs.iter().all(|r| r.attempts[0].artifact.is_none()));
 }
 #[test]
 #[ignore = "release benchmark: use a scratch CONTROL_STATE_DIR on the filesystem being measured; no models"]
@@ -333,10 +282,7 @@ fn profile_durable_save_stages() {
     // Run this test in its own process. Never point it at an existing node.
     let directory = crate::config::state_directory().unwrap();
     assert!(std::env::var_os("CONTROL_STATE_DIR").is_some());
-    assert!(
-        !directory.join("state.json").exists(),
-        "use a fresh scratch directory"
-    );
+    assert!(!directory.join("state.json").exists(), "use a fresh scratch directory");
     fs::create_dir_all(&directory).unwrap();
     let samples = |values: &mut Vec<u128>| {
         values.sort_unstable();
@@ -346,11 +292,9 @@ fn profile_durable_save_stages() {
         let mut state = State::initial();
         for count in [1, 100, 1000] {
             while state.runtime.runs.len() < count {
-                state.runtime.enqueue(
-                    "Synthetic completed task".into(),
-                    RunKind::Task,
-                    "benchmark",
-                );
+                state
+                    .runtime
+                    .enqueue("Synthetic completed task".into(), RunKind::Task, "benchmark");
                 let run = state.runtime.runs.last_mut().unwrap();
                 run.status = "completed".into();
                 *run.result = "A bounded synthetic result.\n".repeat(16);
@@ -385,8 +329,7 @@ fn profile_durable_save_stages() {
             raw.sync_all().unwrap();
             fs::File::open(&directory).unwrap().sync_all().unwrap();
             save(&state).unwrap();
-            let (mut encode, mut sync, mut atomic, mut complete) =
-                (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            let (mut encode, mut sync, mut atomic, mut complete) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             for round in 0..31 {
                 // Rotate stage order to avoid systematically favouring one path
                 // under changing filesystem load. Every write still fsyncs.
@@ -395,12 +338,7 @@ fn profile_durable_save_stages() {
                     let start = Instant::now();
                     match stage {
                         0 => {
-                            black_box(
-                                crate::history::persisting(|| {
-                                    serde_json::to_vec(black_box(&state))
-                                })
-                                .unwrap(),
-                            );
+                            black_box(crate::history::persisting(|| serde_json::to_vec(black_box(&state))).unwrap());
                         }
                         1 => {
                             use std::io::{Seek, SeekFrom};
@@ -415,8 +353,7 @@ fn profile_durable_save_stages() {
                             save(black_box(&state)).unwrap();
                         }
                     }
-                    [&mut encode, &mut sync, &mut atomic, &mut complete][stage]
-                        .push(start.elapsed().as_nanos());
+                    [&mut encode, &mut sync, &mut atomic, &mut complete][stage].push(start.elapsed().as_nanos());
                 }
             }
             println!(
@@ -461,8 +398,7 @@ fn profile_checkpoint_by_state_size() {
             );
         }
     }
-    let root =
-        Cleanup(std::env::temp_dir().join(format!("control-checkpoint-{}", std::process::id())));
+    let root = Cleanup(std::env::temp_dir().join(format!("control-checkpoint-{}", std::process::id())));
     let load_root = root.0.join("load");
     fs::create_dir_all(&load_root).unwrap();
     let ms = |d: Duration| d.as_secs_f64() * 1000.0;
@@ -473,9 +409,7 @@ fn profile_checkpoint_by_state_size() {
     for megabytes in [1usize, 3, 10] {
         let mut state = State::initial();
         for n in 0..megabytes * 4 {
-            state
-                .runtime
-                .enqueue(format!("run {n}"), RunKind::Task, "test");
+            state.runtime.enqueue(format!("run {n}"), RunKind::Task, "test");
             let mut attempt = crate::usage::Attempt::new();
             for i in 0..64 {
                 let mut output = format!("{n}-{i} ");
@@ -502,14 +436,12 @@ fn profile_checkpoint_by_state_size() {
             let mut background = Background(Arc::new(AtomicBool::new(false)), Vec::new());
             let syncs = Arc::new(AtomicU64::new(0));
             if loaded {
-                let (stop, counter, load_root) =
-                    (background.0.clone(), syncs.clone(), load_root.clone());
+                let (stop, counter, load_root) = (background.0.clone(), syncs.clone(), load_root.clone());
                 let (ready, started) = std::sync::mpsc::sync_channel(1);
                 background.1.push(std::thread::spawn(move || {
                     let mut n = 0u64;
                     while !stop.load(Ordering::Relaxed) {
-                        let mut file =
-                            fs::File::create(load_root.join((n % 4096).to_string())).unwrap();
+                        let mut file = fs::File::create(load_root.join((n % 4096).to_string())).unwrap();
                         file.write_all(&[b'l'; 1024]).unwrap();
                         file.sync_all().unwrap();
                         n += 1;
@@ -548,18 +480,9 @@ fn profile_checkpoint_by_state_size() {
                 std::thread::sleep(Duration::from_millis(5));
             }
             let progressed = syncs.load(Ordering::Relaxed) - before;
-            assert!(
-                !loaded || progressed > 0,
-                "fsync load made no progress while sampling"
-            );
+            assert!(!loaded || progressed > 0, "fsync load made no progress while sampling");
             drop(background);
-            let worst = waits
-                .lock()
-                .unwrap()
-                .iter()
-                .max()
-                .copied()
-                .unwrap_or_default();
+            let worst = waits.lock().unwrap().iter().max().copied().unwrap_or_default();
             println!(
                 "state_bytes={size} fsync_load={loaded} load_syncs={progressed} serialize_ms={:.1} lock_held_ms={:.1} reader_max_wait_ms={:.1}",
                 median(serialize),

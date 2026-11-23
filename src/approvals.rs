@@ -2,8 +2,8 @@
 //! and dismissed folder requests. Callers keep their own request records and acknowledge them once
 //! `resume` returns anything but `Wait`. Checkpoint that receipt with the edits
 //! before waking the dispatcher; this preparation step performs no I/O.
+use crate::application::approval_resume::{self, Edit, Eligibility};
 use crate::{State, runtime::RunKind};
-use crate::application::approval_resume::{self, Eligibility, Edit};
 pub(crate) use approval_resume::Outcome;
 
 pub(crate) struct Decisions<'a> {
@@ -28,7 +28,11 @@ pub(crate) struct Decisions<'a> {
 /// same turn rather than steering it.
 pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
     let chat = decisions.chat;
-    let cancelled_through = state.chats.iter().find(|session| session.id == chat).and_then(|session| session.cancelled_through);
+    let cancelled_through = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .and_then(|session| session.cancelled_through);
     let latest = match approval_resume::decide(&state.runtime.runs, chat, decisions.origins, cancelled_through) {
         Eligibility::Wait => return Outcome::Wait,
         Eligibility::Note => None,
@@ -36,7 +40,16 @@ pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
     };
     let mut continuation = None;
     if let Some(latest) = latest {
-        let objective = format!("Operator {}:\n{}\n{} Original task:\n{}", decisions.heading.to_lowercase(), decisions.lines, decisions.instruction, decisions.task).chars().take(2000).collect();
+        let objective = format!(
+            "Operator {}:\n{}\n{} Original task:\n{}",
+            decisions.heading.to_lowercase(),
+            decisions.lines,
+            decisions.instruction,
+            decisions.task
+        )
+        .chars()
+        .take(2000)
+        .collect();
         match crate::chat::continuation(state, chat, latest, objective, decisions.kind, decisions.source) {
             Ok(mut run) => {
                 for grant in decisions.grants {
@@ -50,9 +63,16 @@ pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
             Err(crate::chat::ContinuationError::Rejected) => {}
         }
     }
-    approval_resume::record(Edit {
-        runs: &mut state.runtime.runs, notice: &mut state.runtime.notice, chats: &mut state.chats,
-    }, chat, continuation, format!("{}\n{}", decisions.heading, decisions.lines))
+    approval_resume::record(
+        Edit {
+            runs: &mut state.runtime.runs,
+            notice: &mut state.runtime.notice,
+            chats: &mut state.chats,
+        },
+        chat,
+        continuation,
+        format!("{}\n{}", decisions.heading, decisions.lines),
+    )
 }
 
 #[cfg(test)]

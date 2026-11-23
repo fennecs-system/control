@@ -1,4 +1,3 @@
-
 use super::*;
 use std::fs;
 fn policy() -> Policy {
@@ -12,21 +11,11 @@ fn actor(id: &str) -> Actor {
 }
 #[test]
 fn ids_are_canonical_and_lossless() {
-    for bad in [
-        "geodesic",
-        "@geodesic",
-        "0",
-        "01",
-        "-1",
-        "18446744073709551616",
-    ] {
+    for bad in ["geodesic", "@geodesic", "0", "01", "-1", "18446744073709551616"] {
         assert!(bad.parse::<DiscordId>().is_err());
     }
     let id: DiscordId = "18446744073709551615".parse().unwrap();
-    assert_eq!(
-        serde_json::to_string(&id).unwrap(),
-        "\"18446744073709551615\""
-    );
+    assert_eq!(serde_json::to_string(&id).unwrap(), "\"18446744073709551615\"");
 }
 #[test]
 fn alternate_identities_use_node_tasks_without_architect_authority() {
@@ -47,24 +36,14 @@ fn alternate_identities_use_node_tasks_without_architect_authority() {
             p.authorize_with_dms(&actor(id), Action::Task, &dms),
             Ok(Workspace::User)
         );
-        assert!(
-            p.authorize_with_dms(&actor(id), Action::Improve, &dms)
-                .is_err()
-        );
+        assert!(p.authorize_with_dms(&actor(id), Action::Improve, &dms).is_err());
         assert!(
             p.authorize_with_dms(&actor(id), Action::Task, &DmBindings::default())
                 .is_err()
         );
     }
-    assert!(
-        p.authorize_with_dms(&actor("4"), Action::Task, &dms)
-            .is_err()
-    );
-    assert!(
-        !serde_json::to_string(&p)
-            .unwrap()
-            .contains("codex_owner_id")
-    );
+    assert!(p.authorize_with_dms(&actor("4"), Action::Task, &dms).is_err());
+    assert!(!serde_json::to_string(&p).unwrap().contains("codex_owner_id"));
 }
 
 #[test]
@@ -92,23 +71,14 @@ fn policy_checkpoints_are_private_and_do_not_overwrite_unknown_temporary_files()
     let mut p = policy();
     p.save_in(&directory).unwrap();
     let path = directory.join("discord-access.json");
-    assert_eq!(
-        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    assert_eq!(
-        Policy::read(&path).unwrap().principals[0].role,
-        Role::Architect
-    );
+    assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(Policy::read(&path).unwrap().principals[0].role, Role::Architect);
     let temporary = directory.join(format!("discord-access.json.{}.tmp", std::process::id()));
     fs::write(&temporary, b"preserve evidence").unwrap();
     p.principals[0].role = Role::User;
     assert!(p.save_in(&directory).is_err());
     assert_eq!(fs::read(&temporary).unwrap(), b"preserve evidence");
-    assert_eq!(
-        Policy::read(&path).unwrap().principals[0].role,
-        Role::Architect
-    );
+    assert_eq!(Policy::read(&path).unwrap().principals[0].role, Role::Architect);
     let linked = directory.join("linked.json");
     symlink(&path, &linked).unwrap();
     assert!(Policy::read(&linked).is_err());
@@ -137,10 +107,7 @@ fn roles_bound_actions_and_workspaces() {
             p.authorize_with_dms(&actor(id), Action::Task, &dms),
             Ok(Workspace::User)
         );
-        assert!(
-            p.authorize_with_dms(&actor(id), Action::Improve, &dms)
-                .is_err()
-        );
+        assert!(p.authorize_with_dms(&actor(id), Action::Improve, &dms).is_err());
     }
     assert!(p.authorize(&actor("4"), Action::Task).is_err());
     assert!(p.authorize(&Actor::Unknown, Action::Improve).is_err());
@@ -207,21 +174,9 @@ fn direct_messages_need_matching_recipient_bindings_and_keep_roles() {
         p.authorize_with_dms(&actor("2", "102"), Action::Task, &dms),
         Ok(Workspace::User)
     );
-    assert!(
-        p.authorize_with_dms(&actor("2", "102"), Action::Improve, &dms)
-            .is_err()
-    );
-    assert!(
-        p.authorize_with_dms(&actor("2", "101"), Action::Task, &dms)
-            .is_err()
-    );
-    assert!(
-        p.authorize_with_dms(&actor("3", "103"), Action::Task, &dms)
-            .is_err()
-    );
+    assert!(p.authorize_with_dms(&actor("2", "102"), Action::Improve, &dms).is_err());
+    assert!(p.authorize_with_dms(&actor("2", "101"), Action::Task, &dms).is_err());
+    assert!(p.authorize_with_dms(&actor("3", "103"), Action::Task, &dms).is_err());
     p.principals[0].user_id = None;
-    assert!(
-        p.authorize_with_dms(&actor("1", "101"), Action::Improve, &dms)
-            .is_err()
-    );
+    assert!(p.authorize_with_dms(&actor("1", "101"), Action::Improve, &dms).is_err());
 }

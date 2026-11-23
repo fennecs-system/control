@@ -2,29 +2,29 @@
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
-    Terminal,
 };
 #[cfg(test)]
 use reqwest::Url;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     io,
     time::{Duration, Instant},
 };
 
+use control_context::commands;
 #[cfg(test)]
 use reqwest::blocking::Client;
 #[cfg(test)]
 use std::fs;
-use control_context::commands;
 mod command_menu;
 mod history;
 mod lens_input;
@@ -32,38 +32,66 @@ mod lens_input;
 const COMMAND_STYLE: Style = Style::new().fg(Color::Rgb(181, 160, 255));
 /// Known lenses render as chips; unknown names use the error colour before submission.
 const LENS_STYLE: Style = Style::new().fg(Color::Rgb(12, 13, 16)).bg(Color::Rgb(181, 160, 255));
-const UNKNOWN_LENS_STYLE: Style = Style::new().fg(Color::Rgb(237, 139, 155)).add_modifier(Modifier::CROSSED_OUT);
+const UNKNOWN_LENS_STYLE: Style = Style::new()
+    .fg(Color::Rgb(237, 139, 155))
+    .add_modifier(Modifier::CROSSED_OUT);
 
 /// Style ordered, non-overlapping byte ranges of `text`; a range overlapping an earlier one is ignored.
 fn marked_line<'a>(text: &'a str, marks: impl IntoIterator<Item = (std::ops::Range<usize>, Style)>) -> Line<'a> {
     let (mut spans, mut at) = (Vec::new(), 0);
     for (range, style) in marks {
-        if range.start < at { continue; }
-        if range.start > at { spans.push(Span::raw(&text[at..range.start])); }
+        if range.start < at {
+            continue;
+        }
+        if range.start > at {
+            spans.push(Span::raw(&text[at..range.start]));
+        }
         spans.push(Span::styled(&text[range.clone()], style));
         at = range.end;
     }
-    if at < text.len() || spans.is_empty() { spans.push(Span::raw(&text[at..])); }
+    if at < text.len() || spans.is_empty() {
+        spans.push(Span::raw(&text[at..]));
+    }
     Line::from(spans)
 }
 fn command_line(text: &str) -> Line<'static> {
     let line = marked_line(text, command_menu::highlight(text).map(|range| (range, COMMAND_STYLE)));
-    Line::from(line.spans.into_iter().map(|span| Span::styled(span.content.into_owned(), span.style)).collect::<Vec<_>>())
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content.into_owned(), span.style))
+            .collect::<Vec<_>>(),
+    )
 }
 /// Draft rendering: command highlighting plus live `/use` lens validity.
 fn composer_line<'a>(text: &'a str, lenses: &lens_input::Catalog) -> Line<'a> {
-    let names = lenses.known().and_then(|ids| lens_input::highlight(text, |id| ids.contains(id))).into_iter().flatten();
-    marked_line(text, command_menu::highlight(text).map(|range| (range, COMMAND_STYLE)).into_iter()
-        .chain(names.map(|(range, valid)| (range, if valid { LENS_STYLE } else { UNKNOWN_LENS_STYLE }))))
+    let names = lenses
+        .known()
+        .and_then(|ids| lens_input::highlight(text, |id| ids.contains(id)))
+        .into_iter()
+        .flatten();
+    marked_line(
+        text,
+        command_menu::highlight(text)
+            .map(|range| (range, COMMAND_STYLE))
+            .into_iter()
+            .chain(names.map(|(range, valid)| (range, if valid { LENS_STYLE } else { UNKNOWN_LENS_STYLE }))),
+    )
 }
-use control_client::{Hive, chats::{self, Navigation}, operator};
-fn failure(message:impl std::fmt::Display)->io::Error {io::Error::other(message.to_string())}
+use control_client::{
+    Hive,
+    chats::{self, Navigation},
+    operator,
+};
+fn failure(message: impl std::fmt::Display) -> io::Error {
+    io::Error::other(message.to_string())
+}
 #[cfg(test)]
 use control_client::local_server;
 #[derive(Default)]
 struct App {
-    history:history::layout::Cache,
-    show_activity:bool,
+    history: history::layout::Cache,
+    show_activity: bool,
     command_selection: usize,
     commands_hidden: bool,
     menu: Option<Menu>,
@@ -111,12 +139,27 @@ impl Menu {
     }
 }
 fn service_command_lines(lines: &mut Vec<Line<'static>>, command: &Value) {
-    if command["kind"]=="message" {
-        lines.extend(clean(command["text"].as_str().unwrap_or("")).lines().map(|line|Line::from(line.to_owned())));
+    if command["kind"] == "message" {
+        lines.extend(
+            clean(command["text"].as_str().unwrap_or(""))
+                .lines()
+                .map(|line| Line::from(line.to_owned())),
+        );
         return;
     }
-    lines.push(Line::styled(format!("[{}] > {}",clean(command["status"].as_str().unwrap_or("")),clean(command["text"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
-    lines.extend(clean(command["output"].as_str().unwrap_or("")).lines().map(|line|Line::from(format!("  {line}"))));
+    lines.push(Line::styled(
+        format!(
+            "[{}] > {}",
+            clean(command["status"].as_str().unwrap_or("")),
+            clean(command["text"].as_str().unwrap_or(""))
+        ),
+        Style::default().fg(Color::Rgb(181, 160, 255)),
+    ));
+    lines.extend(
+        clean(command["output"].as_str().unwrap_or(""))
+            .lines()
+            .map(|line| Line::from(format!("  {line}"))),
+    );
 }
 fn clean(text: &str) -> String {
     text.chars()
@@ -124,29 +167,55 @@ fn clean(text: &str) -> String {
         .collect()
 }
 /// The attempt's compact status line from the chat detail, live while it runs.
-fn attempt_status(index:usize,attempt:&Value)->Option<String> {
-    let tokens=serde_json::from_value(attempt["tokens"].clone()).ok().flatten();
-    let accounting=serde_json::from_value(attempt["accounting"].clone()).unwrap_or_default();
-    let omitted=attempt["omitted_history"].as_u64().unwrap_or(0) as usize;
-    let parts=control_ai::attempt_status(index,tokens,accounting,attempt["status"]=="running",omitted);
-    (parts.len()>1).then(||control_ai::status_text(&parts))
+fn attempt_status(index: usize, attempt: &Value) -> Option<String> {
+    let tokens = serde_json::from_value(attempt["tokens"].clone()).ok().flatten();
+    let accounting = serde_json::from_value(attempt["accounting"].clone()).unwrap_or_default();
+    let omitted = attempt["omitted_history"].as_u64().unwrap_or(0) as usize;
+    let parts = control_ai::attempt_status(index, tokens, accounting, attempt["status"] == "running", omitted);
+    (parts.len() > 1).then(|| control_ai::status_text(&parts))
 }
-fn folded_activity(lines:&mut Vec<Line<'static>>,events:&[Value]) {
-    let mut count=0;let mut failed=0;let mut latest=None;let mut failure=None;
-    for event in events.iter().filter(|event|event["kind"]!="message") {
-        count+=1;latest=Some(event);
-        if matches!(event["status"].as_str(),Some("failed"|"error"|"interrupted"|"cancelled")) {failed+=1;failure=Some(event);}
+fn folded_activity(lines: &mut Vec<Line<'static>>, events: &[Value]) {
+    let mut count = 0;
+    let mut failed = 0;
+    let mut latest = None;
+    let mut failure = None;
+    for event in events.iter().filter(|event| event["kind"] != "message") {
+        count += 1;
+        latest = Some(event);
+        if matches!(
+            event["status"].as_str(),
+            Some("failed" | "error" | "interrupted" | "cancelled")
+        ) {
+            failed += 1;
+            failure = Some(event);
+        }
     }
-    if let Some(latest)=latest {
-        let detail=clean(latest["text"].as_str().or(latest["command"].as_str()).unwrap_or(""));
-        let detail=detail.lines().next().unwrap_or("").chars().take(48).collect::<String>();
-        let failures=if failed>0 {format!(" · {failed} failed")}else{String::new()};
-        lines.push(Line::styled(format!("  ↳ {count} actions{failures} · {detail}"),Style::default().fg(Color::Rgb(133,133,143))));
+    if let Some(latest) = latest {
+        let detail = clean(latest["text"].as_str().or(latest["command"].as_str()).unwrap_or(""));
+        let detail = detail.lines().next().unwrap_or("").chars().take(48).collect::<String>();
+        let failures = if failed > 0 {
+            format!(" · {failed} failed")
+        } else {
+            String::new()
+        };
+        lines.push(Line::styled(
+            format!("  ↳ {count} actions{failures} · {detail}"),
+            Style::default().fg(Color::Rgb(133, 133, 143)),
+        ));
     }
-    if let Some(event)=failure {
-        let output=clean(event["output"].as_str().unwrap_or(""));
-        let output=output.lines().find(|line|!line.trim().is_empty()).unwrap_or("See activity details").chars().take(240).collect::<String>();
-        lines.push(Line::styled(format!("  ! {output}"),Style::default().fg(Color::Rgb(237,139,155))));
+    if let Some(event) = failure {
+        let output = clean(event["output"].as_str().unwrap_or(""));
+        let output = output
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("See activity details")
+            .chars()
+            .take(240)
+            .collect::<String>();
+        lines.push(Line::styled(
+            format!("  ! {output}"),
+            Style::default().fg(Color::Rgb(237, 139, 155)),
+        ));
     }
 }
 fn lens_label(detail: &Value) -> String {
@@ -165,14 +234,23 @@ fn pending_project(detail: &Value) -> Option<&Value> {
     (project["grant"].is_null() || project["pending"] == true).then_some(project)
 }
 impl App {
-    fn set_detail(&mut self,detail:Value) {self.detail=detail;self.history.invalidate();}
-    fn layout_history(&mut self,width:u16) {
-        let width=history::content_width(width);
-        if self.history.dirty() {let text=self.transcript();self.history.update(text,width);}
-        else if self.history.width()!=width {self.history.resize(width);}
+    fn set_detail(&mut self, detail: Value) {
+        self.detail = detail;
+        self.history.invalidate();
+    }
+    fn layout_history(&mut self, width: u16) {
+        let width = history::content_width(width);
+        if self.history.dirty() {
+            let text = self.transcript();
+            self.history.update(text, width);
+        } else if self.history.width() != width {
+            self.history.resize(width);
+        }
     }
     fn command_matches(&self) -> Vec<command_menu::Entry> {
-        if self.commands_hidden || self.menu.is_some() { return Vec::new(); }
+        if self.commands_hidden || self.menu.is_some() {
+            return Vec::new();
+        }
         command_menu::matching(&self.input).collect()
     }
     /// Completion edits the draft only. Sending remains an explicit Enter.
@@ -187,12 +265,20 @@ impl App {
         self.command_selection = 0;
         self.commands_hidden = false;
         // Each `/use` draft reads the library once, so lens edits elsewhere show up.
-        if !lens_input::is_use(&self.input) { self.lenses = lens_input::Catalog::Unloaded; }
+        if !lens_input::is_use(&self.input) {
+            self.lenses = lens_input::Catalog::Unloaded;
+        }
     }
     /// Fetch lens IDs for live `/use` highlighting; failure leaves names unstyled.
     fn load_lenses(&mut self, hive: &mut Hive) -> bool {
-        if !matches!(self.lenses, lens_input::Catalog::Unloaded) || !lens_input::is_use(&self.input) { return false; }
-        self.lenses = hive.tool("control.lenses.list", json!({})).map_or(lens_input::Catalog::Unavailable, |list| lens_input::Catalog::from_list(&list));
+        if !matches!(self.lenses, lens_input::Catalog::Unloaded) || !lens_input::is_use(&self.input) {
+            return false;
+        }
+        self.lenses = hive
+            .tool("control.lenses.list", json!({}))
+            .map_or(lens_input::Catalog::Unavailable, |list| {
+                lens_input::Catalog::from_list(&list)
+            });
         true
     }
     fn refresh(&mut self, hive: &mut Hive) -> io::Result<()> {
@@ -209,9 +295,24 @@ impl App {
         if !self.active.is_empty()
             && (self.detail["id"] != self.active
                 || revision.as_ref() != Some(&self.detail["revision"])
-                || self.chats.iter().find(|s|s["id"] == self.active).map(|s|&s["decision_revision"]) != Some(&self.detail["decision_revision"])
-                || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["port_revision"]) != Some(&self.detail["port_revision"])
-                || self.chats.iter().find(|s|s["id"]==self.active).map(|s|&s["bot_revision"]) != Some(&self.detail["bot_revision"]))
+                || self
+                    .chats
+                    .iter()
+                    .find(|s| s["id"] == self.active)
+                    .map(|s| &s["decision_revision"])
+                    != Some(&self.detail["decision_revision"])
+                || self
+                    .chats
+                    .iter()
+                    .find(|s| s["id"] == self.active)
+                    .map(|s| &s["port_revision"])
+                    != Some(&self.detail["port_revision"])
+                || self
+                    .chats
+                    .iter()
+                    .find(|s| s["id"] == self.active)
+                    .map(|s| &s["bot_revision"])
+                    != Some(&self.detail["bot_revision"]))
         {
             self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
         }
@@ -233,137 +334,305 @@ impl App {
         let text = self.input.trim().to_owned();
         self.menu = None;
         match text.as_str() {
-            _ if text=="/activity" || text.starts_with("/activity ") => {
-                self.show_activity=match text.strip_prefix("/activity").unwrap().trim() {
-                    ""=>!self.show_activity,"full"=>true,"compact"=>false,_=>return Err(failure("Use /activity, /activity full or /activity compact."))
+            _ if text == "/activity" || text.starts_with("/activity ") => {
+                self.show_activity = match text.strip_prefix("/activity").unwrap().trim() {
+                    "" => !self.show_activity,
+                    "full" => true,
+                    "compact" => false,
+                    _ => return Err(failure("Use /activity, /activity full or /activity compact.")),
                 };
-                self.status=if self.show_activity {"Tool details expanded · /activity folds them"}else{"Tool activity compact · failures remain visible"}.into();
+                self.status = if self.show_activity {
+                    "Tool details expanded · /activity folds them"
+                } else {
+                    "Tool activity compact · failures remain visible"
+                }
+                .into();
             }
-            _ if text=="/github" || text.starts_with("/github ") => {
-                if self.active.is_empty() { return Err(failure("Open a conversation first")); }
+            _ if text == "/github" || text.starts_with("/github ") => {
+                if self.active.is_empty() {
+                    return Err(failure("Open a conversation first"));
+                }
                 let command = control_context::github::Command::parse(text[7..].trim()).map_err(failure)?;
                 let value = match command {
                     control_context::github::Command::Read(query) => hive.github_read(&self.active, query)?,
                     control_context::github::Command::Write(operation) => hive.github_write(&self.active, operation)?,
                 };
-                self.inspector = Some(("GitHub operation".into(), serde_json::to_string_pretty(&value).map_err(failure)?));
-                self.scroll=0;self.follow=false;
-                self.status="Repository evidence · /github PR checks or statuses · /chat returns".into();
+                self.inspector = Some((
+                    "GitHub operation".into(),
+                    serde_json::to_string_pretty(&value).map_err(failure)?,
+                ));
+                self.scroll = 0;
+                self.follow = false;
+                self.status = "Repository evidence · /github PR checks or statuses · /chat returns".into();
             }
             "/compact" => {
-                if self.active.is_empty() { return Err(failure("Open a conversation first")); }
+                if self.active.is_empty() {
+                    return Err(failure("Open a conversation first"));
+                }
                 self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
                 let compaction = &self.detail["compaction"];
                 let summary = compaction["summary"].as_str().unwrap_or_default();
-                self.inspector = Some(("Memory Tree".into(), format!("{summary}\n\n{}", serde_json::to_string_pretty(compaction).map_err(failure)?)));
-                self.scroll = 0; self.follow = false;
+                self.inspector = Some((
+                    "Memory Tree".into(),
+                    format!(
+                        "{summary}\n\n{}",
+                        serde_json::to_string_pretty(compaction).map_err(failure)?
+                    ),
+                ));
+                self.scroll = 0;
+                self.follow = false;
                 self.status = "/memory on [MODEL] or /memory off changes it · /chat returns".into();
             }
             _ if text.starts_with("/port ") => {
-                let shown=operator::pending(&self.detail);
-                let command=operator::port(&text,|id|shown.iter().find(|p|p.kind==operator::Kind::Port && p.id==id).map(|p|p.loopback)).map_err(failure)?;
-                operator::execute(hive,&self.active,&command)?;
-                self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
-                self.status="Port decision saved".into();
+                let shown = operator::pending(&self.detail);
+                let command = operator::port(&text, |id| {
+                    shown
+                        .iter()
+                        .find(|p| p.kind == operator::Kind::Port && p.id == id)
+                        .map(|p| p.loopback)
+                })
+                .map_err(failure)?;
+                operator::execute(hive, &self.active, &command)?;
+                self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
+                self.status = "Port decision saved".into();
             }
             _ if text.starts_with("/knowledge ") => {
-                operator::execute(hive,&self.active,&operator::knowledge(&text).map_err(failure)?)?;
-                self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
-                self.status="Knowledge review saved".into();
+                operator::execute(hive, &self.active, &operator::knowledge(&text).map_err(failure)?)?;
+                self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
+                self.status = "Knowledge review saved".into();
             }
             "/open" => {
                 if !self.active.is_empty() {
-                    self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
+                    self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
                 }
-                self.inspector=None;self.follow=true;self.scroll=usize::MAX;
-                self.status=if pending_project(&self.detail).is_some() {"Review the folder request below; /trust confirms it"}else{"Use /open /absolute/path or /open --as NAME /absolute/path"}.into();
+                self.inspector = None;
+                self.follow = true;
+                self.scroll = usize::MAX;
+                self.status = if pending_project(&self.detail).is_some() {
+                    "Review the folder request below; /trust confirms it"
+                } else {
+                    "Use /open /absolute/path or /open --as NAME /absolute/path"
+                }
+                .into();
             }
-            _ if text=="/trust" || text.starts_with("/trust ")=>{
-                let project=pending_project(&self.detail).ok_or_else(||failure("No folder request to approve. Use /open /absolute/path."))?;
-                let displayed=project["request"].as_str().filter(|request|!request.is_empty()).ok_or_else(||failure("Project request changed. Use /open to review it."))?;
-                let request=text.strip_prefix("/trust ").map(str::trim).unwrap_or(displayed).to_owned();
-                if request!=displayed {return Err(failure("Project request changed. Use /open to review it."));}
+            _ if text == "/trust" || text.starts_with("/trust ") => {
+                let project = pending_project(&self.detail)
+                    .ok_or_else(|| failure("No folder request to approve. Use /open /absolute/path."))?;
+                let displayed = project["request"]
+                    .as_str()
+                    .filter(|request| !request.is_empty())
+                    .ok_or_else(|| failure("Project request changed. Use /open to review it."))?;
+                let request = text
+                    .strip_prefix("/trust ")
+                    .map(str::trim)
+                    .unwrap_or(displayed)
+                    .to_owned();
+                if request != displayed {
+                    return Err(failure("Project request changed. Use /open to review it."));
+                }
                 let approval = hive.approve_project(&self.active, &request)?;
                 self.set_detail(approval.detail);
                 approval.result.map_err(failure)?;
-                self.inspector=None;self.status="Folder ready · isolated worktree".into();
+                self.inspector = None;
+                self.status = "Folder ready · isolated worktree".into();
             }
-            _ if text=="/dismiss" || text.starts_with("/dismiss ")=>{
-                let project=pending_project(&self.detail).ok_or_else(||failure("No folder request to dismiss."))?;
-                let displayed=project["request"].as_str().filter(|request|!request.is_empty()).ok_or_else(||failure("Project request changed. Use /open to review it."))?;
-                let request=text.strip_prefix("/dismiss ").map(str::trim).unwrap_or(displayed).to_owned();
-                if request!=displayed {return Err(failure("Project request changed. Use /open to review it."));}
-                let message=hive.dismiss_project(&self.active,&request)?;
-                self.set_detail(hive.tool("control.chat.read",json!({"id":self.active}))?);
-                self.inspector=None;self.status=message;
+            _ if text == "/dismiss" || text.starts_with("/dismiss ") => {
+                let project = pending_project(&self.detail).ok_or_else(|| failure("No folder request to dismiss."))?;
+                let displayed = project["request"]
+                    .as_str()
+                    .filter(|request| !request.is_empty())
+                    .ok_or_else(|| failure("Project request changed. Use /open to review it."))?;
+                let request = text
+                    .strip_prefix("/dismiss ")
+                    .map(str::trim)
+                    .unwrap_or(displayed)
+                    .to_owned();
+                if request != displayed {
+                    return Err(failure("Project request changed. Use /open to review it."));
+                }
+                let message = hive.dismiss_project(&self.active, &request)?;
+                self.set_detail(hive.tool("control.chat.read", json!({"id":self.active}))?);
+                self.inspector = None;
+                self.status = message;
             }
             "/quit" => return Ok(true),
             _ if let Some(navigation) = chats::navigation(&text) => match navigation {
                 Navigation::New => self.new_chat(hive)?,
-                Navigation::Open(id) => { self.active = id; self.inspector=None;self.refresh(hive)?; }
+                Navigation::Open(id) => {
+                    self.active = id;
+                    self.inspector = None;
+                    self.refresh(hive)?;
+                }
                 // Nothing selected is not a command: keep the draft and change nothing.
                 Navigation::Use(None) => return Ok(false),
                 Navigation::Use(Some(lenses)) => {
                     // Check against the library before creating a conversation: invalid input has no side effects.
-                    self.lenses=lens_input::Catalog::from_list(&chats::check_lenses(hive,&lenses)?);
-                    if self.active.is_empty(){self.new_chat(hive)?;}
-                    self.set_detail(hive.tool("control.chat.lenses",json!({"id":self.active,"lenses":lenses}))?);
-                    self.inspector=None;self.status=format!("Future messages: {}",lens_label(&self.detail));self.follow=true;
+                    self.lenses = lens_input::Catalog::from_list(&chats::check_lenses(hive, &lenses)?);
+                    if self.active.is_empty() {
+                        self.new_chat(hive)?;
+                    }
+                    self.set_detail(hive.tool("control.chat.lenses", json!({"id":self.active,"lenses":lenses}))?);
+                    self.inspector = None;
+                    self.status = format!("Future messages: {}", lens_label(&self.detail));
+                    self.follow = true;
                 }
                 Navigation::Personas => {
-                    let library=hive.tool("control.personas.list",json!({}))?;
-                    self.inspector=Some(("Personas".into(),format!("{}\nReturn with /chat.",chats::persona_list(&library))));self.scroll=0;self.follow=false;self.status="Select with /persona NAME · Esc back".into();
+                    let library = hive.tool("control.personas.list", json!({}))?;
+                    self.inspector = Some((
+                        "Personas".into(),
+                        format!("{}\nReturn with /chat.", chats::persona_list(&library)),
+                    ));
+                    self.scroll = 0;
+                    self.follow = false;
+                    self.status = "Select with /persona NAME · Esc back".into();
                 }
                 Navigation::Persona(persona) => {
-                    if self.active.is_empty(){self.new_chat(hive)?;}
-                    self.set_detail(chats::use_persona(hive,&self.active,&persona)?);
-                    self.inspector=None;self.status=format!("Persona: {} · DNA {}",self.detail["persona"].as_str().unwrap_or("none"),lens_label(&self.detail));self.follow=true;
+                    if self.active.is_empty() {
+                        self.new_chat(hive)?;
+                    }
+                    self.set_detail(chats::use_persona(hive, &self.active, &persona)?);
+                    self.inspector = None;
+                    self.status = format!(
+                        "Persona: {} · DNA {}",
+                        self.detail["persona"].as_str().unwrap_or("none"),
+                        lens_label(&self.detail)
+                    );
+                    self.follow = true;
                 }
                 Navigation::Rename(name) => {
-                    if self.active.is_empty() {return Err(failure("Start or resume a DM before renaming it."));}
-                    self.set_detail(chats::rename(hive,&self.active,&name)?);
+                    if self.active.is_empty() {
+                        return Err(failure("Start or resume a DM before renaming it."));
+                    }
+                    self.set_detail(chats::rename(hive, &self.active, &name)?);
                     self.refresh(hive)?;
-                    self.status=format!("Renamed to {}",self.detail["title"].as_str().unwrap_or(&name));
+                    self.status = format!("Renamed to {}", self.detail["title"].as_str().unwrap_or(&name));
                 }
                 Navigation::List => {
                     self.refresh(hive)?;
-                    let entries=chats::entries(&self.chats);
-                    self.menu=Some(Menu {entries:entries.iter().zip(&self.chats).map(|(e,c)| (format!("{}{}", "  ".repeat(e.depth),e.title),c["lenses"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(),e.id.into())).collect(),selected:0,multiple:false,checked:Vec::new()});
-                    self.inspector=Some(("DMs".into(),chats::resume_list(&entries)));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Enter open · Esc back".into();
+                    let entries = chats::entries(&self.chats);
+                    self.menu = Some(Menu {
+                        entries: entries
+                            .iter()
+                            .zip(&self.chats)
+                            .map(|(e, c)| {
+                                (
+                                    format!("{}{}", "  ".repeat(e.depth), e.title),
+                                    c["lenses"]
+                                        .as_array()
+                                        .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + "))
+                                        .unwrap_or_default(),
+                                    e.id.into(),
+                                )
+                            })
+                            .collect(),
+                        selected: 0,
+                        multiple: false,
+                        checked: Vec::new(),
+                    });
+                    self.inspector = Some(("DMs".into(), chats::resume_list(&entries)));
+                    self.scroll = 0;
+                    self.follow = false;
+                    self.status = "↑ ↓ choose · Enter open · Esc back".into();
                 }
                 Navigation::Genes => {
-                    let definitions=hive.tool("control.lenses.list",json!({}))?;
-                    let entries=definitions.as_array().ok_or_else(||failure("Invalid DNA library response."))?.iter().map(|d| (d["name"].as_str().unwrap_or("Gene").into(), d["includes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default(), d["id"].as_str().unwrap_or("").into())).collect();
-                    let checked=self.detail["lenses"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
-                    self.menu=Some(Menu{entries,selected:0,multiple:true,checked});
-                    self.inspector=Some(("DNA".into(),format!("{}\nReturn with /chat.",chats::gene_list(&definitions))));self.scroll=0;self.follow=false;self.status="↑ ↓ choose · Space toggle · Enter apply · Esc back".into();
+                    let definitions = hive.tool("control.lenses.list", json!({}))?;
+                    let entries = definitions
+                        .as_array()
+                        .ok_or_else(|| failure("Invalid DNA library response."))?
+                        .iter()
+                        .map(|d| {
+                            (
+                                d["name"].as_str().unwrap_or("Gene").into(),
+                                d["includes"]
+                                    .as_array()
+                                    .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + "))
+                                    .unwrap_or_default(),
+                                d["id"].as_str().unwrap_or("").into(),
+                            )
+                        })
+                        .collect();
+                    let checked = self.detail["lenses"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                        .unwrap_or_default();
+                    self.menu = Some(Menu {
+                        entries,
+                        selected: 0,
+                        multiple: true,
+                        checked,
+                    });
+                    self.inspector = Some((
+                        "DNA".into(),
+                        format!("{}\nReturn with /chat.", chats::gene_list(&definitions)),
+                    ));
+                    self.scroll = 0;
+                    self.follow = false;
+                    self.status = "↑ ↓ choose · Space toggle · Enter apply · Esc back".into();
                 }
             },
             "/help" => {
-                let channels=control_client::channel::ADAPTERS.iter().map(|(name,title)| {
-                    let settings=control_client::channel::settings(name);
-                    format!("{title}: operator forwarding {} · prefix {}",if settings.enabled {"on"} else {"off"},settings.prefix)
-                }).collect::<Vec<_>>().join("\n");
-                self.inspector = Some(("Help".into(), format!("{}\n\nMessaging channels (change on the web Connections page)\n{channels}",command_menu::help())));
+                let channels = control_client::channel::ADAPTERS
+                    .iter()
+                    .map(|(name, title)| {
+                        let settings = control_client::channel::settings(name);
+                        format!(
+                            "{title}: operator forwarding {} · prefix {}",
+                            if settings.enabled { "on" } else { "off" },
+                            settings.prefix
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.inspector = Some((
+                    "Help".into(),
+                    format!(
+                        "{}\n\nMessaging channels (change on the web Connections page)\n{channels}",
+                        command_menu::help()
+                    ),
+                ));
                 self.scroll = 0;
                 self.follow = false;
                 self.status = "PageUp / PageDown scroll · Esc or /chat returns".into();
             }
-            "/context"=>{
-                let lenses=self.detail.get("lenses").cloned().unwrap_or_else(||json!([]));
-                let resolved=hive.tool("control.lenses.resolve",json!({"lenses":lenses}))?;
-                self.inspector=Some(("Next-message context preview".into(),serde_json::to_string_pretty(&resolved).map_err(|_|failure("Could not display context."))?));self.scroll=0;self.follow=false;self.status="Live library preview; existing runs retain their captured snapshots. /chat to return.".into();
+            "/context" => {
+                let lenses = self.detail.get("lenses").cloned().unwrap_or_else(|| json!([]));
+                let resolved = hive.tool("control.lenses.resolve", json!({"lenses":lenses}))?;
+                self.inspector = Some((
+                    "Next-message context preview".into(),
+                    serde_json::to_string_pretty(&resolved).map_err(|_| failure("Could not display context."))?,
+                ));
+                self.scroll = 0;
+                self.follow = false;
+                self.status =
+                    "Live library preview; existing runs retain their captured snapshots. /chat to return.".into();
             }
-            "/chat"=>{self.inspector=None;self.follow=true;self.scroll=usize::MAX;}
-            _ if text.starts_with('/') && commands::parse(&text).is_none()=>return Err(failure("Unknown command. Use /help.")),
+            "/chat" => {
+                self.inspector = None;
+                self.follow = true;
+                self.scroll = usize::MAX;
+            }
+            _ if text.starts_with('/') && commands::parse(&text).is_none() => {
+                return Err(failure("Unknown command. Use /help."));
+            }
             _ if !text.is_empty() => {
-                if control_context::limits::message_too_long(&text) { return Err(failure(control_context::limits::CHAT_MESSAGE_ERROR)); }
-                if self.active.is_empty() { self.new_chat(hive)?; }
-                self.set_detail(hive.tool("control.chat.send",json!({"id":self.active,"message":text}))?);
-                self.inspector=None;
+                if control_context::limits::message_too_long(&text) {
+                    return Err(failure(control_context::limits::CHAT_MESSAGE_ERROR));
+                }
+                if self.active.is_empty() {
+                    self.new_chat(hive)?;
+                }
+                self.set_detail(hive.tool("control.chat.send", json!({"id":self.active,"message":text}))?);
+                self.inspector = None;
                 self.scroll = usize::MAX;
                 self.follow = true;
-                self.status = if text.starts_with("/steer ") { "Queued for next turn" } else if self.detail["mode"] == "improve" { "Improve · sent" } else { "Sent" }.into();
+                self.status = if text.starts_with("/steer ") {
+                    "Queued for next turn"
+                } else if self.detail["mode"] == "improve" {
+                    "Improve · sent"
+                } else {
+                    "Sent"
+                }
+                .into();
             }
             _ => {}
         }
@@ -388,20 +657,12 @@ impl App {
                         Color::Rgb(12, 13, 16)
                     });
                 let marker = if menu.multiple {
-                    if menu.checked.contains(id) {
-                        "[✓]"
-                    } else {
-                        "[ ]"
-                    }
+                    if menu.checked.contains(id) { "[✓]" } else { "[ ]" }
                 } else {
                     ""
                 };
                 lines.push(Line::styled(
-                    format!(
-                        " {} {marker}  {}",
-                        if active { "›" } else { " " },
-                        clean(label)
-                    ),
+                    format!(" {} {marker}  {}", if active { "›" } else { " " }, clean(label)),
                     style,
                 ));
                 if active && !detail.is_empty() {
@@ -435,14 +696,35 @@ impl App {
             );
         }
         let mut lines = Vec::new();
-        if let Some(listener)=self.detail["room_listener"].as_object() {
-            lines.push(Line::styled(format!("Room #{} · {}",listener.get("room").and_then(Value::as_str).unwrap_or(""),listener.get("state").and_then(Value::as_str).unwrap_or("")),Style::default().fg(Color::Rgb(181,160,255))));
+        if let Some(listener) = self.detail["room_listener"].as_object() {
+            lines.push(Line::styled(
+                format!(
+                    "Room #{} · {}",
+                    listener.get("room").and_then(Value::as_str).unwrap_or(""),
+                    listener.get("state").and_then(Value::as_str).unwrap_or("")
+                ),
+                Style::default().fg(Color::Rgb(181, 160, 255)),
+            ));
         }
-        if let Some(previews)=self.detail["previews"].as_array() {for preview in previews {if let Some(url)=preview["url"].as_str(){lines.push(Line::styled(format!("Preview · {}",clean(url)),Style::default().fg(Color::Rgb(181,160,255))));}}}
-        if let Some(path)=self.detail["project_worktree"].as_str(){lines.push(Line::from(format!("Worktree · {}",clean(path))));}
-        if let Some(project)=self.detail["project"].as_object() {
-            let path=clean(project.get("path").and_then(Value::as_str).unwrap_or(""));
-            lines.push(Line::styled(format!("Project · {path}"),Style::default().fg(Color::Rgb(181,160,255))));
+        if let Some(previews) = self.detail["previews"].as_array() {
+            for preview in previews {
+                if let Some(url) = preview["url"].as_str() {
+                    lines.push(Line::styled(
+                        format!("Preview · {}", clean(url)),
+                        Style::default().fg(Color::Rgb(181, 160, 255)),
+                    ));
+                }
+            }
+        }
+        if let Some(path) = self.detail["project_worktree"].as_str() {
+            lines.push(Line::from(format!("Worktree · {}", clean(path))));
+        }
+        if let Some(project) = self.detail["project"].as_object() {
+            let path = clean(project.get("path").and_then(Value::as_str).unwrap_or(""));
+            lines.push(Line::styled(
+                format!("Project · {path}"),
+                Style::default().fg(Color::Rgb(181, 160, 255)),
+            ));
         }
         if let Some(messages) = self.detail["messages"].as_array() {
             for (position, message) in messages.iter().enumerate() {
@@ -454,64 +736,113 @@ impl App {
                 }
                 if message["notice"] == true {
                     // A Control notice without a run (operator decisions): muted lines, no reply.
-                    let text=control_context::agent_policy::notice_line(&clean(message["text"].as_str().unwrap_or("")));
-                    lines.extend(text.lines().enumerate().map(|(index,line)|Line::styled(if index==0 {format!("◇ {line}")} else {format!("  {line}")},Style::default().fg(Color::Rgb(133,133,143)))));
+                    let text =
+                        control_context::agent_policy::notice_line(&clean(message["text"].as_str().unwrap_or("")));
+                    lines.extend(text.lines().enumerate().map(|(index, line)| {
+                        Line::styled(
+                            if index == 0 {
+                                format!("◇ {line}")
+                            } else {
+                                format!("  {line}")
+                            },
+                            Style::default().fg(Color::Rgb(133, 133, 143)),
+                        )
+                    }));
                     lines.push(Line::from(""));
                     continue;
                 }
-                let user=control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str())==control_context::agent_policy::MessageSpeaker::User;
+                let user = control_context::agent_policy::MessageSpeaker::for_run_kind(message["kind"].as_str())
+                    == control_context::agent_policy::MessageSpeaker::User;
                 if user {
                     lines.push(history::user_line(Line::from(" ")));
-                    lines.extend(clean(message["text"].as_str().unwrap_or("")).lines().map(command_line).map(history::user_line));
+                    lines.extend(
+                        clean(message["text"].as_str().unwrap_or(""))
+                            .lines()
+                            .map(command_line)
+                            .map(history::user_line),
+                    );
                     lines.push(history::user_line(Line::from(" ")));
                 } else {
-                    lines.push(Line::styled("◇ Event",Style::default().fg(Color::Rgb(133,133,143))));
+                    lines.push(Line::styled("◇ Event", Style::default().fg(Color::Rgb(133, 133, 143))));
                     lines.extend(clean(message["text"].as_str().unwrap_or("")).lines().map(command_line));
                 }
                 lines.push(Line::from(""));
-                let status=message["status"].as_str().unwrap_or("");
-                if !matches!(status,""|"completed") {
-                    let status=if status=="queued" && message["kind"]=="steering" {"queued · next turn"} else {status};
-                    let color=if matches!(status,"failed"|"interrupted"|"cancelled") {Color::Rgb(237,139,155)}else{history::PURPLE};
-                    lines.push(Line::styled(format!("● {}",clean(status)),Style::default().fg(color)));
+                let status = message["status"].as_str().unwrap_or("");
+                if !matches!(status, "" | "completed") {
+                    let status = if status == "queued" && message["kind"] == "steering" {
+                        "queued · next turn"
+                    } else {
+                        status
+                    };
+                    let color = if matches!(status, "failed" | "interrupted" | "cancelled") {
+                        Color::Rgb(237, 139, 155)
+                    } else {
+                        history::PURPLE
+                    };
+                    lines.push(Line::styled(format!("● {}", clean(status)), Style::default().fg(color)));
                 }
                 let folder_reply = (message["run_id"].is_null()
                     && commands::tail(message["text"].as_str().unwrap_or("").trim(), commands::Kind::Open).is_some()
-                    && message["reply"].as_str().and_then(|reply|reply.strip_prefix("Review and approve folder access: ")).and_then(control_url_names::dm_route).and_then(|path|path.strip_suffix("/project"))==Some(self.active.as_str())).then(|| {
-                    if let Some(mount)=self.detail["project"]["mounts"].as_array().and_then(|mounts|mounts.iter().find(|mount|mount["message_index"].as_u64()==Some(position as u64))) {
-                        format!("Opened /workspace/{}",clean(mount["name"].as_str().unwrap_or("")))
-                    } else if pending_project(&self.detail).is_some_and(|project|project["message_index"].as_u64()==Some(position as u64)) {
+                    && message["reply"]
+                        .as_str()
+                        .and_then(|reply| reply.strip_prefix("Review and approve folder access: "))
+                        .and_then(control_url_names::dm_route)
+                        .and_then(|path| path.strip_suffix("/project"))
+                        == Some(self.active.as_str()))
+                .then(|| {
+                    if let Some(mount) = self.detail["project"]["mounts"].as_array().and_then(|mounts| {
+                        mounts
+                            .iter()
+                            .find(|mount| mount["message_index"].as_u64() == Some(position as u64))
+                    }) {
+                        format!("Opened /workspace/{}", clean(mount["name"].as_str().unwrap_or("")))
+                    } else if pending_project(&self.detail)
+                        .is_some_and(|project| project["message_index"].as_u64() == Some(position as u64))
+                    {
                         "Folder access requested; review the prompt below.".into()
                     } else {
                         "Folder request replaced by a later request.".into()
                     }
                 });
                 lines.extend(
-                    clean(folder_reply.as_deref().unwrap_or_else(||message["reply"].as_str().unwrap_or("")))
-                        .lines()
-                        .map(|s| Line::from(s.to_owned())),
+                    clean(
+                        folder_reply
+                            .as_deref()
+                            .unwrap_or_else(|| message["reply"].as_str().unwrap_or("")),
+                    )
+                    .lines()
+                    .map(|s| Line::from(s.to_owned())),
                 );
                 if let Some(attempts) = message["attempts"].as_array() {
                     for (index, attempt) in attempts.iter().enumerate() {
                         if let Some(error) = attempt["history_error"].as_str() {
-                            lines.push(Line::styled(format!("  ! {}",clean(error)),Style::default().fg(Color::Rgb(237,139,155))));
+                            lines.push(Line::styled(
+                                format!("  ! {}", clean(error)),
+                                Style::default().fg(Color::Rgb(237, 139, 155)),
+                            ));
                         }
                         if let Some(status) = attempt_status(index, attempt) {
                             lines.push(Line::styled(status, Style::default().fg(Color::Rgb(143, 129, 172))));
                         }
                         if let Some(events) = attempt["activity"].as_array() {
-                            if !self.show_activity {folded_activity(&mut lines,events);}
+                            if !self.show_activity {
+                                folded_activity(&mut lines, events);
+                            }
                             for event in events {
-                                if event["kind"]=="message" {
-                                    let text=event["text"].as_str().unwrap_or("");
-                                    if text.trim()!=message["reply"].as_str().unwrap_or("").trim() {
-                                        lines.extend(clean(text).lines().map(|line|Line::from(line.to_owned())));
+                                if event["kind"] == "message" {
+                                    let text = event["text"].as_str().unwrap_or("");
+                                    if text.trim() != message["reply"].as_str().unwrap_or("").trim() {
+                                        lines.extend(clean(text).lines().map(|line| Line::from(line.to_owned())));
                                     }
                                     continue;
                                 }
-                                if !self.show_activity {continue;}
-                                let patch=event["kind"] == "file_change";
-                                if patch && event["output"].as_str().unwrap_or("").is_empty() {continue;}
+                                if !self.show_activity {
+                                    continue;
+                                }
+                                let patch = event["kind"] == "file_change";
+                                if patch && event["output"].as_str().unwrap_or("").is_empty() {
+                                    continue;
+                                }
                                 lines.push(Line::styled(
                                     format!(
                                         "  [{} · attempt {}] {}",
@@ -521,54 +852,96 @@ impl App {
                                     ),
                                     Style::default().fg(Color::Rgb(133, 133, 143)),
                                 ));
-                                lines.extend(
-                                    clean(event["output"].as_str().unwrap_or(""))
-                                        .lines()
-                                        .map(|s| {
-                                            let color=if patch {match control_diff::kind(s) {
-                                                control_diff::Kind::Add=>{let (r,g,b)=control_diff::ADD_RGB;Some(Color::Rgb(r,g,b))},
-                                                control_diff::Kind::Remove=>{let (r,g,b)=control_diff::REMOVE_RGB;Some(Color::Rgb(r,g,b))},
-                                                control_diff::Kind::Header=>Some(Color::Rgb(133,133,143)),
-                                                control_diff::Kind::Context=>None,
-                                            }}else{None};
-                                            let style=color.map(|color|Style::default().fg(color)).unwrap_or_default();
-                                            Line::styled(format!("  {s}"),style)
-                                        }),
-                                );
+                                lines.extend(clean(event["output"].as_str().unwrap_or("")).lines().map(|s| {
+                                    let color = if patch {
+                                        match control_diff::kind(s) {
+                                            control_diff::Kind::Add => {
+                                                let (r, g, b) = control_diff::ADD_RGB;
+                                                Some(Color::Rgb(r, g, b))
+                                            }
+                                            control_diff::Kind::Remove => {
+                                                let (r, g, b) = control_diff::REMOVE_RGB;
+                                                Some(Color::Rgb(r, g, b))
+                                            }
+                                            control_diff::Kind::Header => Some(Color::Rgb(133, 133, 143)),
+                                            control_diff::Kind::Context => None,
+                                        }
+                                    } else {
+                                        None
+                                    };
+                                    let style = color.map(|color| Style::default().fg(color)).unwrap_or_default();
+                                    Line::styled(format!("  {s}"), style)
+                                }));
                             }
                         }
                     }
                 }
-                if let Some(commands)=message["commands"].as_array() {
-                    if self.show_activity {for command in commands {service_command_lines(&mut lines,command);}}
-                    else {folded_activity(&mut lines,commands);for command in commands.iter().filter(|command|command["kind"]=="message") {service_command_lines(&mut lines,command);}}
+                if let Some(commands) = message["commands"].as_array() {
+                    if self.show_activity {
+                        for command in commands {
+                            service_command_lines(&mut lines, command);
+                        }
+                    } else {
+                        folded_activity(&mut lines, commands);
+                        for command in commands.iter().filter(|command| command["kind"] == "message") {
+                            service_command_lines(&mut lines, command);
+                        }
+                    }
                 }
                 lines.push(Line::from(""));
             }
         }
-        if let Some(commands)=self.detail["agent_activity"].as_array() {
+        if let Some(commands) = self.detail["agent_activity"].as_array() {
             for command in commands {
-                lines.push(Line::styled(format!("Agent · {}",clean(command["chat"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
-                if self.show_activity || command["activity"]["kind"]=="message" {service_command_lines(&mut lines,&command["activity"]);}
-                else {folded_activity(&mut lines,std::slice::from_ref(&command["activity"]));}
+                lines.push(Line::styled(
+                    format!("Agent · {}", clean(command["chat"].as_str().unwrap_or(""))),
+                    Style::default().fg(Color::Rgb(181, 160, 255)),
+                ));
+                if self.show_activity || command["activity"]["kind"] == "message" {
+                    service_command_lines(&mut lines, &command["activity"]);
+                } else {
+                    folded_activity(&mut lines, std::slice::from_ref(&command["activity"]));
+                }
             }
         }
         for request in operator::pending(&self.detail) {
-            lines.push(Line::styled(request.heading,Style::default().fg(Color::Rgb(181,160,255))));
-            lines.extend(clean(request.body).lines().map(|line|Line::from(line.to_owned())));
-            if let Some(usage)=request.usage {lines.push(Line::from(usage));}
+            lines.push(Line::styled(
+                request.heading,
+                Style::default().fg(Color::Rgb(181, 160, 255)),
+            ));
+            lines.extend(clean(request.body).lines().map(|line| Line::from(line.to_owned())));
+            if let Some(usage) = request.usage {
+                lines.push(Line::from(usage));
+            }
         }
-        if let Some(project)=pending_project(&self.detail) {
-            lines.push(Line::styled(format!("Folder access requested · {}",clean(project["path"].as_str().unwrap_or(""))),Style::default().fg(Color::Rgb(181,160,255))));
-            lines.push(Line::from(format!("Open as /workspace/{}",clean(project["name"].as_str().unwrap_or("")))));
+        if let Some(project) = pending_project(&self.detail) {
+            lines.push(Line::styled(
+                format!(
+                    "Folder access requested · {}",
+                    clean(project["path"].as_str().unwrap_or(""))
+                ),
+                Style::default().fg(Color::Rgb(181, 160, 255)),
+            ));
+            lines.push(Line::from(format!(
+                "Open as /workspace/{}",
+                clean(project["name"].as_str().unwrap_or(""))
+            )));
             // The rest of an `/open` list, trusted with the same decision.
             for folder in project["also"].as_array().into_iter().flatten() {
-                lines.push(Line::from(format!("Also {} as /workspace/{}",clean(folder["path"].as_str().unwrap_or("")),clean(folder["name"].as_str().unwrap_or("")))));
+                lines.push(Line::from(format!(
+                    "Also {} as /workspace/{}",
+                    clean(folder["path"].as_str().unwrap_or("")),
+                    clean(folder["name"].as_str().unwrap_or(""))
+                )));
             }
             lines.push(Line::from("Trust this folder’s code and allow local previews? Control copies it into an isolated worktree; credentials, generated directories and symlinks are excluded. The original stays unchanged."));
-            if let Some(error)=project["error"].as_str() {lines.push(Line::from(clean(error)));}
-            let request=clean(project["request"].as_str().unwrap_or(""));
-            lines.push(Line::from(format!("/trust {request} to approve · /dismiss {request} to reject · /open /absolute/path to change")));
+            if let Some(error) = project["error"].as_str() {
+                lines.push(Line::from(clean(error)));
+            }
+            let request = clean(project["request"].as_str().unwrap_or(""));
+            lines.push(Line::from(format!(
+                "/trust {request} to approve · /dismiss {request} to reject · /open /absolute/path to change"
+            )));
         }
         Text::from(lines)
     }
@@ -580,12 +953,19 @@ impl Drop for Restore {
         let _ = execute!(io::stdout(), crossterm::cursor::Show, LeaveAlternateScreen);
     }
 }
-fn resume_selection(args:&[String])->io::Result<Option<&str>> {
-    let mut selected=None;
-    for (index,arg) in args.iter().enumerate() {
-        if arg=="--session"||arg=="--resume" {
-            if selected.is_some(){return Err(failure("Choose one --resume ID or --session ID."));}
-            selected=Some(args.get(index+1).filter(|value|!value.is_empty()&&!value.starts_with('-')).ok_or_else(||failure("Use --resume ID to select a conversation."))?.as_str());
+fn resume_selection(args: &[String]) -> io::Result<Option<&str>> {
+    let mut selected = None;
+    for (index, arg) in args.iter().enumerate() {
+        if arg == "--session" || arg == "--resume" {
+            if selected.is_some() {
+                return Err(failure("Choose one --resume ID or --session ID."));
+            }
+            selected = Some(
+                args.get(index + 1)
+                    .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                    .ok_or_else(|| failure("Use --resume ID to select a conversation."))?
+                    .as_str(),
+            );
         }
     }
     Ok(selected)
@@ -593,7 +973,10 @@ fn resume_selection(args:&[String])->io::Result<Option<&str>> {
 pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|s| s == "--help") {
-        println!("control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path [/another/path …] · /trust [REQUEST] · /dismiss [REQUEST] · /port allow|deny ID · /services [stop ID|all] · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /personas · /persona NAME · /context · /chat · /help", control_config::server_url());
+        println!(
+            "control tui [--server {}] [--resume ID] [--directory PATH] [--check]\nAlso available as control-harness. Starts a fresh DM; --resume ID (or --session ID) explicitly resumes one. CONTROL_ADDR sets the default server.\n\n/resume · /open /absolute/path [/another/path …] · /trust [REQUEST] · /dismiss [REQUEST] · /port allow|deny ID · /services [stop ID|all] · /answer QUESTION_ID choice · /genes · /use GENE GENE · /use none · /personas · /persona NAME · /context · /chat · /help",
+            control_config::server_url()
+        );
         return Ok(());
     }
     let option = |name: &str| {
@@ -602,7 +985,7 @@ pub fn run() -> io::Result<()> {
             .and_then(|i| args.get(i + 1))
             .map(String::as_str)
     };
-    let selected=resume_selection(&args)?;
+    let selected = resume_selection(&args)?;
     let default = control_config::server_url();
     let mut hive = Hive::connect(option("--server").unwrap_or(&default))?;
     let mut app = App {
@@ -611,18 +994,24 @@ pub fn run() -> io::Result<()> {
         ..App::default()
     };
     app.refresh(&mut hive)?;
-    if let Some(directory)=option("--directory") {
-        let path=std::path::PathBuf::from(directory);
-        let path=if path.is_absolute(){path}else{std::env::current_dir()?.join(path)};
-        if app.active.is_empty(){app.new_chat(&mut hive)?;}
-        app.set_detail(hive.tool("control.project.request",json!({"id":app.active,"path":path.to_string_lossy()}))?);
+    if let Some(directory) = option("--directory") {
+        let path = std::path::PathBuf::from(directory);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        if app.active.is_empty() {
+            app.new_chat(&mut hive)?;
+        }
+        app.set_detail(hive.tool(
+            "control.project.request",
+            json!({"id":app.active,"path":path.to_string_lossy()}),
+        )?);
         app.refresh(&mut hive)?;
     }
     if args.iter().any(|s| s == "--check") {
-        println!(
-            "Connected to Control MCP. {} DMs available.",
-            app.chats.len()
-        );
+        println!("Connected to Control MCP. {} DMs available.", app.chats.len());
         return Ok(());
     }
     enable_raw_mode()?;
@@ -633,11 +1022,17 @@ pub fn run() -> io::Result<()> {
     let mut updates = hive.updates()?;
     let mut dirty = true;
     loop {
-        if app.load_lenses(&mut hive) { dirty = true; }
+        if app.load_lenses(&mut hive) {
+            dirty = true;
+        }
         if dirty {
             let matches = app.command_matches();
             let selection = app.command_selection.min(matches.len().saturating_sub(1));
-            let suggestions_height = if matches.is_empty() { 0 } else { matches.len().min(5) as u16 + 1 };
+            let suggestions_height = if matches.is_empty() {
+                0
+            } else {
+                matches.len().min(5) as u16 + 1
+            };
             terminal.draw(|frame| {
                 let layout = Layout::default()
                     .direction(Direction::Vertical)
@@ -664,31 +1059,53 @@ pub fn run() -> io::Result<()> {
                             app.inspector
                                 .as_ref()
                                 .map(|(title, _)| title.as_str())
-                                .unwrap_or_else(|| app.detail["title"]
-                                    .as_str()
-                                    .unwrap_or("New chat"))
+                                .unwrap_or_else(|| app.detail["title"].as_str().unwrap_or("New chat"))
                         )
                     ))
                     .style(Style::default().fg(Color::Rgb(133, 133, 143))),
                     layout[0],
                 );
                 app.layout_history(layout[1].width);
-                let max_scroll=app.history.len().saturating_sub(usize::from(layout[1].height));
+                let max_scroll = app.history.len().saturating_sub(usize::from(layout[1].height));
                 if app.follow || app.scroll == usize::MAX {
                     app.scroll = max_scroll;
+                } else {
+                    app.scroll = app.scroll.min(max_scroll);
                 }
-                else {app.scroll=app.scroll.min(max_scroll);}
-                let text=app.history.window(app.scroll.min(max_scroll),usize::from(layout[1].height));
-                frame.render_widget(history::History{paragraph:Paragraph::new(text),scroll:0}, layout[1]);
+                let text = app
+                    .history
+                    .window(app.scroll.min(max_scroll), usize::from(layout[1].height));
+                frame.render_widget(
+                    history::History {
+                        paragraph: Paragraph::new(text),
+                        scroll: 0,
+                    },
+                    layout[1],
+                );
                 let composer_style = Style::default()
                     .bg(Color::Rgb(36, 32, 47))
                     .fg(Color::Rgb(233, 232, 237));
                 if !matches.is_empty() {
                     let start = selection.saturating_sub(4);
-                    let mut lines = matches.iter().enumerate().skip(start).take(5).map(|(index, entry)| {
-                        Line::from(vec![Span::styled(format!("{} {}", if index == selection { "›" } else { " " }, entry.text), Style::default().fg(Color::Rgb(181, 160, 255))), Span::raw(format!("  {}", entry.description))])
-                    }).collect::<Vec<_>>();
-                    lines.push(Line::styled("↑ ↓ choose · Tab completes · Esc dismisses", Style::default().fg(Color::Rgb(133, 133, 143))));
+                    let mut lines = matches
+                        .iter()
+                        .enumerate()
+                        .skip(start)
+                        .take(5)
+                        .map(|(index, entry)| {
+                            Line::from(vec![
+                                Span::styled(
+                                    format!("{} {}", if index == selection { "›" } else { " " }, entry.text),
+                                    Style::default().fg(Color::Rgb(181, 160, 255)),
+                                ),
+                                Span::raw(format!("  {}", entry.description)),
+                            ])
+                        })
+                        .collect::<Vec<_>>();
+                    lines.push(Line::styled(
+                        "↑ ↓ choose · Tab completes · Esc dismisses",
+                        Style::default().fg(Color::Rgb(133, 133, 143)),
+                    ));
                     frame.render_widget(Paragraph::new(lines), layout[2]);
                 }
                 frame.render_widget(Block::default().style(composer_style), layout[3]);
@@ -702,9 +1119,9 @@ pub fn run() -> io::Result<()> {
                     .enumerate()
                     .map(|(i, line)| {
                         let mut spans = vec![Span::styled(
-                                if i == 0 { "> " } else { "  " },
-                                Style::default().fg(Color::Rgb(181, 160, 255)),
-                            )];
+                            if i == 0 { "> " } else { "  " },
+                            Style::default().fg(Color::Rgb(181, 160, 255)),
+                        )];
                         spans.extend(composer_line(line, &app.lenses).spans);
                         Line::from(spans)
                     })
@@ -719,8 +1136,7 @@ pub fn run() -> io::Result<()> {
                     .map(|line| line.width().max(1).div_ceil(width))
                     .sum::<usize>()
                     + last_line / width;
-                let scroll =
-                    cursor_row.saturating_sub(input_area.height.saturating_sub(1) as usize);
+                let scroll = cursor_row.saturating_sub(input_area.height.saturating_sub(1) as usize);
                 frame.render_widget(
                     Paragraph::new(input_text)
                         .style(composer_style)
@@ -761,9 +1177,18 @@ pub fn run() -> io::Result<()> {
                 let matches = app.command_matches();
                 if !matches.is_empty() && key.modifiers.is_empty() {
                     match key.code {
-                        KeyCode::Up => { app.command_selection = app.command_selection.saturating_sub(1); continue; }
-                        KeyCode::Down => { app.command_selection = (app.command_selection + 1).min(matches.len() - 1); continue; }
-                        KeyCode::Esc => { app.commands_hidden = true; continue; }
+                        KeyCode::Up => {
+                            app.command_selection = app.command_selection.saturating_sub(1);
+                            continue;
+                        }
+                        KeyCode::Down => {
+                            app.command_selection = (app.command_selection + 1).min(matches.len() - 1);
+                            continue;
+                        }
+                        KeyCode::Esc => {
+                            app.commands_hidden = true;
+                            continue;
+                        }
                         _ => {}
                     }
                 }
@@ -806,9 +1231,7 @@ pub fn run() -> io::Result<()> {
                     }
                 }
                 match key.code {
-                    KeyCode::Char('q' | 'c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        break
-                    }
+                    KeyCode::Char('q' | 'c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if let Err(e) = app.new_chat(&mut hive) {
                             app.status = e.to_string();
@@ -848,14 +1271,9 @@ pub fn run() -> io::Result<()> {
                     KeyCode::End => app.follow = true,
                     KeyCode::PageDown => app.scroll = app.scroll.saturating_add(10),
                     KeyCode::Up | KeyCode::Down
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && !app.chats.is_empty() =>
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && !app.chats.is_empty() =>
                     {
-                        let index = app
-                            .chats
-                            .iter()
-                            .position(|s| s["id"] == app.active)
-                            .unwrap_or(0);
+                        let index = app.chats.iter().position(|s| s["id"] == app.active).unwrap_or(0);
                         let next = if key.code == KeyCode::Down {
                             (index + 1).min(app.chats.len() - 1)
                         } else {
@@ -889,9 +1307,7 @@ pub fn run() -> io::Result<()> {
             if let Err(e) = app.refresh(&mut hive) {
                 app.status = e.to_string();
             }
-            dirty |= app.chats != old_chats
-                || app.detail["revision"] != old_revision
-                || app.status != old_status;
+            dirty |= app.chats != old_chats || app.detail["revision"] != old_revision || app.status != old_status;
             refreshed = Instant::now();
         }
     }
@@ -899,8 +1315,6 @@ pub fn run() -> io::Result<()> {
 }
 #[cfg(test)]
 mod tests;
-
-
 
 #[cfg(test)]
 #[path = "terminal/tests/profiling.rs"]

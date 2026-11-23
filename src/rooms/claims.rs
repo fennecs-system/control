@@ -85,7 +85,9 @@ impl Claim {
 
 pub(crate) fn valid_key(key: &str) -> bool {
     (1..=MAX_KEY).contains(&key.len())
-        && key.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 /// Wait-topic name for one claim incarnation. Keys contain no '/' or '#'.
 pub(crate) fn topic_name(room: &str, key: &str, incarnation: u64) -> String {
@@ -101,7 +103,11 @@ pub(crate) fn parse_topic(name: &str) -> Option<(&str, &str, u64)> {
 /// means the waited incarnation was released.
 pub(crate) fn resolution(state: &State, room: &str, key: &str, incarnation: u64) -> Option<(Outcome, u64, String)> {
     let claim = find(state, room, key)?;
-    let outcome = if claim.incarnation == incarnation { claim.outcome()? } else { Outcome::Released };
+    let outcome = if claim.incarnation == incarnation {
+        claim.outcome()?
+    } else {
+        Outcome::Released
+    };
     Some((outcome, claim.revision, claim.owner.clone()))
 }
 /// Canonical handoff wait topic `claim:<room>/<key>#<incarnation>`. A wait
@@ -109,18 +115,32 @@ pub(crate) fn resolution(state: &State, room: &str, key: &str, incarnation: u64)
 /// produce, or on one that already resolved, would never wake usefully.
 pub(crate) fn wait_topic(state: &State, chat: &str, name: &str) -> Result<String, String> {
     let (name, named) = match name.rsplit_once('#') {
-        Some((name, incarnation)) => (name, Some(incarnation.parse::<u64>().map_err(|_| "Claim incarnations are integers.")?)),
+        Some((name, incarnation)) => (
+            name,
+            Some(
+                incarnation
+                    .parse::<u64>()
+                    .map_err(|_| "Claim incarnations are integers.")?,
+            ),
+        ),
         None => (name, None),
     };
-    let (room, key) = name.rsplit_once('/').filter(|(_, key)| valid_key(key))
+    let (room, key) = name
+        .rsplit_once('/')
+        .filter(|(_, key)| valid_key(key))
         .ok_or("Name a claim wait as claim:<room>/<key>, optionally with #<incarnation>.")?;
     let room = crate::rooms::resolve(state, chat, room)?;
     let Some(claim) = find(state, &room, key).filter(|c| c.status != Status::Released) else {
-        return Err(format!("No live claim {key}: nobody has committed to produce it. Claim and produce it yourself, ask the producer to claim it, or ask the operator."));
+        return Err(format!(
+            "No live claim {key}: nobody has committed to produce it. Claim and produce it yourself, ask the producer to claim it, or ask the operator."
+        ));
     };
     let incarnation = named.unwrap_or(claim.incarnation);
     match resolution(state, &room, key, incarnation) {
-        Some((outcome, revision, _)) => Err(format!("Claim {key} incarnation {incarnation} already resolved as {} (revision {revision}); act on it instead of waiting.", outcome_name(outcome))),
+        Some((outcome, revision, _)) => Err(format!(
+            "Claim {key} incarnation {incarnation} already resolved as {} (revision {revision}); act on it instead of waiting.",
+            outcome_name(outcome)
+        )),
         None => Ok(format!("claim:{}", topic_name(&room, key, incarnation))),
     }
 }
@@ -138,10 +158,20 @@ pub(crate) fn find<'a>(state: &'a State, room: &str, key: &str) -> Option<&'a Cl
 /// persistent bot. Computed once per pass.
 pub(crate) fn active_owners(state: &State) -> HashSet<&str> {
     let chats: HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
-    state.runtime.runs.iter()
+    state
+        .runtime
+        .runs
+        .iter()
         .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting"))
         .filter_map(|run| run.chat_id.as_deref())
-        .chain(state.collective.claims.iter().map(|c| c.owner.as_str()).filter(|owner| crate::bots::continuation_enabled(state, owner)))
+        .chain(
+            state
+                .collective
+                .claims
+                .iter()
+                .map(|c| c.owner.as_str())
+                .filter(|owner| crate::bots::continuation_enabled(state, owner)),
+        )
         .filter(|chat| chats.contains(chat))
         .collect()
 }
@@ -150,16 +180,24 @@ fn owner_active(state: &State, owner: &str) -> bool {
 }
 pub(crate) fn listed(state: &State, room: &str) -> Vec<Value> {
     let active = active_owners(state);
-    state.collective.claims.iter().filter(|c| c.room == room && c.status != Status::Released)
-        .map(|c| json!({"key":c.key,"owner":c.owner,"status":c.status,"blocked_on":c.blocked_on,
+    state
+        .collective
+        .claims
+        .iter()
+        .filter(|c| c.room == room && c.status != Status::Released)
+        .map(|c| {
+            json!({"key":c.key,"owner":c.owner,"status":c.status,"blocked_on":c.blocked_on,
             "note":c.note,"revision":c.revision,"incarnation":c.incarnation,
-            "abandoned":c.abandoned,"owner_idle":!active.contains(c.owner.as_str())}))
+            "abandoned":c.abandoned,"owner_idle":!active.contains(c.owner.as_str())})
+        })
         .collect()
 }
 
 /// Lowercase words of at least three characters, without filler.
 fn words(text: &str) -> HashSet<String> {
-    const FILLER: [&str; 12] = ["the", "and", "for", "with", "own", "owns", "from", "into", "via", "then", "this", "that"];
+    const FILLER: [&str; 12] = [
+        "the", "and", "for", "with", "own", "owns", "from", "into", "via", "then", "this", "that",
+    ];
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .map(str::to_ascii_lowercase)
         .filter(|word| word.len() >= 3 && !FILLER.contains(&word.as_str()))
@@ -170,7 +208,10 @@ fn words(text: &str) -> HashSet<String> {
 /// existing effort or release its duplicate.
 fn related(state: &State, room: &str, key: &str, note: &str) -> Vec<Value> {
     let (keys, all) = (words(key), words(&format!("{key} {note}")));
-    let mut scored: Vec<(usize, &Claim)> = state.collective.claims.iter()
+    let mut scored: Vec<(usize, &Claim)> = state
+        .collective
+        .claims
+        .iter()
         .filter(|c| c.room == room && c.key != key && c.status != Status::Released)
         .filter_map(|c| {
             let (their_keys, theirs) = (words(&c.key), words(&format!("{} {}", c.key, c.note)));
@@ -237,9 +278,19 @@ pub(crate) struct Resolved {
 
 /// Applies one claim operation for `chat`. Returns a resolution, if any, so
 /// the caller can notify waiters inside its checkpoint.
-pub(crate) fn call(state: &mut State, chat: &str, room: &str, args: &Value) -> Result<(Value, Option<Resolved>), std::borrow::Cow<'static, str>> {
-    let call: Call = serde_json::from_value(args.clone()).map_err(|error|
-        crate::worker_tools::fixes::shape("control_room_claim", error, r#"{"key":"<deliverable>","action":"acquire","note":"<plan>"}"#))?;
+pub(crate) fn call(
+    state: &mut State,
+    chat: &str,
+    room: &str,
+    args: &Value,
+) -> Result<(Value, Option<Resolved>), std::borrow::Cow<'static, str>> {
+    let call: Call = serde_json::from_value(args.clone()).map_err(|error| {
+        crate::worker_tools::fixes::shape(
+            "control_room_claim",
+            error,
+            r#"{"key":"<deliverable>","action":"acquire","note":"<plan>"}"#,
+        )
+    })?;
     apply(state, chat, room, call).map_err(Into::into)
 }
 fn apply(state: &mut State, chat: &str, room: &str, call: Call) -> Result<(Value, Option<Resolved>), &'static str> {
@@ -262,24 +313,46 @@ fn apply(state: &mut State, chat: &str, room: &str, call: Call) -> Result<(Value
         (_, Some(_)) => return Err("blocked_on is only for status=blocked."),
         (_, None) => None,
     };
-    let index = state.collective.claims.iter().position(|c| c.room == room && c.key == call.key);
+    let index = state
+        .collective
+        .claims
+        .iter()
+        .position(|c| c.room == room && c.key == call.key);
     let current = index.map(|i| state.collective.claims[i].clone());
-    let related = if call.action == Action::Acquire { related(state, room, &call.key, note) } else { Vec::new() };
-    let unchanged = |claim: &Claim, reason: &str| json!({"applied":false,"reason":reason,"claim":claim,"related":related});
+    let related = if call.action == Action::Acquire {
+        related(state, room, &call.key, note)
+    } else {
+        Vec::new()
+    };
+    let unchanged =
+        |claim: &Claim, reason: &str| json!({"applied":false,"reason":reason,"claim":claim,"related":related});
     match call.action {
         Action::Acquire => {
             if let Some(claim) = current.as_ref().filter(|c| c.status != Status::Released) {
-                let reason = if claim.owner == chat { "You already own this claim; use update with its revision." } else { "Another participant owns this claim." };
+                let reason = if claim.owner == chat {
+                    "You already own this claim; use update with its revision."
+                } else {
+                    "Another participant owns this claim."
+                };
                 return Ok((unchanged(claim, reason), None));
             }
         }
         Action::Update | Action::Release => {
-            let claim = current.as_ref().filter(|c| c.status != Status::Released).ok_or("No live claim with that key. Acquire it first.")?;
+            let claim = current
+                .as_ref()
+                .filter(|c| c.status != Status::Released)
+                .ok_or("No live claim with that key. Acquire it first.")?;
             if claim.owner != chat {
                 return Ok((unchanged(claim, "Only the owner can change this claim."), None));
             }
             if call.revision != Some(claim.revision) {
-                return Ok((unchanged(claim, "Stale revision; read the claim and retry with its current revision."), None));
+                return Ok((
+                    unchanged(
+                        claim,
+                        "Stale revision; read the claim and retry with its current revision.",
+                    ),
+                    None,
+                ));
             }
         }
     }
@@ -297,7 +370,13 @@ fn apply(state: &mut State, chat: &str, room: &str, call: Call) -> Result<(Value
     // Staying blocked on the same claim keeps the transition's revision.
     let blocked_at = match &current {
         _ if blocked_on.is_none() => 0,
-        Some(previous) if previous.incarnation == incarnation && previous.status == Status::Blocked && previous.blocked_on == blocked_on => previous.blocked_at,
+        Some(previous)
+            if previous.incarnation == incarnation
+                && previous.status == Status::Blocked
+                && previous.blocked_on == blocked_on =>
+        {
+            previous.blocked_at
+        }
         _ => revision,
     };
     // Progress is a transition into done, or out of blocked back to working;
@@ -323,11 +402,25 @@ fn apply(state: &mut State, chat: &str, room: &str, call: Call) -> Result<(Value
         advanced_at,
     };
     // Resolution is a transition: re-reporting done is progress, not a new outcome.
-    let resolved = claim.outcome().filter(|_| current.as_ref().is_none_or(|c| c.incarnation != claim.incarnation || c.outcome().is_none_or(|o| o == Outcome::Abandoned)))
-        .map(|outcome| Resolved { room: room.to_owned(), key: claim.key.clone(), incarnation: claim.incarnation, revision, outcome, by: Some(chat.to_owned()) });
+    let resolved = claim
+        .outcome()
+        .filter(|_| {
+            current.as_ref().is_none_or(|c| {
+                c.incarnation != claim.incarnation || c.outcome().is_none_or(|o| o == Outcome::Abandoned)
+            })
+        })
+        .map(|outcome| Resolved {
+            room: room.to_owned(),
+            key: claim.key.clone(),
+            incarnation: claim.incarnation,
+            revision,
+            outcome,
+            by: Some(chat.to_owned()),
+        });
     // The caller owns an applied claim and just sent its room, key and note:
     // return only what the host assigned and the next update needs.
-    let mut applied = json!({"key":claim.key,"status":claim.status,"revision":claim.revision,"incarnation":claim.incarnation});
+    let mut applied =
+        json!({"key":claim.key,"status":claim.status,"revision":claim.revision,"incarnation":claim.incarnation});
     if let Some(blocked_on) = &claim.blocked_on {
         applied["blocked_on"] = json!(blocked_on);
     }
@@ -342,7 +435,11 @@ fn evict(state: &mut State, room: &str) -> Result<(), &'static str> {
     if state.collective.claims.iter().filter(|c| c.room == room).count() < MAX_PER_ROOM {
         return Ok(());
     }
-    let released = state.collective.claims.iter().position(|c| c.room == room && c.status == Status::Released)
+    let released = state
+        .collective
+        .claims
+        .iter()
+        .position(|c| c.room == room && c.status == Status::Released)
         .ok_or("This room holds the maximum number of live claims; release finished ones first.")?;
     state.collective.claims.remove(released);
     Ok(())
@@ -360,16 +457,30 @@ fn lost_owners(state: &State) -> HashSet<&str> {
         }
     }
     let chats: HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
-    state.collective.claims.iter().map(|c| c.owner.as_str())
-        .filter(|owner| !chats.contains(owner)
-            || (!crate::bots::continuation_enabled(state, owner)
-                && latest.get(owner).is_some_and(|status| matches!(*status, "failed" | "cancelled" | "interrupted" | "blocked"))))
+    state
+        .collective
+        .claims
+        .iter()
+        .map(|c| c.owner.as_str())
+        .filter(|owner| {
+            !chats.contains(owner)
+                || (!crate::bots::continuation_enabled(state, owner)
+                    && latest
+                        .get(owner)
+                        .is_some_and(|status| matches!(*status, "failed" | "cancelled" | "interrupted" | "blocked")))
+        })
         .collect()
 }
 fn lost(state: &State) -> Vec<usize> {
     let lost = lost_owners(state);
-    state.collective.claims.iter().enumerate()
-        .filter(|(_, c)| matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned && lost.contains(c.owner.as_str()))
+    state
+        .collective
+        .claims
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned && lost.contains(c.owner.as_str())
+        })
         .map(|(index, _)| index)
         .collect()
 }
@@ -377,13 +488,23 @@ pub(crate) fn abandonment_due(state: &State) -> bool {
     !lost(state).is_empty()
 }
 fn abandon(state: &mut State, indices: Vec<usize>) -> Vec<Resolved> {
-    indices.into_iter().map(|index| {
-        state.collective.claim_seq += 1;
-        let revision = state.collective.claim_seq;
-        let claim = &mut state.collective.claims[index];
-        (claim.abandoned, claim.revision) = (true, revision);
-        Resolved { room: claim.room.clone(), key: claim.key.clone(), incarnation: claim.incarnation, revision, outcome: Outcome::Abandoned, by: None }
-    }).collect()
+    indices
+        .into_iter()
+        .map(|index| {
+            state.collective.claim_seq += 1;
+            let revision = state.collective.claim_seq;
+            let claim = &mut state.collective.claims[index];
+            (claim.abandoned, claim.revision) = (true, revision);
+            Resolved {
+                room: claim.room.clone(),
+                key: claim.key.clone(),
+                incarnation: claim.incarnation,
+                revision,
+                outcome: Outcome::Abandoned,
+                by: None,
+            }
+        })
+        .collect()
 }
 /// Host observation: live claims whose owner is lost become abandoned once,
 /// so dependents wake instead of sleeping on a producer that will not report.
@@ -394,7 +515,11 @@ pub(crate) fn observe_abandoned(state: &mut State) -> Vec<Resolved> {
 /// An explicit stop (task cancellation or `/bot off`) abandons the chat's live
 /// claims immediately; its final running turn may still report afterwards.
 pub(crate) fn abandon_owned(state: &mut State, owner: &str) -> Vec<Resolved> {
-    let indices = state.collective.claims.iter().enumerate()
+    let indices = state
+        .collective
+        .claims
+        .iter()
+        .enumerate()
         .filter(|(_, c)| c.owner == owner && matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned)
         .map(|(index, _)| index)
         .collect();
@@ -403,8 +528,16 @@ pub(crate) fn abandon_owned(state: &mut State, owner: &str) -> Vec<Resolved> {
 
 /// Operator reclaim of a claim whose owner can no longer act. The revision
 /// must match what the operator saw, so a revived owner's update is not lost.
-pub(crate) fn operator_release(state: &mut State, room: &str, key: &str, revision: u64) -> Result<Resolved, &'static str> {
-    let index = state.collective.claims.iter()
+pub(crate) fn operator_release(
+    state: &mut State,
+    room: &str,
+    key: &str,
+    revision: u64,
+) -> Result<Resolved, &'static str> {
+    let index = state
+        .collective
+        .claims
+        .iter()
         .position(|c| c.room == room && c.key == key && c.status != Status::Released)
         .ok_or("That claim is no longer live.")?;
     let claim = &state.collective.claims[index];
@@ -419,15 +552,30 @@ pub(crate) fn operator_release(state: &mut State, room: &str, key: &str, revisio
     let claim = &mut state.collective.claims[index];
     (claim.status, claim.blocked_on, claim.blocked_at, claim.revision) = (Status::Released, None, 0, revision);
     claim.note.clear();
-    Ok(Resolved { room: room.to_owned(), key: key.to_owned(), incarnation: claim.incarnation, revision, outcome: Outcome::Released, by: None })
+    Ok(Resolved {
+        room: room.to_owned(),
+        key: key.to_owned(),
+        incarnation: claim.incarnation,
+        revision,
+        outcome: Outcome::Released,
+        by: None,
+    })
 }
 
 /// `POST /room-claim-release`: the operator's explicit reclaim.
 pub(crate) fn operator_action(state: &mut State, f: &std::collections::HashMap<String, String>) {
     let field = |name: &str| f.get(name).map(|value| value.trim()).unwrap_or_default();
     let (room, key) = (field("channel"), field("key"));
-    let result = field("revision").parse::<u64>().map_err(|_| "Missing claim revision.")
-        .and_then(|revision| if crate::rooms::valid(room) && valid_key(key) { Ok(revision) } else { Err("Unknown claim.") })
+    let result = field("revision")
+        .parse::<u64>()
+        .map_err(|_| "Missing claim revision.")
+        .and_then(|revision| {
+            if crate::rooms::valid(room) && valid_key(key) {
+                Ok(revision)
+            } else {
+                Err("Unknown claim.")
+            }
+        })
         .and_then(|revision| operator_release(state, room, key, revision));
     state.collective.notice = match result {
         Ok(resolved) => {
@@ -441,7 +589,10 @@ pub(crate) fn render(state: &State, room: &str) -> String {
     let claims = listed(state, room);
     let mut html = String::from("<h2>Claims</h2>");
     if !state.collective.notice.is_empty() {
-        html.push_str(&format!("<p class='muted' role='status'>{}</p>", crate::escape(&state.collective.notice)));
+        html.push_str(&format!(
+            "<p class='muted' role='status'>{}</p>",
+            crate::escape(&state.collective.notice)
+        ));
     }
     if claims.is_empty() {
         html.push_str("<p class='muted'>No live claims.</p>");
@@ -450,10 +601,23 @@ pub(crate) fn render(state: &State, room: &str) -> String {
     html.push_str("<ul class='room-claims'>");
     for claim in &claims {
         let text = |name: &str| crate::escape(claim[name].as_str().unwrap_or_default());
-        let owner = state.chats.iter().find(|chat| Some(chat.id.as_str()) == claim["owner"].as_str())
-            .map_or_else(|| text("owner"), |chat| crate::escape(&crate::callsigns::name_or_id(&state.chats, &chat.id)));
-        let blocked = claim["blocked_on"].as_str().map_or(String::new(), |key| format!(" on {}", crate::escape(key)));
-        html.push_str(&format!("<li><strong>{}</strong> <small>{}{blocked} · {owner} · r{}</small>", text("key"), text("status"), claim["revision"]));
+        let owner = state
+            .chats
+            .iter()
+            .find(|chat| Some(chat.id.as_str()) == claim["owner"].as_str())
+            .map_or_else(
+                || text("owner"),
+                |chat| crate::escape(&crate::callsigns::name_or_id(&state.chats, &chat.id)),
+            );
+        let blocked = claim["blocked_on"]
+            .as_str()
+            .map_or(String::new(), |key| format!(" on {}", crate::escape(key)));
+        html.push_str(&format!(
+            "<li><strong>{}</strong> <small>{}{blocked} · {owner} · r{}</small>",
+            text("key"),
+            text("status"),
+            claim["revision"]
+        ));
         if !claim["note"].as_str().unwrap_or_default().is_empty() {
             html.push_str(&format!("<p class='preserve muted'>{}</p>", text("note")));
         }

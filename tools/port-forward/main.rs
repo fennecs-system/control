@@ -10,8 +10,7 @@ fn main() -> io::Result<()> {
         .and_then(|s| s.parse::<u16>().ok())
         .filter(|p| *p > 0)
         .ok_or_else(|| io::Error::other("Expected a loopback port"))?;
-    let mut socket =
-        TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_secs(5))?;
+    let mut socket = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_secs(5))?;
     let mut outgoing = socket.try_clone()?;
     let _writer = std::thread::spawn(move || {
         let result = io::copy(&mut io::stdin().lock(), &mut outgoing);

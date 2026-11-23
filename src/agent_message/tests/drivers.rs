@@ -19,7 +19,8 @@ fn call(target: &str) -> MessageCall {
     MessageCall {
         chat_id: target.into(),
         text: "A dependency changed; continue independently".into(),
-        services: vec![], urgent: true,
+        services: vec![],
+        urgent: true,
     }
 }
 async fn asynchronous(
@@ -52,17 +53,11 @@ async fn asynchronous(
 }
 #[test]
 fn blocking_and_tokio_drivers_share_effect_order_failure_rollback_and_restart_receipts() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     for peer in [false, true] {
-        for failure in [
-            None,
-            Some(Effect::Checkpoint),
-            Some(Effect::ArchiveEvidence),
-        ]
-        .into_iter()
-        .filter(|failure| peer || *failure != Some(Effect::ArchiveEvidence))
+        for failure in [None, Some(Effect::Checkpoint), Some(Effect::ArchiveEvidence)]
+            .into_iter()
+            .filter(|failure| peer || *failure != Some(Effect::ArchiveEvidence))
         {
             let (mut blocking, origin, target, generation) = fixture(peer);
             let before = serde_json::to_vec(&blocking).unwrap();
@@ -119,17 +114,12 @@ fn blocking_and_tokio_drivers_share_effect_order_failure_rollback_and_restart_re
                 assert!(!other_trace.contains(&Effect::WakeDispatcher));
             } else {
                 let expected = if peer {
-                    vec![
-                        Effect::ArchiveEvidence,
-                        Effect::Checkpoint,
-                        Effect::WakeDispatcher,
-                    ]
+                    vec![Effect::ArchiveEvidence, Effect::Checkpoint, Effect::WakeDispatcher]
                 } else {
                     vec![Effect::Checkpoint, Effect::WakeDispatcher]
                 };
                 assert_eq!(other_trace, expected);
-                let mut restored: State =
-                    serde_json::from_slice(&serde_json::to_vec(&blocking).unwrap()).unwrap();
+                let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&blocking).unwrap()).unwrap();
                 let replay = transact_at(
                     &mut restored,
                     &attempt,
@@ -147,9 +137,7 @@ fn blocking_and_tokio_drivers_share_effect_order_failure_rollback_and_restart_re
 }
 #[test]
 fn dropping_a_suspended_driver_rolls_back_before_a_waiting_writer_can_cancel_the_origin() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     runtime.block_on(async {
         let (state, origin, target, generation) = fixture(true);
         let before = serde_json::to_vec(&state).unwrap();
@@ -216,10 +204,7 @@ fn dropping_a_suspended_driver_rolls_back_before_a_waiting_writer_can_cancel_the
             call(&state.chats[1].id),
             "another-id".into(),
         );
-        assert!(
-            decision.is_err(),
-            "cancelled attempts cannot create new effects"
-        );
+        assert!(decision.is_err(), "cancelled attempts cannot create new effects");
     });
 }
 #[test]
@@ -240,9 +225,7 @@ fn dropping_after_a_confirmed_checkpoint_preserves_committed_work_and_its_receip
     flight.completed(Effect::Checkpoint);
     assert_eq!(flight.next(), Some(Effect::WakeDispatcher));
     drop(flight);
-    let Decision::Existing(result) =
-        prepare(&state, &attempt, call(&target), "unused-id".into()).unwrap()
-    else {
+    let Decision::Existing(result) = prepare(&state, &attempt, call(&target), "unused-id".into()).unwrap() else {
         panic!("committed receipt must survive interpreter cancellation")
     };
     assert_eq!(result.run_id, "committed-id");
@@ -296,19 +279,12 @@ fn planning_is_read_only_and_deterministic_with_explicit_ids_and_rejects_stale_a
 fn transport_encodes_the_typed_result_and_can_use_a_host_without_global_state() {
     struct MemoryHost;
     impl MessageOps for MemoryHost {
-        fn message(
-            &self,
-            attempt: &AttemptRef<'_>,
-            call: MessageCall,
-        ) -> io::Result<MessageResult> {
+        fn message(&self, attempt: &AttemptRef<'_>, call: MessageCall) -> io::Result<MessageResult> {
             assert_eq!(
                 (attempt.run, attempt.generation, attempt.nonce),
                 ("run", "generation", "request")
             );
-            assert_eq!(
-                (call.chat_id.as_str(), call.text.as_str()),
-                ("peer", "hello")
-            );
+            assert_eq!((call.chat_id.as_str(), call.text.as_str()), ("peer", "hello"));
             Ok(MessageResult {
                 chat_id: call.chat_id,
                 run_id: "accepted".into(),
@@ -325,12 +301,7 @@ fn transport_encodes_the_typed_result_and_can_use_a_host_without_global_state() 
         nonce: "request",
     };
     assert_eq!(
-        run(
-            &MemoryHost,
-            &attempt,
-            &json!({"chat_id":"peer","text":"hello"})
-        )
-        .unwrap(),
+        run(&MemoryHost, &attempt, &json!({"chat_id":"peer","text":"hello"})).unwrap(),
         json!({"chat_id":"peer","run_id":"accepted","queued":false,"services":[],"retained":true})
     );
     assert!(

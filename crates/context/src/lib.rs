@@ -1,16 +1,19 @@
 //! Pure lens selection. Resource permissions remain outside this function.
-mod library;
 pub mod agent_policy;
 pub mod commands;
 /// Arguments of the GitHub tools and the `/github` command grammar that produces them.
 pub mod github;
+mod library;
 pub mod limits;
 pub mod persona;
 pub mod tool_policy;
 pub mod turn_context;
-pub mod working_state;
 pub mod turn_mailbox;
-pub use library::{package_reference, valid_id, Audience, Definition, DocumentInput, Guidance, LensVersion, Library, PackageInput, Resolved};
+pub mod working_state;
+pub use library::{
+    Audience, Definition, DocumentInput, Guidance, LensVersion, Library, PackageInput, Resolved, package_reference,
+    valid_id,
+};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tool {
     pub name: &'static str,
@@ -65,21 +68,39 @@ pub mod roles {
 }
 /// An operator-protocol name with no worker exposure of its own.
 const fn op(name: &'static str) -> Mcp {
-    Mcp { name, phrase: "", core: 0, judge: Judge::Denied, brief: "" }
+    Mcp {
+        name,
+        phrase: "",
+        core: 0,
+        judge: Judge::Denied,
+        brief: "",
+    }
 }
 /// A worker tool, deferred for every role until `core` says otherwise.
 const fn w(name: &'static str, phrase: &'static str) -> Mcp {
-    Mcp { name, phrase, core: 0, judge: Judge::Denied, brief: "" }
+    Mcp {
+        name,
+        phrase,
+        core: 0,
+        judge: Judge::Denied,
+        brief: "",
+    }
 }
 impl Mcp {
     const fn core(self, core: u8) -> Self {
         Mcp { core, ..self }
     }
     const fn judge(self) -> Self {
-        Mcp { judge: Judge::Allowed, ..self }
+        Mcp {
+            judge: Judge::Allowed,
+            ..self
+        }
     }
     const fn advisor(self) -> Self {
-        Mcp { judge: Judge::Advisor, ..self }
+        Mcp {
+            judge: Judge::Advisor,
+            ..self
+        }
     }
     const fn brief(self, brief: &'static str) -> Self {
         Mcp { brief, ..self }
@@ -523,8 +544,14 @@ pub const TOOLS: [Tool; 37] = [
 ];
 /// Managed-adapter tool names; advertising a name never grants execution authority.
 pub fn worker_mcp_names() -> Vec<&'static str> {
-    TOOLS.iter().filter(|tool|tool.available).flat_map(|tool|tool.mcp_names.iter().map(|m|m.name))
-        .filter(|name|name.starts_with("control_")).collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+    TOOLS
+        .iter()
+        .filter(|tool| tool.available)
+        .flat_map(|tool| tool.mcp_names.iter().map(|m| m.name))
+        .filter(|name| name.starts_with("control_"))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 /// UI discovery metadata only; protocol schemas and execution authority remain with their adapters.
 pub fn tool_for_mcp(name: &str) -> Option<&'static Tool> {
@@ -534,19 +561,27 @@ pub fn tool_for_mcp(name: &str) -> Option<&'static Tool> {
 }
 /// The catalogue entry of one available protocol name.
 pub fn mcp(name: &str) -> Option<&'static Mcp> {
-    TOOLS.iter().filter(|tool| tool.available).flat_map(|tool| tool.mcp_names).find(|m| m.name == name)
+    TOOLS
+        .iter()
+        .filter(|tool| tool.available)
+        .flat_map(|tool| tool.mcp_names)
+        .find(|m| m.name == name)
 }
 /// Worker spelling of a dotted operator name that has an underscore sibling
 /// in the same family (`control.web.search` → `control_web_search`).
 pub fn worker_name(name: &str) -> Option<&'static str> {
     let family = tool_for_mcp(name)?;
-    name.contains('.').then(|| name.replace('.', "_"))
+    name.contains('.')
+        .then(|| name.replace('.', "_"))
         .and_then(|underscored| family.mcp_names.iter().find(|m| m.name == underscored).map(|m| m.name))
 }
 /// The dotted operator name a worker spelling stands for, if any.
 pub fn dotted_name(name: &str) -> Option<&'static str> {
-    tool_for_mcp(name)?.mcp_names.iter()
-        .find(|m| m.name.contains('.') && m.name.replace('.', "_") == name).map(|m| m.name)
+    tool_for_mcp(name)?
+        .mcp_names
+        .iter()
+        .find(|m| m.name.contains('.') && m.name.replace('.', "_") == name)
+        .map(|m| m.name)
 }
 /// Whether `role`'s sessions list this worker tool's schema at start.
 pub fn loaded(name: &str, role: Audience) -> bool {

@@ -1,7 +1,7 @@
 //! Antibodies: opt-in read-only judges that hear pathological facts about
 //! every team on the node.
-use super::*;
 use super::advisor::turn;
+use super::*;
 
 fn ok(_: &State) -> io::Result<()> {
     Ok(())
@@ -15,16 +15,39 @@ pub(super) fn observer(state: &mut State) -> (String, String) {
     let judge = spawned(state, &root, "Antibody");
     let lead = state.runtime.runs[0].id.clone();
     let run = state.runtime.runs.last_mut().unwrap();
-    run.persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: lead, depth: 1, parent: None, bundle: None });
-    run.attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
+    run.persona = Some(crate::delegation::Persona {
+        role: crate::delegation::Role::Judge,
+        root: lead,
+        depth: 1,
+        parent: None,
+        bundle: None,
+    });
+    run.attempts = vec![crate::usage::Attempt {
+        review_only: true,
+        ..Default::default()
+    }];
     (root, judge)
 }
 fn node_facts(state: &State, chat: &str) -> Vec<std::collections::BTreeMap<String, Facts>> {
-    bot_runs(state).into_iter().filter(|run| run.chat_id.as_deref() == Some(chat))
-        .flat_map(|run| run.bot_turn.as_ref().unwrap().reasons.iter().filter_map(|reason| match reason {
-            Reason::Info { info: Message::Node(teams), .. } => Some(teams.clone()),
-            _ => None,
-        }).collect::<Vec<_>>()).collect()
+    bot_runs(state)
+        .into_iter()
+        .filter(|run| run.chat_id.as_deref() == Some(chat))
+        .flat_map(|run| {
+            run.bot_turn
+                .as_ref()
+                .unwrap()
+                .reasons
+                .iter()
+                .filter_map(|reason| match reason {
+                    Reason::Info {
+                        info: Message::Node(teams),
+                        ..
+                    } => Some(teams.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 /// A service holding finished commands of `run`: (command, exit code).
 pub(super) fn service(state: &mut State, owner: &str, run: &str, commands: &[(&str, i32)]) {
@@ -44,25 +67,51 @@ fn antibodies_are_opt_in_operator_owned_and_hear_the_node_topic() {
     let mut state = State::default();
     let (root, judge) = observer(&mut state);
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(Vec::new());
-    assert_eq!(command_at(&mut state, &judge, "on", Now(0)).unwrap_err(), ADVISOR_OFF, "nothing runs without the lens");
+    assert_eq!(
+        command_at(&mut state, &judge, "on", Now(0)).unwrap_err(),
+        ADVISOR_OFF,
+        "nothing runs without the lens"
+    );
     assert!(!antibodies_active(&state));
     // A root not owned by the local operator cannot watch other people's teams.
     let session = state.chats.iter_mut().find(|chat| chat.id == root).unwrap();
     session.lenses = Some(vec!["antibody".into()]);
-    session.actor = identity::Actor::DiscordDm { user_id: "1".parse().unwrap(), channel_id: "2".parse().unwrap() };
+    session.actor = identity::Actor::DiscordDm {
+        user_id: "1".parse().unwrap(),
+        channel_id: "2".parse().unwrap(),
+    };
     assert!(!antibody_offered(&state, &root));
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().actor = identity::Actor::LocalOperator;
     assert!(antibody_offered(&state, &root));
     // Approval (here the operator's /bot on) runs it, with an optional patrol timer.
     command_at(&mut state, &judge, "on every 60", Now(1)).unwrap();
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
-    assert_eq!(definition.sources, [lifecycle::node_source(), Source::Timer { every_ms: 3_600_000 }]);
+    assert_eq!(
+        definition.sources,
+        [lifecycle::node_source(), Source::Timer { every_ms: 3_600_000 }]
+    );
     assert!(state.bots.antibody(&judge) && state.bots.advises(&judge) && antibodies_active(&state));
     // Standing parity: the pre-persona judge reads as the built-in antibody.
-    let run = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(judge.as_str())).unwrap();
-    assert_eq!(crate::personas::of(&state.bots, run), crate::personas::Effective::builtin("antibody", true));
-    assert!(status(&state, &judge).unwrap().starts_with("Antibody · sleeping · node pathology facts"));
-    assert!(state.collective.room_watches.iter().all(|watch| watch.chat != judge), "no room inbox");
+    let run = state
+        .runtime
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.chat_id.as_deref() == Some(judge.as_str()))
+        .unwrap();
+    assert_eq!(
+        crate::personas::of(&state.bots, run),
+        crate::personas::Effective::builtin("antibody", true)
+    );
+    assert!(
+        status(&state, &judge)
+            .unwrap()
+            .starts_with("Antibody · sleeping · node pathology facts")
+    );
+    assert!(
+        state.collective.room_watches.iter().all(|watch| watch.chat != judge),
+        "no room inbox"
+    );
     command_at(&mut state, &judge, "off", Now(2)).unwrap();
     assert!(!state.bots.antibody(&judge));
 }
@@ -74,8 +123,14 @@ fn an_antibody_hears_pathologies_of_every_team_but_not_ordinary_coordination() {
     let (observer_root, judge) = observer(&mut state);
     command_at(&mut state, &judge, "on", Now(0)).unwrap();
     reconcile_at(&mut state, 1, ok).unwrap();
-    assert!(state.bots.teams.contains_key(&team), "every team is observed, without an advisor");
-    assert!(!state.bots.teams.contains_key(&observer_root), "the observer tree is not a team");
+    assert!(
+        state.bots.teams.contains_key(&team),
+        "every team is observed, without an advisor"
+    );
+    assert!(
+        !state.bots.teams.contains_key(&observer_root),
+        "the observer tree is not a team"
+    );
     assert!(crate::bots::conditions(&state, &team).unwrap().is_empty());
 
     // A quiet team is ordinary: the advisor topic hears it, the node topic does not.
@@ -87,15 +142,44 @@ fn an_antibody_hears_pathologies_of_every_team_but_not_ordinary_coordination() {
 
     // The same command failing again and again is a repetition loop.
     let run = state.runtime.runs[active].id.clone();
-    service(&mut state, &worker, &run, &[("./place-wall.sh 10 64", 1), ("./place-wall.sh 11 64", 1), ("./place-wall.sh 12 64", 1)]);
+    service(
+        &mut state,
+        &worker,
+        &run,
+        &[
+            ("./place-wall.sh 10 64", 1),
+            ("./place-wall.sh 11 64", 1),
+            ("./place-wall.sh 12 64", 1),
+        ],
+    );
     reconcile_at(&mut state, 100_000, ok).unwrap();
     let heard = node_facts(&state, &judge);
     assert_eq!(heard.len(), 1, "{heard:?}");
     let facts = &heard[0][&team];
-    assert_eq!(facts.loops, [pathology::Loop { chat: worker.clone(), command: "./place-wall.sh 12 64".into(), failures: 3 }]);
+    assert_eq!(
+        facts.loops,
+        [pathology::Loop {
+            chat: worker.clone(),
+            command: "./place-wall.sh 12 64".into(),
+            failures: 3
+        }]
+    );
     assert!(!facts.quiescent && facts.blocked.is_empty());
-    assert!(describe(&state, &[Reason::Info { topic: lifecycle::node_topic(), through: 1, info: Message::Node(heard[0].clone()) }]).contains("repetition loop"));
-    assert_eq!(crate::bots::conditions(&state, &team).unwrap(), ["1 repetition loop(s)"]);
+    assert!(
+        describe(
+            &state,
+            &[Reason::Info {
+                topic: lifecycle::node_topic(),
+                through: 1,
+                info: Message::Node(heard[0].clone())
+            }]
+        )
+        .contains("repetition loop")
+    );
+    assert_eq!(
+        crate::bots::conditions(&state, &team).unwrap(),
+        ["1 repetition loop(s)"]
+    );
     // Unchanged evidence is not offered again.
     finish_bot_turns(&mut state);
     reconcile_at(&mut state, 200_000, ok).unwrap();
@@ -104,7 +188,10 @@ fn an_antibody_hears_pathologies_of_every_team_but_not_ordinary_coordination() {
     // Stopping the last antibody drops the snapshots of unadvised teams.
     command_at(&mut state, &judge, "off", Now(300_000)).unwrap();
     assert!(state.bots.teams.is_empty() && !antibodies_active(&state));
-    assert!(lifecycle::observe(&state).is_empty(), "nodes without an antibody or advisor do no work");
+    assert!(
+        lifecycle::observe(&state).is_empty(),
+        "nodes without an antibody or advisor do no work"
+    );
 }
 
 #[test]
@@ -117,22 +204,32 @@ fn cost_burn_reaches_the_antibody_and_progress_rearms_it() {
     reconcile_at(&mut state, 1, ok).unwrap();
     let spent = turn(&mut state, &worker, "completed");
     // Cached input is nearly free and is not counted: 9,000 fresh input + 2,000 output.
-    state.runtime.runs[spent].attempts[0].tokens = Some(control_ai::Tokens { input_tokens: 904_000, cached_input_tokens: 895_000, output_tokens: 2_000 });
+    state.runtime.runs[spent].attempts[0].tokens = Some(control_ai::Tokens {
+        input_tokens: 904_000,
+        cached_input_tokens: 895_000,
+        output_tokens: 2_000,
+    });
     reconcile_at(&mut state, 100_000, ok).unwrap();
     let heard = node_facts(&state, &judge);
-    assert_eq!(heard.last().unwrap()[&team].burn, Some(pathology::Burn { tokens: 11_000 }));
+    assert_eq!(
+        heard.last().unwrap()[&team].burn,
+        Some(pathology::Burn { tokens: 11_000 })
+    );
 }
 
 fn finish_bot_turns(state: &mut State) {
     for run in state.runtime.runs.iter_mut().filter(|run| run.bot_turn.is_some()) {
         run.status = "completed".into();
-        run.attempts = vec![crate::usage::Attempt { review_only: true, ..Default::default() }];
+        run.attempts = vec![crate::usage::Attempt {
+            review_only: true,
+            ..Default::default()
+        }];
     }
 }
 
 #[test]
 fn a_captured_observer_persona_decides_its_mode_and_keeps_its_gene_gate() {
-    use control_context::persona::{builtin, Captured};
+    use control_context::persona::{Captured, builtin};
     let mut state = State::default();
     let (root, judge) = observer(&mut state);
     let capture = |id: &str| Some(Box::new(Captured::of(&builtin(id).unwrap(), &[]).unwrap()));
@@ -143,8 +240,17 @@ fn a_captured_observer_persona_decides_its_mode_and_keeps_its_gene_gate() {
     state.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().bundle = capture("antibody");
     command_at(&mut state, &judge, "on every 30", Now(1)).unwrap();
     let definition = state.bots.supervisor.definitions().find(|d| d.chat.0 == judge).unwrap();
-    assert_eq!(definition.sources, [lifecycle::node_source(), Source::Timer { every_ms: 1_800_000 }]);
-    let run = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(judge.as_str())).unwrap();
+    assert_eq!(
+        definition.sources,
+        [lifecycle::node_source(), Source::Timer { every_ms: 1_800_000 }]
+    );
+    let run = state
+        .runtime
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.chat_id.as_deref() == Some(judge.as_str()))
+        .unwrap();
     let standing = crate::personas::of(&state.bots, run);
     assert!(standing.captured && standing.antibody() && standing.notifies());
     command_at(&mut state, &judge, "off", Now(2)).unwrap();
@@ -160,15 +266,26 @@ fn a_quiet_patrol_settles_without_a_model_turn_and_activity_still_wakes_one() {
     command_at(&mut state, &judge, "on every 1", Now(1)).unwrap();
     // Nothing happens on the node: the timer fires, but the turn settles at once.
     reconcile_at(&mut state, 61_000, ok).unwrap();
-    let patrols = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(judge.as_str())).collect::<Vec<_>>();
+    let patrols = bot_runs(&state)
+        .into_iter()
+        .filter(|run| run.chat_id.as_deref() == Some(judge.as_str()))
+        .collect::<Vec<_>>();
     assert_eq!(patrols.len(), 1);
-    assert_eq!((patrols[0].status.as_str(), patrols[0].attempts.len()), ("completed", 0), "no model call");
+    assert_eq!(
+        (patrols[0].status.as_str(), patrols[0].attempts.len()),
+        ("completed", 0),
+        "no model call"
+    );
     assert!(patrols[0].result.contains("Patrol skipped"));
     // Another team starts work: the next patrol is a real turn.
     let other = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &other, "Build the wall", "test").unwrap();
     reconcile_at(&mut state, 122_000, ok).unwrap();
-    let last = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(judge.as_str())).last().unwrap();
+    let last = bot_runs(&state)
+        .into_iter()
+        .filter(|run| run.chat_id.as_deref() == Some(judge.as_str()))
+        .last()
+        .unwrap();
     assert_eq!(last.status, "queued", "activity on the node wakes a real patrol");
 }
 
@@ -178,8 +295,18 @@ fn a_flagged_team_keeps_patrols_real_while_it_sits_idle() {
     let (_, judge) = observer(&mut state);
     command_at(&mut state, &judge, "on every 1", Now(1)).unwrap();
     // An idle team still flagged as stalled: no new activity, no new facts.
-    state.bots.teams.insert("c-idle-team".into(), lifecycle::Team { stalled: true, ..Default::default() });
+    state.bots.teams.insert(
+        "c-idle-team".into(),
+        lifecycle::Team {
+            stalled: true,
+            ..Default::default()
+        },
+    );
     reconcile_at(&mut state, 61_000, ok).unwrap();
-    let patrol = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(judge.as_str())).last().unwrap();
+    let patrol = bot_runs(&state)
+        .into_iter()
+        .filter(|run| run.chat_id.as_deref() == Some(judge.as_str()))
+        .last()
+        .unwrap();
     assert_eq!(patrol.status, "queued", "only the patrol can see an idle stalled team");
 }

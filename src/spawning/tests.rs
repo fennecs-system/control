@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::{
     backend::Backend,
@@ -33,26 +32,50 @@ pub(super) fn active() -> (State, String) {
 pub(super) fn input(n: usize) -> Input {
     Input {
         objectives: (0..n).map(|n| format!("Inspect page {n}")).collect(),
-        model:None,
-        role:None,
-        persona:None,
-        lenses:None,
+        model: None,
+        role: None,
+        persona: None,
+        lenses: None,
     }
 }
 #[test]
 fn configured_override_is_captured_for_the_batch_and_bad_override_creates_nothing() {
-    let (mut state,id)=active();
-    state.runtime.models.push(crate::providers::Model::captured(Backend::Claude,"reviewer".into()));
-    let mut task=input(2);task.model=Some("claude:reviewer".into());
-    request(&mut state,&id,"parent-attempt","choice",task.clone(),|_|Ok(())).unwrap();
-    assert!(state.runtime.runs[1..].iter().all(|run|run.backend==Backend::Claude && run.model.as_deref()==Some("reviewer")));
-    assert!(state.chats[1..].iter().all(|chat|chat.model.as_ref().unwrap().backend==Backend::Claude));
-    task.model=None;
-    assert!(request(&mut state,&id,"parent-attempt","choice",task,|_|panic!("changed retry")).is_err());
-    let (mut state,id)=active();let mut task=input(1);task.model=Some("missing".into());
-    let before=serde_json::to_vec(&state).unwrap();
-    assert!(request(&mut state,&id,"parent-attempt","bad",task,|_|panic!("invalid selection")).is_err());
-    assert_eq!(serde_json::to_vec(&state).unwrap(),before);
+    let (mut state, id) = active();
+    state
+        .runtime
+        .models
+        .push(crate::providers::Model::captured(Backend::Claude, "reviewer".into()));
+    let mut task = input(2);
+    task.model = Some("claude:reviewer".into());
+    request(&mut state, &id, "parent-attempt", "choice", task.clone(), |_| Ok(())).unwrap();
+    assert!(
+        state.runtime.runs[1..]
+            .iter()
+            .all(|run| run.backend == Backend::Claude && run.model.as_deref() == Some("reviewer"))
+    );
+    assert!(
+        state.chats[1..]
+            .iter()
+            .all(|chat| chat.model.as_ref().unwrap().backend == Backend::Claude)
+    );
+    task.model = None;
+    assert!(
+        request(&mut state, &id, "parent-attempt", "choice", task, |_| panic!(
+            "changed retry"
+        ))
+        .is_err()
+    );
+    let (mut state, id) = active();
+    let mut task = input(1);
+    task.model = Some("missing".into());
+    let before = serde_json::to_vec(&state).unwrap();
+    assert!(
+        request(&mut state, &id, "parent-attempt", "bad", task, |_| panic!(
+            "invalid selection"
+        ))
+        .is_err()
+    );
+    assert_eq!(serde_json::to_vec(&state).unwrap(), before);
 }
 #[test]
 fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
@@ -66,24 +89,12 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
         assert_eq!(child.status, "queued");
         assert_eq!(child.model.as_deref(), Some("captured-model"));
         assert_eq!(child.backend, Backend::Codex);
-        assert_eq!(
-            child.persona.as_ref().unwrap().parent.as_deref(),
-            Some(id.as_str())
-        );
-        let chat = s
-            .chats
-            .iter()
-            .find(|c| Some(&c.id) == child.chat_id.as_ref())
-            .unwrap();
+        assert_eq!(child.persona.as_ref().unwrap().parent.as_deref(), Some(id.as_str()));
+        let chat = s.chats.iter().find(|c| Some(&c.id) == child.chat_id.as_ref()).unwrap();
         assert_eq!(chat.workspace.as_deref(), Some("immutable-baseline"));
         assert_eq!(chat.parent_chat, s.runtime.runs[0].chat_id);
         let status = crate::delegated_results::execute(
-            crate::delegated_results::prepare(
-                &s,
-                &id,
-                json!({"child":child.id,"section":"status"}),
-            )
-            .unwrap(),
+            crate::delegated_results::prepare(&s, &id, json!({"child":child.id,"section":"status"})).unwrap(),
         )
         .unwrap();
         assert_eq!(status["status"], "queued");
@@ -91,27 +102,12 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
     assert_eq!(
         first,
-        request(
-            &mut restored,
-            &id,
-            "parent-attempt",
-            "nonce",
-            input(3),
-            |_| panic!("No second admission save")
-        )
+        request(&mut restored, &id, "parent-attempt", "nonce", input(3), |_| panic!(
+            "No second admission save"
+        ))
         .unwrap()
     );
-    assert!(
-        request(
-            &mut restored,
-            &id,
-            "parent-attempt",
-            "nonce",
-            input(2),
-            |_| Ok(())
-        )
-        .is_err()
-    );
+    assert!(request(&mut restored, &id, "parent-attempt", "nonce", input(2), |_| Ok(())).is_err());
     assert_eq!(restored.runtime.runs.len(), 4);
     // A later human turn in the same chat can inspect the durable receipt.
     restored.runtime.runs[0].status = "completed".into();
@@ -186,18 +182,9 @@ fn child_budget_authority_and_cancellation_are_shared_with_delegation() {
     s.runtime.runs[0].actor = Actor::LocalOperator;
     request(&mut s, &id, "parent-attempt", "nonce", input(8), |_| Ok(())).unwrap();
     assert!(delegation::budget(&s, &s.runtime.runs[0], Role::Worker).is_err());
-    assert!(
-        request(&mut s, &id, "parent-attempt", "another", input(1), |_| Ok(
-            ()
-        ))
-        .is_err()
-    );
+    assert!(request(&mut s, &id, "parent-attempt", "another", input(1), |_| Ok(())).is_err());
     crate::lifecycle::request_cancel(&mut s.runtime, &id, &Actor::LocalOperator).unwrap();
-    assert!(
-        s.runtime.runs[1..]
-            .iter()
-            .all(|run| run.status == "cancelled")
-    );
+    assert!(s.runtime.runs[1..].iter().all(|run| run.status == "cancelled"));
     let (mut s, id) = active();
     s.runtime.runs[0].action = Action::Improve;
     s.runtime.runs[0].attempts[0].parent_artifact = None;
@@ -206,15 +193,7 @@ fn child_budget_authority_and_cancellation_are_shared_with_delegation() {
 #[test]
 fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
     let (mut s, id) = active();
-    let accepted = request(
-        &mut s,
-        &id,
-        "parent-attempt",
-        "fifty",
-        input(50),
-        |_| Ok(()),
-    )
-    .unwrap();
+    let accepted = request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| Ok(())).unwrap();
     assert_eq!(accepted["requested"], 50);
     assert_eq!(accepted["materialized"], 31);
     assert_eq!(accepted["pending"], 19);
@@ -225,14 +204,9 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
     assert!(delegation::budget_for(&s, &s.runtime.runs[1], Role::Worker, 15, false).is_err());
     let snapshot = serde_json::to_vec(&s).unwrap();
     assert_eq!(
-        request(
-            &mut s,
-            &id,
-            "parent-attempt",
-            "fifty",
-            input(50),
-            |_| panic!("Retry must not write")
-        )
+        request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| panic!(
+            "Retry must not write"
+        ))
         .unwrap(),
         accepted
     );
@@ -249,11 +223,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
     assert_eq!(s.runtime.runs[0].spawns[0].pending(), 9);
     for child in &s.runtime.runs[32..] {
         assert_eq!(child.model.as_deref(), Some("captured-model"));
-        let chat = s
-            .chats
-            .iter()
-            .find(|c| Some(&c.id) == child.chat_id.as_ref())
-            .unwrap();
+        let chat = s.chats.iter().find(|c| Some(&c.id) == child.chat_id.as_ref()).unwrap();
         assert_eq!(chat.workspace.as_deref(), Some("immutable-baseline"));
     }
     for run in &mut s.runtime.runs {
@@ -270,15 +240,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
 #[test]
 fn later_originating_turn_pages_and_cancels_backlog_atomically() {
     let (mut s, id) = active();
-    let accepted = request(
-        &mut s,
-        &id,
-        "parent-attempt",
-        "fifty",
-        input(50),
-        |_| Ok(()),
-    )
-    .unwrap();
+    let accepted = request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| Ok(())).unwrap();
     let batch = accepted["batch"].clone();
     s.runtime.runs[0].status = "completed".into();
     let originating = s.runtime.runs[0].chat_id.clone();
@@ -323,64 +285,30 @@ fn later_originating_turn_pages_and_cancels_backlog_atomically() {
     )
     .unwrap();
     assert!(s.runtime.runs[0].spawns[0].cancelled);
-    assert!(
-        s.runtime.runs[1..32]
-            .iter()
-            .all(|run| run.status == "cancelled")
-    );
+    assert!(s.runtime.runs[1..32].iter().all(|run| run.status == "cancelled"));
     reconcile(&mut s, |_| panic!("Cancelled backlog cannot spawn")).unwrap();
     assert_eq!(s.runtime.runs.len(), 33);
     s.runtime.runs.last_mut().unwrap().chat_id = Some("unrelated-chat".into());
-    assert!(
-        manage(
-            &mut s,
-            &caller,
-            "control_agent_spawn_status",
-            &args,
-            |_| Ok(())
-        )
-        .is_err()
-    );
+    assert!(manage(&mut s, &caller, "control_agent_spawn_status", &args, |_| Ok(())).is_err());
 }
 #[test]
 fn cancellation_revocation_and_intent_limits_fence_unmaterialized_work() {
     let (mut s, id) = active();
     s.runtime.execution.max_pending_agent_intents = 40;
     assert!(
-        request(
-            &mut s,
-            &id,
-            "parent-attempt",
-            "fifty",
-            input(50),
-            |_| panic!("Over budget cannot save")
-        )
+        request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| panic!(
+            "Over budget cannot save"
+        ))
         .is_err()
     );
     s.runtime.execution.max_pending_agent_intents = 256;
-    request(
-        &mut s,
-        &id,
-        "parent-attempt",
-        "fifty",
-        input(50),
-        |_| Ok(()),
-    )
-    .unwrap();
+    request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| Ok(())).unwrap();
     crate::lifecycle::request_cancel(&mut s.runtime, &id, &identity::Actor::LocalOperator).unwrap();
     reconcile(&mut s, |_| Ok(())).unwrap();
     assert!(s.runtime.runs[0].spawns[0].cancelled);
     assert_eq!(s.runtime.runs.len(), 32);
     let (mut s, id) = active();
-    request(
-        &mut s,
-        &id,
-        "parent-attempt",
-        "fifty",
-        input(50),
-        |_| Ok(()),
-    )
-    .unwrap();
+    request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| Ok(())).unwrap();
     s.runtime.runs[0].actor = identity::Actor::Unknown;
     reconcile(&mut s, |_| Ok(())).unwrap();
     assert!(s.runtime.runs[0].spawns[0].cancelled);
@@ -389,15 +317,7 @@ fn cancellation_revocation_and_intent_limits_fence_unmaterialized_work() {
 #[test]
 fn node_backlog_budget_is_shared_across_independent_roots() {
     let (mut s, id) = active();
-    request(
-        &mut s,
-        &id,
-        "parent-attempt",
-        "fifty",
-        input(50),
-        |_| Ok(()),
-    )
-    .unwrap();
+    request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| Ok(())).unwrap();
     s.runtime.runs[0].status = "completed".into();
     s.runtime.execution.max_pending_agent_intents = 20;
     let next_chat = chat::create(&mut s);
@@ -430,15 +350,7 @@ fn node_backlog_budget_is_shared_across_independent_roots() {
 #[test]
 fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
     let (mut s, id) = active();
-    let root = request(
-        &mut s,
-        &id,
-        "parent-attempt",
-        "root-batch",
-        input(1),
-        |_| Ok(()),
-    )
-    .unwrap();
+    let root = request(&mut s, &id, "parent-attempt", "root-batch", input(1), |_| Ok(())).unwrap();
     let mut next = s.runtime.runs[1].clone();
     next.id = "continued-child".into();
     next.kind = RunKind::DelegationResult;
@@ -451,7 +363,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
     s.runtime.runs[1].status = "continued".into();
     s.runtime.runs[1].delegation = Some(delegation::Delegation {
         input: delegation::Input {
-            model:None,
+            model: None,
             objective: "Review".into(),
             role: Role::Judge,
         },
@@ -485,11 +397,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
     manage(&mut s, &id, "control_agent_spawn_cancel", &args, |_| Ok(())).unwrap();
     assert_eq!(s.runtime.runs[2].status, "cancelling");
     assert!(s.runtime.runs[2].spawns[0].cancelled);
-    assert!(
-        s.runtime.runs[3..]
-            .iter()
-            .all(|run| run.status == "cancelled")
-    );
+    assert!(s.runtime.runs[3..].iter().all(|run| run.status == "cancelled"));
     reconcile(&mut s, |_| panic!("Descendant backlog must remain fenced")).unwrap();
 }
 #[test]
@@ -497,15 +405,7 @@ fn configured_team_above_legacy_graph_limit_remains_inspectable() {
     let (mut s, id) = active();
     s.runtime.execution.max_agents_per_root = 1100;
     s.runtime.execution.max_pending_agent_intents = 1100;
-    request(
-        &mut s,
-        &id,
-        "parent-attempt",
-        "large-team",
-        input(1030),
-        |_| Ok(()),
-    )
-    .unwrap();
+    request(&mut s, &id, "parent-attempt", "large-team", input(1030), |_| Ok(())).unwrap();
     while s.runtime.runs[0].spawns[0].pending() > 0 {
         for child in &mut s.runtime.runs[1..] {
             child.status = "completed".into();
@@ -514,12 +414,8 @@ fn configured_team_above_legacy_graph_limit_remains_inspectable() {
     }
     assert_eq!(s.runtime.runs.len(), 1031);
     let last = s.runtime.runs.last().unwrap().id.clone();
-    let plan = crate::delegated_results::prepare(&s, &id, json!({"child":last,"section":"status"}))
-        .unwrap();
-    assert_eq!(
-        crate::delegated_results::execute(plan).unwrap()["status"],
-        "queued"
-    );
+    let plan = crate::delegated_results::prepare(&s, &id, json!({"child":last,"section":"status"})).unwrap();
+    assert_eq!(crate::delegated_results::execute(plan).unwrap()["status"], "queued");
 }
 #[test]
 #[ignore = "manual optimized profile of the no-backlog reconciliation path"]
@@ -548,27 +444,49 @@ fn profile_idle_backlog_reconciliation() {
 #[test]
 fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_judge() {
     let (mut s, id) = active();
-    let judge = |n| Input { role: Some(Role::Judge), ..input(n) };
+    let judge = |n| Input {
+        role: Some(Role::Judge),
+        ..input(n)
+    };
     // Strictly opt-in: no advisor option until the root chat selects the advisor lens.
     let error = request(&mut s, &id, "parent-attempt", "off", judge(1), |_| panic!("lens off")).unwrap_err();
     assert_eq!(error, crate::bots::ADVISOR_OFF);
     s.chats[0].lenses = Some(vec!["swarm".into()]);
-    assert!(request(&mut s, &id, "parent-attempt", "swarm", judge(1), |_| panic!("swarm excludes it")).is_err());
+    assert!(
+        request(&mut s, &id, "parent-attempt", "swarm", judge(1), |_| panic!(
+            "swarm excludes it"
+        ))
+        .is_err()
+    );
     // Each gene offers only its own observer: a plain judge is an advisor.
     s.chats[0].lenses = Some(vec!["swarm".into(), "acceptance".into()]);
-    let error = request(&mut s, &id, "parent-attempt", "other-gene", judge(1), |_| panic!("no advisor gene")).unwrap_err();
+    let error = request(&mut s, &id, "parent-attempt", "other-gene", judge(1), |_| {
+        panic!("no advisor gene")
+    })
+    .unwrap_err();
     assert_eq!(error, crate::bots::ADVISOR_OFF);
     s.chats[0].lenses = Some(vec!["swarm".into(), "advisor".into()]);
-    assert!(request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!("one advisor per batch")).is_err());
+    assert!(
+        request(&mut s, &id, "parent-attempt", "two", judge(2), |_| panic!(
+            "one advisor per batch"
+        ))
+        .is_err()
+    );
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
     let child = s.runtime.runs.last().unwrap();
-    assert!(delegation::is_judge(child), "spawned with the existing judge persona, not a new role");
+    assert!(
+        delegation::is_judge(child),
+        "spawned with the existing judge persona, not a new role"
+    );
     assert_eq!((child.kind, child.action), (RunKind::Spawned, Action::Task));
     assert!(child.resource_grants.is_empty(), "a judge receives no services");
     // The default allowance fits three observers: an advisor, a monitor and an acceptance check.
     request(&mut s, &id, "parent-attempt", "second", judge(1), |_| Ok(())).unwrap();
     request(&mut s, &id, "parent-attempt", "monitor", judge(1), |_| Ok(())).unwrap();
-    let error = request(&mut s, &id, "parent-attempt", "third", judge(1), |_| panic!("three observers per root")).unwrap_err();
+    let error = request(&mut s, &id, "parent-attempt", "third", judge(1), |_| {
+        panic!("three observers per root")
+    })
+    .unwrap_err();
     assert!(error.contains("max_advisors_per_root"), "{error}");
     // The advisor does not consume the root's one blocking judge review.
     let parent = s.runtime.runs.iter().find(|run| run.id == id).unwrap();
@@ -577,9 +495,17 @@ fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_j
     s.runtime.execution.max_advisors_per_root = 4;
     request(&mut s, &id, "parent-attempt", "third", judge(1), |_| Ok(())).unwrap();
     s.runtime.execution.max_advisors_per_root = 0;
-    assert!(request(&mut s, &id, "parent-attempt", "fourth", judge(1), |_| panic!("advisors disabled")).is_err());
+    assert!(
+        request(&mut s, &id, "parent-attempt", "fourth", judge(1), |_| panic!(
+            "advisors disabled"
+        ))
+        .is_err()
+    );
     request(&mut s, &id, "parent-attempt", "workers", input(1), |_| Ok(())).unwrap();
-    assert!(!delegation::is_judge(s.runtime.runs.last().unwrap()), "omitting the role keeps workers");
+    assert!(
+        !delegation::is_judge(s.runtime.runs.last().unwrap()),
+        "omitting the role keeps workers"
+    );
 }
 #[test]
 fn an_advisor_never_uses_the_teams_member_capacity() {
@@ -588,12 +514,27 @@ fn an_advisor_never_uses_the_teams_member_capacity() {
     let (mut s, id) = active();
     s.chats[0].lenses = Some(vec!["advisor".into()]);
     s.runtime.execution.max_agents_per_root = 3;
-    let judge = |n| Input { role: Some(Role::Judge), ..input(n) };
+    let judge = |n| Input {
+        role: Some(Role::Judge),
+        ..input(n)
+    };
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
     // The whole member budget is still free for players.
     request(&mut s, &id, "parent-attempt", "players", input(3), |_| Ok(())).unwrap();
-    assert_eq!(s.runtime.runs.iter().filter(|run| run.kind == RunKind::Spawned && !delegation::is_judge(run)).count(), 3);
-    assert!(request(&mut s, &id, "parent-attempt", "fourth", input(1), |_| panic!("over budget")).is_err());
+    assert_eq!(
+        s.runtime
+            .runs
+            .iter()
+            .filter(|run| run.kind == RunKind::Spawned && !delegation::is_judge(run))
+            .count(),
+        3
+    );
+    assert!(
+        request(&mut s, &id, "parent-attempt", "fourth", input(1), |_| panic!(
+            "over budget"
+        ))
+        .is_err()
+    );
     // A full team does not hold back its advisor either; only the advisor
     // allowance does.
     let (mut s, id) = active();
@@ -603,7 +544,10 @@ fn an_advisor_never_uses_the_teams_member_capacity() {
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
     assert!(delegation::is_judge(s.runtime.runs.last().unwrap()));
     // Spawning it returned at once: the lead's turn keeps running.
-    assert_eq!(s.runtime.runs.iter().find(|run| run.id == id).unwrap().status, "running");
+    assert_eq!(
+        s.runtime.runs.iter().find(|run| run.id == id).unwrap().status,
+        "running"
+    );
 }
 #[test]
 fn spawned_workers_join_the_team_room_within_one_actor_and_tree() {
@@ -616,9 +560,16 @@ fn spawned_workers_join_the_team_room_within_one_actor_and_tree() {
     s.chats[0].parent_chat = Some(lead.clone());
     let objectives = input(2);
     request(&mut s, &id, "parent-attempt", "team", objectives, |_| Ok(())).unwrap();
-    let children = s.chats.iter().filter(|chat| chat.parent_chat.as_deref() == Some(worker.as_str())).collect::<Vec<_>>();
+    let children = s
+        .chats
+        .iter()
+        .filter(|chat| chat.parent_chat.as_deref() == Some(worker.as_str()))
+        .collect::<Vec<_>>();
     assert_eq!(children.len(), 2);
-    assert!(children.iter().all(|chat| chat.room.as_deref() == Some(team.as_str())), "objectives never had to name the room");
+    assert!(
+        children.iter().all(|chat| chat.room.as_deref() == Some(team.as_str())),
+        "objectives never had to name the room"
+    );
     // Another actor's link is never inherited, and nothing else is widened.
     s.chats[1].actor = Actor::Unknown;
     request(&mut s, &id, "parent-attempt", "foreign", input(1), |_| Ok(())).unwrap();
@@ -643,14 +594,20 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
             .map(|value| value["status"].clone())
     };
     assert_eq!(status(&s, &worker).unwrap(), "queued");
-    let judge = Input { role: Some(Role::Judge), ..input(1) };
+    let judge = Input {
+        role: Some(Role::Judge),
+        ..input(1)
+    };
     request(&mut s, &id, "parent-attempt", "advisor", judge, |_| Ok(())).unwrap();
     let advisor = s.runtime.runs.last().unwrap().id.clone();
     assert!(delegation::is_judge(s.runtime.runs.last().unwrap()));
     assert_eq!(status(&s, &worker).unwrap(), "queued");
     // The advisor's receipt is checked under its own batch's role, but an
     // observer is not a readable result: nothing new becomes readable.
-    assert_eq!(status(&s, &advisor).unwrap_err(), "Result is not from this parent's delegated descendants.");
+    assert_eq!(
+        status(&s, &advisor).unwrap_err(),
+        "Result is not from this parent's delegated descendants."
+    );
     // Receipts still bind: a child whose role differs from its batch is refused.
     s.runtime.runs.last_mut().unwrap().persona.as_mut().unwrap().role = Role::Worker;
     assert_eq!(status(&s, &worker).unwrap_err(), "Spawned child provenance mismatch.");

@@ -1,9 +1,8 @@
 //! Synthetic workloads: never load personal state or make provider calls.
 use crate::runtime::RunKind;
 use crate::{
-    chat,
+    State, chat,
     usage::{Activity, Attempt},
-    State,
 };
 use std::{hint::black_box, time::Instant};
 
@@ -26,7 +25,11 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             .into(),
         );
         run.status = ["completed", "running", "failed", "queued", "cancelled"][index % 5].into();
-        run.kind = if index % 7 == 0 { RunKind::Steering } else { RunKind::Chat };
+        run.kind = if index % 7 == 0 {
+            RunKind::Steering
+        } else {
+            RunKind::Chat
+        };
         *run.result = format!("Answer {index}: Unicode λ & <code> \"text\".");
         run.attempts.push(Attempt {
             omitted_history: index % 3,
@@ -49,7 +52,8 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             ..Default::default()
         });
         if index < messages {
-            state.chats[0].messages.push(chat::Message { speaker: Default::default(),
+            state.chats[0].messages.push(chat::Message {
+                speaker: Default::default(),
                 text: format!("Question {index}: <&> λ"),
                 run_id: Some(run.id.clone()),
                 reply: String::new(),
@@ -201,25 +205,42 @@ type View = dyn Fn(&State) -> usize;
 #[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
 fn operator_views() {
     // More samples for profiling: CONTROL_TIMING_ROUNDS=2000.
-    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9);
     for (messages, unrelated, questions) in [(10, 0, 0), (100, 1000, 10), (500, 5000, 50)] {
         let mut state = fixture(messages, unrelated);
-        for (index, run) in state.runtime.runs.iter_mut().filter(|run| run.chat_id.as_deref() == Some("benchmark-chat")).take(questions).enumerate() {
+        for (index, run) in state
+            .runtime
+            .runs
+            .iter_mut()
+            .filter(|run| run.chat_id.as_deref() == Some("benchmark-chat"))
+            .take(questions)
+            .enumerate()
+        {
             run.status = "waiting".into();
             run.question = Some(crate::design::Question {
                 id: format!("q-{index}"),
                 generation: format!("g-{index}"),
                 nonce: format!("n-{index}"),
-                input: crate::design::parse_input(serde_json::json!({"question":"Choose a route <&> λ","options":["Relay","Stop"]})).unwrap(),
+                input: crate::design::parse_input(
+                    serde_json::json!({"question":"Choose a route <&> λ","options":["Relay","Stop"]}),
+                )
+                .unwrap(),
                 answer: None,
                 continuation: None,
             });
         }
         let workloads: [(&str, &View); 6] = [
             ("web_chat_page", &|s| chat::render(s, "benchmark-chat").unwrap().len()),
-            ("web_requests_panel", &|s| chat::requests(s, "benchmark-chat").unwrap().len()),
+            ("web_requests_panel", &|s| {
+                chat::requests(s, "benchmark-chat").unwrap().len()
+            }),
             ("web_bots_page", &|s| crate::bots::overview(s, "").len()),
-            ("chat_read", &|s| chat::detail(s, "benchmark-chat").unwrap().to_string().len()),
+            ("chat_read", &|s| {
+                chat::detail(s, "benchmark-chat").unwrap().to_string().len()
+            }),
             ("chats_list", &|s| chat::list(s).to_string().len()),
             ("requests_list", &|s| chat::pending_requests(s).to_string().len()),
         ];
@@ -233,7 +254,10 @@ fn operator_views() {
                 samples.push(start.elapsed().as_nanos() / 10);
             }
             samples.sort_unstable();
-            println!("{}", serde_json::json!({"workload":name,"messages":messages,"unrelated_runs":unrelated,"questions":questions,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)}));
+            println!(
+                "{}",
+                serde_json::json!({"workload":name,"messages":messages,"unrelated_runs":unrelated,"questions":questions,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)})
+            );
         }
     }
 }
@@ -241,7 +265,10 @@ fn operator_views() {
 #[test]
 #[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
 fn dna_page() {
-    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9);
     for genes in [10, 100, 1000] {
         let mut state = State::default();
         crate::ui_previews::genes(&mut state, genes);
@@ -250,13 +277,22 @@ fn dna_page() {
         for _ in 0..rounds {
             let start = Instant::now();
             for _ in 0..10 {
-                black_box(crate::lens_library::render(black_box(&state), &selected, None, None, false));
+                black_box(crate::lens_library::render(
+                    black_box(&state),
+                    &selected,
+                    None,
+                    None,
+                    false,
+                ));
             }
             samples.push(start.elapsed().as_nanos() / 10);
         }
         samples.sort_unstable();
         let bytes = crate::lens_library::render(&state, &selected, None, None, false).len();
-        println!("{}", serde_json::json!({"workload":"web_dna_page","genes":genes,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":bytes}));
+        println!(
+            "{}",
+            serde_json::json!({"workload":"web_dna_page","genes":genes,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":bytes})
+        );
     }
 }
 /// The chat list/tree every client renders: `control.chats.list` (TUI picker,
@@ -265,7 +301,10 @@ fn dna_page() {
 #[test]
 #[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
 fn chat_lists() {
-    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9);
     let id = |index: usize| format!("c-{:x}-{index}", 0x1870_0000_0000_u64 + index as u64 * 7919);
     for chats in [10, 100, 1000] {
         let mut state = State::default();
@@ -280,8 +319,12 @@ fn chat_lists() {
         let active: &'static str = state.chats[chats / 2].id.clone().leak();
         let workloads: [(&str, &View); 3] = [
             ("chats_list", &|s| chat::list(s).to_string().len()),
-            ("web_conversation_tree", &move |s| crate::navigation::conversations(s, active).len()),
-            ("chat_read_heading", &move |s| chat::detail(s, active).unwrap()["title"].to_string().len()),
+            ("web_conversation_tree", &move |s| {
+                crate::navigation::conversations(s, active).len()
+            }),
+            ("chat_read_heading", &move |s| {
+                chat::detail(s, active).unwrap()["title"].to_string().len()
+            }),
         ];
         for (name, workload) in workloads {
             let mut samples = Vec::new();
@@ -293,7 +336,10 @@ fn chat_lists() {
                 samples.push(start.elapsed().as_nanos() / 10);
             }
             samples.sort_unstable();
-            println!("{}", serde_json::json!({"workload":name,"chats":chats,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)}));
+            println!(
+                "{}",
+                serde_json::json!({"workload":name,"chats":chats,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)})
+            );
         }
     }
 }
@@ -317,8 +363,17 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
         turn.id = format!("run-{index}");
         turn.chat_id = Some(id(index));
         turn.status = ["completed", "cancelled", "failed", "completed"][index % 4].into();
-        turn.bot_turn = Some(Box::new(crate::bots::Turn { bot: id(index), turn: 1, reasons: Vec::new(), recovery: None }));
-        turn.attempts.push(Attempt { started_unix: 1_700_000_000 + index as u64 * 37, elapsed_ms: 90_000, ..Default::default() });
+        turn.bot_turn = Some(Box::new(crate::bots::Turn {
+            bot: id(index),
+            turn: 1,
+            reasons: Vec::new(),
+            recovery: None,
+        }));
+        turn.attempts.push(Attempt {
+            started_unix: 1_700_000_000 + index as u64 * 37,
+            elapsed_ms: 90_000,
+            ..Default::default()
+        });
         state.runtime.runs.push(turn);
     }
     for index in 0..live {
@@ -350,17 +405,32 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
 #[test]
 #[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
 fn bots_page() {
-    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9);
     for (live, dead) in [(0, 10), (100, 1000), (100, 10_000)] {
         let state = dead_bots(live, dead);
-        let next = crate::graveyard::dead(&state, "").get(crate::graveyard::PAGE.min(dead) - 1).map(|grave| grave.chat.id.clone()).unwrap_or_default();
+        let next = crate::graveyard::dead(&state, "")
+            .get(crate::graveyard::PAGE.min(dead) - 1)
+            .map(|grave| grave.chat.id.clone())
+            .unwrap_or_default();
         let next: &'static str = next.leak();
         let workloads: [(&str, &View); 4] = [
-            ("web_bots_page", &|s| crate::public_render(s, &crate::fields("view=agents"), "none").len()),
-            ("web_bots_page_search", &|s| crate::public_render(s, &crate::fields("view=agents&q=tunnel+9"), "none").len()),
-            ("web_bots_page_search_miss", &|s| crate::public_render(s, &crate::fields("view=agents&q=zzzz"), "none").len()),
+            ("web_bots_page", &|s| {
+                crate::public_render(s, &crate::fields("view=agents"), "none").len()
+            }),
+            ("web_bots_page_search", &|s| {
+                crate::public_render(s, &crate::fields("view=agents&q=tunnel+9"), "none").len()
+            }),
+            ("web_bots_page_search_miss", &|s| {
+                crate::public_render(s, &crate::fields("view=agents&q=zzzz"), "none").len()
+            }),
             ("graveyard_next_page", &move |s| {
-                let query = crate::graveyard::Query { older: Some(next.into()), ..Default::default() };
+                let query = crate::graveyard::Query {
+                    older: Some(next.into()),
+                    ..Default::default()
+                };
                 crate::graveyard::rows(&crate::graveyard::dead(s, ""), &query).len()
             }),
         ];
@@ -374,7 +444,10 @@ fn bots_page() {
                 samples.push(start.elapsed().as_nanos() / 10);
             }
             samples.sort_unstable();
-            println!("{}", serde_json::json!({"workload":name,"live_bots":live,"dead_bots":dead,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)}));
+            println!(
+                "{}",
+                serde_json::json!({"workload":name,"live_bots":live,"dead_bots":dead,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":workload(&state)})
+            );
         }
     }
 }
@@ -405,7 +478,11 @@ pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
         turn.attempts.push(Attempt {
             started_unix: 1_700_000_000 + index as u64 * 13,
             elapsed_ms: 30_000,
-            tokens: Some(crate::usage::Tokens { input_tokens: 9_000, cached_input_tokens: 6_000, output_tokens: 700 }),
+            tokens: Some(crate::usage::Tokens {
+                input_tokens: 9_000,
+                cached_input_tokens: 6_000,
+                output_tokens: 700,
+            }),
             ..Default::default()
         });
         state.runtime.runs.push(turn);
@@ -417,8 +494,14 @@ pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
 #[test]
 #[ignore = "explicit release-mode synthetic timing; no credentials, models or source execution"]
 fn history_page() {
-    let rounds = std::env::var("CONTROL_TIMING_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
-    let turns = std::env::var("CONTROL_HISTORY_TURNS").ok().and_then(|v| v.parse().ok()).unwrap_or(100_000);
+    let rounds = std::env::var("CONTROL_TIMING_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9);
+    let turns = std::env::var("CONTROL_HISTORY_TURNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000);
     for dms in [10, 1000, 10_000] {
         let mut state = history_fixture(dms, turns);
         let dm = state.chats[0].id.clone();
@@ -445,7 +528,10 @@ fn history_page() {
                 samples.push(start.elapsed().as_nanos() / 5);
             }
             samples.sort_unstable();
-            println!("{}", serde_json::json!({"workload":name,"dms":dms,"turns":turns,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"max_ns":samples[samples.len() - 1],"bytes":request(&mut state)}));
+            println!(
+                "{}",
+                serde_json::json!({"workload":name,"dms":dms,"turns":turns,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"max_ns":samples[samples.len() - 1],"bytes":request(&mut state)})
+            );
         }
     }
 }

@@ -54,7 +54,13 @@ fn with_chat() -> (State, String) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     for i in 0..20 {
-        crate::chat::send(&mut state, &chat, &format!("message {i} {}", "text ".repeat(50)), "test").unwrap();
+        crate::chat::send(
+            &mut state,
+            &chat,
+            &format!("message {i} {}", "text ".repeat(50)),
+            "test",
+        )
+        .unwrap();
     }
     (state, chat)
 }
@@ -71,7 +77,12 @@ fn saves_append_only_the_change_and_a_restart_reads_them_back() {
     scratch.save(&state);
     assert_eq!(scratch.lines(), 2, "an unchanged save writes nothing");
     assert_eq!(scratch.snapshot(), snapshot, "the snapshot is not rewritten");
-    assert!(scratch.log().len() < snapshot.len() / 4, "{} byte patch for a {} byte state", scratch.log().len(), snapshot.len());
+    assert!(
+        scratch.log().len() < snapshot.len() / 4,
+        "{} byte patch for a {} byte state",
+        scratch.log().len(),
+        snapshot.len()
+    );
     let restored = scratch.restart();
     assert!(same(&restored, &state));
     // The restart compacted the replayed log into a fresh snapshot.
@@ -106,7 +117,10 @@ fn a_torn_or_corrupt_log_tail_is_dropped_and_earlier_saves_survive() {
     published().lock().unwrap().remove(&scratch.0);
     archives().lock().unwrap().remove(&scratch.0);
     let restored = scratch.restart();
-    assert_eq!(crate::history::persisting(|| serde_json::to_value(&restored).unwrap()), durable);
+    assert_eq!(
+        crate::history::persisting(|| serde_json::to_value(&restored).unwrap()),
+        durable
+    );
     // A complete but corrupt line (zero-filled block after power loss) ends the
     // valid prefix too: it and everything after it are truncated on recovery.
     crate::chat::send(&mut state, &chat, "second", "test").unwrap();
@@ -114,14 +128,19 @@ fn a_torn_or_corrupt_log_tail_is_dropped_and_earlier_saves_survive() {
     let lines = scratch.lines();
     let mut log = fs::OpenOptions::new().append(true).open(scratch.0.join(LOG)).unwrap();
     log.write_all(b"\0\0\0\0\n").unwrap();
-    log.write_all(&snapshot::commit(br#"[["s",["note"],"after"]]"#)).unwrap();
+    log.write_all(&snapshot::commit(br#"[["s",["note"],"after"]]"#))
+        .unwrap();
     log.write_all(b"\n").unwrap();
     published().lock().unwrap().remove(&scratch.0);
     archives().lock().unwrap().remove(&scratch.0);
     let data = read_checkpoint(&scratch.0).unwrap().unwrap();
     let (restored, recovered) = recover(&scratch.0, data).unwrap();
     assert!(same(&restored, &state));
-    assert_eq!(recovered.unwrap().log.len() as usize, lines, "the corrupt tail was truncated");
+    assert_eq!(
+        recovered.unwrap().log.len() as usize,
+        lines,
+        "the corrupt tail was truncated"
+    );
 }
 
 #[test]
@@ -150,7 +169,11 @@ fn the_log_compacts_once_it_outgrows_the_snapshot() {
         state.note = format!("{i}").repeat(1 << 20);
         scratch.save(&state);
     }
-    assert!(scratch.log().len() < LOG_MINIMUM + (1 << 20) + 4096, "{} log bytes", scratch.log().len());
+    assert!(
+        scratch.log().len() < LOG_MINIMUM + (1 << 20) + 4096,
+        "{} log bytes",
+        scratch.log().len()
+    );
     assert!(scratch.lines() < 6);
     assert!(same(&scratch.restart(), &state));
 }
@@ -160,18 +183,29 @@ fn a_monolithic_state_json_migrates_and_compaction_keeps_it_readable_by_older_bu
     let scratch = Scratch::new("migrate");
     let (state, _) = with_chat();
     // What builds before the patch log wrote: the state alone, no log.
-    fs::write(scratch.0.join("state.json"), crate::history::persisting(|| serde_json::to_vec(&state)).unwrap()).unwrap();
+    fs::write(
+        scratch.0.join("state.json"),
+        crate::history::persisting(|| serde_json::to_vec(&state)).unwrap(),
+    )
+    .unwrap();
     let restored = scratch.restart();
     assert!(same(&restored, &state));
     let snapshot = scratch.snapshot();
-    assert!(snapshot.starts_with(br#"{"_snapshot":"#), "migrated to a named snapshot");
+    assert!(
+        snapshot.starts_with(br#"{"_snapshot":"#),
+        "migrated to a named snapshot"
+    );
     let plain: State = serde_json::from_slice(&snapshot).unwrap();
     assert!(same(&plain, &state), "older builds ignore the extra members");
     // An older build then rewrote state.json (rollback): its log is stale and ignored.
     let (mut older, chat) = with_chat();
     crate::chat::send(&mut older, &chat, "written by the older build", "test").unwrap();
     scratch.save(&restored);
-    fs::write(scratch.0.join("state.json"), crate::history::persisting(|| serde_json::to_vec(&older)).unwrap()).unwrap();
+    fs::write(
+        scratch.0.join("state.json"),
+        crate::history::persisting(|| serde_json::to_vec(&older)).unwrap(),
+    )
+    .unwrap();
     assert!(same(&scratch.restart(), &older));
 }
 
@@ -183,13 +217,20 @@ fn state_from_a_newer_schema_is_read_back_through_its_recorded_lenses() {
     // A hypothetical next version renamed `note` to `notes` and recorded the lens.
     let mut newer = schema();
     newer.version += 1;
-    newer.lenses.push(vec![lens::Lens::Rename { from: "note".into(), to: "notes".into() }]);
+    newer.lenses.push(vec![lens::Lens::Rename {
+        from: "note".into(),
+        to: "notes".into(),
+    }]);
     let mut document = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     lens::document(&lens::route(&schema(), &newer).unwrap(), &mut document);
     assert_eq!(document["notes"], "kept");
     let newer_value = serde_json::to_value(&newer).unwrap();
     let encoded = snapshot::encode(&document).unwrap();
-    fs::write(scratch.0.join("state.json"), snapshot::snapshot(&encoded, "n", &newer_value)).unwrap();
+    fs::write(
+        scratch.0.join("state.json"),
+        snapshot::snapshot(&encoded, "n", &newer_value),
+    )
+    .unwrap();
     // Its log changed `notes`; this build reads it as `note`.
     let mut log = snapshot::header("n", &newer_value);
     log.push(b'\n');
@@ -226,15 +267,26 @@ fn a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it() {
     let after = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     let full = scratch.log();
     let line = &full[committed.len()..];
-    assert!(line.len() > 100 && line.ends_with(b"\n") && line.iter().filter(|&&b| b == b'\n').count() == 1, "one line, one commit");
+    assert!(
+        line.len() > 100 && line.ends_with(b"\n") && line.iter().filter(|&&b| b == b'\n').count() == 1,
+        "one line, one commit"
+    );
     for cut in 0..=line.len() {
         fs::write(scratch.0.join(LOG), &full[..committed.len() + cut]).unwrap();
         let expected = if cut == line.len() { &after } else { &before };
-        assert!(&recovered(&scratch) == expected, "crash after {cut} of {} bytes", line.len());
+        assert!(
+            &recovered(&scratch) == expected,
+            "crash after {cut} of {} bytes",
+            line.len()
+        );
     }
     // A complete line with damaged content (a block lost after power failure)
     // fails its checksum and is not applied.
-    for at in [committed.len() + 40, full.len() / 2 + committed.len() / 2, full.len() - 3] {
+    for at in [
+        committed.len() + 40,
+        full.len() / 2 + committed.len() / 2,
+        full.len() - 3,
+    ] {
         let mut damaged = full.clone();
         damaged[at] ^= 0x01;
         fs::write(scratch.0.join(LOG), &damaged).unwrap();
@@ -259,13 +311,27 @@ fn a_crash_at_every_step_of_compaction_recovers_the_committed_state() {
     let nonce = snapshot::nonce();
     let next = snapshot::snapshot(&encoded, &nonce, &schema);
     let header = snapshot::header(&nonce, &schema);
-    let (snapshot_path, log_path, temporary) = (scratch.0.join("state.json"), scratch.0.join(LOG), scratch.0.join("state.json.tmp"));
+    let (snapshot_path, log_path, temporary) = (
+        scratch.0.join("state.json"),
+        scratch.0.join(LOG),
+        scratch.0.join("state.json.tmp"),
+    );
     // (crash point, temporary file, published snapshot, log)
     type Files<'a> = (&'a str, Option<&'a [u8]>, &'a [u8], &'a [u8]);
     let restarted = [&header[..], b"\n"].concat();
     let steps: [Files; 6] = [
-        ("temporary file partly written", Some(&next[..next.len() / 2]), &snapshot_before, &log_before),
-        ("temporary file complete, not renamed", Some(&next), &snapshot_before, &log_before),
+        (
+            "temporary file partly written",
+            Some(&next[..next.len() / 2]),
+            &snapshot_before,
+            &log_before,
+        ),
+        (
+            "temporary file complete, not renamed",
+            Some(&next),
+            &snapshot_before,
+            &log_before,
+        ),
         ("renamed, old log", None, &next, &log_before),
         ("log emptied", None, &next, b""),
         ("log header torn", None, &next, &header[..header.len() / 2]),
@@ -291,11 +357,20 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
     const CHILD: &str = "CONTROL_STATE_LOG_FULL_DISK_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "storage::tests::log::a_full_disk_fails_saves_cleanly_without_corrupting_state", "--nocapture"])
+            .args([
+                "--exact",
+                "storage::tests::log::a_full_disk_fails_saves_cleanly_without_corrupting_state",
+                "--nocapture",
+            ])
             .env(CHILD, "1")
             .output()
             .unwrap();
-        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return;
     }
     let scratch = Scratch::new("full-disk");
@@ -313,9 +388,25 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
     limit(log_before.len() as u64 + 16);
     crate::chat::send(&mut state, &chat, &"does not fit ".repeat(100), "test").unwrap();
     let encode = |state: &State| super::encode(state, &archived(&scratch.0)).unwrap();
-    assert!(matches!(persist(&scratch.0, encode(&state), false), Err(CheckpointError::NotReplaced(_))), "append fails cleanly");
-    assert!(matches!(persist(&scratch.0, encode(&state), true), Err(CheckpointError::NotReplaced(_))), "compaction fails cleanly");
-    assert_eq!((scratch.snapshot(), scratch.log()), (snapshot_before, log_before), "no partial line or snapshot");
+    assert!(
+        matches!(
+            persist(&scratch.0, encode(&state), false),
+            Err(CheckpointError::NotReplaced(_))
+        ),
+        "append fails cleanly"
+    );
+    assert!(
+        matches!(
+            persist(&scratch.0, encode(&state), true),
+            Err(CheckpointError::NotReplaced(_))
+        ),
+        "compaction fails cleanly"
+    );
+    assert_eq!(
+        (scratch.snapshot(), scratch.log()),
+        (snapshot_before, log_before),
+        "no partial line or snapshot"
+    );
     assert!(recovered(&scratch) == before);
     limit(libc::RLIM_INFINITY);
     scratch.save(&state);
@@ -327,11 +418,17 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
 #[test]
 fn cached_runs_are_reencoded_after_any_mutable_access() {
     let (mut state, chat) = with_chat();
-    let fresh = |state: &State| crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(state).unwrap()));
+    let fresh =
+        |state: &State| crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(state).unwrap()));
     let mut previous = encode(&state, &Default::default()).unwrap().bytes().to_vec();
     let changes: [&dyn Fn(&mut State); 5] = [
         &|s| s.runtime.runs[0].status = "completed".into(),
-        &|s| s.runtime.runs.iter_mut().for_each(|run| run.attempts.push(Default::default())),
+        &|s| {
+            s.runtime
+                .runs
+                .iter_mut()
+                .for_each(|run| run.attempts.push(Default::default()))
+        },
         &|s| *s.runtime.runs[1].result = "spilled text".into(),
         &|s| drop(crate::history::archive_run(&mut s.runtime.runs[1]).unwrap()),
         &|s| s.runtime.runs.retain(|run| run.status != "completed"),
@@ -350,7 +447,9 @@ fn cached_runs_are_reencoded_after_any_mutable_access() {
 fn with_history(count: usize) -> State {
     let mut state = State::default();
     for i in 0..count {
-        state.runtime.enqueue(format!("finished task {i}"), crate::runtime::RunKind::Task, "test");
+        state
+            .runtime
+            .enqueue(format!("finished task {i}"), crate::runtime::RunKind::Task, "test");
         let run = state.runtime.runs.last_mut().unwrap();
         run.status = "completed".into();
         *run.result = format!("result {i}");
@@ -358,7 +457,9 @@ fn with_history(count: usize) -> State {
     state
 }
 fn saved_runs(scratch: &Scratch) -> usize {
-    let document: serde_json::Value = crate::config::read_state_in(&scratch.0, usize::MAX >> 1).unwrap().unwrap();
+    let document: serde_json::Value = crate::config::read_state_in(&scratch.0, usize::MAX >> 1)
+        .unwrap()
+        .unwrap();
     document["runtime"]["runs"].as_array().unwrap().len()
 }
 fn runs_json(state: &State) -> serde_json::Value {
@@ -367,7 +468,10 @@ fn runs_json(state: &State) -> serde_json::Value {
 }
 fn blocks(scratch: &Scratch) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(scratch.0.join("history/runs")).map_or(Vec::new(), |entries| {
-        entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect()
+        entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect()
     });
     names.sort();
     names
@@ -390,7 +494,11 @@ fn archived_runs_leave_the_state_and_are_found_by_id_after_restart() {
     let archived = state.runtime.runs.iter().filter(|run| run.archived()).count();
     assert_eq!(archived, 192, "three blocks of 64 out of 197 candidates");
     assert_eq!(saved_runs(&scratch), state.runtime.runs.len() - archived);
-    assert_eq!(blocks(&scratch), ["000000000000-07.jsonl", "000000000128-06.jsonl"], "aligned like lens::cut blocks");
+    assert_eq!(
+        blocks(&scratch),
+        ["000000000000-07.jsonl", "000000000128-06.jsonl"],
+        "aligned like lens::cut blocks"
+    );
     for index in [3, 5, 7] {
         assert!(!state.runtime.runs[index].archived(), "run {index} stays hot");
     }
@@ -417,7 +525,10 @@ fn changing_an_archived_run_unarchives_it() {
     scratch.save(&state);
     assert_eq!(saved_runs(&scratch), hot + 1);
     let restored = scratch.restart();
-    assert_eq!(restored.runtime.runs[0].status, "continued", "the state's copy wins over the block's");
+    assert_eq!(
+        restored.runtime.runs[0].status, "continued",
+        "the state's copy wins over the block's"
+    );
     assert_eq!(runs_json(&restored), runs_json(&state));
 }
 
@@ -431,12 +542,18 @@ fn blocks_merge_and_unreferenced_blocks_are_removed_at_load() {
     scratch.save(&state);
     assert_eq!(blocks(&scratch), ["000000000000-06.jsonl"]);
     for i in 0..64 {
-        state.runtime.enqueue(format!("more {i}"), crate::runtime::RunKind::Task, "test");
+        state
+            .runtime
+            .enqueue(format!("more {i}"), crate::runtime::RunKind::Task, "test");
         state.runtime.runs.last_mut().unwrap().status = "completed".into();
     }
     scratch.save(&state);
     scratch.save(&state);
-    assert_eq!(blocks(&scratch), ["000000000000-07.jsonl"], "merged, children removed after commit");
+    assert_eq!(
+        blocks(&scratch),
+        ["000000000000-07.jsonl"],
+        "merged, children removed after commit"
+    );
     // A crash after writing a block but before its save: nothing references it.
     fs::write(scratch.0.join("history/runs/000000000128-06.jsonl"), b"{}\n").unwrap();
     let restored = scratch.restart();
@@ -461,7 +578,11 @@ fn a_failed_save_undoes_the_archive_step() {
 fn referenced_blocks(scratch: &Scratch) -> Vec<String> {
     let document: serde_json::Value = serde_json::from_slice(&scratch.snapshot()).unwrap();
     let archive: archive::Archive = serde_json::from_value(document["_archive"].clone()).unwrap_or_default();
-    let mut names: Vec<String> = archive.blocks.iter().map(|span| format!("{:012}-{:02}.jsonl", span.start, span.level)).collect();
+    let mut names: Vec<String> = archive
+        .blocks
+        .iter()
+        .map(|span| format!("{:012}-{:02}.jsonl", span.start, span.level))
+        .collect();
     names.sort();
     names
 }
@@ -487,12 +608,31 @@ fn archived_runs_stay_out_of_the_snapshot_across_shutdowns_and_restarts() {
     let mut last = state;
     for restart in 0..2 {
         let mut restored = scratch.restart();
-        assert_eq!(ids(&restored), all, "restart {restart}: every run once, in creation order");
+        assert_eq!(
+            ids(&restored),
+            all,
+            "restart {restart}: every run once, in creation order"
+        );
         assert_eq!(runs_json(&restored), every);
-        assert_eq!(restored.runtime.runs.iter().filter(|run| run.archived()).count(), archived, "restart {restart}");
-        assert_eq!(saved_runs(&scratch), all.len() - archived, "restart {restart}: only hot runs saved");
-        assert_eq!(referenced_blocks(&scratch), blocks(&scratch), "restart {restart}: every block referenced");
-        assert!(scratch.snapshot().len() <= hot_bytes + 64, "restart {restart}: the snapshot stays small");
+        assert_eq!(
+            restored.runtime.runs.iter().filter(|run| run.archived()).count(),
+            archived,
+            "restart {restart}"
+        );
+        assert_eq!(
+            saved_runs(&scratch),
+            all.len() - archived,
+            "restart {restart}: only hot runs saved"
+        );
+        assert_eq!(
+            referenced_blocks(&scratch),
+            blocks(&scratch),
+            "restart {restart}: every block referenced"
+        );
+        assert!(
+            scratch.snapshot().len() <= hot_bytes + 64,
+            "restart {restart}: the snapshot stays small"
+        );
         // Work after the restart, then another clean stop.
         restored.runtime.notice = format!("restart {restart}");
         scratch.save(&restored);
@@ -552,12 +692,28 @@ fn a_snapshot_holding_archived_runs_recovers_without_losing_or_duplicating_runs(
 #[ignore = "stress: about 10 s per iteration in a debug build"]
 fn crash_recovery_survives_concurrent_process_spawns() {
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let spawners: Vec<_> = (0..6).map(|_| { let stop = stop.clone(); std::thread::spawn(move || {
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) { let _ = std::process::Command::new("true").status(); }
-    })}).collect();
-    let rounds = std::env::var("CONTROL_STRESS_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(5);
-    let result = std::panic::catch_unwind(|| for _ in 0..rounds { a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it(); });
+    let spawners: Vec<_> = (0..6)
+        .map(|_| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = std::process::Command::new("true").status();
+                }
+            })
+        })
+        .collect();
+    let rounds = std::env::var("CONTROL_STRESS_ROUNDS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(5);
+    let result = std::panic::catch_unwind(|| {
+        for _ in 0..rounds {
+            a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it();
+        }
+    });
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    for s in spawners { s.join().unwrap(); }
+    for s in spawners {
+        s.join().unwrap();
+    }
     result.unwrap();
 }

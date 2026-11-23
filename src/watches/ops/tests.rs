@@ -1,4 +1,3 @@
-
 use super::*;
 fn watched(id: &str, chat: &str) -> Watch {
     Watch {
@@ -44,13 +43,7 @@ fn a_failed_arm_restores_unoffered_terminal_evidence() {
     assert_eq!(state.watches[0].lines, 1);
     assert_eq!(state.watches[0].exits.len(), 1);
     assert_eq!(state.watches[0].pending_notifications(), 1);
-    assert_eq!(
-        state.watches[0].gap,
-        Some(super::super::Gap {
-            after: 2,
-            through: 3
-        })
-    );
+    assert_eq!(state.watches[0].gap, Some(super::super::Gap { after: 2, through: 3 }));
     assert!(arm_saved(&mut state, &chat, |_| Ok(())).unwrap());
 }
 #[test]

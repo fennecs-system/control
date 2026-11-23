@@ -79,27 +79,38 @@ impl Edits {
         self.selected.is_empty() && self.pins.is_empty() && !self.drops.iter().any(|d| d.restored_unix.is_none())
     }
     pub fn dropped(&self, at: u64) -> bool {
-        self.drops.iter().any(|d| d.restored_unix.is_none() && d.start <= at && at < d.end)
+        self.drops
+            .iter()
+            .any(|d| d.restored_unix.is_none() && d.start <= at && at < d.end)
     }
     pub fn overlaps_drop(&self, start: u64, end: u64) -> bool {
-        self.drops.iter().any(|d| d.restored_unix.is_none() && d.start < end && start < d.end)
+        self.drops
+            .iter()
+            .any(|d| d.restored_unix.is_none() && d.start < end && start < d.end)
     }
     pub fn pinned(&self, at: u64) -> bool {
         self.pins.contains(&at)
     }
     /// The selected revision id for a block (0: the automatic summary).
     pub fn selection(&self, block: Block) -> u32 {
-        self.selected.iter().find(|s| s.start == block.start && s.level == block.level).map_or(0, |s| s.revision)
+        self.selected
+            .iter()
+            .find(|s| s.start == block.start && s.level == block.level)
+            .map_or(0, |s| s.revision)
     }
     /// The revision the agent sees for this block. A revision written before
     /// a range inside it was dropped is not used: it may quote that range.
     pub fn active(&self, block: Block) -> Option<&Revision> {
         let id = self.selection(block);
-        (id != 0).then(|| self.revisions.iter().find(|r| r.id == id)).flatten()
+        (id != 0)
+            .then(|| self.revisions.iter().find(|r| r.id == id))
+            .flatten()
             .filter(|r| !self.overlaps_drop(r.start, r.start + (1u64 << r.level)))
     }
     pub fn versions(&self, block: Block) -> impl Iterator<Item = &Revision> {
-        self.revisions.iter().filter(move |r| r.start == block.start && r.level == block.level)
+        self.revisions
+            .iter()
+            .filter(move |r| r.start == block.start && r.level == block.level)
     }
     /// Active revisions strictly inside `block`: a parent summary built from
     /// them differs from one built from the automatic children.
@@ -108,7 +119,13 @@ impl Edits {
             .selected
             .iter()
             .filter(|s| s.level < block.level && block.start <= s.start && s.start + (1u64 << s.level) <= block.end())
-            .filter(|s| self.active(Block { start: s.start, level: s.level }).is_some())
+            .filter(|s| {
+                self.active(Block {
+                    start: s.start,
+                    level: s.level,
+                })
+                .is_some()
+            })
             .map(|s| (s.start, s.level, s.revision))
             .collect();
         found.sort_unstable();
@@ -146,7 +163,8 @@ impl Edits {
         let mut added = 0usize;
         for at in pins {
             let at = at as usize;
-            if at >= current || self.dropped(at as u64) || items.iter().any(|i| matches!(i, Item::Entry(e) if *e == at)) {
+            if at >= current || self.dropped(at as u64) || items.iter().any(|i| matches!(i, Item::Entry(e) if *e == at))
+            {
                 continue;
             }
             if conversation.entry(at).is_none_or(|e| e.render().is_empty()) {
@@ -160,13 +178,20 @@ impl Edits {
             items.insert(position, Item::Entry(at));
             added += 1;
         }
-        Window { items, omitted: (window.omitted + removed).saturating_sub(added) }
+        Window {
+            items,
+            omitted: (window.omitted + removed).saturating_sub(added),
+        }
     }
     fn record(&mut self, action: &str, detail: String) -> Result<(), &'static str> {
         if self.log.len() >= MAX_LOG {
             return Err("This DM's Memory Tree edit log is full");
         }
-        self.log.push(Event { at: now(), action: action.into(), detail });
+        self.log.push(Event {
+            at: now(),
+            action: action.into(),
+            detail,
+        });
         Ok(())
     }
 }
@@ -184,7 +209,11 @@ pub enum Op {
 /// Only the local operator performs surgery; agents and remote principals
 /// cannot, whatever chat they own.
 pub(crate) fn operator(actor: &Actor) -> Result<(), &'static str> {
-    if *actor == Actor::LocalOperator { Ok(()) } else { Err("Memory Tree edits are operator-only") }
+    if *actor == Actor::LocalOperator {
+        Ok(())
+    } else {
+        Err("Memory Tree edits are operator-only")
+    }
 }
 
 /// Apply one edit and tell the compactor to rebuild what it changed. The
@@ -225,12 +254,22 @@ pub fn edit(state: &mut State, chat: &str, actor: &Actor, op: Op) -> Result<Opti
                 return Err("At most 64 dropped ranges per DM");
             }
             let id = edits.drops.iter().map(|d| d.id).max().unwrap_or(0) + 1;
-            edits.drops.push(Redaction { id, start, end, created_unix: now(), restored_unix: None });
+            edits.drops.push(Redaction {
+                id,
+                start,
+                end,
+                created_unix: now(),
+                restored_unix: None,
+            });
             edits.record("drop", format!("entries {start}–{end} (d{id})"))?;
             sources = true;
         }
         Op::Restore(id) => {
-            let drop = edits.drops.iter_mut().find(|d| d.id == id && d.restored_unix.is_none()).ok_or("No active dropped range with that id")?;
+            let drop = edits
+                .drops
+                .iter_mut()
+                .find(|d| d.id == id && d.restored_unix.is_none())
+                .ok_or("No active dropped range with that id")?;
             drop.restored_unix = Some(now());
             let detail = format!("entries {}–{} (d{id})", drop.start, drop.end);
             edits.record("restore", detail)?;
@@ -240,12 +279,25 @@ pub fn edit(state: &mut State, chat: &str, actor: &Actor, op: Op) -> Result<Opti
             if revision != 0 && !edits.versions(block).any(|r| r.id == revision) {
                 return Err("No such revision for this block");
             }
-            edits.selected.retain(|s| !(s.start == block.start && s.level == block.level));
+            edits
+                .selected
+                .retain(|s| !(s.start == block.start && s.level == block.level));
             if revision != 0 {
-                edits.selected.push(Selection { start: block.start, level: block.level, revision });
+                edits.selected.push(Selection {
+                    start: block.start,
+                    level: block.level,
+                    revision,
+                });
             }
-            let version = if revision == 0 { "automatic".to_owned() } else { format!("r{revision}") };
-            edits.record("select", format!("block {}–{} uses {version}", block.start, block.end()))?;
+            let version = if revision == 0 {
+                "automatic".to_owned()
+            } else {
+                format!("r{revision}")
+            };
+            edits.record(
+                "select",
+                format!("block {}–{} uses {version}", block.start, block.end()),
+            )?;
         }
     }
     state.runtime.compaction.edited(chat, sources);
@@ -279,12 +331,27 @@ pub(crate) fn emphasis_system(emphasis: &str, words: usize) -> String {
 }
 /// The path of child indexes from `root` down to `block`.
 pub(super) fn path(root: Block, block: Block) -> Option<Vec<usize>> {
-    if block.level > root.level || block.start < root.start || block.end() > root.end() || !block.start.is_multiple_of(block.len()) {
+    if block.level > root.level
+        || block.start < root.start
+        || block.end() > root.end()
+        || !block.start.is_multiple_of(block.len())
+    {
         return None;
     }
-    Some((block.level + 1..=root.level).rev().map(|level| ((block.start >> (level - 1)) & 1) as usize).collect())
+    Some(
+        (block.level + 1..=root.level)
+            .rev()
+            .map(|level| ((block.start >> (level - 1)) & 1) as usize)
+            .collect(),
+    )
 }
-pub(crate) fn plan(state: &State, chat: &str, actor: &Actor, block: Block, text: &str) -> Result<Regeneration, &'static str> {
+pub(crate) fn plan(
+    state: &State,
+    chat: &str,
+    actor: &Actor,
+    block: Block,
+    text: &str,
+) -> Result<Regeneration, &'static str> {
     operator(actor)?;
     let session = state.chats.iter().find(|c| c.id == chat).ok_or("Chat not found")?;
     crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
@@ -293,8 +360,14 @@ pub(crate) fn plan(state: &State, chat: &str, actor: &Actor, block: Block, text:
     if memory.surgery.is_some() {
         return Err("Another summary regeneration is running");
     }
-    let model = compactor_for(state, session).ok_or("This DM has no compactor; enable summaries first")?.clone();
-    let view = memory.views.get(chat).filter(|v| v.actor == session.actor).ok_or("No summary tree yet")?;
+    let model = compactor_for(state, session)
+        .ok_or("This DM has no compactor; enable summaries first")?
+        .clone();
+    let view = memory
+        .views
+        .get(chat)
+        .filter(|v| v.actor == session.actor)
+        .ok_or("No summary tree yet")?;
     let edits = session.memory.as_deref().cloned().unwrap_or_default();
     if edits.revisions.len() >= MAX_REVISIONS {
         return Err("At most 64 summary revisions per DM");
@@ -302,9 +375,26 @@ pub(crate) fn plan(state: &State, chat: &str, actor: &Actor, block: Block, text:
     let (root, path) = view
         .nodes
         .iter()
-        .find_map(|n| path(Block { start: n.start, level: n.level }, block).map(|p| (n.key.clone(), p)))
+        .find_map(|n| {
+            path(
+                Block {
+                    start: n.start,
+                    level: n.level,
+                },
+                block,
+            )
+            .map(|p| (n.key.clone(), p))
+        })
         .ok_or("That block is not in the current summary tree")?;
-    Ok(Regeneration { chat: chat.into(), block, root, path, emphasis, model, edits })
+    Ok(Regeneration {
+        chat: chat.into(),
+        block,
+        root,
+        path,
+        emphasis,
+        model,
+        edits,
+    })
 }
 /// Rebuild one summary from the same inputs the compactor used (its leaf
 /// sources or its children's selected summaries), with the operator emphasis.
@@ -322,7 +412,12 @@ pub(crate) fn run(
             .collect::<Vec<_>>()
             .join("\n")
     } else {
-        let [left, right] = Block { start: node.start, level: node.level }.children().ok_or_else(|| io::Error::other("Leaf has children"))?;
+        let [left, right] = Block {
+            start: node.start,
+            level: node.level,
+        }
+        .children()
+        .ok_or_else(|| io::Error::other("Leaf has children"))?;
         let text = |block: Block, key: &str| -> io::Result<String> {
             Ok(match plan.edits.active(block) {
                 Some(r) => r.text.clone(),
@@ -346,8 +441,17 @@ pub(crate) fn run(
     Ok((node.key, response))
 }
 /// Publish a finished regeneration as a new, selected revision.
-pub(crate) fn commit(state: &mut State, plan: Regeneration, base: String, response: control_ai::model::Response) -> Result<u32, &'static str> {
-    let session = state.chats.iter_mut().find(|c| c.id == plan.chat).ok_or("Chat not found")?;
+pub(crate) fn commit(
+    state: &mut State,
+    plan: Regeneration,
+    base: String,
+    response: control_ai::model::Response,
+) -> Result<u32, &'static str> {
+    let session = state
+        .chats
+        .iter_mut()
+        .find(|c| c.id == plan.chat)
+        .ok_or("Chat not found")?;
     let edits = session.memory.get_or_insert_with(Box::default);
     if edits.revisions.len() >= MAX_REVISIONS {
         return Err("At most 64 summary revisions per DM");
@@ -364,16 +468,36 @@ pub(crate) fn commit(state: &mut State, plan: Regeneration, base: String, respon
         base,
         created_unix: now(),
     });
-    edits.selected.retain(|s| !(s.start == plan.block.start && s.level == plan.block.level));
-    edits.selected.push(Selection { start: plan.block.start, level: plan.block.level, revision: id });
-    edits.record("regenerate", format!("block {}–{} → r{id}: {}", plan.block.start, plan.block.end(), plan.emphasis))?;
+    edits
+        .selected
+        .retain(|s| !(s.start == plan.block.start && s.level == plan.block.level));
+    edits.selected.push(Selection {
+        start: plan.block.start,
+        level: plan.block.level,
+        revision: id,
+    });
+    edits.record(
+        "regenerate",
+        format!(
+            "block {}–{} → r{id}: {}",
+            plan.block.start,
+            plan.block.end(),
+            plan.emphasis
+        ),
+    )?;
     state.runtime.compaction.edited(&plan.chat, false);
     Ok(id)
 }
 
 /// Start a regeneration on a background thread; the HTTP request returns at
 /// once and the Memory Tree shows it pending until the revision lands.
-pub fn regenerate(state: &Arc<Mutex<State>>, chat: &str, actor: &Actor, block: Block, text: &str) -> Result<(), &'static str> {
+pub fn regenerate(
+    state: &Arc<Mutex<State>>,
+    chat: &str,
+    actor: &Actor,
+    block: Block,
+    text: &str,
+) -> Result<(), &'static str> {
     let plan = {
         let mut s = state.lock().map_err(|_| "State unavailable")?;
         let plan = plan(&s, chat, actor, block, text)?;
@@ -383,34 +507,39 @@ pub fn regenerate(state: &Arc<Mutex<State>>, chat: &str, actor: &Actor, block: B
     };
     let state = Arc::clone(state);
     let recovery = Arc::clone(&state);
-    let spawned = std::thread::Builder::new().name("control-memory-surgery".into()).spawn(move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let directory = crate::config::state("summaries").map_err(io::Error::other)?;
-            run(&plan, &directory, crate::model_calls::call)
-        }))
-        .unwrap_or_else(|_| Err(io::Error::other("Summary regeneration stopped unexpectedly")));
-        if let Ok(mut s) = state.lock() {
-            s.runtime.compaction.surgery = None;
-            let chat = plan.chat.clone();
-            let previous = s.chats.iter().find(|c| c.id == chat).map(|c| c.memory.clone());
-            let outcome = result.map_err(|e| e.to_string()).and_then(|(base, response)| {
-                commit(&mut s, plan, base, response).map_err(str::to_owned)?;
-                crate::storage::save(&s).map_err(|e| {
-                    format!("Could not save the revision: {e}")
-                })
-            });
-            if let Err(error) = outcome {
-                if let (Some(previous), Some(session)) = (previous, s.chats.iter_mut().find(|c| c.id == chat)) {
-                    session.memory = previous;
+    let spawned = std::thread::Builder::new()
+        .name("control-memory-surgery".into())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let directory = crate::config::state("summaries").map_err(io::Error::other)?;
+                run(&plan, &directory, crate::model_calls::call)
+            }))
+            .unwrap_or_else(|_| Err(io::Error::other("Summary regeneration stopped unexpectedly")));
+            if let Ok(mut s) = state.lock() {
+                s.runtime.compaction.surgery = None;
+                let chat = plan.chat.clone();
+                let previous = s.chats.iter().find(|c| c.id == chat).map(|c| c.memory.clone());
+                let outcome = result.map_err(|e| e.to_string()).and_then(|(base, response)| {
+                    commit(&mut s, plan, base, response).map_err(str::to_owned)?;
+                    crate::storage::save(&s).map_err(|e| format!("Could not save the revision: {e}"))
+                });
+                if let Err(error) = outcome {
+                    if let (Some(previous), Some(session)) = (previous, s.chats.iter_mut().find(|c| c.id == chat)) {
+                        session.memory = previous;
+                    }
+                    s.runtime.compaction.surgery_errors.insert(chat, error);
                 }
-                s.runtime.compaction.surgery_errors.insert(chat, error);
             }
-        }
-        crate::worker::wake();
-    });
-    if spawned.is_err() && let Ok(mut s) = recovery.lock() {
+            crate::worker::wake();
+        });
+    if spawned.is_err()
+        && let Ok(mut s) = recovery.lock()
+    {
         s.runtime.compaction.surgery = None;
-        s.runtime.compaction.surgery_errors.insert(chat.to_owned(), "Could not start the regeneration".into());
+        s.runtime
+            .compaction
+            .surgery_errors
+            .insert(chat.to_owned(), "Could not start the regeneration".into());
     }
     Ok(())
 }

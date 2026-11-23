@@ -10,11 +10,17 @@ fn request(state: &Arc<Mutex<State>>, method: &str, target: &str, body: &str) ->
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let mut client = TcpStream::connect(address).unwrap();
-    client.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    client
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
     let (server, _) = listener.accept().unwrap();
     let (state, access) = (state.clone(), Arc::new(access::Access::for_tests(SESSION)));
     let handler = std::thread::spawn(move || handle(server, state, access));
-    let form = if body.is_empty() { String::new() } else { "Content-Type: application/x-www-form-urlencoded\r\n".to_owned() };
+    let form = if body.is_empty() {
+        String::new()
+    } else {
+        "Content-Type: application/x-www-form-urlencoded\r\n".to_owned()
+    };
     write!(
         client,
         "{method} {target} HTTP/1.1\r\nHost: {address}\r\nCookie: control_operator={SESSION}\r\n{form}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -29,7 +35,11 @@ fn request(state: &Arc<Mutex<State>>, method: &str, target: &str, body: &str) ->
 fn status_and_location(response: &str) -> (&str, Option<&str>) {
     let head = response.split("\r\n\r\n").next().unwrap();
     let status = head.lines().next().unwrap().split_once(' ').unwrap().1;
-    let location = head.lines().find_map(|line| line.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("location")).map(|(_, v)| v.trim()));
+    let location = head.lines().find_map(|line| {
+        line.split_once(':')
+            .filter(|(k, _)| k.eq_ignore_ascii_case("location"))
+            .map(|(_, v)| v.trim())
+    });
     (status, location)
 }
 
@@ -39,7 +49,10 @@ fn local_links(html: &str) -> Vec<String> {
     for marker in ["href=", "action=", "src=", "url="] {
         for piece in html.split(marker).skip(1) {
             let piece = piece.trim_start_matches(['\'', '"']);
-            let link: String = piece.chars().take_while(|c| !matches!(c, '\'' | '"' | ' ' | '>')).collect();
+            let link: String = piece
+                .chars()
+                .take_while(|c| !matches!(c, '\'' | '"' | ' ' | '>'))
+                .collect();
             if link.starts_with('/') {
                 links.push(link);
             }
@@ -59,19 +72,43 @@ fn legacy_urls_redirect_permanently_with_tail_and_query() {
     let (state, id) = fixture();
     for (method, old, new) in [
         ("GET", format!("/chat/{id}"), format!("/dm/{id}")),
-        ("GET", format!("/chat/{id}/transcript?after=3"), format!("/dm/{id}/transcript?after=3")),
-        ("GET", format!("/chat/{id}/context?run=r-1&attempt=2"), format!("/dm/{id}/context?run=r-1&attempt=2")),
-        ("GET", format!("/chat/{id}/compaction/read?node=4"), format!("/dm/{id}/compaction/read?node=4")),
+        (
+            "GET",
+            format!("/chat/{id}/transcript?after=3"),
+            format!("/dm/{id}/transcript?after=3"),
+        ),
+        (
+            "GET",
+            format!("/chat/{id}/context?run=r-1&attempt=2"),
+            format!("/dm/{id}/context?run=r-1&attempt=2"),
+        ),
+        (
+            "GET",
+            format!("/chat/{id}/compaction/read?node=4"),
+            format!("/dm/{id}/compaction/read?node=4"),
+        ),
         ("GET", format!("/chat/{id}/compaction"), format!("/dm/{id}/memory")),
-        ("GET", format!("/dm/{id}/compaction?block=0.2"), format!("/dm/{id}/memory?block=0.2")),
+        (
+            "GET",
+            format!("/dm/{id}/compaction?block=0.2"),
+            format!("/dm/{id}/memory?block=0.2"),
+        ),
         ("GET", "/chats?new=1".to_owned(), "/dms?new=1".to_owned()),
         ("GET", "/chats".to_owned(), "/dms".to_owned()),
-        ("GET", "/lenses?id=engineering".to_owned(), "/dna?id=engineering".to_owned()),
+        (
+            "GET",
+            "/lenses?id=engineering".to_owned(),
+            "/dna?id=engineering".to_owned(),
+        ),
         ("GET", "/lenses/export".to_owned(), "/dna/export".to_owned()),
         ("HEAD", "/lenses".to_owned(), "/dna".to_owned()),
     ] {
         let response = request(&state, method, &old, "");
-        assert_eq!(status_and_location(&response), ("301 Moved Permanently", Some(new.as_str())), "{method} {old}");
+        assert_eq!(
+            status_and_location(&response),
+            ("301 Moved Permanently", Some(new.as_str())),
+            "{method} {old}"
+        );
     }
     for (old, new) in [
         (format!("/chat/{id}/messages"), format!("/dm/{id}/messages")),
@@ -82,29 +119,57 @@ fn legacy_urls_redirect_permanently_with_tail_and_query() {
         ("/lenses/save?from=form".to_owned(), "/dna/save?from=form".to_owned()),
     ] {
         let response = request(&state, "POST", &old, "message=hello");
-        assert_eq!(status_and_location(&response), ("308 Permanent Redirect", Some(new.as_str())), "POST {old}");
+        assert_eq!(
+            status_and_location(&response),
+            ("308 Permanent Redirect", Some(new.as_str())),
+            "POST {old}"
+        );
     }
     // Earlier history pages open the one History page with an equivalent filter.
     for (old, new) in [
         ("/chats/history".to_owned(), "/bots/history".to_owned()),
-        (format!("/chats/history?older={id}&x=1"), format!("/bots/history?older={id}")),
+        (
+            format!("/chats/history?older={id}&x=1"),
+            format!("/bots/history?older={id}"),
+        ),
         ("/bots/history/runs".to_owned(), "/bots/history?expand=1".to_owned()),
-        ("/bots/history/runs?older=r-1".to_owned(), "/bots/history?expand=1".to_owned()),
+        (
+            "/bots/history/runs?older=r-1".to_owned(),
+            "/bots/history?expand=1".to_owned(),
+        ),
     ] {
         let response = request(&state, "GET", &old, "");
-        assert_eq!(status_and_location(&response), ("301 Moved Permanently", Some(new.as_str())), "GET {old}");
+        assert_eq!(
+            status_and_location(&response),
+            ("301 Moved Permanently", Some(new.as_str())),
+            "GET {old}"
+        );
     }
-    assert_eq!(status_and_location(&request(&state, "GET", "/?view=runs", "")).1, Some("/bots/history?expand=1"));
+    assert_eq!(
+        status_and_location(&request(&state, "GET", "/?view=runs", "")).1,
+        Some("/bots/history?expand=1")
+    );
     // The old gene-library view goes to its page.
-    assert_eq!(status_and_location(&request(&state, "GET", "/?view=lenses", "")).1, Some("/dna"));
+    assert_eq!(
+        status_and_location(&request(&state, "GET", "/?view=lenses", "")).1,
+        Some("/dna")
+    );
 }
 
 #[test]
 fn root_lands_on_a_new_dm_and_the_retired_overview_on_usage() {
     let (state, _) = fixture();
-    for (target, expected) in [("/", "/dms?new=1"), ("/?view=hub", "/?view=monitor"), ("/?view=overview", "/?view=monitor")] {
+    for (target, expected) in [
+        ("/", "/dms?new=1"),
+        ("/?view=hub", "/?view=monitor"),
+        ("/?view=overview", "/?view=monitor"),
+    ] {
         let response = request(&state, "GET", target, "");
-        assert_eq!(status_and_location(&response), ("303 See Other", Some(expected)), "{target}: {response}");
+        assert_eq!(
+            status_and_location(&response),
+            ("303 See Other", Some(expected)),
+            "{target}: {response}"
+        );
     }
 }
 #[test]
@@ -134,7 +199,10 @@ fn current_names_serve_and_pages_link_only_to_current_names() {
         let response = request(&state, "GET", page, "");
         assert_eq!(status_and_location(&response).0, "200 OK", "GET {page}: {response}");
         let links = local_links(&response);
-        assert!(!links.is_empty() || page.ends_with("/requests") || page.ends_with("/transcript"), "{page} has no links");
+        assert!(
+            !links.is_empty() || page.ends_with("/requests") || page.ends_with("/transcript"),
+            "{page} has no links"
+        );
         for link in links {
             let path = link.split(['?', '#']).next().unwrap();
             assert_eq!(url_names::renamed(path), None, "{page} links to legacy {link}");
@@ -142,10 +210,18 @@ fn current_names_serve_and_pages_link_only_to_current_names() {
         }
     }
     let dm = request(&state, "GET", &format!("/dm/{id}"), "");
-    assert!(dm.contains(&format!("src='/dm/{id}/transcript#latest'")) && dm.contains(&format!("action='/dm/{id}/messages'")));
+    assert!(
+        dm.contains(&format!("src='/dm/{id}/transcript#latest'"))
+            && dm.contains(&format!("action='/dm/{id}/messages'"))
+    );
     let dna = request(&state, "GET", "/dna", "");
     assert!(dna.contains("action='/dna/save'") && dna.contains("href='/dna/export'"));
     // A new DM posted to the current list lands on its `/dm/ID` page.
     let created = request(&state, "POST", "/dms", "message=");
-    assert!(status_and_location(&created).1.is_some_and(|location| location.starts_with("/dm/c-")), "{created}");
+    assert!(
+        status_and_location(&created)
+            .1
+            .is_some_and(|location| location.starts_with("/dm/c-")),
+        "{created}"
+    );
 }

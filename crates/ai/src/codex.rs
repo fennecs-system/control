@@ -21,12 +21,7 @@ pub fn activity(value: &serde_json::Value) -> Option<Activity> {
     };
     Some(Activity {
         id: item["id"].as_str()?.chars().take(100).collect(),
-        kind: if kind == "agent_message" {
-            "message"
-        } else {
-            kind
-        }
-        .into(),
+        kind: if kind == "agent_message" { "message" } else { kind }.into(),
         text: text
             .chars()
             .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
@@ -105,7 +100,11 @@ impl Decoder for Codex {
     /// Codex reports usage only in `turn.completed`, the whole turn's total.
     /// A turn stopped or failed before it reports nothing: unknown.
     fn usage(&self) -> Usage {
-        Usage { tokens: self.tokens, complete: self.tokens.is_some(), model: None }
+        Usage {
+            tokens: self.tokens,
+            complete: self.tokens.is_some(),
+            model: None,
+        }
     }
     fn finish(self) -> io::Result<Output> {
         Ok(Output {
@@ -125,16 +124,18 @@ pub struct Text {
 impl Text {
     /// A reply of at most `max` bytes.
     pub fn new(max: usize) -> Self {
-        Self { inner: Codex::default(), text: None, bad: false, max }
+        Self {
+            inner: Codex::default(),
+            text: None,
+            bad: false,
+            max,
+        }
     }
 }
 impl Decoder for Text {
     fn decode(&mut self, value: &Value, emit: &mut dyn FnMut(Event)) {
         self.inner.decode(value, &mut |_| {});
-        if value["type"]
-            .as_str()
-            .is_some_and(|s| s.starts_with("item."))
-        {
+        if value["type"].as_str().is_some_and(|s| s.starts_with("item.")) {
             match value["item"]["type"].as_str() {
                 Some("agent_message") if value["type"] == "item.completed" => {
                     self.text = value["item"]["text"]
@@ -162,9 +163,7 @@ impl Decoder for Text {
     }
     fn finish(self) -> io::Result<Output> {
         if self.bad {
-            return Err(io::Error::other(
-                "CLI summary contained invalid/tool records",
-            ));
+            return Err(io::Error::other("CLI summary contained invalid/tool records"));
         }
         let mut output = self.inner.finish()?;
         output.text = self.text;

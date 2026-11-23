@@ -84,12 +84,7 @@ pub fn ordered(state: &State) -> Vec<Entry<'_>> {
             parent: parents[index].map(|p| visible[p].id.as_str()),
             depth,
         });
-        stack.extend(
-            children[index]
-                .iter()
-                .rev()
-                .map(|child| (*child, depth + 1)),
-        );
+        stack.extend(children[index].iter().rev().map(|child| (*child, depth + 1)));
     }
     entries
 }

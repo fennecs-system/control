@@ -3,22 +3,10 @@ use std::io::{BufRead, BufReader};
 
 #[test]
 fn streams_and_slow_clients_share_bounded_admission_and_cancel_on_shutdown() {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let fixture = Fixture(
-        std::env::temp_dir().join(format!("control-http-cap-{}-{stamp}", std::process::id())),
-    );
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let fixture = Fixture(std::env::temp_dir().join(format!("control-http-cap-{}-{stamp}", std::process::id())));
     fs::create_dir(&fixture.0).unwrap();
-    assert!(
-        fixture
-            .command()
-            .args(["config", "init"])
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(fixture.command().args(["config", "init"]).status().unwrap().success());
     let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = reservation.local_addr().unwrap();
     drop(reservation);
@@ -67,9 +55,7 @@ fn streams_and_slow_clients_share_bounded_admission_and_cancel_on_shutdown() {
     let mut streams = Vec::new();
     for _ in 0..16 {
         let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         write!(
             stream,
             "GET /events HTTP/1.1\r\nHost: localhost:{}\r\nCookie: {cookie}\r\n\r\n",
@@ -82,26 +68,17 @@ fn streams_and_slow_clients_share_bounded_admission_and_cancel_on_shutdown() {
         assert_eq!(line, "HTTP/1.1 200 OK\r\n");
         streams.push(stream);
     }
-    assert!(
-        healthy(addr),
-        "live streams must leave ordinary request capacity"
-    );
+    assert!(healthy(addr), "live streams must leave ordinary request capacity");
     let mut slow = Vec::new();
     for _ in 0..16 {
         let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
-        stream
-            .write_all(b"GET /health HTTP/1.1\r\nHost: local")
-            .unwrap();
+        stream.set_write_timeout(Some(Duration::from_millis(100))).unwrap();
+        stream.write_all(b"GET /health HTTP/1.1\r\nHost: local").unwrap();
         slow.push(stream);
     }
     // The 33rd connection must be rejected without reading any request bytes.
     let excess = TcpStream::connect(addr).unwrap();
-    excess
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
+    excess.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     let mut line = String::new();
     BufReader::new(excess).read_line(&mut line).unwrap();
     assert_eq!(line, "HTTP/1.1 503 Service Unavailable\r\n");
@@ -110,10 +87,7 @@ fn streams_and_slow_clients_share_bounded_admission_and_cancel_on_shutdown() {
     drop(slow.pop());
     let start = Instant::now();
     while !healthy(addr) {
-        assert!(
-            start.elapsed() < Duration::from_secs(3),
-            "capacity did not recover"
-        );
+        assert!(start.elapsed() < Duration::from_secs(3), "capacity did not recover");
         std::thread::sleep(Duration::from_millis(10));
     }
     // Trickle bytes throughout shutdown: per-read timeouts alone cannot stop it.
@@ -131,10 +105,7 @@ fn streams_and_slow_clients_share_bounded_admission_and_cancel_on_shutdown() {
         }
     });
     let start = Instant::now();
-    assert_eq!(
-        unsafe { libc::kill(server.0.id() as libc::pid_t, libc::SIGTERM) },
-        0
-    );
+    assert_eq!(unsafe { libc::kill(server.0.id() as libc::pid_t, libc::SIGTERM) }, 0);
     loop {
         if let Some(status) = server.0.try_wait().unwrap() {
             assert!(status.success(), "server did not exit cleanly: {status}");

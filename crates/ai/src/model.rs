@@ -76,8 +76,15 @@ pub fn usage(value: &Value) -> Option<Tokens> {
     let cache = timings["cache_n"].as_u64();
     let u = &value["usage"];
     if let (Some(input), Some(output)) = (u["prompt_tokens"].as_u64(), u["completion_tokens"].as_u64()) {
-        let cached = u["prompt_tokens_details"]["cached_tokens"].as_u64().or(cache).unwrap_or(0);
-        return Some(Tokens { input_tokens: input, cached_input_tokens: cached.min(input), output_tokens: output });
+        let cached = u["prompt_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .or(cache)
+            .unwrap_or(0);
+        return Some(Tokens {
+            input_tokens: input,
+            cached_input_tokens: cached.min(input),
+            output_tokens: output,
+        });
     }
     let processed = timings["prompt_n"].as_u64()?;
     let cached = cache.unwrap_or(0);
@@ -119,7 +126,13 @@ pub fn decode(value: Value, limits: &Limits) -> io::Result<Response> {
     // A think block left inline is never part of the answer.
     let text = choice["message"]["content"]
         .as_str()
-        .map(|s| if s.contains("</think>") { split_reasoning(s).1.trim_start() } else { s })
+        .map(|s| {
+            if s.contains("</think>") {
+                split_reasoning(s).1.trim_start()
+            } else {
+                s
+            }
+        })
         .filter(|s| !s.trim().is_empty() && s.len() <= limits.output_bytes)
         .ok_or_else(|| io::Error::other("Missing or oversized completion text"))?
         .to_owned();
@@ -224,7 +237,10 @@ pub fn split_reasoning(content: &str) -> (Option<&str>, &str) {
         Some(end) => {
             let head = content[..end].trim_start();
             let thought = head.strip_prefix("<think>").unwrap_or(head).trim();
-            ((!thought.is_empty()).then_some(thought), &content[end + "</think>".len()..])
+            (
+                (!thought.is_empty()).then_some(thought),
+                &content[end + "</think>".len()..],
+            )
         }
         None => (None, content),
     }
@@ -285,27 +301,42 @@ pub fn decode_step(value: &Value, limits: &Limits) -> io::Result<Step> {
         }
         _ => return Err(io::Error::other("Completion content must be text")),
     };
-    let calls = message["tool_calls"].as_array().into_iter().flatten().take(64).map(|call| {
-        let function = &call["function"];
-        let name = function["name"].as_str().unwrap_or("").chars().take(128).collect();
-        let arguments = match &function["arguments"] {
-            Value::String(raw) if raw.trim().is_empty() => Ok(json!({})),
-            Value::String(raw) => match serde_json::from_str::<Value>(raw) {
-                Ok(value @ Value::Object(_)) => Ok(value),
-                Ok(_) => Err("arguments must be a JSON object".to_owned()),
-                Err(error) => Err(format!("arguments are not valid JSON ({error})")),
-            },
-            value @ Value::Object(_) => Ok(value.clone()),
-            Value::Null => Ok(json!({})),
-            _ => Err("arguments must be a JSON object".to_owned()),
-        };
-        Call {
-            id: call["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 128).map(str::to_owned),
-            name,
-            arguments,
-        }
-    }).collect();
-    Ok(Step { text, calls, truncated: choices[0]["finish_reason"] == "length", tokens: usage(value), reasoning })
+    let calls = message["tool_calls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(64)
+        .map(|call| {
+            let function = &call["function"];
+            let name = function["name"].as_str().unwrap_or("").chars().take(128).collect();
+            let arguments = match &function["arguments"] {
+                Value::String(raw) if raw.trim().is_empty() => Ok(json!({})),
+                Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+                    Ok(value @ Value::Object(_)) => Ok(value),
+                    Ok(_) => Err("arguments must be a JSON object".to_owned()),
+                    Err(error) => Err(format!("arguments are not valid JSON ({error})")),
+                },
+                value @ Value::Object(_) => Ok(value.clone()),
+                Value::Null => Ok(json!({})),
+                _ => Err("arguments must be a JSON object".to_owned()),
+            };
+            Call {
+                id: call["id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty() && id.len() <= 128)
+                    .map(str::to_owned),
+                name,
+                arguments,
+            }
+        })
+        .collect();
+    Ok(Step {
+        text,
+        calls,
+        truncated: choices[0]["finish_reason"] == "length",
+        tokens: usage(value),
+        reasoning,
+    })
 }
 
 /// Runtime identity the server reports about itself. It is untrusted metadata

@@ -1,4 +1,3 @@
-
 #[test]
 fn capture_names_cannot_escape_artifact_directory() {
     assert!(super::valid_name("capture-1793199264262426000.png"));

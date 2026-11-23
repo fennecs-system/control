@@ -12,7 +12,8 @@ const Z3_FUNCTION: &str = "sat\n(\n  (define-fun x () Int\n    0)\n  (define-fun
 const MZN_OPTIMAL: &str = "{\"type\": \"solution\", \"output\": {\"json\": {  \"x\" : 6,  \"y\" : 4,  \"_objective\" : 34}}, \"sections\": [\"json\"]}\n{\"type\": \"status\", \"status\": \"OPTIMAL_SOLUTION\"}\n";
 const MZN_UNSAT: &str = "{\"type\": \"warning\", \"stack\": [{\"location\": {\"filename\": \"/tmp/model.mzn\", \"firstLine\": 2, \"firstColumn\": 12, \"lastLine\": 2, \"lastColumn\": 16}, \"isCompIter\": false, \"description\": \"binary '>' operator expression\"}], \"message\": \"model inconsistency detected\"}\n{\"type\": \"status\", \"status\": \"UNSATISFIABLE\"}\n";
 const MZN_SYNTAX: &str = "{\"type\": \"error\", \"what\": \"syntax error\", \"location\": {\"filename\": \"/tmp/model.mzn\", \"firstLine\": 2, \"firstColumn\": 1, \"lastLine\": 2, \"lastColumn\": 10}, \"message\": \"unexpected item, expecting ';' or end of file\"}\n";
-const MZN_SATISFY: &str = "{\"type\": \"solution\", \"output\": {\"json\": {  \"a\" : [2, 3, 1]}}, \"sections\": [\"json\"]}\n";
+const MZN_SATISFY: &str =
+    "{\"type\": \"solution\", \"output\": {\"json\": {  \"a\" : [2, 3, 1]}}, \"sections\": [\"json\"]}\n";
 const MZN_UNKNOWN: &str = "{\"type\": \"status\", \"status\": \"UNKNOWN\"}\n";
 
 fn request(solver: &str, time_limit_seconds: u64, nonzero_only: bool) -> Request {
@@ -37,7 +38,11 @@ fn raw(stdout: &str, exit_code: Option<i32>, elapsed_ms: u64) -> Raw {
     }
 }
 fn solve(solver: &str, stdout: &str) -> Value {
-    shape(&request(solver, 10, false), &raw(stdout, Some(0), 200), json!({"image":"sha256:test"}))
+    shape(
+        &request(solver, 10, false),
+        &raw(stdout, Some(0), 200),
+        json!({"image":"sha256:test"}),
+    )
 }
 
 #[test]
@@ -51,11 +56,27 @@ fn registry_ids_formats_and_schema_agree() {
         assert!(std::ptr::eq(lookup(solver.id).unwrap(), solver));
         assert!(schema["solver"]["enum"].as_array().unwrap().contains(&json!(solver.id)));
         for format in solver.formats {
-            assert!(schema["format"]["enum"].as_array().unwrap().contains(&json!(format)), "{format} missing from schema");
+            assert!(
+                schema["format"]["enum"].as_array().unwrap().contains(&json!(format)),
+                "{format} missing from schema"
+            );
         }
-        let command = (solver.command)(&Invocation { model: "/tmp/model.x", time_limit_seconds: 7, memory_mb: 1024, threads: 2 });
-        assert!(command.iter().any(|arg| arg == "/tmp/model.x"), "{} ignores the model path", solver.id);
-        assert!(command.iter().any(|arg| arg.contains('7')), "{} ignores the time limit", solver.id);
+        let command = (solver.command)(&Invocation {
+            model: "/tmp/model.x",
+            time_limit_seconds: 7,
+            memory_mb: 1024,
+            threads: 2,
+        });
+        assert!(
+            command.iter().any(|arg| arg == "/tmp/model.x"),
+            "{} ignores the model path",
+            solver.id
+        );
+        assert!(
+            command.iter().any(|arg| arg.contains('7')),
+            "{} ignores the time limit",
+            solver.id
+        );
     }
     assert!(definition["description"].as_str().unwrap().contains("cp-sat (mzn)"));
     assert!(lookup("gurobi").is_none());
@@ -72,8 +93,16 @@ fn requests_are_validated_before_any_container_runs() {
         nonzero_only: false,
     };
     let ok = validate(input("highs", None, "x", None, None)).unwrap();
-    assert_eq!((ok.format, ok.time_limit_seconds, ok.memory_mb), ("lp", DEFAULT_TIME_LIMIT, DEFAULT_MEMORY_MB));
-    assert_eq!(validate(input("highs", Some("mps"), "x", Some(20), Some(4096))).unwrap().format, "mps");
+    assert_eq!(
+        (ok.format, ok.time_limit_seconds, ok.memory_mb),
+        ("lp", DEFAULT_TIME_LIMIT, DEFAULT_MEMORY_MB)
+    );
+    assert_eq!(
+        validate(input("highs", Some("mps"), "x", Some(20), Some(4096)))
+            .unwrap()
+            .format,
+        "mps"
+    );
     let error = |input| validate(input).err().unwrap().to_string();
     assert!(error(input("cplex", None, "x", None, None)).contains("available: highs, z3, cp-sat"));
     assert!(error(input("z3", Some("lp"), "x", None, None)).contains("accepts formats smt2"));
@@ -92,17 +121,38 @@ fn requests_are_validated_before_any_container_runs() {
 fn container_arguments_are_isolated_and_bounded() {
     let request = request("highs", 5, false);
     let arguments = arguments("sha256:abc", "control-solve-1", &request);
-    for expected in ["--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-        "--memory=1024m", "--memory-swap=1024m", "--cpus=2", "--pids-limit=128", "--pull=never", "--rm", "--log-driver=none"] {
+    for expected in [
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--memory=1024m",
+        "--memory-swap=1024m",
+        "--cpus=2",
+        "--pids-limit=128",
+        "--pull=never",
+        "--rm",
+        "--log-driver=none",
+    ] {
         assert!(arguments.iter().any(|arg| arg == expected), "missing {expected}");
     }
     assert!(arguments.windows(2).any(|pair| pair == ["--user", "65534:65534"]));
-    assert!(!arguments.iter().any(|arg| arg.starts_with("--mount") || arg.starts_with("--volume") || arg == "-v" || arg.starts_with("--privileged")));
+    assert!(!arguments.iter().any(|arg| arg.starts_with("--mount")
+        || arg.starts_with("--volume")
+        || arg == "-v"
+        || arg.starts_with("--privileged")));
     let image = arguments.iter().position(|arg| arg == "sha256:abc").unwrap();
-    assert_eq!(&arguments[image + 1..image + 5], ["-c", STAGE, "/tmp/model.lp", "/tmp/solution.txt"]);
+    assert_eq!(
+        &arguments[image + 1..image + 5],
+        ["-c", STAGE, "/tmp/model.lp", "/tmp/solution.txt"]
+    );
     assert_eq!(arguments[image + 5], "highs");
     let z3 = arguments_for("z3");
-    assert_eq!(z3[z3.iter().position(|arg| arg == "/tmp/model.smt2").unwrap() + 1], "", "z3 writes its result to stdout");
+    assert_eq!(
+        z3[z3.iter().position(|arg| arg == "/tmp/model.smt2").unwrap() + 1],
+        "",
+        "z3 writes its result to stdout"
+    );
     assert!(z3.iter().any(|arg| arg == "-T:7") && z3.iter().any(|arg| arg == "-memory:768"));
     let minizinc = arguments_for("cp-sat");
     assert!(minizinc.windows(2).any(|pair| pair == ["--solver", "cp-sat"]));
@@ -127,18 +177,31 @@ fn highs_solution_files_map_to_statuses_and_assignments() {
     assert!(optimal.get("diagnostics").is_none());
 
     let infeasible = solve("highs", HIGHS_INFEASIBLE);
-    assert_eq!((infeasible["status"].as_str(), infeasible["has_solution"].as_bool()), (Some("infeasible"), Some(false)));
+    assert_eq!(
+        (infeasible["status"].as_str(), infeasible["has_solution"].as_bool()),
+        (Some("infeasible"), Some(false))
+    );
     assert_eq!(infeasible["objective"], Value::Null);
     let unbounded = solve("highs", HIGHS_UNBOUNDED);
     assert_eq!(unbounded["status"], "unbounded");
-    assert_eq!(unbounded["variables"], json!({"x":1,"y":0}), "dual columns are not primal values");
+    assert_eq!(
+        unbounded["variables"],
+        json!({"x":1,"y":0}),
+        "dual columns are not primal values"
+    );
     let timeout = solve("highs", HIGHS_TIME_LIMIT);
-    assert_eq!((timeout["status"].as_str(), timeout["has_solution"].as_bool()), (Some("timeout"), Some(true)));
+    assert_eq!(
+        (timeout["status"].as_str(), timeout["has_solution"].as_bool()),
+        (Some("timeout"), Some(true))
+    );
     assert_eq!(timeout["objective"], 41.5);
     assert_eq!(timeout["variables"]["load"], 2.5);
     let other = super::parse::highs("Model status\nPrimal infeasible or unbounded\n");
     assert_eq!(other.status, Some(Status::InfeasibleOrUnbounded));
-    assert_eq!(super::parse::highs("Model status\nLoad error\n").status, Some(Status::Error));
+    assert_eq!(
+        super::parse::highs("Model status\nLoad error\n").status,
+        Some(Status::Error)
+    );
     assert_eq!(super::parse::highs("").status, None);
 }
 
@@ -148,7 +211,12 @@ fn highs_load_errors_report_engine_diagnostics() {
     output.stderr = "Running HiGHS 1.14.0\nERROR:   Parser error reading /tmp/model.lp\nError loading file\n".into();
     let result = shape(&request("highs", 10, false), &output, json!({}));
     assert_eq!(result["status"], "error");
-    assert!(result["diagnostics"].as_str().unwrap().contains("Parser error reading /tmp/model.lp"));
+    assert!(
+        result["diagnostics"]
+            .as_str()
+            .unwrap()
+            .contains("Parser error reading /tmp/model.lp")
+    );
     assert_eq!(result["exit_code"], 255);
 }
 
@@ -162,7 +230,12 @@ fn smtlib_responses_cover_models_objectives_and_errors() {
 
     let unsat = solve("z3", Z3_UNSAT);
     assert_eq!(unsat["status"], "infeasible");
-    assert!(unsat["messages"][0].as_str().unwrap().contains("model is not available"));
+    assert!(
+        unsat["messages"][0]
+            .as_str()
+            .unwrap()
+            .contains("model is not available")
+    );
     let syntax = shape(&request("z3", 10, false), &raw(Z3_SYNTAX, Some(1), 30), json!({}));
     assert_eq!(syntax["status"], "error");
     assert!(syntax["messages"][0].as_str().unwrap().contains("')' expected"));
@@ -190,16 +263,26 @@ fn smtlib_responses_cover_models_objectives_and_errors() {
 
 #[test]
 fn sexp_reader_handles_strings_comments_and_depth() {
-    assert_eq!(sexps("(a \"b ) \"\"c\" |d e|) ; (ignored\n x"), vec![
-        Sexp::List(vec![Sexp::Atom("a".into()), Sexp::Atom("\"b ) \"\"c\"".into()), Sexp::Atom("|d e|".into())]),
-        Sexp::Atom("x".into()),
-    ]);
+    assert_eq!(
+        sexps("(a \"b ) \"\"c\" |d e|) ; (ignored\n x"),
+        vec![
+            Sexp::List(vec![
+                Sexp::Atom("a".into()),
+                Sexp::Atom("\"b ) \"\"c\"".into()),
+                Sexp::Atom("|d e|".into())
+            ]),
+            Sexp::Atom("x".into()),
+        ]
+    );
     assert_eq!(sexps(")) sat"), vec![Sexp::Atom("sat".into())]);
     // Deep or unbalanced input never recurses or panics.
     let deep = "(".repeat(100_000);
     assert!(sexps(&deep).is_empty());
     assert!(sexps(&format!("sat {}", "(".repeat(10))).contains(&Sexp::Atom("sat".into())));
-    assert_eq!(smt_value(&Sexp::Atom("123456789012345678901234567890".into())), json!("123456789012345678901234567890"));
+    assert_eq!(
+        smt_value(&Sexp::Atom("123456789012345678901234567890".into())),
+        json!("123456789012345678901234567890")
+    );
     assert_eq!(smt_value(&Sexp::Atom("2.5".into())), json!(2.5));
 }
 
@@ -212,20 +295,43 @@ fn minizinc_streams_map_to_statuses_and_assignments() {
     assert_eq!(optimal["variables"], json!({"x":6,"y":4}));
     let unsat = solve("cp-sat", MZN_UNSAT);
     assert_eq!(unsat["status"], "infeasible");
-    assert!(unsat["messages"][0].as_str().unwrap().contains("model inconsistency detected (line 2)"));
+    assert!(
+        unsat["messages"][0]
+            .as_str()
+            .unwrap()
+            .contains("model inconsistency detected (line 2)")
+    );
     let syntax = shape(&request("cp-sat", 10, false), &raw(MZN_SYNTAX, Some(1), 30), json!({}));
     assert_eq!(syntax["status"], "error");
-    assert_eq!(syntax["messages"][0], "error: syntax error: unexpected item, expecting ';' or end of file (line 2)");
+    assert_eq!(
+        syntax["messages"][0],
+        "error: syntax error: unexpected item, expecting ';' or end of file (line 2)"
+    );
     let satisfy = solve("cp-sat", MZN_SATISFY);
     assert_eq!(satisfy["status"], "feasible");
     assert_eq!(satisfy["variables"]["a"], json!([2, 3, 1]));
     assert_eq!(solve("cp-sat", MZN_UNKNOWN)["status"], "unknown");
-    let late = shape(&request("cp-sat", 1, false), &raw(MZN_UNKNOWN, Some(0), 1200), json!({}));
+    let late = shape(
+        &request("cp-sat", 1, false),
+        &raw(MZN_UNKNOWN, Some(0), 1200),
+        json!({}),
+    );
     assert_eq!(late["status"], "timeout");
     let interrupted = solve("cp-sat", &MZN_OPTIMAL.replace("OPTIMAL_SOLUTION", "SATISFIED"));
-    assert_eq!((interrupted["status"].as_str(), interrupted["has_solution"].as_bool()), (Some("timeout"), Some(true)));
-    assert_eq!(solve("cp-sat", "{\"type\": \"status\", \"status\": \"UNSAT_OR_UNBOUNDED\"}\n")["status"], "infeasible_or_unbounded");
-    assert!(solve("cp-sat", "not json\n")["messages"][0].as_str().unwrap().starts_with("Unparsed output"));
+    assert_eq!(
+        (interrupted["status"].as_str(), interrupted["has_solution"].as_bool()),
+        (Some("timeout"), Some(true))
+    );
+    assert_eq!(
+        solve("cp-sat", "{\"type\": \"status\", \"status\": \"UNSAT_OR_UNBOUNDED\"}\n")["status"],
+        "infeasible_or_unbounded"
+    );
+    assert!(
+        solve("cp-sat", "not json\n")["messages"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Unparsed output")
+    );
 }
 
 #[test]
@@ -245,17 +351,27 @@ fn container_endings_override_parsed_output() {
     let mut truncated = raw(Z3_OPTIMAL, Some(0), 100);
     truncated.stdout_truncated = true;
     let result = shape(&request("z3", 10, false), &truncated, json!({}));
-    assert!(result["messages"].as_array().unwrap().iter().any(|m| m.as_str().unwrap().contains("truncated")));
+    assert!(
+        result["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m.as_str().unwrap().contains("truncated"))
+    );
 }
 
 #[test]
 fn assignments_are_bounded_and_optionally_sparse() {
-    let mut columns = String::from("Model status\nOptimal\n\n# Primal solution values\nFeasible\nObjective 1\n# Columns 5000\n");
+    let mut columns =
+        String::from("Model status\nOptimal\n\n# Primal solution values\nFeasible\nObjective 1\n# Columns 5000\n");
     for i in 0..5000 {
         columns.push_str(&format!("x{i} {}\n", i % 2));
     }
     let full = solve("highs", &columns);
-    assert_eq!((full["variable_count"].as_u64(), full["variables_returned"].as_u64()), (Some(5000), Some(MAX_VARIABLES as u64)));
+    assert_eq!(
+        (full["variable_count"].as_u64(), full["variables_returned"].as_u64()),
+        (Some(5000), Some(MAX_VARIABLES as u64))
+    );
     assert_eq!(full["variables_truncated"], true);
     let sparse = shape(&request("highs", 10, true), &raw(&columns, Some(0), 100), json!({}));
     assert_eq!(sparse["variables_returned"], 2000);
@@ -265,20 +381,47 @@ fn assignments_are_bounded_and_optionally_sparse() {
     assert_eq!(small["variables_omitted_zero"], 1);
     assert_eq!(small["variables_truncated"], false);
     // Large values are bounded by bytes as well as count.
-    let wide = format!("{{\"type\": \"solution\", \"output\": {{\"json\": {{\"a\": [{}], \"b\": 1}}}}}}\n", vec!["123456"; 40_000].join(","));
+    let wide = format!(
+        "{{\"type\": \"solution\", \"output\": {{\"json\": {{\"a\": [{}], \"b\": 1}}}}}}\n",
+        vec!["123456"; 40_000].join(",")
+    );
     let result = solve("cp-sat", &wide);
-    assert_eq!((result["variables_returned"].as_u64(), result["variables_truncated"].as_bool()), (Some(0), Some(true)));
+    assert_eq!(
+        (
+            result["variables_returned"].as_u64(),
+            result["variables_truncated"].as_bool()
+        ),
+        (Some(0), Some(true))
+    );
 }
 
 #[test]
 fn provenance_comes_from_the_image_registry_label() {
     let label = r#"{"cp-sat":{"frontend":"minizinc 2.10.1","package":"or-tools","version":"9.15"},"highs":{"package":"highs","version":"1.14.0"},"z3":{"package":"z3","version":"5.1.0"}}"#;
-    assert_eq!(provenance(label, "sha256:abc", "cp-sat").unwrap(), json!({"image":"sha256:abc","package":"or-tools","version":"9.15","frontend":"minizinc 2.10.1"}));
+    assert_eq!(
+        provenance(label, "sha256:abc", "cp-sat").unwrap(),
+        json!({"image":"sha256:abc","package":"or-tools","version":"9.15","frontend":"minizinc 2.10.1"})
+    );
     assert_eq!(check_installed(label).unwrap(), "highs, z3, cp-sat");
     let missing = r#"{"highs":{"package":"highs","version":"1.14.0"}}"#;
-    assert!(provenance(missing, "sha256:abc", "z3").unwrap_err().to_string().contains("does not provide z3"));
-    assert!(check_installed(missing).unwrap_err().to_string().contains("lacks z3, cp-sat"));
-    assert!(provenance("", "sha256:abc", "z3").unwrap_err().to_string().contains("registry label"));
+    assert!(
+        provenance(missing, "sha256:abc", "z3")
+            .unwrap_err()
+            .to_string()
+            .contains("does not provide z3")
+    );
+    assert!(
+        check_installed(missing)
+            .unwrap_err()
+            .to_string()
+            .contains("lacks z3, cp-sat")
+    );
+    assert!(
+        provenance("", "sha256:abc", "z3")
+            .unwrap_err()
+            .to_string()
+            .contains("registry label")
+    );
 }
 
 #[test]
@@ -298,25 +441,41 @@ fn live_solvers_run_tiny_models_in_their_containers() {
         let result = call(&json!({"solver":solver,"model":model,"time_limit_seconds":5})).unwrap();
         assert_eq!(result["status"], "optimal", "{solver}: {result}");
         assert_eq!(result["objective"], 34, "{solver}: {result}");
-        assert_eq!((result["variables"]["x"].as_i64(), result["variables"]["y"].as_i64()), (Some(6), Some(4)), "{solver}: {result}");
+        assert_eq!(
+            (result["variables"]["x"].as_i64(), result["variables"]["y"].as_i64()),
+            (Some(6), Some(4)),
+            "{solver}: {result}"
+        );
         assert!(result["provenance"]["version"].is_string(), "{solver}: {result}");
     }
-    let infeasible = call(&json!({"solver":"highs","model":"Minimize\n obj: x\nSubject To\n c1: x >= 5\nBounds\n 0 <= x <= 3\nEnd\n"})).unwrap();
+    let infeasible = call(
+        &json!({"solver":"highs","model":"Minimize\n obj: x\nSubject To\n c1: x >= 5\nBounds\n 0 <= x <= 3\nEnd\n"}),
+    )
+    .unwrap();
     assert_eq!(infeasible["status"], "infeasible");
     let error = call(&json!({"solver":"cp-sat","model":"var 0..3: x\nconstraint x > 5;\n"})).unwrap();
     assert_eq!(error["status"], "error");
-    assert!(error["messages"][0].as_str().unwrap().contains("syntax error"), "{error}");
+    assert!(
+        error["messages"][0].as_str().unwrap().contains("syntax error"),
+        "{error}"
+    );
     // Fermat's cubic case has no positive solution; Z3 cannot prove it in a second.
     let hard = "(declare-const x Int)(declare-const y Int)(declare-const z Int)(assert (> x 0))(assert (> y 0))(assert (> z 0))(assert (= (+ (* x x x) (* y y y)) (* z z z)))(check-sat)";
     let timeout = call(&json!({"solver":"z3","model":hard,"time_limit_seconds":1})).unwrap();
     assert_eq!(timeout["status"], "timeout", "{timeout}");
-    assert!(timeout["elapsed_ms"].as_u64().unwrap() < 1000 * (1 + GRACE.as_secs()), "{timeout}");
+    assert!(
+        timeout["elapsed_ms"].as_u64().unwrap() < 1000 * (1 + GRACE.as_secs()),
+        "{timeout}"
+    );
 }
 
 #[test]
 fn solver_launch_vector_is_pinned() {
     use crate::engine::golden::{fill, pin_equivalent};
-    pin_equivalent(&arguments("sha256:img", "control-solve-1", &request("highs", 5, false)), &fill(GOLDEN, &[("stage", STAGE)]));
+    pin_equivalent(
+        &arguments("sha256:img", "control-solve-1", &request("highs", 5, false)),
+        &fill(GOLDEN, &[("stage", STAGE)]),
+    );
 }
 const GOLDEN: &[&str] = &[
     "run",

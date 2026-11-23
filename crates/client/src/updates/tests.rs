@@ -16,7 +16,9 @@ fn shutdown_unblocks_a_live_reader_and_hints_are_coalesced() {
                 break;
             }
         }
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: changed\n\ndata: changed\n\n").unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: changed\n\ndata: changed\n\n")
+            .unwrap();
         ready.send(()).unwrap();
         let mut byte = [0];
         assert_eq!(stream.read(&mut byte).unwrap(), 0);
@@ -25,12 +27,7 @@ fn shutdown_unblocks_a_live_reader_and_hints_are_coalesced() {
     let connected = Arc::new(AtomicBool::new(false));
     let socket = Arc::new(Mutex::new(None));
     let cancel = CancelToken::new();
-    let (signal, online, connection, stop) = (
-        changed.clone(),
-        connected.clone(),
-        socket.clone(),
-        cancel.clone(),
-    );
+    let (signal, online, connection, stop) = (changed.clone(), connected.clone(), socket.clone(), cancel.clone());
     let reader = std::thread::spawn(move || {
         receive(
             address,
@@ -54,11 +51,9 @@ fn shutdown_unblocks_a_live_reader_and_hints_are_coalesced() {
     // Reader may process the second hint after the first wake, so consume it
     // before checking coalescing of multiple already-published generations.
     assert!(matches!(
-        updates.changed.wait_newer(
-            1,
-            Some(Instant::now() + Duration::from_secs(2)),
-            &updates.cancel
-        ),
+        updates
+            .changed
+            .wait_newer(1, Some(Instant::now() + Duration::from_secs(2)), &updates.cancel),
         Newer::Changed(2)
     ));
     assert!(updates.connected());

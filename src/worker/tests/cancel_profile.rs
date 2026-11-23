@@ -17,7 +17,15 @@ fn execute(state: Arc<Mutex<State>>, task: Task) {
     while !crate::lifecycle::cancelled(Some((&state, &task.0))) {
         std::thread::sleep(Duration::from_millis(250));
     }
-    let _ = commit(&mut state.lock().unwrap(), &task.0, task.3, task.4, Err(("cancelled", "Cancelled.".into())), false, storage::save);
+    let _ = commit(
+        &mut state.lock().unwrap(),
+        &task.0,
+        task.3,
+        task.4,
+        Err(("cancelled", "Cancelled.".into())),
+        false,
+        storage::save,
+    );
 }
 
 fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
@@ -30,13 +38,21 @@ fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
         let chat = crate::chat::create(&mut state);
         let session = state.chats.last_mut().unwrap();
         session.room = Some("general".into());
-        if index < tree { session.parent_chat = Some(root.clone()); }
+        if index < tree {
+            session.parent_chat = Some(root.clone());
+        }
         chats.push(chat);
     }
     // Finished history first, as on a long-lived node.
     for chat in &chats[tree + 1..] {
         for turn in 0..runs {
-            crate::chat::send(&mut state, chat, &format!("Turn {turn}: {}", "context ".repeat(32)), "test").unwrap();
+            crate::chat::send(
+                &mut state,
+                chat,
+                &format!("Turn {turn}: {}", "context ".repeat(32)),
+                "test",
+            )
+            .unwrap();
             let run = state.runtime.runs.last_mut().unwrap();
             run.status = "completed".into();
             run.emitted = Some("completed".into());
@@ -44,8 +60,14 @@ fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
         }
     }
     for index in 0..4_000 {
-        state.collective.posts.push(crate::rooms::Post { room: "general".into(), text: "room traffic ".repeat(16),
-            chat: Some(chats[index % chats.len()].clone()), run: None, key: format!("k{index}"), delivery: Default::default() });
+        state.collective.posts.push(crate::rooms::Post {
+            room: "general".into(),
+            text: "room traffic ".repeat(16),
+            chat: Some(chats[index % chats.len()].clone()),
+            run: None,
+            key: format!("k{index}"),
+            delivery: Default::default(),
+        });
     }
     for chat in &chats[1..=tree] {
         crate::chat::send(&mut state, chat, "Join the game", "test").unwrap();
@@ -64,19 +86,34 @@ fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
 fn live_cancel_all_profile() {
     struct Stop;
     impl Drop for Stop {
-        fn drop(&mut self) { crate::shutdown::request(); }
+        fn drop(&mut self) {
+            crate::shutdown::request();
+        }
     }
     let _stop = Stop;
-    assert!(std::env::var("CONTROL_STATE_DIR").unwrap().contains("control-cancel-profile"));
+    assert!(
+        std::env::var("CONTROL_STATE_DIR")
+            .unwrap()
+            .contains("control-cancel-profile")
+    );
     assert!(crate::backend::Backend::Codex.image().is_none() && crate::backend::Backend::Claude.image().is_none());
     storage::initialize().unwrap();
-    let unrelated = std::env::var("CONTROL_PROFILE_CHATS").ok().and_then(|v| v.parse().ok()).unwrap_or(120);
+    let unrelated = std::env::var("CONTROL_PROFILE_CHATS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(120);
     let (initial, root) = node(unrelated, 48, 6);
     storage::save(&initial).unwrap();
     let bytes = fs::metadata(crate::config::state("state.json").unwrap()).unwrap().len();
     let state = Arc::new(Mutex::new(initial));
     let threads = start_with(state.clone(), execute);
-    let active = |s: &State| s.runtime.runs.iter().filter(|r| matches!(r.status.as_str(), "running" | "cancelling")).count();
+    let active = |s: &State| {
+        s.runtime
+            .runs
+            .iter()
+            .filter(|r| matches!(r.status.as_str(), "running" | "cancelling"))
+            .count()
+    };
     let started = Instant::now();
     while active(&state.lock().unwrap()) < 7 {
         assert!(started.elapsed() < Duration::from_secs(60), "turns did not start");
@@ -93,10 +130,15 @@ fn live_cancel_all_profile() {
             while !done.load(Ordering::Relaxed) {
                 let _ = changes.wait_newer(seen, Some(Instant::now() + Duration::from_millis(100)), &token);
                 let now = changes.generation();
-                if now == seen { continue; }
+                if now == seen {
+                    continue;
+                }
                 seen = now;
                 let s = state.lock().unwrap();
-                std::hint::black_box((crate::chat::transcript(&s, &root).ok(), crate::navigation::conversations(&s, &root)));
+                std::hint::black_box((
+                    crate::chat::transcript(&s, &root).ok(),
+                    crate::navigation::conversations(&s, &root),
+                ));
                 renders.fetch_add(1, Ordering::Relaxed);
             }
         })
@@ -105,11 +147,20 @@ fn live_cancel_all_profile() {
     let (before, generation, started) = (cpu(), storage::changes().generation(), Instant::now());
     {
         let mut s = state.lock().unwrap();
-        crate::session_http::change_with_save(&mut s, "control.chat.send", &serde_json::json!({"id":root,"message":"/cancel all"}), storage::save).unwrap();
+        crate::session_http::change_with_save(
+            &mut s,
+            "control.chat.send",
+            &serde_json::json!({"id":root,"message":"/cancel all"}),
+            storage::save,
+        )
+        .unwrap();
     }
     wake();
     while active(&state.lock().unwrap()) > 0 {
-        assert!(started.elapsed() < Duration::from_secs(120), "cancellation did not finish");
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "cancellation did not finish"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     let settled = started.elapsed();
@@ -119,10 +170,13 @@ fn live_cancel_all_profile() {
     done.store(true, Ordering::Relaxed);
     presenter.join().unwrap();
     let s = state.lock().unwrap();
-    println!("{}", serde_json::json!({"workload":"live_cancel_all","chats":s.chats.len(),"runs":s.runtime.runs.len(),
+    println!(
+        "{}",
+        serde_json::json!({"workload":"live_cancel_all","chats":s.chats.len(),"runs":s.runtime.runs.len(),
         "state_bytes":bytes,"cancelled":s.runtime.runs.iter().filter(|r| r.status == "cancelled").count(),
         "settled_ms":settled.as_millis(),"checkpoints":checkpoints,"renders":renders.load(Ordering::Relaxed),
-        "cpu_s_including_3s_tail":(cpu_s * 1000.0).round() / 1000.0}));
+        "cpu_s_including_3s_tail":(cpu_s * 1000.0).round() / 1000.0})
+    );
     drop(s);
     crate::shutdown::request();
     threads.join().unwrap();

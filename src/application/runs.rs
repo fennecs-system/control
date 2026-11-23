@@ -161,7 +161,10 @@ impl Record {
         if !self.attempts.is_empty() || self.status != "completed" {
             return None;
         }
-        self.result.strip_prefix(ABSORBED)?.split_once(';').map(|(active, _)| active)
+        self.result
+            .strip_prefix(ABSORBED)?
+            .split_once(';')
+            .map(|(active, _)| active)
     }
 }
 /// The result prefix of a queued turn that an active run processed instead.

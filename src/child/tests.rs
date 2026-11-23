@@ -1,4 +1,3 @@
-
 use super::*;
 use std::{process::Command, time::Duration};
 
@@ -24,10 +23,7 @@ fn exit_is_delivered_without_polling_and_kill_after_exit_is_a_no_op() {
 fn kill_stops_a_running_child_and_deadlines_and_cancellation_end_waits() {
     let watched = watch(Command::new("sleep").arg("30").spawn().unwrap()).unwrap();
     assert!(matches!(
-        watched.wait(
-            Some(Instant::now() + Duration::from_millis(20)),
-            &CancelToken::new()
-        ),
+        watched.wait(Some(Instant::now() + Duration::from_millis(20)), &CancelToken::new()),
         Recv::Elapsed
     ));
     let cancelled = CancelToken::new();
@@ -45,11 +41,7 @@ fn a_failed_waiter_spawn_kills_and_reaps_the_child() {
         .err()
         .unwrap();
     assert_eq!(error.to_string(), "no threads");
-    assert_eq!(
-        unsafe { libc::kill(pid, 0) },
-        -1,
-        "child must be gone and reaped"
-    );
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "child must be gone and reaped");
     assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
 }
 
@@ -58,25 +50,15 @@ fn lost_ownership_reports_an_error_and_disables_kill() {
     fn lost(_: libc::pid_t) -> io::Result<()> {
         Err(io::Error::from_raw_os_error(libc::ECHILD))
     }
-    let watched = watch_with(
-        Command::new("sleep").arg("0").spawn().unwrap(),
-        lost,
-        |task| {
-            std::thread::spawn(task);
-            Ok(())
-        },
-    )
+    let watched = watch_with(Command::new("sleep").arg("0").spawn().unwrap(), lost, |task| {
+        std::thread::spawn(task);
+        Ok(())
+    })
     .unwrap();
-    assert_eq!(
-        status(&watched).unwrap_err().raw_os_error(),
-        Some(libc::ECHILD)
-    );
+    assert_eq!(status(&watched).unwrap_err().raw_os_error(), Some(libc::ECHILD));
     assert!(*watched.exited.lock().unwrap());
     watched.kill();
-    assert_eq!(
-        observe_exit(1).unwrap_err().raw_os_error(),
-        Some(libc::ECHILD)
-    );
+    assert_eq!(observe_exit(1).unwrap_err().raw_os_error(), Some(libc::ECHILD));
 }
 
 #[test]
@@ -90,10 +72,7 @@ fn dropping_a_watch_while_unwinding_kills_and_reaps_the_child() {
     assert!(unwound.is_err());
     let deadline = Instant::now() + Duration::from_secs(5);
     while unsafe { libc::kill(pid, 0) } == 0 {
-        assert!(
-            Instant::now() < deadline,
-            "child still running or unreaped after drop"
-        );
+        assert!(Instant::now() < deadline, "child still running or unreaped after drop");
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
@@ -111,22 +90,14 @@ fn other_observation_errors_still_stop_reap_and_release_output() {
         .unwrap();
     let pid = child.id() as libc::pid_t;
     let mut stdout = child.stdout.take().unwrap();
-    let reader =
-        std::thread::spawn(move || std::io::Read::read_to_end(&mut stdout, &mut Vec::new()));
+    let reader = std::thread::spawn(move || std::io::Read::read_to_end(&mut stdout, &mut Vec::new()));
     let watched = watch_with(child, broken, |task| {
         std::thread::spawn(task);
         Ok(())
     })
     .unwrap();
-    assert_eq!(
-        status(&watched).unwrap_err().raw_os_error(),
-        Some(libc::EINVAL)
-    );
+    assert_eq!(status(&watched).unwrap_err().raw_os_error(), Some(libc::EINVAL));
     reader.join().unwrap().unwrap();
-    assert_eq!(
-        unsafe { libc::kill(pid, 0) },
-        -1,
-        "child must be stopped and reaped"
-    );
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "child must be stopped and reaped");
     assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
 }

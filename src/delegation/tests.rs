@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::{
     backend::Backend,
@@ -7,7 +6,7 @@ use crate::{
 };
 fn input(role: Role) -> Input {
     Input {
-        model:None,
+        model: None,
         objective: "Inspect this change and report evidence".into(),
         role,
     }
@@ -56,11 +55,16 @@ fn pause(s: &mut State, role: Role) {
 #[test]
 fn delegated_feedback_reports_unavailable_diff_evidence() {
     let mut state = crate::State::default();
-    state.runtime.enqueue("Review changes".into(), crate::runtime::RunKind::Chat, "test");
+    state
+        .runtime
+        .enqueue("Review changes".into(), crate::runtime::RunKind::Chat, "test");
     let child = &mut state.runtime.runs[0];
     child.chat_id = Some("c-test-delegation-history-error".into());
     child.status = "completed".into();
-    child.attempts.push(crate::usage::Attempt { journal:Some(u64::MAX),..Default::default() });
+    child.attempts.push(crate::usage::Attempt {
+        journal: Some(u64::MAX),
+        ..Default::default()
+    });
     let before = serde_json::to_vec(child).unwrap();
     let text = feedback(child);
     assert!(text.contains("Activity history unavailable"));
@@ -71,17 +75,22 @@ fn delegated_feedback_reports_unavailable_diff_evidence() {
 
 #[test]
 fn explicit_reviewer_model_is_captured_without_changing_parent_or_granting_authority() {
-    let mut state=active(Action::Task);
-    state.runtime.models.push(crate::providers::Model::captured(Backend::Claude,"reviewer".into()));
-    let id=state.runtime.runs[0].id.clone();
-    let mut task=input(Role::Judge);task.model=Some("claude:reviewer".into());
-    request_with_save(&mut state,&id,"selected",task,|_|Ok(())).unwrap();
-    let parent=&state.runtime.runs[0];
-    assert_eq!(parent.backend,Backend::Codex);
-    assert_eq!(parent.model.as_deref(),Some("dev-model"));
-    let delegation=parent.delegation.as_ref().unwrap();
-    assert_eq!(delegation.backend,Backend::Claude);assert_eq!(delegation.model,"reviewer");
-    assert_eq!(delegation.input.role,Role::Judge);
+    let mut state = active(Action::Task);
+    state
+        .runtime
+        .models
+        .push(crate::providers::Model::captured(Backend::Claude, "reviewer".into()));
+    let id = state.runtime.runs[0].id.clone();
+    let mut task = input(Role::Judge);
+    task.model = Some("claude:reviewer".into());
+    request_with_save(&mut state, &id, "selected", task, |_| Ok(())).unwrap();
+    let parent = &state.runtime.runs[0];
+    assert_eq!(parent.backend, Backend::Codex);
+    assert_eq!(parent.model.as_deref(), Some("dev-model"));
+    let delegation = parent.delegation.as_ref().unwrap();
+    assert_eq!(delegation.backend, Backend::Claude);
+    assert_eq!(delegation.model, "reviewer");
+    assert_eq!(delegation.input.role, Role::Judge);
 }
 #[test]
 fn acknowledgement_is_idempotent_and_fences_other_requests() {
@@ -95,8 +104,7 @@ fn acknowledgement_is_idempotent_and_fences_other_requests() {
     assert!(request_with_save(&mut s, &id, "changed", input(Role::Worker), |_| Ok(())).is_err());
     let shared = std::sync::Arc::new(std::sync::Mutex::new(s));
     assert!(crate::design::requested(Some((&shared, &id))));
-    shared.lock().unwrap().runtime.runs[0].attempts[0].workspace_id =
-        Some("later-generation".into());
+    shared.lock().unwrap().runtime.runs[0].attempts[0].workspace_id = Some("later-generation".into());
     assert!(!crate::design::requested(Some((&shared, &id))));
 }
 
@@ -111,18 +119,9 @@ fn worker_inherits_current_improve_snapshot_without_sharing_publication() {
     let child = &s.runtime.runs[1];
     assert_eq!(child.action, Action::Improve);
     assert_eq!(child.actor, s.runtime.runs[0].actor);
-    assert_eq!(
-        child.persona.as_ref().unwrap().parent.as_deref(),
-        Some(parent.as_str())
-    );
-    assert_eq!(
-        s.chats[1].improve_workspace.as_deref(),
-        Some("immutable-paused-source")
-    );
-    assert_eq!(
-        s.chats[0].improve_workspace.as_deref(),
-        Some("published-improve")
-    );
+    assert_eq!(child.persona.as_ref().unwrap().parent.as_deref(), Some(parent.as_str()));
+    assert_eq!(s.chats[1].improve_workspace.as_deref(), Some("immutable-paused-source"));
+    assert_eq!(s.chats[0].improve_workspace.as_deref(), Some("published-improve"));
     assert_eq!(crate::scheduler::next(&s.runtime), Some(1));
     reconcile(&mut s, |_| Ok(())).unwrap();
     assert_eq!(s.runtime.runs.len(), 2);
@@ -152,10 +151,9 @@ fn worker_inherits_current_improve_snapshot_without_sharing_publication() {
 #[test]
 fn judge_inherits_captured_model_and_has_task_ceiling() {
     let mut s = active(Action::Improve);
-    s.runtime.models = serde_json::from_value(
-        json!([{"backend":"codex","model":"other-dev"},{"backend":"claude","model":"sonnet"}]),
-    )
-    .unwrap();
+    s.runtime.models =
+        serde_json::from_value(json!([{"backend":"codex","model":"other-dev"},{"backend":"claude","model":"sonnet"}]))
+            .unwrap();
     pause(&mut s, Role::Judge);
     reconcile(&mut s, |_| Ok(())).unwrap();
     let child = &s.runtime.runs[1];
@@ -163,10 +161,7 @@ fn judge_inherits_captured_model_and_has_task_ceiling() {
     assert_eq!(child.backend, Backend::Codex);
     assert_eq!(child.model.as_deref(), Some("dev-model"));
     assert_eq!(child.action, Action::Task);
-    assert_eq!(
-        s.chats[1].workspace.as_deref(),
-        Some("immutable-paused-source")
-    );
+    assert_eq!(s.chats[1].workspace.as_deref(), Some("immutable-paused-source"));
     assert!(!s.chats[1].improve_mode);
     assert!(budget(&s, child, Role::Worker).is_err());
     assert!(
@@ -180,7 +175,10 @@ fn all_children_keep_parent_selection_and_failures_resume_the_parent() {
     for backend in [Backend::Codex, Backend::Claude] {
         for role in [Role::Worker, Role::Judge] {
             let mut s = active(Action::Task);
-            s.runtime.models=serde_json::from_value(json!([{"backend":"codex","model":"unrelated"},{"backend":"claude","model":"expired-alternate"}])).unwrap();
+            s.runtime.models = serde_json::from_value(
+                json!([{"backend":"codex","model":"unrelated"},{"backend":"claude","model":"expired-alternate"}]),
+            )
+            .unwrap();
             s.runtime.runs[0].backend = backend;
             s.runtime.runs[0].model = Some("captured-parent-model".into());
             pause(&mut s, role);
@@ -192,13 +190,9 @@ fn all_children_keep_parent_selection_and_failures_resume_the_parent() {
             s.runtime.model = Some("changed-default".into());
             reconcile(&mut s, |_| Ok(())).unwrap();
             assert_eq!(s.runtime.runs[1].backend, backend);
-            assert_eq!(
-                s.runtime.runs[1].model.as_deref(),
-                Some("captured-parent-model")
-            );
+            assert_eq!(s.runtime.runs[1].model.as_deref(), Some("captured-parent-model"));
             s.runtime.runs[1].status = "failed".into();
-            s.runtime.runs[1].result =
-                "Synthetic authentication failure; refresh the parent provider login".into();
+            s.runtime.runs[1].result = "Synthetic authentication failure; refresh the parent provider login".into();
             reconcile(&mut s, |_| Ok(())).unwrap();
             assert_eq!(s.runtime.runs[0].status, "continued");
             let resumed = &s.runtime.runs[2];
@@ -230,7 +224,8 @@ fn denied_identity_mismatched_actor_depth_and_total_budget_are_enforced() {
         root: id.clone(),
         role: Role::Worker,
         depth: MAX_DEPTH,
-        parent: None, bundle: None
+        parent: None,
+        bundle: None,
     });
     assert!(
         request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Ok(()))
@@ -245,7 +240,8 @@ fn denied_identity_mismatched_actor_depth_and_total_budget_are_enforced() {
             root: id.clone(),
             role: Role::Worker,
             depth: 1,
-            parent: Some(id.clone()), bundle: None
+            parent: Some(id.clone()),
+            bundle: None,
         });
         s.runtime.runs.push(child);
     }
@@ -260,9 +256,9 @@ fn request_and_transition_failures_rollback_without_duplicate_children() {
     let mut s = active(Action::Task);
     let id = s.runtime.runs[0].id.clone();
     assert!(
-        request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Err(
-            std::io::Error::other("disk full")
-        ))
+        request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Err(std::io::Error::other(
+            "disk full"
+        )))
         .is_err()
     );
     assert!(s.runtime.runs[0].delegation.is_none());
@@ -271,14 +267,7 @@ fn request_and_transition_failures_rollback_without_duplicate_children() {
     assert!(reconcile(&mut s, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert_eq!(s.chats.len(), 1);
     assert_eq!(s.runtime.runs.len(), 1);
-    assert!(
-        s.runtime.runs[0]
-            .delegation
-            .as_ref()
-            .unwrap()
-            .child
-            .is_none()
-    );
+    assert!(s.runtime.runs[0].delegation.as_ref().unwrap().child.is_none());
     reconcile(&mut s, |_| Ok(())).unwrap();
     s.runtime.runs[1].status = "failed".into();
     assert!(reconcile(&mut s, |_| Err(std::io::Error::other("disk full"))).is_err());
@@ -336,13 +325,7 @@ fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
         ..Default::default()
     });
     let child_id = child.id.clone();
-    crate::design::tests::ask_without_io(
-        &mut state,
-        &child_id,
-        "question",
-        crate::design::tests::input(),
-    )
-    .unwrap();
+    crate::design::tests::ask_without_io(&mut state, &child_id, "question", crate::design::tests::input()).unwrap();
     let child = &mut state.runtime.runs[1];
     child.status = "waiting".into();
     child.attempts[0].status = "waiting".into();
@@ -378,23 +361,14 @@ fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
         before,
         "A failed save must restore the child and parent together"
     );
-    chat::send(
-        &mut state,
-        &parent_chat,
-        &format!("/answer {question} 2"),
-        "test",
-    )
-    .unwrap();
+    chat::send(&mut state, &parent_chat, &format!("/answer {question} 2"), "test").unwrap();
     let resumed = state.runtime.runs.last().unwrap();
     assert_eq!(resumed.chat_id.as_deref(), Some(child_chat.as_str()));
     assert_eq!(
         resumed.persona.as_ref().unwrap().parent.as_deref(),
         Some(state.runtime.runs[0].id.as_str())
     );
-    assert_eq!(
-        resumed.continuation.as_ref().unwrap().checkpoint,
-        "paused-child"
-    );
+    assert_eq!(resumed.continuation.as_ref().unwrap().checkpoint, "paused-child");
     assert!(crate::design::pending(&state, &parent_chat).is_empty());
 }
 #[test]
@@ -402,12 +376,7 @@ fn persistent_resources_follow_real_delegation_and_return_to_parent() {
     let mut state = active(Action::Task);
     let (mut resources, _, _) = crate::ports::tests::fixture();
     let mut service = resources.services.remove(0);
-    service.resource.owner.chat = state.runtime.runs[0]
-        .chat_id
-        .clone()
-        .unwrap()
-        .try_into()
-        .unwrap();
+    service.resource.owner.chat = state.runtime.runs[0].chat_id.clone().unwrap().try_into().unwrap();
     state.services.push(service);
     pause(&mut state, Role::Worker);
     reconcile(&mut state, |_| Ok(())).unwrap();
@@ -419,22 +388,13 @@ fn persistent_resources_follow_real_delegation_and_return_to_parent() {
     ));
     let mut created = state.services[0].clone();
     created.resource.id = "svc-created-by-child".to_owned().try_into().unwrap();
-    created.resource.owner.chat = state.runtime.runs[1]
-        .chat_id
-        .clone()
-        .unwrap()
-        .try_into()
-        .unwrap();
+    created.resource.owner.chat = state.runtime.runs[1].chat_id.clone().unwrap().try_into().unwrap();
     state.services.push(created);
     state.runtime.runs[1].status = "completed".into();
     reconcile(&mut state, |_| Ok(())).unwrap();
     let parent = state.runtime.runs.last().unwrap();
     assert_eq!(parent.chat_id, state.runtime.runs[0].chat_id);
-    assert!(crate::services::direct(
-        &state.services[1],
-        &node,
-        parent
-    ));
+    assert!(crate::services::direct(&state.services[1], &node, parent));
 }
 #[test]
 fn parent_waits_for_child_design_and_delegation_continuations() {
@@ -528,7 +488,8 @@ fn tree_with_children(count: usize, at_ms: u64, parent_kind: RunKind) -> (State,
             role: Role::Worker,
             root: parent.clone(),
             depth: 1,
-            parent: Some(parent), bundle: None
+            parent: Some(parent),
+            bundle: None,
         });
     }
     (s, lead)
@@ -557,11 +518,7 @@ fn spawns_are_capped_per_conversation_tree_per_window() {
 #[test]
 fn agents_woken_by_control_events_cannot_keep_respawning() {
     let now = 10 * SPAWN_WINDOW_MS;
-    let (mut s, lead) = tree_with_children(
-        AUTOMATIC_SPAWN_TURNS_PER_WINDOW,
-        now - 1_000,
-        RunKind::AgentCompletion,
-    );
+    let (mut s, lead) = tree_with_children(AUTOMATIC_SPAWN_TURNS_PER_WINDOW, now - 1_000, RunKind::AgentCompletion);
     let member = chat::create(&mut s);
     s.chats.last_mut().unwrap().parent_chat = Some(lead);
     let mut woken = s.runtime.runs[0].clone();
@@ -573,7 +530,10 @@ fn agents_woken_by_control_events_cannot_keep_respawning() {
     // The cap is each chat's own: a peer bot in the same team still spawns.
     let mut peer = woken.clone();
     (peer.id, peer.chat_id) = ("peer-turn".into(), Some(member));
-    assert!(spawn_rate(&s, &peer, 1, now).is_ok(), "one member's helpers do not spend its peers'");
+    assert!(
+        spawn_rate(&s, &peer, 1, now).is_ok(),
+        "one member's helpers do not spend its peers'"
+    );
     let mut asked = woken.clone();
     asked.kind = RunKind::Chat;
     assert!(
@@ -612,14 +572,7 @@ fn automatic_turns_holding_reservations_count_toward_the_cap() {
         turn.chat_id = Some(lead.clone());
         turn.status = "running".into();
         s.runtime.runs.push(turn);
-        request_with_save(
-            &mut s,
-            &format!("woken-{index}"),
-            "n",
-            input(Role::Worker),
-            |_| Ok(()),
-        )
-        .unwrap();
+        request_with_save(&mut s, &format!("woken-{index}"), "n", input(Role::Worker), |_| Ok(())).unwrap();
     }
     let mut next = s.runtime.runs[0].clone();
     next.id = "woken-next".into();

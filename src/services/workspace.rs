@@ -17,11 +17,7 @@ impl<'a> Workspace<'a> {
                 &ring::digest::SHA256,
                 format!("{}\0{}", owner.node.as_str(), owner.chat.as_str()).as_bytes(),
             );
-            let digest = hash
-                .as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>();
+            let digest = hash.as_ref().iter().map(|b| format!("{b:02x}")).collect::<String>();
             Self {
                 owner,
                 name: format!("control-service-workspace-{digest}"),
@@ -55,20 +51,18 @@ impl<'a> Workspace<'a> {
             && volume.driver == "local"
             && volume.scope == "local"
             && volume.options.is_empty()
-            && self.labels().iter().all(|(key, value)| volume.labels.get(*key).is_some_and(|observed| observed == value))
+            && self
+                .labels()
+                .iter()
+                .all(|(key, value)| volume.labels.get(*key).is_some_and(|observed| observed == value))
     }
 }
 
-pub(super) fn valid_mounts(
-    service: &Service,
-    mounts: &[ObservedMount],
-    tmpfs: &HashMap<String, String>,
-) -> bool {
+pub(super) fn valid_mounts(service: &Service, mounts: &[ObservedMount], tmpfs: &HashMap<String, String>) -> bool {
     let workspace = Workspace::of(service);
     let mut found = false;
     for mount in mounts {
-        if mount.kind == MountKind::Tmpfs && tmpfs.contains_key(&mount.destination)
-        {
+        if mount.kind == MountKind::Tmpfs && tmpfs.contains_key(&mount.destination) {
             continue;
         }
         let Some(workspace) = &workspace else {
@@ -94,15 +88,26 @@ mod tests;
 /// Removes this node's service workspace volumes for chats not in `keep`, or
 /// only `chat`'s when given. Ownership comes from the volume's Control labels;
 /// the engine refuses a volume still mounted by any container.
-pub(super) fn remove_unused(isolation: &dyn Isolation, node: &str, keep: &std::collections::HashSet<String>, chat: Option<&str>) -> (usize, Vec<String>) {
+pub(super) fn remove_unused(
+    isolation: &dyn Isolation,
+    node: &str,
+    keep: &std::collections::HashSet<String>,
+    chat: Option<&str>,
+) -> (usize, Vec<String>) {
     let listed = match isolation.volumes(&[("dev.control.purpose", "service-workspace"), ("dev.control.node", node)]) {
         Ok(listed) => listed,
         Err(error) => return (0, vec![format!("Could not list service workspaces: {error}")]),
     };
     let (mut removed, mut failures) = (0, Vec::new());
     for volume in &listed {
-        let (name, owner) = (volume.name.as_str(), volume.labels.get("dev.control.chat").map_or("", String::as_str));
-        if !name.starts_with("control-service-workspace-") || keep.contains(owner) || chat.is_some_and(|chat| chat != owner) {
+        let (name, owner) = (
+            volume.name.as_str(),
+            volume.labels.get("dev.control.chat").map_or("", String::as_str),
+        );
+        if !name.starts_with("control-service-workspace-")
+            || keep.contains(owner)
+            || chat.is_some_and(|chat| chat != owner)
+        {
             continue;
         }
         match isolation.volume_remove(name) {

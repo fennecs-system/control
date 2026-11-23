@@ -20,7 +20,10 @@ pub struct Hive {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PortDecision { Allow, Deny }
+pub enum PortDecision {
+    Allow,
+    Deny,
+}
 
 /// The refreshed projection is retained even when approval is not confirmed.
 /// A transport failure is an outer error and must not be blindly retried.
@@ -34,8 +37,13 @@ impl ProjectApproval {
         let result = if project["request"] != request {
             Err("Project request changed. Use /open to review it.".into())
         } else if !redirected || project["pending"] == true || !project["grant"].is_string() {
-            Err(project["error"].as_str().unwrap_or("Folder was not opened. Use /open to review it or /open /absolute/path to change it.").into())
-        } else { Ok(()) };
+            Err(project["error"]
+                .as_str()
+                .unwrap_or("Folder was not opened. Use /open to review it or /open /absolute/path to change it.")
+                .into())
+        } else {
+            Ok(())
+        };
         Self { detail, result }
     }
 }
@@ -84,26 +92,50 @@ impl Hive {
     }
     #[cfg(feature = "fixture")]
     pub fn fixture(client: Client, endpoint: String) -> Self {
-        Self { client, endpoint, next: 0, operator_cookie: HeaderValue::from_static("fixture") }
+        Self {
+            client,
+            endpoint,
+            next: 0,
+            operator_cookie: HeaderValue::from_static("fixture"),
+        }
     }
     #[cfg(feature = "fixture")]
-    pub fn http(&self) -> &Client { &self.client }
+    pub fn http(&self) -> &Client {
+        &self.client
+    }
     #[cfg(feature = "fixture")]
-    pub fn operator_cookie(&self) -> &HeaderValue { &self.operator_cookie }
+    pub fn operator_cookie(&self) -> &HeaderValue {
+        &self.operator_cookie
+    }
     /// Submit an operator decision through this connection's authenticated
     /// origin. The server rechecks ownership, request identity and permission.
     pub fn decide_port(&self, chat: &str, request: &str, decision: PortDecision, loopback: bool) -> io::Result<()> {
         let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
-        let mut fields = vec![("id", request), ("return_chat", chat), ("response", "json"), ("seconds", "-1")];
-        if matches!(decision, PortDecision::Deny) { fields.push(("revoke", "yes")); }
-        if loopback { fields.push(("loopback", "yes")); }
-        let response = self.client.post(endpoint.join("/tools/ports").map_err(failure)?)
+        let mut fields = vec![
+            ("id", request),
+            ("return_chat", chat),
+            ("response", "json"),
+            ("seconds", "-1"),
+        ];
+        if matches!(decision, PortDecision::Deny) {
+            fields.push(("revoke", "yes"));
+        }
+        if loopback {
+            fields.push(("loopback", "yes"));
+        }
+        let response = self
+            .client
+            .post(endpoint.join("/tools/ports").map_err(failure)?)
             .timeout(Duration::from_secs(15))
             .header("Origin", endpoint.origin().ascii_serialization())
-            .form(&fields).send().map_err(failure)?;
+            .form(&fields)
+            .send()
+            .map_err(failure)?;
         let status = response.status();
         let value: Value = response.json().map_err(failure)?;
-        if !status.is_success() { return Err(failure(value["error"].as_str().unwrap_or("Port decision failed"))); }
+        if !status.is_success() {
+            return Err(failure(value["error"].as_str().unwrap_or("Port decision failed")));
+        }
         Ok(())
     }
 
@@ -111,13 +143,26 @@ impl Hive {
     /// which refuses one that is no longer pending.
     pub fn review_knowledge(&self, id: &str, accept: bool) -> io::Result<()> {
         let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
-        let index = id.strip_prefix("claim:").ok_or_else(|| failure("Knowledge proposal IDs look like claim:N"))?;
-        let response = self.client.post(endpoint.join("/review").map_err(failure)?).timeout(Duration::from_secs(15))
+        let index = id
+            .strip_prefix("claim:")
+            .ok_or_else(|| failure("Knowledge proposal IDs look like claim:N"))?;
+        let response = self
+            .client
+            .post(endpoint.join("/review").map_err(failure)?)
+            .timeout(Duration::from_secs(15))
             .header("Origin", endpoint.origin().ascii_serialization())
-            .form(&[("id", index), ("decision", if accept { "accepted" } else { "rejected" }), ("response", "json")]).send().map_err(failure)?;
+            .form(&[
+                ("id", index),
+                ("decision", if accept { "accepted" } else { "rejected" }),
+                ("response", "json"),
+            ])
+            .send()
+            .map_err(failure)?;
         let status = response.status();
         let value: Value = response.json().map_err(failure)?;
-        if !status.is_success() { return Err(failure(value["error"].as_str().unwrap_or("Knowledge review failed"))); }
+        if !status.is_success() {
+            return Err(failure(value["error"].as_str().unwrap_or("Knowledge review failed")));
+        }
         Ok(())
     }
 
@@ -126,11 +171,18 @@ impl Hive {
     pub fn approve_project(&mut self, chat: &str, request: &str) -> io::Result<ProjectApproval> {
         let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
         let mut target = endpoint.join("/").map_err(failure)?;
-        target.path_segments_mut().map_err(|_| failure("Invalid server URL"))?
-            .pop_if_empty().extend(["dm", chat, "project"]);
-        let response = self.client.post(target).timeout(Duration::from_secs(15))
+        target
+            .path_segments_mut()
+            .map_err(|_| failure("Invalid server URL"))?
+            .pop_if_empty()
+            .extend(["dm", chat, "project"]);
+        let response = self
+            .client
+            .post(target)
+            .timeout(Duration::from_secs(15))
             .header("Origin", endpoint.origin().ascii_serialization())
-            .form(&[("approve", "yes"), ("request", request)]).send()
+            .form(&[("approve", "yes"), ("request", request)])
+            .send()
             .map_err(|_| failure("Project approval was not confirmed; use /open to refresh before retrying."))?;
         let status = response.status();
         // The server accepts at once and imports in the background; wait for
@@ -153,16 +205,30 @@ impl Hive {
     pub fn dismiss_project(&self, chat: &str, request: &str) -> io::Result<String> {
         let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
         let mut target = endpoint.join("/").map_err(failure)?;
-        target.path_segments_mut().map_err(|_| failure("Invalid server URL"))?
-            .pop_if_empty().extend(["dm", chat, "project"]);
-        let response = self.client.post(target).timeout(Duration::from_secs(15))
+        target
+            .path_segments_mut()
+            .map_err(|_| failure("Invalid server URL"))?
+            .pop_if_empty()
+            .extend(["dm", chat, "project"]);
+        let response = self
+            .client
+            .post(target)
+            .timeout(Duration::from_secs(15))
             .header("Origin", endpoint.origin().ascii_serialization())
-            .form(&[("dismiss", "yes"), ("request", request), ("response", "json")]).send()
+            .form(&[("dismiss", "yes"), ("request", request), ("response", "json")])
+            .send()
             .map_err(|_| failure("Dismissal was not confirmed; use /open to check the request."))?;
         let status = response.status();
         let value: Value = response.json().map_err(failure)?;
-        if !status.is_success() { return Err(failure(value["error"].as_str().unwrap_or("Folder request was not dismissed"))); }
-        Ok(value["message"].as_str().unwrap_or("Folder request dismissed.").to_owned())
+        if !status.is_success() {
+            return Err(failure(
+                value["error"].as_str().unwrap_or("Folder request was not dismissed"),
+            ));
+        }
+        Ok(value["message"]
+            .as_str()
+            .unwrap_or("Folder request dismissed.")
+            .to_owned())
     }
 
     pub fn connect(server: &str) -> io::Result<Self> {
@@ -172,18 +238,14 @@ impl Hive {
             .map(Ok)
             .unwrap_or_else(|| control_config::state("operator-session"))
             .map_err(failure)?;
-        let metadata = fs::symlink_metadata(&path).map_err(|_| {
-            failure("Start the server first: control serve, then control open.")
-        })?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| failure("Start the server first: control serve, then control open."))?;
         use std::os::unix::fs::PermissionsExt;
         if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-            return Err(failure(
-                "Operator credential must be a private regular file.",
-            ));
+            return Err(failure("Operator credential must be a private regular file."));
         }
         // Only this application consumes the local operator credential. It is never printed or placed in a URL.
-        let token =
-            fs::read_to_string(path).map_err(|_| failure("Cannot load operator credential."))?;
+        let token = fs::read_to_string(path).map_err(|_| failure("Cannot load operator credential."))?;
         if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(failure("Invalid operator credential."));
         }
@@ -192,10 +254,7 @@ impl Hive {
         cookie.set_sensitive(true);
         let mut headers = HeaderMap::new();
         headers.insert(COOKIE, cookie.clone());
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static("application/json, text/event-stream"),
-        );
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json, text/event-stream"));
         headers.insert("mcp-protocol-version", HeaderValue::from_static(VERSION));
         let client = Client::builder()
             .default_headers(headers)
@@ -232,18 +291,19 @@ impl Hive {
             .timeout(
                 if method == "tools/call"
                     && control_context::tool_policy::lookup(params["name"].as_str().unwrap_or(""))
-                        .is_some_and(|tool| {
-                            tool.route == control_context::tool_policy::Route::Toolbox
-                        })
+                        .is_some_and(|tool| tool.route == control_context::tool_policy::Route::Toolbox)
                 {
                     Duration::from_secs(25)
-                } else if method == "tools/call" && matches!(params["name"].as_str(), Some("control_github_read" | "control_github_write")) {
+                } else if method == "tools/call"
+                    && matches!(
+                        params["name"].as_str(),
+                        Some("control_github_read" | "control_github_write")
+                    )
+                {
                     // One PR lookup plus one page/mutation, at most 20 s each.
                     Duration::from_secs(50)
                 } else if method == "tools/call"
-                    && control_context::tool_policy::checkpoint(
-                        params["name"].as_str().unwrap_or(""),
-                    )
+                    && control_context::tool_policy::checkpoint(params["name"].as_str().unwrap_or(""))
                 {
                     // A slow checkpoint must not look like a failure after the server committed it.
                     Duration::from_secs(30)
@@ -259,9 +319,7 @@ impl Hive {
             let body = response.text().unwrap_or_default();
             return Err(failure(rejection(status, &body)));
         }
-        let data: Value = response
-            .json()
-            .map_err(|_| failure("Invalid MCP response."))?;
+        let data: Value = response.json().map_err(|_| failure("Invalid MCP response."))?;
         if data["id"] != self.next || data.get("error").is_some() {
             return Err(failure("MCP request failed."));
         }
@@ -271,9 +329,7 @@ impl Hive {
         let result = self.rpc("tools/call", json!({"name":name,"arguments":arguments}))?;
         if result["isError"] == true {
             return Err(failure(
-                result["content"][0]["text"]
-                    .as_str()
-                    .unwrap_or("Tool request failed."),
+                result["content"][0]["text"].as_str().unwrap_or("Tool request failed."),
             ));
         }
         Ok(result["structuredContent"]["data"].clone())
