@@ -739,7 +739,7 @@ fn accounts_are_managed_by_command_and_listed_on_the_page() {
         Command::try_from(&args("default codex second")[..]),
         Ok(Command::Default(crate::backend::Backend::Codex, second.clone()))
     );
-    let Ok(Command::Add(entry)) = Command::try_from(&args("add claude second --kind api_key --cap 2 --disabled")[..])
+    let Ok(Command::Add(entry)) = Command::try_from(&args("add claude second --kind api-key --cap 2 --disabled")[..])
     else {
         panic!("an add")
     };
@@ -765,7 +765,11 @@ fn accounts_are_managed_by_command_and_listed_on_the_page() {
             .cool(crate::backend::Backend::Claude, &second, super::accounts::now(), None);
     let page = render(&runtime);
     assert!(page.contains("<code>claude+second</code>"), "{page}");
-    assert!(page.contains("control claude login --account second"), "{page}");
+    assert!(page.contains("control claude key --account second"), "{page}");
+    assert!(
+        page.contains("<td>api-key</td>") && page.contains("No key yet"),
+        "{page}"
+    );
     assert!(
         page.contains("<code>codex+default</code> <span class='model-default'>Default</span>"),
         "{page}"

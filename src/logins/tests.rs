@@ -62,7 +62,9 @@ fn a_named_account_is_located_in_its_own_private_directory() {
         super::directory(Backend::Grok, &AccountName::implicit()).unwrap(),
         config.join("grok")
     );
-    let missing = locate(Backend::Grok, &second).unwrap_err().to_string();
+    let missing = locate(&super::account(&Store::default(), Backend::Grok, &second))
+        .unwrap_err()
+        .to_string();
     assert!(missing.contains("control grok login --account second"), "{missing}");
     let account = super::directory(Backend::Grok, &second).unwrap();
     fs::DirBuilder::new()
@@ -71,13 +73,76 @@ fn a_named_account_is_located_in_its_own_private_directory() {
         .create(&account)
         .unwrap();
     private_file(&account.join("auth.json"), "").unwrap();
-    let granted = locate(Backend::Grok, &second).unwrap();
+    let granted = locate(&super::account(&Store::default(), Backend::Grok, &second)).unwrap();
     assert_eq!(
         (granted.form(), granted.path()),
         (Form::Session, account.join("auth.json").as_path())
     );
     // A shared account directory is refused, as the default one is.
     fs::set_permissions(&account, fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(locate(Backend::Grok, &second).is_err());
+    assert!(locate(&super::account(&Store::default(), Backend::Grok, &second)).is_err());
     fs::remove_dir_all(account).unwrap();
+}
+
+#[test]
+fn an_api_key_account_is_located_by_its_kind_and_reported_from_metadata() {
+    let keyed = AccountName::try_from("keyed").unwrap();
+    let store = Store::default()
+        .add(crate::accounts::Entry {
+            backend: Backend::Claude,
+            name: keyed.clone(),
+            kind: AccountKind::ApiKey,
+            cap: None,
+            enabled: true,
+            label: None,
+        })
+        .unwrap();
+    let account = super::account(&store, Backend::Claude, &keyed);
+    assert_eq!(sign_in_command(&account), "control claude key --account keyed");
+    let missing = locate(&account).unwrap_err().to_string();
+    assert!(missing.contains("control claude key --account keyed"), "{missing}");
+    let directory = super::directory(Backend::Claude, &keyed).unwrap();
+    private_directory(&directory).unwrap();
+    // Written as `control claude key` writes it; its contents are never read here.
+    crate::config::write_in(&directory, "anthropic-api-key", b"sk-ant-CANARY").unwrap();
+    let mode = fs::metadata(directory.join("anthropic-api-key"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let granted = locate(&account).unwrap();
+    assert_eq!(
+        (granted.form(), granted.path()),
+        (Form::ApiKey, directory.join("anthropic-api-key").as_path())
+    );
+    let lines = report(Backend::Claude, &store);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("claude+keyed (api-key): api-key: present")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().all(|line| !line.contains("CANARY")));
+    // A named Antigravity key is its key file, not a pick among files.
+    let gemini = Store::default()
+        .add(crate::accounts::Entry {
+            backend: Backend::Antigravity,
+            name: keyed.clone(),
+            kind: AccountKind::ApiKey,
+            cap: None,
+            enabled: true,
+            label: None,
+        })
+        .unwrap();
+    let account = super::account(&gemini, Backend::Antigravity, &keyed);
+    let directory = super::directory(Backend::Antigravity, &keyed).unwrap();
+    private_directory(&directory).unwrap();
+    crate::config::write_in(&directory, "gemini-api-key", b"k").unwrap();
+    let granted = locate(&account).unwrap();
+    assert_eq!(
+        (granted.form(), granted.path()),
+        (Form::ApiKey, directory.join("gemini-api-key").as_path())
+    );
+    fs::remove_dir_all(super::directory(Backend::Claude, &keyed).unwrap()).unwrap();
+    fs::remove_dir_all(directory).unwrap();
 }

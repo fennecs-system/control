@@ -111,7 +111,7 @@ pub(crate) fn shell_bounded(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn shell_container(
+pub(crate) fn shell_container(
     image: &str,
     name: &str,
     node: &str,

@@ -184,9 +184,19 @@ fn attempt(backend: Backend, turn: impl Fn(&RunSpec) -> Command + Sync) -> Finis
 }
 /// The same on `account`, which is added to the node's accounts when named.
 fn attempt_on(backend: Backend, account: &str, turn: impl Fn(&RunSpec) -> Command + Sync) -> Finished {
+    let name = crate::accounts::AccountName::try_from(account).unwrap();
+    credential_on(backend, &name);
+    attempt_as(backend, account, crate::accounts::AccountKind::Subscription, turn)
+}
+/// The same on `account` of `kind`, whose login the caller has saved.
+fn attempt_as(
+    backend: Backend,
+    account: &str,
+    kind: crate::accounts::AccountKind,
+    turn: impl Fn(&RunSpec) -> Command + Sync,
+) -> Finished {
     NODE_STATE.get_or_init(|| storage::initialize().unwrap());
     let account = crate::accounts::AccountName::try_from(account).unwrap();
-    credential_on(backend, &account);
     let mut state = State::default();
     if !account.is_implicit() {
         state.runtime.accounts = state
@@ -195,7 +205,7 @@ fn attempt_on(backend: Backend, account: &str, turn: impl Fn(&RunSpec) -> Comman
             .add(crate::accounts::Entry {
                 backend,
                 name: account.clone(),
-                kind: crate::accounts::AccountKind::Subscription,
+                kind,
                 cap: None,
                 enabled: true,
                 label: None,
@@ -481,7 +491,11 @@ fn an_antigravity_attempt_runs_from_probe_to_published_workspace() {
     assert_eq!(turn.network, Network::Engine);
     let private = host(turn, "/home/agent/.control");
     let mcp: Value = serde_json::from_slice(&fs::read(private.join("mcp_config.json")).unwrap()).unwrap();
-    assert_eq!(mcp["mcpServers"]["control"]["command"], "/bin/control-room-mcp");
+    // This account is an API key: the server starts without the exported key.
+    assert_eq!(
+        mcp["mcpServers"]["control"]["args"],
+        json!(["-u", "GEMINI_API_KEY", "/bin/control-room-mcp"])
+    );
     assert_eq!(turn.argv[..2], ["control-agy", "turn"]);
     assert_eq!(
         finished.activity(),
@@ -765,4 +779,258 @@ fn a_usage_limit_cools_its_account_and_a_pool_picks_another() {
     assert!(picked.account.is_implicit(), "{picked:?}");
     crate::providers::accounts::clear(runtime, Backend::Codex, &name);
     assert_eq!(crate::providers::accounts::hold(runtime, &next), None);
+}
+
+// API-key accounts: a model can never read the key.
+
+/// A CLI turn that first runs a command through Control's shell tool, as a
+/// model trying to read the key would, then hands off. Each request waits
+/// for its reply; the shell's reply is kept as `stub-shell-reply.json`.
+fn cli_with_shell(spec: &RunSpec, before: &str, after: &str) -> Command {
+    const SCRIPT: &str = r#"set -eu
+cat >/dev/null
+m=$1
+call() {
+  printf '%s' "$1" > "$m/.stub-request"
+  mv "$m/.stub-request" "$m/.control-room-request"
+  tries=0
+  until [ -e "$m/.control-room-response" ]; do
+    tries=$((tries + 1)); [ "$tries" -lt 400 ] || exit 3; sleep 0.05
+  done
+  mv "$m/.control-room-response" "$m/../$2"
+}
+printf '%s' "$2"
+call "$3" stub-shell-reply.json
+call "$4" stub-tool-reply.json
+printf '%s' "$5"
+"#;
+    let mailbox = host(spec, "/workspace");
+    let call = |nonce: &str, name: &str, arguments: Value| {
+        json!({"version":1,"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}}).to_string()
+    };
+    let shell = call(
+        "stub-shell",
+        "control_workspace_run",
+        json!({"command":"cat /home/agent/.control-key/* /home/agent/.claude/.credentials.json /home/agent/.grok/auth.json; env"}),
+    );
+    let handoff = call(
+        "stub-handoff",
+        "control_turn_handoff",
+        json!({"disposition":{"kind":"done"},"progress":REPLY}),
+    );
+    sh(SCRIPT, &[mailbox.to_str().unwrap(), before, &shell, &handoff, after])
+}
+
+/// Every file under `root` whose bytes contain `canary`.
+fn holding(root: &std::path::Path, canary: &str) -> Vec<PathBuf> {
+    fs::read_dir(root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .flat_map(|entry| {
+                    let path = entry.path();
+                    match fs::symlink_metadata(&path) {
+                        Ok(meta) if meta.is_dir() => holding(&path, canary),
+                        Ok(meta) if meta.is_file() => fs::read(&path)
+                            .ok()
+                            .filter(|bytes| bytes.windows(canary.len()).any(|w| w == canary.as_bytes()))
+                            .map(|_| path)
+                            .into_iter()
+                            .collect(),
+                        _ => Vec::new(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One attempt of `backend` on an API-key account whose key is a fresh
+/// canary, with `turn` serving the CLI. The key reaches the turn only as one
+/// typed read-only secret mount at `target`; it is in no argument, variable,
+/// file Control wrote, record, diagnostic or published file, and no other
+/// container (the probe, the model's shell) mounts any secret.
+fn assert_key_unreadable(backend: Backend, target: &str, turn: impl Fn(&RunSpec) -> Command + Sync) -> Finished {
+    use std::os::unix::fs::DirBuilderExt;
+    let name = format!("key-{}", backend.id());
+    let account = crate::accounts::AccountName::try_from(name.as_str()).unwrap();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let canary = format!("CANARY-{}-{}-{nanos}", backend.id(), std::process::id());
+    let directory = crate::logins::directory(backend, &account).unwrap();
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
+    let file = crate::accounts::Backend::key_file(backend).unwrap().name;
+    crate::config::write_in(&directory, file, canary.as_bytes()).unwrap();
+    let key = fs::canonicalize(directory.join(file)).unwrap();
+    let finished = attempt_as(backend, &name, crate::accounts::AccountKind::ApiKey, |spec| turn(spec));
+    assert_eq!(finished.outcome.as_deref(), Ok(REPLY), "{backend:?}");
+    let turn_name = format!("control-{}", finished.generation);
+    let spawned = finished.spawned();
+    let launched = spawned
+        .iter()
+        .find(|spec| spec.name == turn_name)
+        .expect("the turn launched");
+    let [secret] = launched.secrets.as_slice() else {
+        panic!("one secret: {:?}", launched.secrets)
+    };
+    assert_eq!(
+        (secret.target.as_str(), secret.access),
+        (target, Access::ReadOnly),
+        "{backend:?}"
+    );
+    assert_eq!(fs::canonicalize(&secret.source).unwrap(), key);
+    let directory = fs::canonicalize(&directory).unwrap();
+    spawned.iter().for_each(|spec| {
+        let shown = format!("{:?}{:?}", spec.argv, spec.env);
+        assert!(!shown.contains(&canary), "{backend:?}: {} names the key", spec.name);
+        assert!(
+            spec.mounts
+                .iter()
+                .all(|m| !matches!(&m.source, Source::Bind(p) if p.starts_with(&directory))),
+            "{backend:?}: {} binds the account directory",
+            spec.name
+        );
+        // Codex's probe mounts an empty stand-in; nothing else but the turn has the key.
+        if spec.name != turn_name {
+            assert!(
+                spec.secrets
+                    .iter()
+                    .all(|s| fs::canonicalize(&s.source).map_or(true, |p| p != key && !p.starts_with(&directory))),
+                "{backend:?}: {} mounts the key",
+                spec.name
+            );
+        }
+    });
+    // Files Control wrote for the turn: MCP configuration, settings, prompt,
+    // mailbox, workspace and the tool replies the stub kept.
+    assert_eq!(holding(&finished.root, &canary), Vec::<PathBuf>::new(), "{backend:?}");
+    // What was recorded: activity, diagnostics, usage and the run itself.
+    let recorded = serde_json::to_string(&(&finished.state.runtime, &finished.live, &finished.attempt)).unwrap();
+    assert!(!recorded.contains(&canary), "{backend:?}: the key was recorded");
+    assert!(
+        !recorded.contains(&account.to_string()) || finished.attempt.account == account,
+        "only the attempt's own record names its account"
+    );
+    let artifact = finished.attempt.artifact.clone().expect("the workspace was published");
+    let manifest = crate::artifacts::manifest(&artifact).unwrap();
+    manifest.files.iter().for_each(|entry| {
+        let bytes = crate::artifacts::read(&manifest, &entry.path).unwrap();
+        assert!(
+            !bytes.windows(canary.len()).any(|w| w == canary.as_bytes()),
+            "{backend:?}: {} was published with the key",
+            entry.path
+        );
+    });
+    // The key files are never published if they appear in a workspace.
+    assert!(crate::artifacts::excluded(file), "{file}");
+    fs::remove_dir_all(directory).unwrap();
+    finished
+}
+
+/// The model's shell, for backends whose CLI uses Control's: the request
+/// reached Control's host tool (the test engine runs no shell, so its reply is
+/// an engine error), and the container that tool launches for this workspace
+/// is offline and has no secret, whatever the account.
+fn model_shell(finished: &Finished) {
+    let reply = fs::read_to_string(finished.root.join("stub-shell-reply.json")).unwrap();
+    assert!(reply.contains("stub-shell") && !reply.contains("CANARY"), "{reply}");
+    let workspace = runtime::workspace(&finished.generation).unwrap();
+    let owner = control_isolation::User { uid: 1000, gid: 1000 };
+    let shell = crate::host_shell::shell_container(IMAGE, "control-shell", NODE, &workspace, "env", false, true, owner)
+        .unwrap();
+    assert_eq!(shell.network, Network::None);
+    assert!(shell.secrets.is_empty(), "{:?}", shell.secrets);
+    assert_eq!(shell.mounts.len(), 1, "only the workspace: {:?}", shell.mounts);
+}
+
+#[test]
+fn a_codex_api_key_is_only_a_read_only_mount() {
+    let recorded = include_str!("../../../crates/ai/tests/fixtures/codex-handoff-completed.jsonl");
+    let (before, after) = recorded.split_at(recorded.match_indices('\n').nth(2).unwrap().0 + 1);
+    let after = after.replace("Handed off; waiting for the build watch.", REPLY);
+    // Codex runs its own shell inside its sandbox, which denies its home.
+    let finished = assert_key_unreadable(Backend::Codex, "/home/agent/.codex/auth.json", |spec| {
+        cli(spec, before, &after, &[(".control-result", REPLY)])
+    });
+    let turn = finished.turn();
+    assert!(turn.argv.iter().any(|w| w.contains("\"/home/agent/.codex\"=\"deny\"")));
+}
+
+#[test]
+fn a_claude_api_key_is_read_only_by_claudes_own_helper() {
+    let (before, after) = claude_stream();
+    let finished = assert_key_unreadable(Backend::Claude, "/home/agent/.control-key/anthropic-api-key", |spec| {
+        cli_with_shell(spec, &before, &after)
+    });
+    model_shell(&finished);
+    let turn = finished
+        .spawned()
+        .into_iter()
+        .find(|spec| spec.argv.first().is_some_and(|w| w == "claude"))
+        .unwrap();
+    let at = turn.argv.iter().position(|w| w == "--settings").unwrap();
+    assert_eq!(
+        turn.argv[at + 1],
+        r#"{"apiKeyHelper":"cat /home/agent/.control-key/anthropic-api-key"}"#
+    );
+    assert!(
+        turn.argv.windows(2).any(|w| w == ["--tools", ""]),
+        "Claude's own tools are removed"
+    );
+}
+
+#[test]
+fn a_grok_api_key_is_exported_only_inside_grok() {
+    let before = lines(&[
+        json!({"type":"available_commands","tools":["search_tool","use_tool"],"commands":[]}),
+        json!({"type":"usage","messageId":"resp_1","stopReason":"tool_use","usage":{"input_tokens":400,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":0}}),
+    ]);
+    let after = lines(&[
+        json!({"type":"text","data":REPLY}),
+        json!({"type":"end","stopReason":"end_turn","sessionId":"s","requestId":"r","usage":{"input_tokens":812,"cache_read_input_tokens":41000,"cache_creation_input_tokens":100,"output_tokens":45,"reasoning_tokens":7,"total_tokens":41957},"num_turns":2}),
+    ]);
+    let finished = assert_key_unreadable(Backend::Grok, "/home/agent/.control-key/xai-api-key", |spec| {
+        cli_with_shell(spec, &before, &after)
+    });
+    model_shell(&finished);
+    let turn = finished
+        .spawned()
+        .into_iter()
+        .find(|spec| spec.argv.first().is_some_and(|w| w == "control-grok"))
+        .unwrap();
+    let config = fs::read_to_string(host(turn, "/home/agent/.grok/config.toml")).unwrap();
+    assert!(
+        config.contains(r#"args = ["-u", "XAI_API_KEY", "/bin/control-room-mcp"]"#),
+        "{config}"
+    );
+}
+
+#[test]
+fn an_antigravity_api_key_on_a_named_account_is_only_a_read_only_mount() {
+    let before = lines(&[
+        json!({"event":"init","conversation_id":"c","init":{"model":"gemini-4-neon-medium","cwd":"/workspace","tools":["ask_permission","call_mcp_tool","run_command"],"permission_mode":"always-proceed"}}),
+    ]);
+    let after = lines(&[
+        json!({"event":"result","result":{"conversation_id":"c","status":"SUCCESS","response":REPLY,"duration_seconds":6.88,"num_turns":1,"usage":{"input_tokens":10418,"output_tokens":589,"thinking_tokens":551,"cache_read_tokens":8113,"total_tokens":11007}}}),
+    ]);
+    let finished = assert_key_unreadable(
+        Backend::Antigravity,
+        "/home/agent/.control-key/gemini-api-key",
+        |spec| cli_with_shell(spec, &before, &after),
+    );
+    model_shell(&finished);
+    let turn = finished
+        .spawned()
+        .into_iter()
+        .find(|spec| spec.argv.first().is_some_and(|w| w == "control-agy"))
+        .unwrap();
+    let private = host(turn, "/home/agent/.control");
+    let settings: Value = serde_json::from_slice(&fs::read(private.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["modelProvider"], "gemini");
 }

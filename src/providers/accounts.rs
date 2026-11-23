@@ -1,7 +1,9 @@
 //! Host glue for `crate::accounts`: the backends' login locations, the
 //! node's accounts.json and accounts-status.json, and the load and holds
 //! admission applies.
-use crate::accounts::{AccountKind, AccountName, Hold, Location, RelativePath, SecretRef, Store, UnixSeconds};
+use crate::accounts::{
+    AccountKind, AccountName, Hold, KeyFile, KeyWriter, Location, RelativePath, SecretRef, Store, UnixSeconds,
+};
 use crate::backend::Backend;
 use std::{io, path::PathBuf, time::SystemTime};
 
@@ -18,6 +20,27 @@ impl crate::accounts::Backend for Backend {
             Self::Claude => Some(".credentials.json"),
             // A directory: the sign-in is chosen by which file it holds.
             Self::Antigravity | Self::Local => None,
+        }
+    }
+    /// Each CLI's documented API-key path; the backend crate decides how
+    /// its CLI is handed the file (docs/LOCAL-MODELS.md).
+    fn key_file(self) -> Option<KeyFile> {
+        let host = |name| {
+            Some(KeyFile {
+                name,
+                writer: KeyWriter::Host,
+            })
+        };
+        match self {
+            // `codex login --with-api-key` writes the key into auth.json.
+            Self::Codex => Some(KeyFile {
+                name: "auth.json",
+                writer: KeyWriter::Cli,
+            }),
+            Self::Claude => host("anthropic-api-key"),
+            Self::Grok => host("xai-api-key"),
+            Self::Antigravity => host("gemini-api-key"),
+            Self::Local => None,
         }
     }
     fn signs_in(self) -> bool {
@@ -166,7 +189,7 @@ pub(crate) enum Command {
     Remove(Backend, AccountName),
     Default(Backend, AccountName),
 }
-pub(crate) const USAGE: &str = "Use control accounts list | add BACKEND NAME [--kind subscription|api_key|cloud] [--cap N] [--label TEXT] [--disabled] | remove BACKEND NAME | default BACKEND NAME";
+pub(crate) const USAGE: &str = "Use control accounts list | add BACKEND NAME [--kind subscription|api-key|cloud] [--cap N] [--label TEXT] [--disabled] | remove BACKEND NAME | default BACKEND NAME";
 impl TryFrom<&[String]> for Command {
     type Error = String;
     fn try_from(args: &[String]) -> Result<Self, String> {
@@ -239,10 +262,11 @@ pub(crate) fn command(args: &[String]) -> io::Result<()> {
     write(&changed)?;
     match command {
         Command::Add(entry) => println!(
-            "Added {}+{}. Sign it in with {}.",
+            "Added {}+{} ({}). Set it up with {}.",
             entry.backend.id(),
             entry.name,
-            crate::logins::login_command(entry.backend, &entry.name)
+            entry.kind.as_str(),
+            crate::logins::sign_in_command(&entry.clone().into())
         ),
         Command::Remove(backend, name) => println!(
             "Removed {}+{name}. Its login directory was left in place: {}",

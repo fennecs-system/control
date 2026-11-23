@@ -1318,7 +1318,7 @@ fn execute(
         Some(control_agent::Login {
             checked: control_agent::Checked::BeforeWorkspace,
             ..
-        }) => Some(crate::logins::locate(attempt.backend, &attempt.account).map_err(|e| blocked(&e.to_string()))?),
+        }) => Some(attempt_login(attempt, bridge).map_err(|e| blocked(&e.to_string()))?),
         _ => None,
     };
     let workspace = runtime::workspace(id).map_err(blocked)?;
@@ -1387,7 +1387,7 @@ fn execute(
         control_agent::Runs::Cli(cli) => {
             let login = match early {
                 Some(granted) => Ok(granted),
-                None => crate::logins::locate(attempt.backend, &attempt.account),
+                None => attempt_login(attempt, bridge),
             };
             let model = attempt.model.clone();
             let turn = control_agent::Turn {
@@ -1426,6 +1426,23 @@ fn execute(
         })?;
     }
     Ok(output)
+}
+/// The attempt's login, located for the account it captured as the node
+/// defines that account now (its kind says which file holds the login).
+fn attempt_login(
+    attempt: &crate::usage::Attempt,
+    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+) -> std::io::Result<control_agent::Granted> {
+    let store = match bridge {
+        Some((state, _)) => state
+            .lock()
+            .map_err(|_| std::io::Error::other("State unavailable"))?
+            .runtime
+            .accounts
+            .clone(),
+        None => crate::providers::accounts::read()?,
+    };
+    crate::logins::locate(&crate::logins::account(&store, attempt.backend, &attempt.account))
 }
 /// What a failed publication calls the turn's files. Wording difference: Codex's
 /// predates the other backends (docs/CRATE-BOUNDARIES.md).
