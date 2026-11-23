@@ -12,10 +12,8 @@ pub(crate) struct Read {
     request: String,
     managed: bool,
 }
-fn index(state: &State, attempt: &AttemptRef<'_>) -> io::Result<usize> {
-    let index = state
-        .runtime
-        .runs
+fn index(runs: &[crate::runtime::Run], attempt: &AttemptRef<'_>) -> io::Result<usize> {
+    let index = runs
         .iter()
         .position(|r| {
             r.id == attempt.run
@@ -25,8 +23,7 @@ fn index(state: &State, attempt: &AttemptRef<'_>) -> io::Result<usize> {
                     .is_some_and(|a| a.workspace_id.as_deref() == Some(attempt.generation))
         })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;
-    crate::identity::authorize(&state.runtime.runs[index].actor, state.runtime.runs[index].action)
-        .map_err(io::Error::other)?;
+    crate::identity::authorize(&runs[index].actor, runs[index].action).map_err(io::Error::other)?;
     Ok(index)
 }
 /// Whether a committed source can still deliver events. Reads and receipts
@@ -124,7 +121,7 @@ pub(crate) fn prepare_view(
     after: Option<u64>,
     logs: bool,
 ) -> io::Result<Read> {
-    let run = &state.runtime.runs[index(state, attempt)?];
+    let run = &state.runtime.runs[index(&state.runtime.runs, attempt)?];
     let owned = state
         .watches
         .iter()
@@ -193,7 +190,7 @@ pub(crate) fn record(
     gap: bool,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> io::Result<Option<String>> {
-    let index = index(state, attempt)?;
+    let index = index(&state.runtime.runs, attempt)?;
     if !read.managed {
         return Ok(None);
     }
