@@ -73,13 +73,72 @@ pub struct Claim {
 fn is_zero(value: &u64) -> bool {
     *value == 0
 }
+/// What a claim's saved `status`, `abandoned` and `blocked_on` mean together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClaimState<'a> {
+    Working,
+    /// `on` is None only in a saved shape no build writes.
+    Blocked {
+        on: Option<&'a str>,
+    },
+    /// Done, including a done claim saved as abandoned (no build writes one).
+    Done,
+    /// Released, including by the operator after the owner was lost (saved
+    /// as released and abandoned).
+    Released,
+    /// Working or blocked when the host observed its owner lost.
+    Abandoned,
+}
+impl ClaimState<'_> {
+    /// Working or blocked with an owner that can still report.
+    pub(crate) fn is_live(self) -> bool {
+        match self {
+            Self::Working | Self::Blocked { .. } => true,
+            Self::Done | Self::Released | Self::Abandoned => false,
+        }
+    }
+}
+crate::application::status_text::status_enum! {
+    /// A claim's state as reported to agents and saved in advisor facts.
+    pub(crate) enum StateName {
+        Working = "working",
+        Blocked = "blocked",
+        Done = "done",
+        Abandoned = "abandoned",
+        Released = "released",
+        Unclaimed = "unclaimed",
+    }
+}
+impl From<Option<ClaimState<'_>>> for StateName {
+    fn from(state: Option<ClaimState<'_>>) -> Self {
+        match state {
+            Some(ClaimState::Working) => Self::Working,
+            Some(ClaimState::Blocked { .. }) => Self::Blocked,
+            Some(ClaimState::Done) => Self::Done,
+            Some(ClaimState::Abandoned) => Self::Abandoned,
+            Some(ClaimState::Released) => Self::Released,
+            None => Self::Unclaimed,
+        }
+    }
+}
 impl Claim {
+    pub(crate) fn state(&self) -> ClaimState<'_> {
+        match (self.status, self.abandoned) {
+            (Status::Released, _) => ClaimState::Released,
+            (Status::Done, _) => ClaimState::Done,
+            (Status::Working | Status::Blocked, true) => ClaimState::Abandoned,
+            (Status::Working, false) => ClaimState::Working,
+            (Status::Blocked, false) => ClaimState::Blocked {
+                on: self.blocked_on.as_deref(),
+            },
+        }
+    }
     fn outcome(&self) -> Option<Outcome> {
-        match self.status {
-            Status::Done => Some(Outcome::Done),
-            Status::Released => Some(Outcome::Released),
-            _ if self.abandoned => Some(Outcome::Abandoned),
-            _ => None,
+        match self.state() {
+            ClaimState::Done => Some(Outcome::Done),
+            ClaimState::Released => Some(Outcome::Released),
+            ClaimState::Abandoned => Some(Outcome::Abandoned),
+            ClaimState::Working | ClaimState::Blocked { .. } => None,
         }
     }
 }
@@ -498,9 +557,7 @@ fn lost(state: &State) -> Vec<usize> {
         .claims
         .iter()
         .enumerate()
-        .filter(|(_, c)| {
-            matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned && lost.contains(c.owner.as_str())
-        })
+        .filter(|(_, c)| c.state().is_live() && lost.contains(c.owner.as_str()))
         .map(|(index, _)| index)
         .collect()
 }
@@ -540,7 +597,7 @@ pub(crate) fn abandon_owned(state: &mut State, owner: &str) -> Vec<Resolved> {
         .claims
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.owner == owner && matches!(c.status, Status::Working | Status::Blocked) && !c.abandoned)
+        .filter(|(_, c)| c.owner == owner && c.state().is_live())
         .map(|(index, _)| index)
         .collect();
     abandon(state, indices)

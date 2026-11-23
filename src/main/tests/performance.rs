@@ -187,7 +187,7 @@ fn ownership_snapshots() {
             profile: crate::worker_profile::Profile::Lite,
             deadline_unix: 0,
             container_id: Some("synthetic-container".into()),
-            status: "completed".into(),
+            status: crate::command_jobs::JobStatus::Completed,
             output: "x".repeat(16000),
             exit_code: Some(0),
         });

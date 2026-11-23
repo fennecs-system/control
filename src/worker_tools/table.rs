@@ -473,11 +473,7 @@ static WORKSPACE_RUN: External<WorkspaceCommand> = External {
         }
         let input = serde_json::from_value::<Input>(call.arguments.clone()).map_err(|_| "Expected a command")?;
         let attempt = caller.run(state).attempts.last().ok_or("No active attempt")?;
-        if attempt
-            .command_jobs
-            .iter()
-            .any(|job| ["preparing", "running", "stopping"].contains(&job.status.as_str()))
-        {
+        if attempt.command_jobs.iter().any(|job| job.status.is_active()) {
             return Err(
                 "An asynchronous workspace command owns this attempt; await or cancel it before running another command"
                     .into(),

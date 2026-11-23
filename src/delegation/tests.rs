@@ -592,3 +592,40 @@ fn automatic_turns_holding_reservations_count_toward_the_cap() {
         "unmaterialized reservations from woken turns count"
     );
 }
+#[test]
+fn delegation_state_reads_every_saved_child_and_continuation_pair() {
+    let delegation = |child: Option<&str>, continuation: Option<&str>| Delegation {
+        input: input(Role::Worker),
+        nonce: "nonce".into(),
+        generation: "generation".into(),
+        target: Default::default(),
+        child: child.map(str::to_owned),
+        continuation: continuation.map(str::to_owned),
+    };
+    let cases = [
+        ((None, None), DelegationState::Requested),
+        ((Some("child"), None), DelegationState::Admitted { child: "child" }),
+        (
+            (Some("child"), Some("next")),
+            DelegationState::Continued {
+                child: Some("child"),
+                continuation: "next",
+            },
+        ),
+        // Impossible: a continuation is only saved after the child it follows.
+        // Read as continued, so no child is admitted and no slot reserved.
+        (
+            (None, Some("next")),
+            DelegationState::Continued {
+                child: None,
+                continuation: "next",
+            },
+        ),
+    ];
+    for ((child, continuation), state) in cases {
+        let delegation = delegation(child, continuation);
+        assert_eq!(delegation.state(), state);
+        assert_eq!(state.child(), child);
+        assert_eq!(state.continuation(), continuation);
+    }
+}

@@ -17,6 +17,34 @@ use std::{
 };
 pub use tools::{JobCall, Tools};
 
+crate::application::status_text::status_enum! {
+    /// A workspace command job's lifecycle, saved as its snake_case name.
+    pub enum JobStatus {
+        Preparing = "preparing",
+        Running = "running",
+        Stopping = "stopping",
+        Completed = "completed",
+        Failed = "failed",
+        TimedOut = "timed_out",
+        Cancelled = "cancelled",
+        Interrupted = "interrupted",
+    }
+}
+impl JobStatus {
+    /// Launching, executing or not yet confirmed stopped: the job still owns its attempt.
+    pub fn is_active(&self) -> bool {
+        match self {
+            Self::Preparing | Self::Running | Self::Stopping => true,
+            Self::Completed
+            | Self::Failed
+            | Self::TimedOut
+            | Self::Cancelled
+            | Self::Interrupted
+            | Self::Unrecognised(_) => false,
+        }
+    }
+}
+
 const MAX_JOBS: usize = 32;
 const OUTPUT_BYTES: usize = 16000;
 
@@ -34,7 +62,7 @@ pub struct Job {
     pub profile: crate::worker_profile::Profile,
     pub deadline_unix: u64,
     pub container_id: Option<String>,
-    pub status: String,
+    pub status: JobStatus,
     pub output: String,
     pub exit_code: Option<i64>,
 }
@@ -70,7 +98,7 @@ impl Job {
         })
     }
     fn active(&self) -> bool {
-        ["preparing", "running", "stopping"].contains(&self.status.as_str())
+        self.status.is_active()
     }
     fn summary(&self) -> Value {
         json!({"job_id":self.id,"status":self.status,"output":self.output,"exit_code":self.exit_code,"deadline_unix":self.deadline_unix})
@@ -155,7 +183,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         .ok_or_else(|| fail("Unknown job in this attempt"))?;
     if cancel && job.active() {
         let old = job.status.clone();
-        job.status = "stopping".into();
+        job.status = JobStatus::Stopping;
         let summary = job.summary();
         if let Err(e) = crate::storage::save(&state) {
             current(&mut state, run, generation)?
@@ -238,7 +266,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, i
         profile,
         deadline_unix,
         container_id: None,
-        status: "preparing".into(),
+        status: JobStatus::Preparing,
         output: String::new(),
         exit_code: None,
     };
@@ -259,7 +287,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, i
         .spawn(move || supervise(thread_state, thread_run, thread_job))
     {
         let mut job = job;
-        job.status = "failed".into();
+        job.status = JobStatus::Failed;
         job.output = "Could not start command supervisor; no command was launched.".into();
         activity(shared, run, &job, true);
         return Err(e);
@@ -553,9 +581,9 @@ fn activity(shared: &Arc<Mutex<State>>, run: &str, job: &Job, persist: bool) -> 
     };
     if let Some(stored) = live(&mut state, run, job) {
         // A cancellation request wins over an in-flight progress update.
-        let stopping = stored.status == "stopping" && job.active();
-        let status = if stopping { "stopping" } else { &job.status };
-        if stored.status == status
+        let stopping = stored.status == JobStatus::Stopping && job.active();
+        let status = if stopping { &JobStatus::Stopping } else { &job.status };
+        if &stored.status == status
             && stored.output == job.output
             && stored.container_id == job.container_id
             && stored.exit_code == job.exit_code
@@ -564,7 +592,7 @@ fn activity(shared: &Arc<Mutex<State>>, run: &str, job: &Job, persist: bool) -> 
         }
         *stored = job.clone();
         if stopping {
-            stored.status = "stopping".into();
+            stored.status = JobStatus::Stopping;
         }
     }
     crate::worker::record_activity_for(
@@ -576,7 +604,7 @@ fn activity(shared: &Arc<Mutex<State>>, run: &str, job: &Job, persist: bool) -> 
             kind: "command_execution".into(),
             text: job.command.chars().take(2000).collect(),
             output: job.output.clone(),
-            status: job.status.clone(),
+            status: job.status.to_string(),
         },
     );
     !persist || crate::storage::save(&state).is_ok()
@@ -589,17 +617,16 @@ fn should_stop(shared: &Arc<Mutex<State>>, run: &str, job: &Job) -> bool {
         return true;
     };
     let active = current(&mut state, run, &job.generation).is_ok();
-    !active || live(&mut state, run, job).is_none_or(|j| j.status == "stopping")
+    !active || live(&mut state, run, job).is_none_or(|j| j.status == JobStatus::Stopping)
 }
 fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
     let isolation = crate::engine::isolation();
     if should_stop(&shared, &run, &job) {
         job.status = if now() >= job.deadline_unix {
-            "timed_out"
+            JobStatus::TimedOut
         } else {
-            "cancelled"
-        }
-        .into();
+            JobStatus::Cancelled
+        };
         activity(&shared, &run, &job, true);
         return;
     }
@@ -610,11 +637,10 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
             // durably before sending any start request to the daemon.
             if !activity(&shared, &run, &job, true) {
                 job.status = if stop(isolation, &job).is_ok() {
-                    "failed"
+                    JobStatus::Failed
                 } else {
-                    "stopping"
-                }
-                .into();
+                    JobStatus::Stopping
+                };
                 job.output = "Command identity could not be saved; no start was requested.".into();
                 activity(&shared, &run, &job, true);
                 return;
@@ -623,11 +649,10 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         Err(_) => {
             // Launch can time out after Docker admitted it. Verify and stop by durable name.
             job.status = if stop(isolation, &job).is_ok() {
-                "failed"
+                JobStatus::Failed
             } else {
-                "stopping"
-            }
-            .into();
+                JobStatus::Stopping
+            };
             job.output = "Command launch failed; inspect node container diagnostics.".into();
             activity(&shared, &run, &job, true);
             return;
@@ -636,29 +661,27 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
     if should_stop(&shared, &run, &job) {
         job.status = if stop(isolation, &job).is_ok() {
             if now() >= job.deadline_unix {
-                "timed_out"
+                JobStatus::TimedOut
             } else {
-                "cancelled"
+                JobStatus::Cancelled
             }
         } else {
-            "stopping"
-        }
-        .into();
+            JobStatus::Stopping
+        };
         activity(&shared, &run, &job, true);
         return;
     }
     if isolation.start(&job.container_id.as_deref().unwrap().into()).is_err() {
         job.status = if stop(isolation, &job).is_ok() {
-            "failed"
+            JobStatus::Failed
         } else {
-            "stopping"
-        }
-        .into();
+            JobStatus::Stopping
+        };
         job.output = "Command start failed; its admitted resource was stopped or remains fenced.".into();
         activity(&shared, &run, &job, true);
         return;
     }
-    job.status = "running".into();
+    job.status = JobStatus::Running;
     activity(&shared, &run, &job, true);
     let mut persisted = Instant::now();
     let shutdown = crate::shutdown::token();
@@ -672,29 +695,28 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
             Ok(inspection) if !inspection.running => {
                 job.exit_code = Some(inspection.exit_code);
                 Some(if inspection.exit_code == 0 {
-                    "completed"
+                    JobStatus::Completed
                 } else {
-                    "failed"
+                    JobStatus::Failed
                 })
             }
             Ok(_) if should_stop(&shared, &run, &job) => Some(if now() >= job.deadline_unix {
-                "timed_out"
+                JobStatus::TimedOut
             } else {
-                "cancelled"
+                JobStatus::Cancelled
             }),
             Ok(_) => None,
-            Err(_) => Some("interrupted"),
+            Err(_) => Some(JobStatus::Interrupted),
         };
         if let Some(status) = finish {
             // Never announce a finished writer until its exact resource is confirmed stopped.
             job.status = if stop(isolation, &job).is_ok() {
                 status
             } else {
-                "stopping"
-            }
-            .into();
+                JobStatus::Stopping
+            };
             activity(&shared, &run, &job, true);
-            if job.status != "stopping" && !job.read_only {
+            if job.status != JobStatus::Stopping && !job.read_only {
                 crate::worker::observe_workspace_diff(
                     &shared,
                     &run,
@@ -749,7 +771,7 @@ fn quiesce_until(shared: &Arc<Mutex<State>>, run: &str, generation: &str, deadli
         let mut active = false;
         for job in &mut attempt.command_jobs {
             if job.active() {
-                job.status = "stopping".into();
+                job.status = JobStatus::Stopping;
                 active = true;
             }
         }

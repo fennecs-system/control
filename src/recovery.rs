@@ -104,11 +104,7 @@ pub fn capture(
                 .filter(|a| a.workspace_id == attempt.workspace_id)
                 .ok_or_else(|| io::Error::other("Recovery generation changed"))?;
             candidate.draft = live.turn_mailbox.as_ref().and_then(|m| m.accepted()).cloned();
-            if live
-                .command_jobs
-                .iter()
-                .any(|job| matches!(job.status.as_str(), "preparing" | "running" | "stopping"))
-            {
+            if live.command_jobs.iter().any(|job| job.status.is_active()) {
                 return Err(io::Error::other(
                     "Command supervision has not quiesced; recovery bytes were not copied",
                 ));
