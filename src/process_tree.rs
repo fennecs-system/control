@@ -216,7 +216,7 @@ impl Tree {
 
 /// The latest run status of every chat that has run, in one pass over runs,
 /// so the page costs O(chats + runs) rather than a run scan per chat.
-type Latest<'a> = crate::history_view::ByDm<'a, &'a RunStatus>;
+type Latest<'a> = std::collections::HashMap<&'a str, &'a RunStatus>;
 fn latest_statuses(state: &State) -> Latest<'_> {
     state
         .runtime

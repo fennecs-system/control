@@ -6,7 +6,7 @@
 use crate::runtime::RunStatus;
 use crate::{State, escape};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Rows rendered per page, server-side and per scroll fetch.
 pub const PAGE: usize = 50;
@@ -91,13 +91,13 @@ pub struct Grave<'a> {
 /// a bot turn or was spawned by another chat, is not a defined bot and has no
 /// active run. Costs one pass over runs, one over chats, and a sort.
 pub fn dead<'a>(state: &'a State, search: &str) -> Vec<Grave<'a>> {
-    let mut latest: crate::history_view::ByDm<(usize, &crate::runtime::Run)> = Default::default();
-    let mut bots: crate::history_view::ByDm<()> = Default::default();
+    let mut latest: HashMap<&str, (usize, &crate::runtime::Run)> = HashMap::new();
+    let mut bots: HashSet<&str> = HashSet::new();
     for (index, run) in state.runtime.runs.iter().enumerate() {
         if let Some(chat) = run.chat_id.as_deref() {
             latest.insert(chat, (index, run));
             if run.bot_turn.is_some() {
-                bots.insert(chat, ());
+                bots.insert(chat);
             }
         }
     }
@@ -108,7 +108,7 @@ pub fn dead<'a>(state: &'a State, search: &str) -> Vec<Grave<'a>> {
         .iter()
         .zip(callsigns)
         .filter_map(|(chat, callsign)| {
-            let bot = bots.contains_key(chat.id.as_str());
+            let bot = bots.contains(chat.id.as_str());
             let run = latest.get(chat.id.as_str()).copied();
             // An agent chat that never ran has nothing to remember.
             if !(bot || (chat.parent_chat.is_some() && run.is_some()))

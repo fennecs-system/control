@@ -239,10 +239,9 @@ impl Filter {
 
 /// A word-at-a-time multiplicative hash (as in rustc's FxHash) for the short
 /// chat IDs looked up once per run: a page touches every run, and SipHash's
-/// DoS resistance buys nothing for IDs Control generated. The Bots page's
-/// tree and graveyard key their per-run maps with it too.
+/// DoS resistance buys nothing for IDs Control generated.
 #[derive(Default)]
-pub(crate) struct Words(u64);
+struct Words(u64);
 impl Words {
     fn mix(&mut self, word: u64) {
         self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
@@ -262,7 +261,7 @@ impl std::hash::Hasher for Words {
         self.mix(u64::from_le_bytes(tail) ^ bytes.len() as u64);
     }
 }
-pub(crate) type ByDm<'a, V> = HashMap<&'a str, V, std::hash::BuildHasherDefault<Words>>;
+type ByDm<'a, V> = HashMap<&'a str, V, std::hash::BuildHasherDefault<Words>>;
 
 /// What one listed DM's turns add up to.
 #[derive(Default)]
