@@ -293,6 +293,21 @@ fn login_container(
     .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
     .args(["control-agy", "login"]))
 }
+/// The credential canary in a turn's own container, for each form of login,
+/// on a fake credential.
+fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io::Result<()> {
+    let mailbox = root.join(MAILBOX);
+    fs::create_dir_all(&mailbox)?;
+    let name = format!("control-antigravity-probe-{}-canary", std::process::id());
+    [(Form::ApiKey, KEY), (Form::Session, TOKEN), (Form::CloudDefault, ADC)]
+        .into_iter()
+        .try_for_each(|(form, target)| {
+            cli::canary_check(isolation, root, form, target, |login| {
+                let private = prepare(root, login, Some(&mcp_config()), Some(""))?;
+                turn_container(&name, node, login, &private, &mailbox, image, "canary")
+            })
+        })
+}
 /// Lists models with the saved login, without a workspace.
 fn check_container(name: &str, node: &str, login: &Granted, private: &Path, image: &str) -> io::Result<RunSpec> {
     Ok(container(name, node, login, private, image)?
@@ -362,7 +377,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     let [action] = args else { return Err(fail(USAGE)) };
     if matches!(action.as_str(), "--help" | "-h" | "help") {
         println!(
-            "control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity check: offline tool isolation, then the binary, the saved login and the model list it can see"
+            "control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity check: offline tool isolation, a fake-credential canary in a turn container for each login form, then the binary, the saved login and the model list it can see"
         );
         return Ok(());
     }
@@ -421,6 +436,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
             println!(
                 "Antigravity offline workspace isolation verified. No account credentials were mounted or model called."
             );
+            canary(isolation, &node_id, &state, &image)?;
             let login = login?;
             let private = prepare(&state, &login, None, None)?;
             let spec = check_container(

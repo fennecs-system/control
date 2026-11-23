@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod canary;
+
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
@@ -471,5 +473,40 @@ pub fn supervise(
     Outcome::Launched {
         result,
         usage: Some(usage),
+    }
+}
+
+/// `control ID check`'s credential canary: a fake credential, private and
+/// owned like a real login, beside the check's state; `launch` builds the
+/// turn container with it mounted at `target` as a turn would. Prints one
+/// line per assertion and fails unless every one held.
+pub fn canary_check(
+    isolation: &dyn Isolation,
+    root: &Path,
+    form: crate::Form,
+    target: &str,
+    launch: impl FnOnce(&crate::Granted) -> io::Result<RunSpec>,
+) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(root)?;
+    let owner = User {
+        uid: meta.uid(),
+        gid: meta.gid(),
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let canary = format!("control-canary-{}-{nanos}", std::process::id());
+    let path = root.join("canary-credential");
+    private_file(&path, &canary)?;
+    let results = launch(&crate::Granted::located(form, path.clone(), owner))
+        .and_then(|spec| canary::run(isolation, spec, target, &canary));
+    let _ = fs::remove_file(&path);
+    let (lines, held) = canary::report(&results?);
+    lines.iter().for_each(|line| println!("{line}"));
+    if held {
+        Ok(())
+    } else {
+        Err(fail("the credential canary failed; see the FAIL lines above"))
     }
 }

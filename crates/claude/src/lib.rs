@@ -1,6 +1,6 @@
 //! Unmodified Claude Code harness; executable tools run in separate offline containers.
 use control_agent::{
-    Agent, Checked, Command, Failure, Granted, Host, ImagePin, Login, Node, Outcome, Runs, TextCall, Turn, Turns,
+    Agent, Checked, Command, Failure, Form, Granted, Host, ImagePin, Login, Node, Outcome, Runs, TextCall, Turn, Turns,
     cli::{self, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Streams, Tmpfs, User};
@@ -120,6 +120,8 @@ const CLI: Cli = Cli {
     },
     failure,
 };
+/// Where a turn mounts the login.
+const CREDENTIALS: &str = "/home/agent/.claude/.credentials.json";
 const UNCLASSIFIED: &str =
     "Claude stopped without success. Check its login, selected model and usage limits; credentials remain read-only.";
 
@@ -155,7 +157,7 @@ fn text_container(
     }
     .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner));
     Ok(login
-        .mount(spec, "claude/credentials", "/home/agent/.claude/.credentials.json")?
+        .mount(spec, "claude/credentials", CREDENTIALS)?
         .bind(cli::checked(workspace)?, "/workspace", Access::ReadOnly)
         .args([
             "claude",
@@ -201,7 +203,7 @@ fn turn_container(
     }
     .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner));
     Ok(login
-        .mount(spec, "claude/credentials", "/home/agent/.claude/.credentials.json")?
+        .mount(spec, "claude/credentials", CREDENTIALS)?
         .bind(cli::checked(mailbox)?, "/workspace", Access::ReadWrite)
         .args([
             "claude",
@@ -242,7 +244,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     if !matches!(args, [a] if a == "login" || a == "check") {
         if matches!(args, [a] if a == "--help" || a == "-h" || a == "help") {
             println!(
-                "control claude login: sign in inside the pinned Nix Claude container\ncontrol claude check: offline tool isolation check; no credentials or model calls"
+                "control claude login: sign in inside the pinned Nix Claude container\ncontrol claude check: offline tool isolation check, then a fake-credential canary in a turn container; no real credentials or model calls"
             );
             return Ok(());
         }
@@ -291,10 +293,20 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
             println!(
                 "Claude offline workspace isolation verified. No account credentials were mounted or model called."
             );
-            Ok(())
+            canary(isolation, &node.id().map_err(|e| fail(&e))?, &root, &image)
         }
         _ => Err(fail("Use control claude login | check")),
     }
+}
+
+/// The credential canary in a turn's own container, on a fake credential.
+fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io::Result<()> {
+    let mailbox = root.join(CLI.mailbox);
+    fs::create_dir_all(&mailbox)?;
+    let name = format!("control-claude-probe-{}-canary", std::process::id());
+    cli::canary_check(isolation, root, Form::Session, CREDENTIALS, |login| {
+        turn_container(&name, node, login, &mailbox, image, "canary")
+    })
 }
 
 fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {
