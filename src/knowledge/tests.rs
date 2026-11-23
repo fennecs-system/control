@@ -58,17 +58,17 @@ fn graph_uses_real_links_and_escapes_notes() {
     .unwrap();
     save_with(&mut s, &fields("", "Two", "", 0), |_| Ok(())).unwrap();
     assert_eq!(edges(&s.documents), BTreeSet::from([(0, 1)]));
-    let html = render(&s, &a, Some(1));
+    let html = render(&s.documents, &s.collective, &a, Some(1));
     assert!(html.contains("Unresolved · missing"));
     assert!(html.contains("&lt;script&gt;"));
     assert!(!html.contains("<script>"));
     assert!(html.contains("✓ Saved One.md"));
-    assert!(render(&s, "graph", None).contains("<line"));
+    assert!(render(&s.documents, &s.collective, "graph", None).contains("<line"));
     if let Ok(directory) = std::env::var("CONTROL_KNOWLEDGE_PREVIEW") {
         std::fs::create_dir_all(&directory).unwrap();
         for (file, content) in [
-            ("documents.html", render(&s, &a, Some(1))),
-            ("graph.html", render(&s, "graph", None)),
+            ("documents.html", render(&s.documents, &s.collective, &a, Some(1))),
+            ("graph.html", render(&s.documents, &s.collective, "graph", None)),
         ] {
             let page = crate::render(&s, "knowledge-page", "research", &content)
                 .replace(

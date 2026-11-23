@@ -207,7 +207,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         "tools" => tool_catalog::render(state, if channel == "general" { "" } else { channel }),
         "session" => chat::render(state,channel).unwrap_or_else(escape),
         "session-list" | "history" | "artifact-page" | "browser" | "tool-page" => channel.to_owned(),
-        "editor" | "knowledge" => knowledge::render(state,if view=="editor"{"scratchpad"}else{""},None),
+        "editor" | "knowledge" => knowledge::render(&state.documents,&state.collective,if view=="editor"{"scratchpad"}else{""},None),
         "knowledge-page" => channel.to_owned(),
         "rooms" => rooms::render(state,channel),
         "lenses" => lens_library::render(state,if lens=="none"{"engineering"}else{lens},None,None,false),

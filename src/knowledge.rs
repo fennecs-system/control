@@ -210,10 +210,15 @@ fn graph(docs: &[Document]) -> String {
     html.push_str("</svg>");
     html
 }
-pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
-    let doc = state.documents.iter().find(|d| d.id == selection).or_else(|| {
+pub fn render(
+    documents: &[Document],
+    collective: &crate::collective::Collective,
+    selection: &str,
+    saved: Option<u64>,
+) -> String {
+    let doc = documents.iter().find(|d| d.id == selection).or_else(|| {
         if ["", "general"].contains(&selection) {
-            state.documents.first()
+            documents.first()
         } else {
             None
         }
@@ -221,7 +226,7 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
     let mut html = String::from(
         "<div class='section-heading knowledge-heading'><h2>Knowledge</h2><a class='primary add-note' href='/knowledge?mode=new' aria-label='Create a note'>＋ <span>New note</span></a></div><div class='tabs knowledge-tabs'><a href='/knowledge'>Documents</a><a href='/knowledge?mode=graph'>Graph</a><a href='/knowledge?mode=review'>Review</a></div><div class='knowledge-workspace'><aside class='note-files' aria-label='Notes'><span class='eyebrow'>DOCUMENTS</span>",
     );
-    for note in &state.documents {
+    for note in documents {
         html.push_str(&format!(
             "<a href='/knowledge?doc={}'{}><span>▤</span> {}</a>",
             escape(&note.id),
@@ -233,20 +238,15 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
             escape(&note.title)
         ));
     }
-    if state.documents.is_empty() {
+    if documents.is_empty() {
         html.push_str("<p class='muted'>No notes yet.</p>");
     }
     html.push_str("</aside><section class='knowledge-content'>");
     if selection == "graph" {
-        html.push_str(&graph(&state.documents));
+        html.push_str(&graph(documents));
     } else if selection == "review" {
-        html.push_str(
-            &state
-                .collective
-                .render("knowledge-review", "general")
-                .unwrap_or_default(),
-        );
-    } else if selection == "new" || doc.is_some() || state.documents.is_empty() {
+        html.push_str(&collective.render("knowledge-review", "general").unwrap_or_default());
+    } else if selection == "new" || doc.is_some() || documents.is_empty() {
         if let Some(doc) = doc
             && saved == Some(doc.revision)
         {
@@ -259,15 +259,14 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
         html.push_str(&editor(doc, None));
         if let Some(doc) = doc {
             let outgoing = links(&doc.body);
-            let incoming: Vec<_> = state
-                .documents
+            let incoming: Vec<_> = documents
                 .iter()
                 .filter(|d| d.id != doc.id && links(&d.body).contains(&key(&doc.title)))
                 .collect();
             if !outgoing.is_empty() || !incoming.is_empty() {
                 html.push_str("<div class='note-connections'><h3>Connections</h3>");
                 for target in outgoing {
-                    if let Some(note) = state.documents.iter().find(|d| key(&d.title) == target) {
+                    if let Some(note) = documents.iter().find(|d| key(&d.title) == target) {
                         html.push_str(&format!(
                             "<a href='/knowledge?doc={}'>↗ {}</a>",
                             escape(&note.id),
@@ -362,7 +361,10 @@ pub fn handle(
             .map(String::as_str)
             .unwrap_or("");
         let saved = query.get("saved").and_then(|s| s.parse().ok());
-        let page = crate::shell("knowledge-page", &render(state, selection, saved));
+        let page = crate::shell(
+            "knowledge-page",
+            &render(&state.documents, &state.collective, selection, saved),
+        );
         let _ = control_http::respond(
             stream,
             "200 OK",
