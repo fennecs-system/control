@@ -179,6 +179,9 @@ pub(crate) fn finish(
         }
     };
     result.map_err(|failure| {
+        if let Failure::Provider { cause, .. } = failure {
+            attempt.cause = Some(cause);
+        }
         if failure == Failure::UnfinishedTool {
             crate::worker::interrupt_unfinished_tools(bridge, id);
             attempt.termination = Some(crate::attempt_control::Termination::ProviderError);

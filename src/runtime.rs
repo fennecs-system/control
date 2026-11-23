@@ -30,6 +30,13 @@ pub struct Runtime {
     /// `<config>/accounts.json`; empty: each backend has only its implicit account.
     #[serde(skip)]
     pub accounts: crate::accounts::Store<crate::backend::Backend>,
+    /// When accounts.json was last read, to reload it once it changes.
+    #[serde(skip)]
+    pub accounts_read: Option<std::time::SystemTime>,
+    /// Accounts cooling down after a usage limit, saved with the state in the
+    /// same transaction as the attempt that reported it. Absent when none.
+    #[serde(default, skip_serializing_if = "crate::accounts::Status::is_empty")]
+    pub account_status: crate::accounts::Status<crate::backend::Backend>,
     // Read old checkpoints for migration; new configuration belongs in the home directory.
     #[serde(skip_serializing)]
     pub model: Option<String>,

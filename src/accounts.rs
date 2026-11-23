@@ -7,7 +7,9 @@
 //! host finds one. The module is generic over the backend type and names no
 //! application state, so it can move to a leaf crate unchanged.
 //! Examples and the file format are in `accounts/tests.rs` and docs/LOCAL-MODELS.md.
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+//! A named account's login lives in `<config>/accounts/BACKEND/NAME/`, holding
+//! the same file the backend's default location holds.
+use serde::{Deserialize, Serialize, de::DeserializeOwned, ser::SerializeMap};
 use std::{
     fmt, io,
     num::NonZeroU8,
@@ -21,6 +23,16 @@ pub trait Backend: Copy + Eq + fmt::Debug + Serialize + DeserializeOwned {
     /// The implicit `default` account's kind and credential location: where
     /// the backend keeps its sign-in today, overrides included.
     fn implicit(self) -> (AccountKind, SecretRef);
+    /// The file a login directory holds, `None` when the directory itself is
+    /// the login (Antigravity picks a file inside it).
+    fn login_file(self) -> Option<&'static str>;
+    /// Whether the backend signs in at all; local endpoints do not, so they
+    /// have no named accounts.
+    fn signs_in(self) -> bool;
+    /// Whether its CLI rewrites its own sign-in to refresh it (Codex). Two
+    /// attempts refreshing one sign-in at once can invalidate it, so such a
+    /// named account runs one attempt at a time unless its `cap` says more.
+    fn refreshes(self) -> bool;
 }
 
 /// An account's name: `[a-z0-9-]{1,32}`. `default` is reserved for the
@@ -158,6 +170,25 @@ pub enum AccountKind {
     /// Cloud provider credentials such as Google Application Default Credentials.
     Cloud,
 }
+impl AccountKind {
+    pub const ALL: [Self; 3] = [Self::Subscription, Self::ApiKey, Self::Cloud];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Subscription => "subscription",
+            Self::ApiKey => "api_key",
+            Self::Cloud => "cloud",
+        }
+    }
+}
+impl TryFrom<&str> for AccountKind {
+    type Error = &'static str;
+    fn try_from(text: &str) -> Result<Self, &'static str> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == text)
+            .ok_or("an account kind is subscription, api_key or cloud")
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountId<B> {
@@ -187,9 +218,14 @@ impl From<Label> for String {
     }
 }
 
+impl Label {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A relative path of plain components, resolved under a root the host owns.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "PathBuf", into = "PathBuf")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelativePath(PathBuf);
 impl TryFrom<PathBuf> for RelativePath {
     type Error = &'static str;
@@ -207,33 +243,14 @@ impl TryFrom<&str> for RelativePath {
         Self::try_from(PathBuf::from(path))
     }
 }
-impl From<RelativePath> for PathBuf {
-    fn from(path: RelativePath) -> Self {
-        path.0
-    }
-}
-/// An absolute path without `..` components.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "PathBuf", into = "PathBuf")]
-pub struct AbsolutePath(PathBuf);
-impl TryFrom<PathBuf> for AbsolutePath {
-    type Error = &'static str;
-    fn try_from(path: PathBuf) -> Result<Self, &'static str> {
-        if !path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
-            return Err("a credential path must be absolute, without ..");
-        }
-        Ok(Self(path))
-    }
-}
-impl From<AbsolutePath> for PathBuf {
-    fn from(path: AbsolutePath) -> Self {
-        path.0
+impl RelativePath {
+    pub fn as_path(&self) -> &Path {
+        &self.0
     }
 }
 
 /// One place a credential may be. Only the host turns it into a path.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
     /// The path an environment variable names, joined with `join` when set
     /// (`CONTROL_CLAUDE_AUTH_FILE`; `CODEX_HOME` + `auth.json`).
@@ -245,12 +262,11 @@ pub enum Location {
     Home(RelativePath),
     /// Under the node configuration directory.
     Config(RelativePath),
-    Path(AbsolutePath),
 }
 /// Where the host finds an account's credential: the first location whose
 /// root is available (a set variable, a known home). Empty when the backend
 /// needs none. A reference only, never contents.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretRef(pub Vec<Location>);
 /// The roots a [`SecretRef`] is resolved against, supplied by the host so the
 /// resolution itself is pure (and tests can supply their own).
@@ -272,11 +288,28 @@ impl SecretRef {
                 }
                 Location::Home(path) => roots.home?.join(&path.0),
                 Location::Config(path) => roots.config.join(&path.0),
-                Location::Path(path) => path.0.clone(),
             };
             Some((location, path))
         })
     }
+}
+
+/// A named account's login directory, relative to the configuration
+/// directory: `accounts/BACKEND/NAME`.
+pub fn directory<B: Backend>(backend: B, name: &AccountName) -> RelativePath {
+    RelativePath(["accounts", backend.id(), name.as_str()].iter().collect())
+}
+/// Where an account's login is: today's location for the implicit account,
+/// else the backend's login file in the account's own directory.
+pub fn secret<B: Backend>(backend: B, name: &AccountName) -> SecretRef {
+    if name.is_implicit() {
+        return backend.implicit().1;
+    }
+    let directory = directory(backend, name).0;
+    let path = backend
+        .login_file()
+        .map_or_else(|| directory.clone(), |file| directory.join(file));
+    SecretRef(vec![Location::Config(RelativePath(path))])
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -288,6 +321,15 @@ pub struct Account<B> {
     pub cap: Option<NonZeroU8>,
     pub enabled: bool,
     pub label: Option<Label>,
+}
+impl<B: Backend> Account<B> {
+    /// The cap admission applies: the operator's, else one at a time for a
+    /// named account whose CLI refreshes its own sign-in. The implicit
+    /// account keeps today's behaviour.
+    pub fn effective_cap(&self) -> Option<NonZeroU8> {
+        self.cap
+            .or_else(|| (self.id.backend.refreshes() && !self.id.name.is_implicit()).then_some(NonZeroU8::MIN))
+    }
 }
 
 /// The implicit `default` account: today's credential location, always enabled.
@@ -303,6 +345,55 @@ pub fn default_for<B: Backend>(backend: B) -> Account<B> {
         cap: None,
         enabled: true,
         label: None,
+    }
+}
+
+/// What an operator gives to add an account; its login location follows
+/// from its backend and name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, bound = "B: Backend")]
+pub struct Entry<B> {
+    pub backend: B,
+    pub name: AccountName,
+    pub kind: AccountKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<NonZeroU8>,
+    #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<Label>,
+}
+fn enabled() -> bool {
+    true
+}
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
+}
+impl<B: Backend> From<Entry<B>> for Account<B> {
+    fn from(entry: Entry<B>) -> Self {
+        Self {
+            secret: secret(entry.backend, &entry.name),
+            id: AccountId {
+                backend: entry.backend,
+                name: entry.name,
+            },
+            kind: entry.kind,
+            cap: entry.cap,
+            enabled: entry.enabled,
+            label: entry.label,
+        }
+    }
+}
+impl<B: Backend> From<&Account<B>> for Entry<B> {
+    fn from(account: &Account<B>) -> Self {
+        Self {
+            backend: account.id.backend,
+            name: account.id.name.clone(),
+            kind: account.kind,
+            cap: account.cap,
+            enabled: account.enabled,
+            label: account.label.clone(),
+        }
     }
 }
 
@@ -322,7 +413,7 @@ impl<B> Default for Store<B> {
     }
 }
 
-/// Why accounts.json was refused; nothing in it is used then.
+/// Why accounts.json, or a change to it, was refused; nothing in it is used then.
 #[derive(Debug)]
 pub enum LoadError<B> {
     Syntax(serde_json::Error),
@@ -334,6 +425,10 @@ pub enum LoadError<B> {
     Default(B, AccountName),
     /// A backend named twice in `defaults`.
     DefaultTwice(B),
+    /// An account of a backend that signs in to nothing (a local endpoint).
+    NoLogin(B),
+    /// A change naming an account that is not defined.
+    Missing(AccountId<B>),
 }
 impl<B: Backend> fmt::Display for LoadError<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -351,6 +446,8 @@ impl<B: Backend> fmt::Display for LoadError<B> {
                 backend.id()
             ),
             Self::DefaultTwice(backend) => write!(f, "accounts.json names a default for {} twice", backend.id()),
+            Self::NoLogin(backend) => write!(f, "{} signs in to nothing, so it has no accounts", backend.id()),
+            Self::Missing(id) => write!(f, "{} has no account {}", id.backend.id(), id.name),
         }
     }
 }
@@ -378,20 +475,32 @@ impl<B: Backend> Store<B> {
     /// Pure: file bytes to a validated store.
     pub fn parse(bytes: &[u8]) -> Result<Self, LoadError<B>> {
         let file: File<B> = serde_json::from_slice(bytes).map_err(LoadError::Syntax)?;
-        let accounts: Vec<Account<B>> = file.accounts.into_iter().map(Account::from).collect();
+        Self::validated(file.defaults, file.accounts.into_iter().map(Account::from).collect())
+    }
+    /// The file's bytes, which [`Store::parse`] reads back to this store.
+    pub fn encode(&self) -> Vec<u8> {
+        let file = Saved {
+            defaults: Defaults(&self.defaults),
+            accounts: self.accounts.iter().map(Entry::from).collect(),
+        };
+        let mut bytes = serde_json::to_vec_pretty(&file).expect("accounts encode as JSON");
+        bytes.push(b'\n');
+        bytes
+    }
+    fn validated(defaults: Vec<(B, AccountName)>, accounts: Vec<Account<B>>) -> Result<Self, LoadError<B>> {
         accounts.iter().enumerate().try_for_each(|(at, account)| {
             if account.id.name.is_implicit() {
                 return Err(LoadError::Reserved(account.id.backend));
+            }
+            if !account.id.backend.signs_in() {
+                return Err(LoadError::NoLogin(account.id.backend));
             }
             if accounts[..at].iter().any(|other| other.id == account.id) {
                 return Err(LoadError::Duplicate(account.id.clone()));
             }
             Ok(())
         })?;
-        let store = Self {
-            defaults: file.defaults,
-            accounts,
-        };
+        let store = Self { defaults, accounts };
         store
             .defaults
             .iter()
@@ -406,6 +515,44 @@ impl<B: Backend> Store<B> {
                 }
             })?;
         Ok(store)
+    }
+    /// The store with `entry` added.
+    pub fn add(&self, entry: Entry<B>) -> Result<Self, LoadError<B>> {
+        let accounts = self.accounts.iter().cloned().chain([entry.into()]).collect();
+        Self::validated(self.defaults.clone(), accounts)
+    }
+    /// The store without the account, and without a default naming it.
+    pub fn remove(&self, backend: B, name: &AccountName) -> Result<Self, LoadError<B>> {
+        let id = AccountId {
+            backend,
+            name: name.clone(),
+        };
+        if !self.accounts.iter().any(|account| account.id == id) {
+            return Err(LoadError::Missing(id));
+        }
+        Self::validated(
+            self.defaults
+                .iter()
+                .filter(|(b, n)| !(*b == backend && n == name))
+                .cloned()
+                .collect(),
+            self.accounts
+                .iter()
+                .filter(|account| account.id != id)
+                .cloned()
+                .collect(),
+        )
+    }
+    /// The store with `name` as `backend`'s default; `default` restores the
+    /// implicit account.
+    pub fn set_default(&self, backend: B, name: &AccountName) -> Result<Self, LoadError<B>> {
+        let others = self.defaults.iter().filter(|(b, _)| *b != backend).cloned();
+        let defaults = if name.is_implicit() {
+            others.collect()
+        } else {
+            others.chain([(backend, name.clone())]).collect()
+        };
+        Self::validated(defaults, self.accounts.clone())
     }
     /// The account an unqualified selection of `backend` uses.
     pub fn default_name(&self, backend: B) -> AccountName {
@@ -422,14 +569,16 @@ impl<B: Backend> Store<B> {
     pub fn get(&self, backend: B, name: &AccountName) -> Option<Account<B>> {
         self.of(backend).find(|a| a.id.name == *name)
     }
-    /// The account a choice runs on. A pool takes the enabled account with the
-    /// least `load`, the first on a tie; the implicit account is always enabled,
-    /// so a pool always has one.
+    /// The account a choice runs on. A pool takes the enabled account that is
+    /// not cooling down with the least `load`, the first on a tie; when every
+    /// one is cooling it still takes one, which admission then holds. The
+    /// implicit account is always enabled, so a pool always has one.
     pub fn choose(
         &self,
         backend: B,
         choice: &AccountChoice,
         load: impl Fn(&AccountName) -> usize,
+        cooling: impl Fn(&AccountName) -> bool,
     ) -> Result<Account<B>, Refusal<B>> {
         let named = |name: AccountName| match self.get(backend, &name) {
             Some(account) if account.enabled => Ok(account),
@@ -451,15 +600,108 @@ impl<B: Backend> Store<B> {
             AccountChoice::Pool => Ok(self
                 .of(backend)
                 .filter(|a| a.enabled)
-                .map(|a| (load(&a.id.name), a))
+                .map(|a| ((cooling(&a.id.name), load(&a.id.name)), a))
                 .reduce(|best, next| if next.0 < best.0 { next } else { best })
                 .map_or_else(|| default_for(backend), |(_, account)| account)),
         }
     }
 }
 
+/// Seconds since the Unix epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct UnixSeconds(pub u64);
+
+/// An account that reported a usage limit: new attempts on it are held until
+/// `until` passes (when the provider said when) or an operator clears it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, bound = "B: Backend")]
+pub struct Cooling<B> {
+    pub backend: B,
+    pub name: AccountName,
+    pub since: UnixSeconds,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<UnixSeconds>,
+}
+/// Which accounts are cooling down, saved with the node state. There is no
+/// automatic failover: a held attempt waits for its own account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, bound = "B: Backend")]
+pub struct Status<B> {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cooling: Vec<Cooling<B>>,
+}
+impl<B> Default for Status<B> {
+    fn default() -> Self {
+        Self { cooling: Vec::new() }
+    }
+}
+impl<B: Backend> Status<B> {
+    pub fn is_empty(&self) -> bool {
+        self.cooling.is_empty()
+    }
+    /// The cooldown holding `name` of `backend` at `now`, if any.
+    pub fn cooling(&self, backend: B, name: &AccountName, now: UnixSeconds) -> Option<&Cooling<B>> {
+        self.cooling
+            .iter()
+            .find(|c| c.backend == backend && c.name == *name && c.until.is_none_or(|until| now < until))
+    }
+    /// The status with the account cooling from `now`; a repeated limit
+    /// keeps the first `since`.
+    pub fn cool(&self, backend: B, name: &AccountName, now: UnixSeconds, until: Option<UnixSeconds>) -> Self {
+        let since = self.cooling(backend, name, now).map_or(now, |c| c.since);
+        Self {
+            cooling: self
+                .without(backend, name)
+                .chain([Cooling {
+                    backend,
+                    name: name.clone(),
+                    since,
+                    until,
+                }])
+                .collect(),
+        }
+    }
+    /// The status with the account's cooldown cleared.
+    pub fn clear(&self, backend: B, name: &AccountName) -> Self {
+        Self {
+            cooling: self.without(backend, name).collect(),
+        }
+    }
+    fn without<'a>(&'a self, backend: B, name: &'a AccountName) -> impl Iterator<Item = Cooling<B>> + 'a {
+        self.cooling
+            .iter()
+            .filter(move |c| !(c.backend == backend && c.name == *name))
+            .cloned()
+    }
+}
+
+/// Why admission holds an attempt on its account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Hold {
+    /// The account already runs `cap` attempts.
+    Cap(NonZeroU8),
+    /// The account reported a usage limit; until when, if the provider said.
+    Cooling(Option<UnixSeconds>),
+}
+/// Whether an attempt on `account` may start now, given the attempts it
+/// already runs. Pure, beside `bots::may_start`.
+pub fn may_start<B: Backend>(
+    account: &Account<B>,
+    status: &Status<B>,
+    running: usize,
+    now: UnixSeconds,
+) -> Result<(), Hold> {
+    if let Some(cooling) = status.cooling(account.id.backend, &account.id.name, now) {
+        return Err(Hold::Cooling(cooling.until));
+    }
+    match account.effective_cap() {
+        Some(cap) if running >= usize::from(cap.get()) => Err(Hold::Cap(cap)),
+        _ => Ok(()),
+    }
+}
+
 /// The thin reader: `<directory>/accounts.json`, or the empty store when it
-/// does not exist. Nothing is written; an operator adds accounts by hand.
+/// does not exist.
 pub fn read<B: Backend>(directory: &Path) -> io::Result<Store<B>> {
     match std::fs::read(directory.join("accounts.json")) {
         Ok(bytes) => Ok(Store::parse(&bytes)?),
@@ -468,7 +710,7 @@ pub fn read<B: Backend>(directory: &Path) -> io::Result<Store<B>> {
     }
 }
 
-/// accounts.json as written.
+/// accounts.json as read.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, bound = "B: Backend")]
 struct File<B> {
@@ -477,47 +719,28 @@ struct File<B> {
     #[serde(default)]
     accounts: Vec<Entry<B>>,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, bound = "B: Backend")]
-struct Entry<B> {
-    backend: B,
-    name: AccountName,
-    kind: AccountKind,
-    secret: Secret,
-    #[serde(default)]
-    cap: Option<NonZeroU8>,
-    #[serde(default = "enabled")]
-    enabled: bool,
-    #[serde(default)]
-    label: Option<Label>,
+/// accounts.json as written.
+#[derive(Serialize)]
+#[serde(bound = "B: Backend")]
+struct Saved<'a, B> {
+    #[serde(skip_serializing_if = "Defaults::is_empty")]
+    defaults: Defaults<'a, B>,
+    accounts: Vec<Entry<B>>,
 }
-fn enabled() -> bool {
-    true
+/// The defaults as a JSON object keyed by backend.
+struct Defaults<'a, B>(&'a [(B, AccountName)]);
+impl<B> Defaults<'_, B> {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
-/// Where a named account's credential is: under the configuration directory,
-/// or an absolute path.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case")]
-enum Secret {
-    Config(RelativePath),
-    Path(AbsolutePath),
-}
-impl<B> From<Entry<B>> for Account<B> {
-    fn from(entry: Entry<B>) -> Self {
-        Self {
-            id: AccountId {
-                backend: entry.backend,
-                name: entry.name,
-            },
-            kind: entry.kind,
-            secret: SecretRef(vec![match entry.secret {
-                Secret::Config(path) => Location::Config(path),
-                Secret::Path(path) => Location::Path(path),
-            }]),
-            cap: entry.cap,
-            enabled: entry.enabled,
-            label: entry.label,
-        }
+impl<B: Backend> Serialize for Defaults<'_, B> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        self.0
+            .iter()
+            .try_for_each(|(backend, name)| map.serialize_entry(backend, name))?;
+        map.end()
     }
 }
 /// A JSON object keyed by backend, kept in file order without needing the

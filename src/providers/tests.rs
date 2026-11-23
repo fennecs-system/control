@@ -728,3 +728,47 @@ fn todays_saved_selections_load_and_save_unchanged() {
         (crate::backend::Backend::Claude, None)
     );
 }
+
+#[test]
+fn accounts_are_managed_by_command_and_listed_on_the_page() {
+    use super::accounts::Command;
+    let args = |line: &str| line.split(' ').map(str::to_owned).collect::<Vec<_>>();
+    let second = crate::accounts::AccountName::try_from("second").unwrap();
+    assert_eq!(Command::try_from(&[][..]), Ok(Command::List));
+    assert_eq!(
+        Command::try_from(&args("default codex second")[..]),
+        Ok(Command::Default(crate::backend::Backend::Codex, second.clone()))
+    );
+    let Ok(Command::Add(entry)) = Command::try_from(&args("add claude second --kind api_key --cap 2 --disabled")[..])
+    else {
+        panic!("an add")
+    };
+    assert_eq!(
+        (entry.kind, entry.cap, entry.enabled),
+        (crate::accounts::AccountKind::ApiKey, std::num::NonZeroU8::new(2), false)
+    );
+    for refused in [
+        "add nope a",
+        "add codex A",
+        "add codex a --cap 0",
+        "add codex a --kind plan",
+        "remove codex",
+        "move a b",
+    ] {
+        assert!(Command::try_from(&args(refused)[..]).is_err(), "{refused}");
+    }
+    let mut runtime = crate::runtime::Runtime::default();
+    runtime.accounts = crate::accounts::Store::default().add(entry).unwrap();
+    runtime.account_status =
+        runtime
+            .account_status
+            .cool(crate::backend::Backend::Claude, &second, super::accounts::now(), None);
+    let page = render(&runtime);
+    assert!(page.contains("<code>claude+second</code>"), "{page}");
+    assert!(page.contains("control claude login --account second"), "{page}");
+    assert!(
+        page.contains("<code>codex+default</code> <span class='model-default'>Default</span>"),
+        "{page}"
+    );
+    assert!(page.contains("codex login (on the host)"), "{page}");
+}

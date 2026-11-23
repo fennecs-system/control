@@ -606,7 +606,13 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         }
         if method == "POST" && path == "/providers" {
             let f = fields(&String::from_utf8_lossy(&data[header_end..header_end + length]));
-            let result = providers::save_with(&mut state.runtime, &f, providers::save_settings);
+            // Clearing a cooldown changes node state, saved like any run change.
+            let result = if f.get("action").is_some_and(|a| a == "account-clear") {
+                providers::clear_account(&mut state.runtime, &f)
+                    .and_then(|()| storage::save(state).map_err(|_| "Could not save the cleared account"))
+            } else {
+                providers::save_with(&mut state.runtime, &f, providers::save_settings)
+            };
             let (status, extra, body) = match result {
                 Ok(()) => ("303 See Other", "Location: /?view=providers#saved\r\n", String::new()),
                 Err(message) => ("400 Bad Request", "", message.to_owned()),
@@ -817,15 +823,19 @@ fn main() -> std::process::ExitCode {
 }
 fn run() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "accounts") {
+        return providers::accounts::command(&args[2..]);
+    }
     if args.get(1).is_some_and(|s| s == "models") {
         return model_calls::command(&args[2..]);
     }
-    // `control claude|grok|antigravity login|check`.
+    // `control codex|claude|grok|antigravity login|check [--account NAME]`.
     let backend_command = [
         (
-            backend::Backend::Claude,
-            control_claude::command as fn(control_agent::Command<'_>) -> std::io::Result<()>,
+            backend::Backend::Codex,
+            control_codex::command as fn(control_agent::Command<'_>) -> std::io::Result<()>,
         ),
+        (backend::Backend::Claude, control_claude::command),
         (backend::Backend::Antigravity, control_antigravity::command),
         (backend::Backend::Grok, control_grok::command),
     ]
@@ -882,7 +892,7 @@ fn run() -> std::io::Result<()> {
             "control [serve | tui | mcp | discord | doctor | config | open | browser | federation | package]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\nmcp --chat: drive chats as the local operator from an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\npackage import | revoke | list | show: admit and inspect reusable tool packages\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification"
         );
         println!(
-            "claude login | check: container login or offline tool isolation check\ngrok login | check: the same for Grok Build\nantigravity login | check: the same for the Antigravity CLI\nconfig init [--provider codex|claude|grok|antigravity] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally"
+            "codex login --account NAME | check: container device login for a named Codex account, or the offline isolation check and each account's sign-in\nclaude login | check [--account NAME]: container login or offline tool isolation check\ngrok login | check [--account NAME]: the same for Grok Build\nantigravity login | check [--account NAME]: the same for the Antigravity CLI\naccounts list | add BACKEND NAME [--kind K] [--cap N] [--label TEXT] [--disabled] | remove BACKEND NAME | default BACKEND NAME: a backend's named accounts (accounts.json)\nconfig init [--provider codex|claude|grok|antigravity] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally"
         );
         println!("open --link: print a one-use local browser sign-in link");
         println!("github configure: bind improvement PR publication to a repository and private credential reference");
