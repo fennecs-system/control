@@ -14,6 +14,10 @@ impl Model {
     fn same(&self,other:&Self)->bool {self.backend==other.backend && self.model==other.model}
 }
 pub(crate) mod selection;
+/// The hosted CLI backend an operator named; local endpoints are not one.
+fn hosted(id: &str) -> Option<crate::backend::Backend> {
+    crate::backend::Backend::named(id).filter(|backend| backend.default_capable())
+}
 pub fn capacity(runtime:&crate::runtime::Runtime,backend:crate::backend::Backend,model:&str)->Option<control_context::turn_context::Capacity> {
     if backend==crate::backend::Backend::Local {
         // Declared endpoint limits, reserving the tool loop's schemas and repair budget.
@@ -56,18 +60,14 @@ pub fn initialization_options(
     for pair in options {
         match pair[0].as_str() {
             "--provider" if provider.is_none() => {
-                provider = Some(match pair[1].as_str() {
-                    "codex" => crate::backend::Backend::Codex,
-                    "claude" => crate::backend::Backend::Claude,
-                    _ => return Err(std::io::Error::other("Provider must be codex or claude")),
-                });
+                provider = Some(hosted(&pair[1]).ok_or_else(|| std::io::Error::other("Provider must be codex, claude or grok"))?);
             }
             "--source-root" if source.is_none() && std::path::Path::new(&pair[1]).is_absolute() => {
                 source = Some(std::path::PathBuf::from(&pair[1]))
             }
             _ => {
                 return Err(std::io::Error::other(
-                    "Use config init [--provider codex|claude] [--source-root /absolute/checkout]",
+                    "Use config init [--provider codex|claude|grok] [--source-root /absolute/checkout]",
                 ))
             }
         }
@@ -150,13 +150,7 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<V
         Ok(bytes) => {
             let settings: Settings = serde_json::from_slice(&bytes)
                 .map_err(|_| std::io::Error::other("Invalid model.json configuration"))?;
-            let installed: Vec<_> = [
-                crate::backend::Backend::Codex,
-                crate::backend::Backend::Claude,
-            ]
-            .into_iter()
-            .filter(|b| b.image().is_some())
-            .collect();
+            let installed: Vec<_> = crate::backend::Backend::hosted().filter(|b| b.image().is_some()).collect();
             let mut settings = migrate(settings, &installed)?;
             let renamed = merge_duplicates(&mut settings.text_models, &mut settings.compaction);
             validate_text(&settings.text_models, &settings.compaction)?;
@@ -283,10 +277,7 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
     // Local endpoints are listed once, under Text models, with their capabilities;
     // they are chosen per chat or spawn and never become the node default.
     html.push_str("</div><p class='provider-description'>Local models that serve tool calls are chosen per DM with <code>/model local:NAME</code> or per spawn with <code>local:NAME</code>; see Text models.</p><details class='model-add'><summary>+ New model</summary>");
-    for backend in [
-        crate::backend::Backend::Codex,
-        crate::backend::Backend::Claude,
-    ] {
+    for backend in crate::backend::Backend::hosted() {
         let id = backend.id();
         let label = backend.label();
         let default = crate::escape(&backend.default_model());
@@ -396,7 +387,7 @@ fn text_fields(model: Option<&crate::model_calls::Endpoint>) -> String {
     let endpoint = model.is_none_or(|m| m.cli.is_none());
     let mut html = String::from("<div class='provider-fields'>");
     if model.is_none() {
-        html.push_str("<label>Adapter<select name='adapter'><option value='endpoint'>Local endpoint</option><option value='codex'>Codex CLI</option><option value='claude'>Claude CLI</option></select></label><label>Name<input name='id' required maxlength='100' placeholder='qwen-local'></label>");
+        html.push_str("<label>Adapter<select name='adapter'><option value='endpoint'>Local endpoint</option><option value='codex'>Codex CLI</option><option value='claude'>Claude CLI</option><option value='grok'>Grok CLI</option></select></label><label>Name<input name='id' required maxlength='100' placeholder='qwen-local'></label>");
     }
     html.push_str(&format!("<label>Model ID or server alias<input name='model' required maxlength='100' value='{}'></label>", value(|m| m.model.clone(), "")));
     if endpoint {
@@ -458,7 +449,7 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
         thinking:match get("thinking") { "" => Default::default(), name => control_ai::model::Thinking::parse(name).ok_or("Unknown thinking level")? } }) };
     match get("action") {
         "text-add" => {
-            let cli = match get("adapter") {""|"endpoint"=>None,"codex"=>Some(crate::backend::Backend::Codex),"claude"=>Some(crate::backend::Backend::Claude),_=>return Err("Unknown text adapter")};
+            let cli = match get("adapter") {""|"endpoint"=>None,id=>Some(hosted(id).ok_or("Unknown text adapter")?)};
             models.push(parse(get("id"),cli)?);
         }
         "text-edit" => {
@@ -509,11 +500,7 @@ pub fn save_with(
     if fields.get("action").is_some_and(|a|a.starts_with("text-") || a == "compaction") {
         return save_text(state, fields, save);
     }
-    let backend = match fields.get("provider").map(String::as_str) {
-        Some("codex") => crate::backend::Backend::Codex,
-        Some("claude") => crate::backend::Backend::Claude,
-        _ => return Err("This provider adapter is not connected. The model was not changed."),
-    };
+    let backend = fields.get("provider").and_then(|id| hosted(id)).ok_or("This provider adapter is not connected. The model was not changed.")?;
     let model = fields.get("model").map(|s| s.trim()).unwrap_or("");
     if !crate::usage::valid_model(model) {
         return Err("Enter a model ID of 1–100 letters, digits, dots, hyphens, underscores, colons or slashes.");

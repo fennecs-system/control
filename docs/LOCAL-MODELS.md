@@ -276,7 +276,9 @@ downloaded, and the server binds to loopback only.
 | `cpu` | explicit | the CPU container on any platform |
 
 Llama.cpp runs natively on Apple Silicon because a container cannot reach the GPU
-there. It is the only host-native third-party service, pinned by `flake.lock`,
+there. It is the only host-native third-party service, pinned by `flake.lock` and
+`tools/inference/llama.nix` (an overlay ahead of the nixpkgs release, for models
+whose support landed after it),
 with no Python or Node.
 
 | Flag | Default |

@@ -43,14 +43,11 @@ fn root() -> io::Result<PathBuf> {
 /// Credential, Control-internal and generated names never leave a workspace.
 pub(crate) fn excluded(name: &str) -> bool {
     name.starts_with(".control-")
+        || crate::backend::private_name(name)
         || matches!(
             name,
             ".git"
                 | ".agents"
-                | ".codex"
-                | ".claude"
-                | ".claude.json"
-                | ".mcp.json"
                 | ".env"
                 | "discord.env"
                 | "auth.json"

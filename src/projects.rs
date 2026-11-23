@@ -397,16 +397,13 @@ pub(crate) fn excluded_name(name: &str) -> bool {
 fn skip(name: &str, metadata: bool) -> bool {
     (name.starts_with(".control-") && !(metadata && name == ".control-git"))
         || (!metadata && name == ".git")
+        || crate::backend::private_name(name)
         || matches!(
             name,
             ".env"
                 | "discord.env"
                 | "auth.json"
                 | ".agents"
-                | ".codex"
-                | ".claude"
-                | ".claude.json"
-                | ".mcp.json"
                 | ".ssh"
                 | ".aws"
                 | ".config"

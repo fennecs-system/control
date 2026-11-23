@@ -4,20 +4,43 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_PAYLOAD_BYTES: usize = 12 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
+    #[default]
     Unknown,
-    #[serde(alias = "reported")]
     Tentative,
-    #[serde(alias = "observed", alias = "verified")]
     Supported,
+}
+/// Models write confidence their own way ("high", 0.95): read what they mean
+/// instead of refusing the whole handoff, and anything else as unknown.
+impl<'de> Deserialize<'de> for Confidence {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Written {
+            Word(String),
+            Number(f64),
+            Other(serde::de::IgnoredAny),
+        }
+        Ok(match Written::deserialize(deserializer)? {
+            Written::Word(word) => match word.trim().to_ascii_lowercase().as_str() {
+                "supported" | "observed" | "verified" | "confirmed" | "certain" | "high" => Self::Supported,
+                "tentative" | "reported" | "likely" | "medium" | "low" => Self::Tentative,
+                _ => Self::Unknown,
+            },
+            Written::Number(number) if number >= 0.8 => Self::Supported,
+            Written::Number(number) if number > 0.0 => Self::Tentative,
+            _ => Self::Unknown,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Finding {
     pub claim: String,
+    #[serde(default)]
     pub confidence: Confidence,
     /// Read #133's empty placeholder without exposing a reference language.
     #[serde(default, skip_serializing)]

@@ -109,6 +109,10 @@ pub(crate) trait Host {
     /// The turn reached its model-step cap without a final report or handoff;
     /// the worker then writes a host checkpoint for the next turn.
     fn step_limit(&mut self) {}
+    /// Whether another turn follows a handoff: the chat is a persistent bot.
+    fn continues(&mut self) -> bool {
+        true
+    }
     /// The turn's usage so far, after every model call (answered or not).
     fn metered(&mut self, meter: &Meter);
     /// The chat's declared observation for the next request, refreshed when
@@ -346,6 +350,11 @@ pub(crate) fn run(
         let mut view = lens.view(&messages, count - shrunk, false);
         let target = count.saturating_sub(policy.verbatim_steps);
         if percent(&view) >= policy.shrink_percent && target >= shrunk + policy.shrink_batch.max(1) {
+            if shrunk == 0 {
+                let note = crate::worker_tools::nudges::elision_text(policy.verbatim_steps);
+                host.record("note", "local-elision-note", &note, "", "completed");
+                append_note(&mut messages, &note);
+            }
             shrunk = target;
             view = lens.view(&messages, count - shrunk, false);
         }
@@ -390,7 +399,8 @@ pub(crate) fn run(
         }
         // Once per turn: the turn has filled most of its context (or lost
         // detail to a fold); ask for a checkpoint before it runs out.
-        let note = crate::worker_tools::nudges::context_text(reached, names.contains("control_turn_handoff"));
+        let next = crate::worker_tools::nudges::Next::of(names.contains("control_turn_handoff"), host.continues(), names.contains("control_bot_request"));
+        let note = crate::worker_tools::nudges::context_text(reached, next);
         if !noted && (reached >= NOTE_PERCENT || folded) && used(&view).saturating_add(tokens(note.len() + 16)) <= budget {
             noted = true;
             host.record("note", "local-context-note", &note, "", "completed");
@@ -401,7 +411,7 @@ pub(crate) fn run(
         let left = policy.max_steps - steps;
         if !step_noted && steps > 0 && left <= STEP_NOTE_LEFT.min(policy.max_steps / 4) {
             step_noted = true;
-            let note = crate::worker_tools::nudges::steps_text(left, names.contains("control_turn_handoff"));
+            let note = crate::worker_tools::nudges::steps_text(left, next);
             host.record("note", "local-step-note", &note, "", "completed");
             append_note(&mut messages, &note);
             view = lens.view(&messages, verbatim, shrink_all);
@@ -651,6 +661,11 @@ impl Host for Live<'_> {
     fn observation(&mut self, first: bool) -> Option<String> {
         crate::observe::step(self.shared, self.run, first)
     }
+    fn continues(&mut self) -> bool {
+        let Ok(state) = self.shared.lock() else { return true };
+        let chat = state.runtime.runs.iter().find(|run| run.id == self.run).and_then(|run| run.chat_id.as_deref());
+        chat.is_some_and(|chat| crate::bots::continuation_enabled(&state, chat))
+    }
     fn inbox(&mut self) -> Option<String> {
         let mut state = self.shared.lock().ok().filter(|_| self.managed)?;
         crate::turn_context::inbox(&mut state, self.run, crate::storage::save)
@@ -765,6 +780,51 @@ fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: Compactor
     let max_steps = live.shared.lock().map_or(Policy::default().max_steps, |state| state.runtime.execution.local_agent_steps);
     run(live, model, limits, budget, prompt, &Policy { max_steps, thinking, resumed, ..Policy::default() })
 }
+
+/// An operator-configured private endpoint. Control runs the tool loop itself;
+/// the CLI backends run their own.
+pub(crate) struct Local;
+impl crate::backend::Agent for Local {
+    fn id(&self) -> &'static str {
+        "local"
+    }
+    fn label(&self) -> &'static str {
+        "Local endpoint"
+    }
+    fn name(&self) -> &'static str {
+        "Local"
+    }
+    fn default_model(&self) -> String {
+        String::new()
+    }
+    fn default_capable(&self) -> bool {
+        false
+    }
+    /// The Codex worker image, used only for credential-free workspace commands.
+    fn image(&self) -> Option<String> {
+        crate::runtime::worker_image()
+    }
+    fn image_hint(&self) -> &'static str {
+        NO_IMAGE
+    }
+    fn credentials_ready(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn probe(&self, _image: &str) -> Result<(), String> {
+        Err(NO_IMAGE.to_owned())
+    }
+    fn text_command(&self, _call: &crate::backend::TextCall<'_>) -> std::io::Result<std::process::Command> {
+        Err(std::io::Error::other(NOT_A_CLI))
+    }
+    fn text(&self, _reader: &mut dyn std::io::Read, _max: usize, _emit: &mut dyn FnMut(control_ai::Event)) -> std::io::Result<control_ai::Output> {
+        Err(std::io::Error::other(NOT_A_CLI))
+    }
+    fn host_shell(&self) -> bool {
+        true
+    }
+}
+const NO_IMAGE: &str = "local endpoints run no worker image";
+const NOT_A_CLI: &str = "Local endpoints are not CLI adapters";
 
 #[cfg(test)]
 mod tests;

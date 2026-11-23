@@ -17,14 +17,9 @@ pub(crate) fn resolve(
         return Ok(Model::captured(backend, model.to_owned()));
     };
     let selector = selector.trim();
-    let (provider, name) = if let Some(name) = selector.strip_prefix("codex:") {
-        (Some(Backend::Codex), name)
-    } else if let Some(name) = selector.strip_prefix("claude:") {
-        (Some(Backend::Claude), name)
-    } else if let Some(name) = selector.strip_prefix("local:") {
-        (Some(Backend::Local), name)
-    } else {
-        (None, selector)
+    let (provider, name) = match selector.split_once(':').and_then(|(id, name)| Some((Backend::named(id)?, name))) {
+        Some((backend, name)) => (Some(backend), name),
+        None => (None, selector),
     };
     if !crate::usage::valid_model(name) {
         return Err("Use a configured model ID, optionally prefixed with codex:, claude: or local:.");

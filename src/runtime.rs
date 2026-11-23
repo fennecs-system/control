@@ -428,20 +428,11 @@ fn integrations() -> String {
         "offline / starting"
     };
     let profile=status["bot_id"].as_str().and_then(|s|s.parse::<identity::DiscordId>().ok()).map(|id|format!("<p><a href='https://discord.com/users/{id}' rel='noreferrer'>Open Control in Discord ↗</a></p>")).unwrap_or_default();
-    let backends: String = [
-        (
-            crate::backend::Backend::Codex,
-            "Codex",
-            crate::worker::credentials_ready().is_ok(),
-        ),
-        (
-            crate::backend::Backend::Claude,
-            "Claude Code",
-            crate::claude::credentials_ready().is_ok(),
-        ),
-    ]
-    .into_iter()
-    .map(|(backend, name, login)| {
+    let backends: String = crate::backend::Backend::hosted()
+    .map(|backend| {
+        // The product name: the label without its vendor.
+        let name = backend.label().rsplit(" / ").next().unwrap_or_default();
+        let login = backend.agent().credentials_ready().is_ok();
         format!(
             "<div class='record'><h3>{name}</h3><p>{} · {}</p></div>",
             if backend.image().is_some() {

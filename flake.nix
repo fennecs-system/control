@@ -6,6 +6,7 @@
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       eachSystem = f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs {
         inherit system;
+        overlays = [ (import ./tools/inference/llama.nix) ];
         # CUDA libraries are only evaluated for the optional inference-image-cuda output.
         config.allowUnfreePredicate = pkg:
           let
@@ -46,7 +47,8 @@
           inference = { type = "app"; program = "${inference}/bin/control-inference"; };
           codex = { type = "app"; program = "${pkgs.codex}/bin/codex"; };
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-          builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
+          # 8 GiB: the stock 3 GiB VM cannot compile large Rust crates (Grok Build's shell crate).
+          builder = { type = "app"; program = "${pkgs.darwin.linux-builder.override { modules = [ { virtualisation.darwin-builder.memorySize = 8192; } ]; }}/bin/create-builder"; };
         });
       packages = eachSystem (pkgs:
         let
@@ -62,6 +64,8 @@
           worker-full-image = import ./examples/worker-image.nix { inherit pkgs; profile = "full"; };
           claude-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; };
           claude-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; profile = "full"; };
+          grok-image = import ./examples/worker-image.nix { inherit pkgs; backend = "grok"; };
+          grok-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "grok"; profile = "full"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
           inference-image = import ./tools/inference/image.nix { inherit pkgs; };
