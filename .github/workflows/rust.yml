@@ -1,9 +1,12 @@
 name: Rust
 
 on:
+  # Changes under docs/ alone do not run CI.
   pull_request:
+    paths-ignore: ["docs/**"]
   push:
     branches: [main]
+    paths-ignore: ["docs/**"]
   workflow_dispatch:
 
 permissions:
@@ -23,7 +26,7 @@ jobs:
       matrix:
         # Linux only for now: macOS runner minutes are costly. macOS is checked locally before merge.
         # Add macos-15 back here to restore it; every cache key already includes the runner.
-        os: [ubuntu-24.04]
+        os: [ubuntu-latest]
     env:
       # Incremental state is large and rarely reusable across fresh checkouts.
       CARGO_INCREMENTAL: "0"
@@ -33,9 +36,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: cachix/install-nix-action@bb0495a1086c46893eee56f32fd192dfe4a15bb9 # v32.0.0
       - name: Cache Nix store and evaluation
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
         with:
           # Rust source changes do not invalidate the toolchain/store cache.
           primary-key: nix-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', 'hosting/setup.sh') }}
