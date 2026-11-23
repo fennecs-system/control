@@ -211,3 +211,27 @@ fn incomplete_turn_never_replaces_the_restorable_project_checkpoint() {
     assert_eq!(fs::read(next.join("project.txt")).unwrap(), b"original project data");
     fs::remove_dir_all(root).unwrap();
 }
+#[test]
+fn every_backend_credential_name_is_kept_out_of_artifacts_and_published_workspaces() {
+    // One name per place a backend stores a sign-in or key: none may be read as an
+    // artifact or copied into a published workspace, whichever backend ran.
+    [
+        ".codex",
+        ".claude",
+        ".claude.json",
+        ".mcp.json",
+        ".grok",
+        ".gemini",
+        "gemini-api-key",
+        "adc.json",
+        "antigravity-oauth-token",
+        "auth.json",
+    ]
+    .into_iter()
+    .for_each(|name| {
+        assert!(
+            excluded(name) && crate::projects::excluded_name(name),
+            "{name} would be published"
+        )
+    });
+}
