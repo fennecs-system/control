@@ -1,8 +1,9 @@
 //! Host glue for `crate::accounts`: the backends' login locations, the
-//! node's accounts.json and accounts-status.json, and the load and holds
-//! admission applies.
+//! node's accounts.json, the load and holds admission applies, and the one
+//! wording of a hold or a cooldown.
 use crate::accounts::{
-    AccountKind, AccountName, Hold, KeyFile, KeyWriter, Location, RelativePath, SecretRef, Store, UnixSeconds,
+    AccountKind, AccountName, Cooling, Ended, Hold, KeyFile, KeyWriter, Location, Phase, RelativePath, RetryAt,
+    SecretRef, Store, UnixSeconds,
 };
 use crate::backend::Backend;
 use std::{io, path::PathBuf, time::SystemTime};
@@ -137,15 +138,15 @@ pub(crate) fn load(runs: &[crate::runtime::Run], backend: Backend) -> impl Fn(&A
             .count()
     }
 }
-/// Whether the account is cooling down now: what a pool skips.
+/// Whether the account is cooling down, held or due for its probe: what a
+/// pool skips.
 pub(crate) fn cooling(runtime: &crate::runtime::Runtime, backend: Backend) -> impl Fn(&AccountName) -> bool + '_ {
-    let now = now();
-    move |name| runtime.account_status.cooling(backend, name, now).is_some()
+    move |name| runtime.account_status.cooling(backend, name).is_some()
 }
 
 /// Why `run` may not start on its captured account now: its account runs
-/// as many attempts as its cap allows, or is cooling down. An account no
-/// longer in accounts.json starts as it was admitted.
+/// as many attempts as its cap allows, is cooling down, or is being probed.
+/// An account no longer in accounts.json starts as it was admitted.
 pub(crate) fn hold(runtime: &crate::runtime::Runtime, run: &crate::runtime::Run) -> Option<Hold> {
     let target = &run.target;
     let account = runtime.accounts.get(target.backend, &target.account)?;
@@ -160,22 +161,133 @@ pub(crate) fn hold(runtime: &crate::runtime::Runtime, run: &crate::runtime::Run)
         .count();
     crate::accounts::may_start(&account, &runtime.account_status, running, now()).err()
 }
-/// A held run's notice in its chat.
-pub(crate) fn held(hold: &Hold, run: &crate::runtime::Run) -> String {
-    let account = format!("{}+{}", run.target.backend.id(), run.target.account);
+/// Why `run` waits in the queue for its account, when it is queued and held.
+pub(crate) fn held_run(runtime: &crate::runtime::Runtime, run: &crate::runtime::Run) -> Option<String> {
+    (run.status == crate::runtime::RunStatus::Queued)
+        .then(|| hold(runtime, run))
+        .flatten()
+        .map(|hold| held(&hold, &run.target, now()))
+}
+/// Queued runs newly held by a cooling account, each with the notice to send
+/// for it: only the first of its chat and account while none noticed earlier
+/// still waits, so a pile of held turns is one message. A run at its cap is
+/// ordinary queueing and sends nothing.
+pub(crate) fn held_notices(runtime: &crate::runtime::Runtime) -> Vec<(usize, Option<String>)> {
+    use crate::runtime::RunStatus;
+    let now = now();
+    let key = |run: &crate::runtime::Run| (run.chat_id.clone(), run.target.backend, run.target.account.clone());
+    let noticed: Vec<_> = runtime
+        .runs
+        .iter()
+        .filter(|run| run.status == RunStatus::Queued && run.emitted == Some(RunStatus::Queued))
+        .map(key)
+        .collect();
+    runtime
+        .runs
+        .iter()
+        .enumerate()
+        .filter(|(_, run)| run.status == RunStatus::Queued && run.emitted.is_none())
+        .filter_map(|(index, run)| match hold(runtime, run)? {
+            hold @ (Hold::Cooling(_) | Hold::Probing) => Some((index, run, held(&hold, &run.target, now))),
+            Hold::Cap(_) => None,
+        })
+        .fold(
+            (noticed, Vec::new()),
+            |(mut noticed, mut notices), (index, run, text)| {
+                let first = !noticed.contains(&key(run));
+                if first {
+                    noticed.push(key(run));
+                }
+                notices.push((index, first.then_some(text)));
+                (noticed, notices)
+            },
+        )
+        .1
+}
+/// Why a queued run waits, in the words every interface shows: the chat
+/// transcript, the chat MCP, the TUI and a Discord notice.
+pub(crate) fn held(hold: &Hold, target: &crate::providers::Target, now: UnixSeconds) -> String {
+    let (id, name) = (target.backend.id(), &target.account);
+    let clear = format!("Clear on the providers page or run `control accounts clear {id} {name}`.");
     match hold {
-        Hold::Cap(cap) => format!("Queued · {account} is running its limit of {cap} at once"),
-        Hold::Cooling(_) => format!(
-            "Queued · {account} reported a usage limit; it waits until it is cleared on Manage → Models (no other account is used)"
+        Hold::Cap(cap) => format!("Held: {id} account {name} is running its limit of {cap} at once."),
+        Hold::Cooling(until) => format!(
+            "Held: {id} account {name} reached its usage limit; retrying at {}. {clear}",
+            when(*until, now)
+        ),
+        Hold::Probing => format!(
+            "Held: {id} account {name} reached its usage limit; one turn is checking whether it has lifted. {clear}"
         ),
     }
 }
+/// A cooling account's state for its line in `control accounts list`,
+/// `control BACKEND check` and the providers page, with the turns it holds.
+pub(crate) fn note(cooling: &Cooling<Backend>, held: usize, now: UnixSeconds) -> String {
+    let state = match cooling.phase(now) {
+        Phase::Waiting(until) => format!("cooling until {}", when(until, now)),
+        Phase::Due => "cooling: one turn is checking whether the limit has lifted".to_owned(),
+    };
+    match held {
+        0 => state,
+        1 => format!("{state}, 1 turn held"),
+        _ => format!("{state}, {held} turns held"),
+    }
+}
+/// `14:05 UTC (in 12m)`, with the date when it is another day.
+fn when(RetryAt(at): RetryAt, now: UnixSeconds) -> String {
+    let date = if at.0 / 86_400 == now.0 / 86_400 {
+        String::new()
+    } else {
+        format!("{} ", crate::intel::date(at.0))
+    };
+    format!(
+        "{date}{:02}:{:02} UTC (in {})",
+        at.0 % 86_400 / 3600,
+        at.0 % 3600 / 60,
+        control_client::operator::age(at.0.saturating_sub(now.0))
+    )
+}
+/// One cooling account's note, as the server serves it to the CLI.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Note {
+    pub backend: Backend,
+    pub account: AccountName,
+    pub note: String,
+}
+/// Every cooling account's note, counting the queued turns it holds.
+pub(crate) fn notes(runtime: &crate::runtime::Runtime, now: UnixSeconds) -> Vec<Note> {
+    runtime
+        .account_status
+        .all()
+        .map(|cooling| {
+            let held = runtime
+                .runs
+                .iter()
+                .filter(|run| {
+                    run.status == crate::runtime::RunStatus::Queued
+                        && run.target.backend == cooling.backend
+                        && run.target.account == cooling.name
+                })
+                .count();
+            Note {
+                backend: cooling.backend,
+                account: cooling.name.clone(),
+                note: note(cooling, held, now),
+            }
+        })
+        .collect()
+}
 
-/// Marks the account cooling down after a usage limit; the caller saves the
-/// state. The provider gives no retry time Control can read, so it holds
-/// until an operator clears it.
-pub(crate) fn cool(runtime: &mut crate::runtime::Runtime, backend: Backend, account: &AccountName) {
-    runtime.account_status = runtime.account_status.cool(backend, account, now(), None);
+/// Settles the account's cooldown after an attempt on it ended: a usage limit
+/// cools it, a probe's ending clears or extends it. The caller saves the state.
+pub(crate) fn ended(runtime: &mut crate::runtime::Runtime, attempt: &crate::usage::Attempt, ended: Ended) {
+    runtime.account_status = runtime.account_status.ended(
+        attempt.backend,
+        &attempt.account,
+        UnixSeconds(attempt.started_unix),
+        ended,
+        now(),
+    );
 }
 /// Clears an account's cooldown; its held attempts may start. The caller saves.
 pub(crate) fn clear(runtime: &mut crate::runtime::Runtime, backend: Backend, account: &AccountName) {
@@ -189,8 +301,9 @@ pub(crate) enum Command {
     Add(crate::accounts::Entry<Backend>),
     Remove(Backend, AccountName),
     Default(Backend, AccountName),
+    Clear(Backend, AccountName),
 }
-pub(crate) const USAGE: &str = "Use control accounts list | add BACKEND NAME [--kind subscription|api-key|cloud] [--cap N] [--label TEXT] [--disabled] | remove BACKEND NAME | default BACKEND NAME";
+pub(crate) const USAGE: &str = "Use control accounts list | add BACKEND NAME [--kind subscription|api-key|cloud] [--cap N] [--label TEXT] [--disabled] | remove BACKEND NAME | default BACKEND NAME | clear BACKEND NAME";
 impl TryFrom<&[String]> for Command {
     type Error = String;
     fn try_from(args: &[String]) -> Result<Self, String> {
@@ -206,6 +319,7 @@ impl TryFrom<&[String]> for Command {
             [] | ["list"] => Ok(Self::List),
             ["remove", id, account] => Ok(Self::Remove(backend(id)?, name(account)?)),
             ["default", id, account] => Ok(Self::Default(backend(id)?, name(account)?)),
+            ["clear", id, account] => Ok(Self::Clear(backend(id)?, name(account)?)),
             ["add", id, account, options @ ..] => {
                 let mut entry = crate::accounts::Entry {
                     backend: backend(id)?,
@@ -245,15 +359,27 @@ impl TryFrom<&[String]> for Command {
     }
 }
 /// Runs `control accounts …`: reads accounts.json, applies the change and
-/// saves it privately. A running Control picks the change up by itself.
+/// saves it privately. A running Control picks the change up by itself. A
+/// cooldown is node state, so listing and clearing ask the running server.
 pub(crate) fn command(args: &[String]) -> io::Result<()> {
     let command = Command::try_from(args).map_err(io::Error::other)?;
     let store = read()?;
     let changed = match &command {
         Command::List => {
+            let cooling = live();
+            let notes = cooling.as_deref().unwrap_or_default();
             Backend::hosted()
-                .flat_map(|backend| listing(backend, &store))
+                .flat_map(|backend| listing(backend, &store, notes))
+                .chain(cooling.as_ref().err().cloned())
                 .for_each(|line| println!("{line}"));
+            return Ok(());
+        }
+        Command::Clear(backend, name) => {
+            store
+                .get(*backend, name)
+                .ok_or_else(|| io::Error::other(format!("{} has no account {name}", backend.id())))?;
+            hive()?.clear_account(backend.id(), name.as_str())?;
+            println!("Cleared {}+{name}: its held turns may start.", backend.id());
             return Ok(());
         }
         Command::Add(entry) => store.add(entry.clone()),
@@ -278,14 +404,26 @@ pub(crate) fn command(args: &[String]) -> io::Result<()> {
             "{} now runs on {name} unless a selection names an account.",
             backend.id()
         ),
-        Command::List => {}
+        Command::List | Command::Clear(..) => {}
     }
     Ok(())
 }
+fn hive() -> io::Result<control_client::Hive> {
+    control_client::Hive::connect(&format!("http://{}", crate::config::server_addr()))
+}
+/// The running server's cooling accounts for an account listing; when it
+/// cannot be asked, the reason, said once instead of a cooldown that might
+/// be missing.
+pub(crate) fn live() -> Result<Vec<Note>, String> {
+    hive()
+        .and_then(|hive| hive.account_notes())
+        .and_then(|notes| serde_json::from_value(notes).map_err(io::Error::other))
+        .map_err(|error| format!("Cooldowns unknown: {error}"))
+}
 /// One line per account of `backend` for `control accounts list`.
-fn listing(backend: Backend, store: &Store<Backend>) -> Vec<String> {
+fn listing(backend: Backend, store: &Store<Backend>, cooling: &[Note]) -> Vec<String> {
     let default = store.default_name(backend);
-    crate::logins::report(backend, store)
+    crate::logins::report(backend, store, cooling)
         .into_iter()
         .zip(store.of(backend))
         .map(|(line, account)| {

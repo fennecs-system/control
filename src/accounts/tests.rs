@@ -329,26 +329,29 @@ fn a_usage_limit_cools_an_account_and_admission_holds_it_without_failover() {
         may_start(&work, &status, 2, now),
         Err(Hold::Cap(NonZeroU8::new(2).unwrap()))
     );
-    let cooled = status.cool(Test::Codex, &name("second"), now, None);
+    let limited = |status: &Status<Test>, started, at, retry| {
+        status.ended(
+            Test::Codex,
+            &name("second"),
+            UnixSeconds(started),
+            Ended::Limited(retry),
+            UnixSeconds(at),
+        )
+    };
+    // No stated time: held for the first backoff step, never until cleared.
+    let cooled = limited(&status, 990, 1_000, None);
     assert_eq!(
-        may_start(&second, &cooled, 0, UnixSeconds(9_999)),
-        Err(Hold::Cooling(None))
+        may_start(&second, &cooled, 0, UnixSeconds(1_299)),
+        Err(Hold::Cooling(RetryAt(UnixSeconds(1_300))))
     );
-    // A repeated limit keeps when it began; a known retry time lifts it.
-    let again = cooled.cool(
-        Test::Codex,
-        &name("second"),
-        UnixSeconds(2_000),
-        Some(UnixSeconds(3_000)),
-    );
+    // Another attempt that began before the retry time hit the same limit:
+    // it keeps when the limit began and the step, and a later stated time wins.
+    let again = limited(&cooled, 995, 1_100, Some(StatedRetry::On(3_000)));
+    let cooling = again.cooling(Test::Codex, &name("second")).unwrap();
     assert_eq!(
-        again
-            .cooling(Test::Codex, &name("second"), UnixSeconds(2_500))
-            .unwrap()
-            .since,
-        now
+        (cooling.since, cooling.until, cooling.strikes),
+        (now, RetryAt(UnixSeconds(3_000)), Strikes::FIRST)
     );
-    assert_eq!(may_start(&second, &again, 0, UnixSeconds(3_000)), Ok(()));
     assert_eq!(cooled.clear(Test::Codex, &name("second")), status);
     // A pool skips a cooling account while another is available.
     let cooling = |busy: &'static str| move |n: &AccountName| n.as_str() == busy;
@@ -371,9 +374,136 @@ fn a_usage_limit_cools_an_account_and_admission_holds_it_without_failover() {
     let saved = serde_json::to_string(&cooled).unwrap();
     assert_eq!(
         saved,
-        r#"{"cooling":[{"backend":"codex","name":"second","since":1000}]}"#
+        r#"{"cooling":[{"backend":"codex","name":"second","since":1000,"until":1300,"strikes":1}]}"#
     );
     assert_eq!(serde_json::from_str::<Status<Test>>(&saved).unwrap(), cooled);
+}
+
+/// Without a stated time each limit in a row waits longer, up to an hour.
+#[test]
+fn backoff_steps_from_five_minutes_to_an_hour() {
+    let minutes = |strikes: u8| backoff(Strikes(NonZeroU8::new(strikes).unwrap())).as_secs() / 60;
+    let table = [(1, 5), (2, 15), (3, 60), (4, 60), (255, 60)];
+    assert_eq!(table.map(|(strikes, _)| (strikes, minutes(strikes))), table);
+    assert_eq!(Strikes(NonZeroU8::MAX).next(), Strikes(NonZeroU8::MAX), "saturates");
+    assert_eq!(BACKOFF_MAX.as_secs(), 3_600);
+}
+
+/// A stated time is used as given when it is ahead; a bare clock time on the
+/// current UTC day is today, one already past reads as tomorrow capped at an
+/// hour from now; a past date falls back to backoff.
+#[test]
+fn a_stated_retry_time_becomes_a_concrete_time() {
+    // 2026-11-24 10:00 UTC.
+    let now = UnixSeconds(1_795_514_400);
+    let day = now.0 - now.0 % 86_400;
+    let cases = [
+        (StatedRetry::On(now.0 + 600), Some(now.0 + 600)),
+        (StatedRetry::On(now.0), None),
+        (StatedRetry::On(now.0 - 60), None),
+        (StatedRetry::Today(12 * 60 + 5), Some(day + (12 * 60 + 5) * 60)),
+        (StatedRetry::Today(10 * 60 + 30), Some(now.0 + 1_800)),
+        // 09:00 has passed: tomorrow 09:00 is the later reading, capped.
+        (StatedRetry::Today(9 * 60), Some(now.0 + 3_600)),
+        // 10:00 exactly: the same.
+        (StatedRetry::Today(10 * 60), Some(now.0 + 3_600)),
+    ];
+    for (retry, expected) in cases {
+        assert_eq!(
+            stated(retry, now),
+            expected.map(|at| RetryAt(UnixSeconds(at))),
+            "{retry:?}"
+        );
+    }
+    // Just before midnight a clock time just after it is tomorrow, within the cap.
+    let late = UnixSeconds(day + 86_400 - 60);
+    assert_eq!(
+        stated(StatedRetry::Today(10), late),
+        Some(RetryAt(UnixSeconds(day + 86_400 + 600)))
+    );
+}
+
+/// After the retry time one attempt probes the account; the rest wait for it.
+/// A successful probe clears the cooldown, a limited one cools it for the
+/// next, longer step; an ending that says nothing about the limit changes nothing.
+#[test]
+fn a_due_cooldown_lets_one_probe_through_and_its_ending_decides() {
+    let store = Store::<Test>::parse(EXAMPLE.as_bytes()).unwrap();
+    let second = store.get(Test::Codex, &name("second")).unwrap();
+    let id = |status: &Status<Test>| status.cooling(Test::Codex, &name("second")).cloned();
+    let ended = |status: &Status<Test>, started, ended, at| {
+        status.ended(
+            Test::Codex,
+            &name("second"),
+            UnixSeconds(started),
+            ended,
+            UnixSeconds(at),
+        )
+    };
+    let cooled = ended(&Status::default(), 0, Ended::Limited(None), 1_000);
+    let due = UnixSeconds(1_300);
+    // Exactly one attempt starts once due; while it runs the others are held.
+    assert_eq!(may_start(&second, &cooled, 0, due), Ok(()));
+    assert_eq!(may_start(&second, &cooled, 1, due), Err(Hold::Probing));
+    // An attempt that began before the retry time is no probe: its success
+    // does not clear the cooldown.
+    assert_eq!(ended(&cooled, 1_200, Ended::Succeeded, 1_400), cooled);
+    assert_eq!(ended(&cooled, 1_300, Ended::Otherwise, 1_400), cooled);
+    assert_eq!(ended(&cooled, 1_300, Ended::Succeeded, 1_400), Status::default());
+    // A probe that hits the limit again: the next step, from when it ended.
+    let second_step = ended(&cooled, 1_300, Ended::Limited(None), 1_310);
+    let cooling = id(&second_step).unwrap();
+    assert_eq!(
+        (cooling.since, cooling.until, cooling.strikes.get()),
+        (UnixSeconds(1_000), RetryAt(UnixSeconds(1_310 + 15 * 60)), 2)
+    );
+    assert_eq!(
+        may_start(&second, &second_step, 0, UnixSeconds(1_400)),
+        Err(Hold::Cooling(RetryAt(UnixSeconds(2_210))))
+    );
+    let third = ended(&second_step, 2_210, Ended::Limited(None), 2_220);
+    assert_eq!(id(&third).unwrap().until, RetryAt(UnixSeconds(2_220 + 3_600)));
+    let fourth = ended(&third, 5_820, Ended::Limited(None), 5_830);
+    assert_eq!(
+        id(&fourth).unwrap().until,
+        RetryAt(UnixSeconds(5_830 + 3_600)),
+        "capped"
+    );
+    // A stated time sets the next retry whatever the step.
+    let stated = ended(&fourth, 9_430, Ended::Limited(Some(StatedRetry::On(90_000))), 9_440);
+    assert_eq!(id(&stated).unwrap().until, RetryAt(UnixSeconds(90_000)));
+    // Success then resets the count: the next limit starts at the first step.
+    let cleared = ended(&stated, 90_000, Ended::Succeeded, 90_100);
+    let fresh = ended(&cleared, 90_200, Ended::Limited(None), 90_210);
+    assert_eq!(id(&fresh).unwrap().strikes, Strikes::FIRST);
+}
+
+/// The installed node holds a cooldown saved before retry times existed:
+/// `until` absent or null. It loads as due one first step after it began.
+#[test]
+fn an_old_cooldown_without_a_retry_time_loads_with_the_first_step() {
+    for saved in [
+        r#"{"cooling":[{"backend":"codex","name":"default","since":1000,"until":null}]}"#,
+        r#"{"cooling":[{"backend":"codex","name":"default","since":1000}]}"#,
+    ] {
+        let status = serde_json::from_str::<Status<Test>>(saved).unwrap();
+        let cooling = status.cooling(Test::Codex, &AccountName::implicit()).unwrap();
+        assert_eq!(
+            (cooling.until, cooling.strikes),
+            (RetryAt(UnixSeconds(1_300)), Strikes::FIRST),
+            "{saved}"
+        );
+        let account = default_for(Test::Codex);
+        assert_eq!(
+            may_start(&account, &status, 0, UnixSeconds(5_000)),
+            Ok(()),
+            "a probe may start"
+        );
+    }
+    assert!(
+        serde_json::from_str::<Status<Test>>(r#"{"cooling":[{"backend":"codex","name":"default","since":1,"x":1}]}"#)
+            .is_err()
+    );
 }
 
 #[test]

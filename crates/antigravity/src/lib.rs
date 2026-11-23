@@ -382,7 +382,7 @@ fn diagnose(ended: Option<Ending>, stderr: &[u8]) -> Failure {
         {
             Some(Cause::SignIn)
         } else if text.contains("resource_exhausted") || text.contains("out of quota") {
-            Some(Cause::UsageLimit)
+            Some(Cause::UsageLimit { retry_at: None })
         } else {
             control_agent::classify(bytes)
         };

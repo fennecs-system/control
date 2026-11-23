@@ -9,11 +9,13 @@
 //! Examples and the file format are in `accounts/tests.rs` and docs/LOCAL-MODELS.md.
 //! A named account's login lives in `<config>/accounts/BACKEND/NAME/`, holding
 //! the same file the backend's default location holds.
+use control_agent::StatedRetry;
 use serde::{Deserialize, Serialize, de::DeserializeOwned, ser::SerializeMap};
 use std::{
     fmt, io,
     num::NonZeroU8,
     path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 /// What accounts need from a backend identifier.
@@ -663,18 +665,145 @@ impl<B: Backend> Store<B> {
 /// Seconds since the Unix epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UnixSeconds(pub u64);
+impl UnixSeconds {
+    pub fn after(self, wait: Duration) -> Self {
+        Self(self.0.saturating_add(wait.as_secs()))
+    }
+}
 
-/// An account that reported a usage limit: new attempts on it are held until
-/// `until` passes (when the provider said when) or an operator clears it.
+/// When a cooling account is tried again: always a concrete time, so no
+/// cooldown waits for an operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RetryAt(pub UnixSeconds);
+
+/// Usage limits an account reported in a row: the first, then one per probe
+/// that hit it again. Never zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Strikes(NonZeroU8);
+impl Strikes {
+    pub const FIRST: Self = Self(NonZeroU8::MIN);
+    pub fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+    pub fn get(self) -> u8 {
+        self.0.get()
+    }
+}
+
+/// How long an account waits after its `n`th limit in a row when the provider
+/// names no time: 5 minutes catches a short rate limit, 15 a burst, and an
+/// hour bounds a long (daily or weekly) limit to one failed request an hour.
+pub const BACKOFF: [Duration; 3] = [
+    Duration::from_secs(5 * 60),
+    Duration::from_secs(15 * 60),
+    Duration::from_secs(60 * 60),
+];
+pub fn backoff(strikes: Strikes) -> Duration {
+    BACKOFF[usize::from(strikes.get() - 1).min(BACKOFF.len() - 1)]
+}
+/// The longest wait backoff alone ever sets.
+pub const BACKOFF_MAX: Duration = BACKOFF[BACKOFF.len() - 1];
+
+/// The provider's stated retry time as a concrete time after `now`, or `None`
+/// when it is already past (backoff then decides). A bare clock time names
+/// the day the message was written, which is `now`'s UTC day; one already
+/// past was written yesterday or names tomorrow, so the later reading wins,
+/// capped at [`BACKOFF_MAX`] from now.
+pub fn stated(retry: StatedRetry, now: UnixSeconds) -> Option<RetryAt> {
+    const DAY: u64 = 86_400;
+    let at = match retry {
+        StatedRetry::On(at) => UnixSeconds(at),
+        StatedRetry::Today(minute) => {
+            let today = UnixSeconds(now.0 - now.0 % DAY + u64::from(minute) * 60);
+            if today > now {
+                today
+            } else {
+                UnixSeconds(today.0 + DAY).min(now.after(BACKOFF_MAX))
+            }
+        }
+    };
+    (at > now).then_some(RetryAt(at))
+}
+
+/// An account that reported a usage limit. New attempts on it are held until
+/// `until`; then one attempt runs as a probe, and its ending clears the
+/// cooldown or extends it ([`Status::ended`]). An operator can clear it at any
+/// time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, bound = "B: Backend")]
+#[serde(
+    bound(serialize = "B: Backend", deserialize = "B: Backend"),
+    from = "SavedCooling<B>"
+)]
 pub struct Cooling<B> {
     pub backend: B,
     pub name: AccountName,
+    /// The first limit of this run of limits.
     pub since: UnixSeconds,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub until: Option<UnixSeconds>,
+    pub until: RetryAt,
+    pub strikes: Strikes,
 }
+/// A cooldown as saved. Before retry times were kept, `until` was absent
+/// (held until cleared) and there were no strikes: such a cooldown is due one
+/// first backoff step after it began.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, bound = "B: Backend")]
+struct SavedCooling<B> {
+    backend: B,
+    name: AccountName,
+    since: UnixSeconds,
+    #[serde(default)]
+    until: Option<UnixSeconds>,
+    #[serde(default)]
+    strikes: Option<Strikes>,
+}
+impl<B> From<SavedCooling<B>> for Cooling<B> {
+    fn from(saved: SavedCooling<B>) -> Self {
+        let strikes = saved.strikes.unwrap_or(Strikes::FIRST);
+        Self {
+            until: RetryAt(saved.until.unwrap_or_else(|| saved.since.after(backoff(strikes)))),
+            backend: saved.backend,
+            name: saved.name,
+            since: saved.since,
+            strikes,
+        }
+    }
+}
+/// Where a cooldown stands at a moment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// Held until then.
+    Waiting(RetryAt),
+    /// Past its retry time: one attempt may probe the account.
+    Due,
+}
+impl<B: Backend> Cooling<B> {
+    pub fn phase(&self, now: UnixSeconds) -> Phase {
+        if now < self.until.0 {
+            Phase::Waiting(self.until)
+        } else {
+            Phase::Due
+        }
+    }
+    /// Whether an attempt that began at `started` is a probe: it began once the
+    /// account was due, so its ending says whether the limit has lifted. One
+    /// that began earlier ran into the same limit.
+    fn probed_by(&self, started: UnixSeconds) -> bool {
+        started >= self.until.0
+    }
+}
+
+/// How an attempt on an account ended, as far as its cooldown is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ended {
+    Succeeded,
+    /// It reported a usage limit, with the provider's retry time if stated.
+    Limited(Option<StatedRetry>),
+    /// Any other ending says nothing about the limit.
+    Otherwise,
+}
+
 /// Which accounts are cooling down, saved with the node state. There is no
 /// automatic failover: a held attempt waits for its own account.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -692,26 +821,45 @@ impl<B: Backend> Status<B> {
     pub fn is_empty(&self) -> bool {
         self.cooling.is_empty()
     }
-    /// The cooldown holding `name` of `backend` at `now`, if any.
-    pub fn cooling(&self, backend: B, name: &AccountName, now: UnixSeconds) -> Option<&Cooling<B>> {
-        self.cooling
-            .iter()
-            .find(|c| c.backend == backend && c.name == *name && c.until.is_none_or(|until| now < until))
+    pub fn all(&self) -> impl Iterator<Item = &Cooling<B>> {
+        self.cooling.iter()
     }
-    /// The status with the account cooling from `now`; a repeated limit
-    /// keeps the first `since`.
-    pub fn cool(&self, backend: B, name: &AccountName, now: UnixSeconds, until: Option<UnixSeconds>) -> Self {
-        let since = self.cooling(backend, name, now).map_or(now, |c| c.since);
+    /// The cooldown on `name` of `backend`, waiting or due, if any.
+    pub fn cooling(&self, backend: B, name: &AccountName) -> Option<&Cooling<B>> {
+        self.cooling.iter().find(|c| c.backend == backend && c.name == *name)
+    }
+    /// The status after an attempt on the account that began at `started`
+    /// ended at `now`. A first limit cools the account. A probe that hits it
+    /// again cools it for the next step, and one that succeeds clears it. An
+    /// attempt that began before the retry time ran into the same limit: it
+    /// can only make the wait longer, to a later stated time.
+    pub fn ended(&self, backend: B, name: &AccountName, started: UnixSeconds, ended: Ended, now: UnixSeconds) -> Self {
+        let current = self.cooling(backend, name);
+        let next = match (current, ended) {
+            (None, Ended::Succeeded | Ended::Otherwise) => return self.clone(),
+            (Some(cooling), Ended::Succeeded) if cooling.probed_by(started) => return self.clear(backend, name),
+            (Some(_), Ended::Succeeded | Ended::Otherwise) => return self.clone(),
+            (None, Ended::Limited(retry)) => Cooling {
+                backend,
+                name: name.clone(),
+                since: now,
+                until: retry_at(retry, Strikes::FIRST, now),
+                strikes: Strikes::FIRST,
+            },
+            (Some(cooling), Ended::Limited(retry)) if cooling.probed_by(started) => Cooling {
+                until: retry_at(retry, cooling.strikes.next(), now),
+                strikes: cooling.strikes.next(),
+                ..cooling.clone()
+            },
+            (Some(cooling), Ended::Limited(retry)) => Cooling {
+                until: retry
+                    .and_then(|retry| stated(retry, now))
+                    .map_or(cooling.until, |stated| stated.max(cooling.until)),
+                ..cooling.clone()
+            },
+        };
         Self {
-            cooling: self
-                .without(backend, name)
-                .chain([Cooling {
-                    backend,
-                    name: name.clone(),
-                    since,
-                    until,
-                }])
-                .collect(),
+            cooling: self.without(backend, name).chain([next]).collect(),
         }
     }
     /// The status with the account's cooldown cleared.
@@ -727,25 +875,40 @@ impl<B: Backend> Status<B> {
             .cloned()
     }
 }
+/// The provider's time when it states one still ahead, else the backoff step.
+fn retry_at(retry: Option<StatedRetry>, strikes: Strikes, now: UnixSeconds) -> RetryAt {
+    retry
+        .and_then(|retry| stated(retry, now))
+        .unwrap_or_else(|| RetryAt(now.after(backoff(strikes))))
+}
 
 /// Why admission holds an attempt on its account.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hold {
     /// The account already runs `cap` attempts.
     Cap(NonZeroU8),
-    /// The account reported a usage limit; until when, if the provider said.
-    Cooling(Option<UnixSeconds>),
+    /// The account reported a usage limit; it is tried again then.
+    Cooling(RetryAt),
+    /// The account's retry time has passed and an attempt on it is checking
+    /// whether the limit has lifted.
+    Probing,
 }
 /// Whether an attempt on `account` may start now, given the attempts it
-/// already runs. Pure, beside `bots::may_start`.
+/// already runs. A due cooldown lets one attempt through as its probe. Pure,
+/// beside `bots::may_start`.
 pub fn may_start<B: Backend>(
     account: &Account<B>,
     status: &Status<B>,
     running: usize,
     now: UnixSeconds,
 ) -> Result<(), Hold> {
-    if let Some(cooling) = status.cooling(account.id.backend, &account.id.name, now) {
-        return Err(Hold::Cooling(cooling.until));
+    match status
+        .cooling(account.id.backend, &account.id.name)
+        .map(|c| c.phase(now))
+    {
+        Some(Phase::Waiting(until)) => return Err(Hold::Cooling(until)),
+        Some(Phase::Due) if running > 0 => return Err(Hold::Probing),
+        Some(Phase::Due) | None => {}
     }
     match account.cap {
         Some(cap) if running >= usize::from(cap.get()) => Err(Hold::Cap(cap)),

@@ -14,7 +14,11 @@ pub enum Cause {
     Tls,
     /// The pinned CLI rejected its runtime configuration.
     RejectedConfig,
-    UsageLimit,
+    /// The account reached its usage or rate limit; when to try again, if
+    /// the provider's message says.
+    UsageLimit {
+        retry_at: Option<StatedRetry>,
+    },
     Connection,
     /// The CLI's own sign-in is missing, expired or rejected (Antigravity).
     SignIn,
@@ -51,7 +55,10 @@ pub fn classify(bytes: &[u8]) -> Option<Cause> {
             ],
             Cause::RejectedConfig,
         ),
-        (&["quota", "usage limit", "rate limit"], Cause::UsageLimit),
+        (
+            &["quota", "usage limit", "rate limit"],
+            Cause::UsageLimit { retry_at: None },
+        ),
         (
             &["stream disconnected", "error sending request", "connection"],
             Cause::Connection,
@@ -59,7 +66,93 @@ pub fn classify(bytes: &[u8]) -> Option<Cause> {
     ]
     .into_iter()
     .find(|(needles, _)| any(needles))
-    .map(|(_, cause)| cause)
+    .map(|(_, cause)| match cause {
+        Cause::UsageLimit { .. } => Cause::UsageLimit {
+            retry_at: stated_retry(&message),
+        },
+        other => other,
+    })
+}
+
+/// When a provider's limit message says to try again, as written. Codex
+/// writes it in the CLI's local zone (`format_retry_timestamp` in
+/// codex-rs/protocol/src/error.rs); Control's pinned worker images carry no
+/// zone data and set no `TZ`, so that zone is UTC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatedRetry {
+    /// `Nov 26th, 2026 12:24 PM`: a full date, as seconds since the epoch.
+    On(u64),
+    /// `12:24 PM`: a time on the day the message was written, as minutes
+    /// after midnight. Which day that was is the host's to decide.
+    Today(u16),
+}
+
+/// The retry time after "try again at" in the two forms Codex 0.164.0 writes
+/// (`%b %-d{st|nd|rd|th}, %Y %-I:%M %p` for another day, `%-I:%M %p` for the
+/// same day); `None` for anything else.
+pub fn stated_retry(message: &str) -> Option<StatedRetry> {
+    let message = message.to_ascii_lowercase();
+    let (_, rest) = message.split_once("try again at ")?;
+    let words: Vec<&str> = rest.split_whitespace().take(5).collect();
+    match words.as_slice() {
+        [month, day, year, time, meridiem] => on(month, day, year, time, meridiem),
+        _ => None,
+    }
+    .or_else(|| match words.as_slice() {
+        [time, meridiem, ..] => clock(time, meridiem).map(StatedRetry::Today),
+        _ => None,
+    })
+}
+/// Minutes after midnight of `12:24` `pm`. Whatever follows the meridiem
+/// (`.`, or the `"}` closing a JSON event line) is not part of it.
+fn clock(time: &str, meridiem: &str) -> Option<u16> {
+    let (hour, minute) = time.split_once(':')?;
+    let (hour, minute) = (hour.parse::<u16>().ok()?, minute.parse::<u16>().ok()?);
+    let word = meridiem
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .next()
+        .unwrap_or_default();
+    let afternoon = match word {
+        "am" => 0,
+        "pm" => 12,
+        _ => return None,
+    };
+    ((1..=12).contains(&hour) && minute < 60).then_some(((hour % 12) + afternoon) * 60 + minute)
+}
+/// `nov` `26th,` `2026` `12:24` `pm.` as seconds since the epoch.
+fn on(month: &str, day: &str, year: &str, time: &str, meridiem: &str) -> Option<StatedRetry> {
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    let month = MONTHS.iter().position(|m| *m == month)? as i64 + 1;
+    let day = day
+        .strip_suffix(',')?
+        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+        .parse::<i64>()
+        .ok()?;
+    let year = year.parse::<i64>().ok().filter(|year| *year >= 1970)?;
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let length = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    let minutes = clock(time, meridiem)?;
+    (1..=length)
+        .contains(&day)
+        .then(|| days_from_civil(year, month, day) * 86_400 + i64::from(minutes) * 60)
+        .and_then(|seconds| u64::try_from(seconds).ok())
+        .map(StatedRetry::On)
+}
+/// Days since 1970-01-01 of a proleptic Gregorian date (Hinnant's algorithm).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 /// The command that signs a turn's account in again, exactly as the
@@ -102,7 +195,7 @@ impl Cause {
             Self::RejectedConfig => format!(
                 "The pinned {agent} worker rejected its runtime configuration. Check CLI and permission-profile compatibility."
             ),
-            Self::UsageLimit => format!("The signed-in {agent} account reached a usage or rate limit."),
+            Self::UsageLimit { .. } => format!("The signed-in {agent} account reached a usage or rate limit."),
             Self::Connection => format!(
                 "{agent} could not complete its provider connection. Check container network connectivity and account availability."
             ),

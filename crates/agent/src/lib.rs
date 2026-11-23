@@ -11,7 +11,8 @@ mod key;
 pub mod mailbox_wake;
 
 pub use failure::{
-    CANCELLED, Cancelled, Cause, Failure, SignIn, Status, UNFINISHED_TOOL, WAITING, classify, timeout_message,
+    CANCELLED, Cancelled, Cause, Failure, SignIn, StatedRetry, Status, UNFINISHED_TOOL, WAITING, classify,
+    stated_retry, timeout_message,
 };
 pub use granted::{Folder, Form, Granted, Keep, Keeps, KeyDelivery, Names, Proxied, Write, sweep, sweep_plan};
 pub use host::{Control, Events, Host, Node, Stop};
