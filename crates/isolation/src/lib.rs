@@ -9,13 +9,16 @@
 //! are not options.
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     io,
     path::PathBuf,
     process::{Child, Stdio},
 };
 
 mod docker;
-pub use docker::Docker;
+mod observed;
+pub use docker::{bounded_output, Docker};
+pub use observed::*;
 
 /// A pinned image reference, as the engine names it (`sha256:…`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -34,6 +37,48 @@ impl From<String> for ImageId {
     fn from(id: String) -> Self {
         Self(id)
     }
+}
+
+/// A container as the engine identifies it. Opaque here; a backend checks the
+/// form of the IDs it reports.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ContainerId(String);
+impl ContainerId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl From<String> for ContainerId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+impl From<&str> for ContainerId {
+    fn from(id: &str) -> Self {
+        Self(id.to_owned())
+    }
+}
+/// A container named by its engine ID or by the name Control gave it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target<'a> {
+    Id(&'a ContainerId),
+    Name(&'a str),
+}
+/// Which containers a listing includes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum States {
+    Running,
+    All,
+}
+/// Which containers a listing selects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Select {
+    Id(ContainerId),
+    /// Exactly this name.
+    Name(String),
+    /// Every one of these labels.
+    Labels(Vec<(String, String)>),
+    Any,
 }
 
 /// Numeric owner of the container's processes.
@@ -111,11 +156,11 @@ impl Tmpfs {
 /// Resource bounds; `None` leaves the engine default.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
-    pub pids: Option<u32>,
+    pub pids: Option<u64>,
     pub memory: Option<Size>,
     /// Memory plus swap; equal to `memory` forbids swapping.
     pub memory_swap: Option<Size>,
-    pub cpus: Option<u32>,
+    pub cpus: Option<u64>,
 }
 /// Whether `/proc` keeps the engine's masked paths. `Unmasked` lets an inner
 /// sandbox mount its own proc; no capability is granted with it.
@@ -150,6 +195,15 @@ pub enum Input {
     Terminal,
 }
 
+/// What runs as the container's first process.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Pid1 {
+    #[default]
+    Program,
+    /// A minimal init that reaps orphans and forwards signals to the program.
+    Init,
+}
+
 /// One container: what runs, as whom, with what, under which limits.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunSpec {
@@ -173,6 +227,9 @@ pub struct RunSpec {
     pub network: Network,
     pub logs: Logs,
     pub input: Input,
+    pub pid1: Pid1,
+    /// A cap on the container's writable layer, where the engine supports one.
+    pub disk: Option<Size>,
 }
 impl RunSpec {
     pub fn env(mut self, name: &str, value: &str) -> Self {
@@ -234,15 +291,59 @@ impl Streams {
     }
 }
 
+/// A program run inside a running container.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecSpec {
+    pub container: ContainerId,
+    pub user: Option<User>,
+    pub workdir: Option<String>,
+    pub env: Vec<(String, String)>,
+    /// `Attached` gives the program the caller's standard input.
+    pub input: Input,
+    pub argv: Vec<String>,
+}
+
 /// The container operations Control performs. Implementations carry out a
-/// [`RunSpec`] faithfully or fail; they never weaken it.
+/// [`RunSpec`] faithfully or fail; they never weaken it. Operations that run a
+/// program (`spawn`, `exec`, `wait`, `logs`) return its process; the rest
+/// return what the engine reports, as data.
 pub trait Isolation: Sync {
+    /// Whether the engine answers and runs Linux containers.
+    fn ready(&self) -> bool;
+    /// Whether the engine can enforce [`RunSpec::disk`].
+    fn disk_quota(&self) -> io::Result<bool>;
+    /// The labels of a local image; fails when the image is not present.
+    fn image_labels(&self, image: &ImageId) -> io::Result<HashMap<String, String>>;
     /// Starts `spec` attached to this process; the container is removed when
     /// it exits. The child is the engine client, whose exit status is the
     /// program's.
     fn spawn(&self, spec: &RunSpec, streams: Streams) -> io::Result<Child>;
-    /// Force-removes the container named `name`, running or not.
-    fn remove(&self, name: &str) -> io::Result<()>;
+    /// Starts `spec` in the background and returns its ID.
+    fn run_detached(&self, spec: &RunSpec) -> io::Result<ContainerId>;
+    /// Creates `spec` without starting it; failures keep the engine's reason.
+    fn create(&self, spec: &RunSpec) -> io::Result<ContainerId>;
+    fn start(&self, id: &ContainerId) -> io::Result<()>;
+    fn kill(&self, id: &ContainerId) -> io::Result<()>;
+    /// Removes a container, stopping it first if it runs.
+    fn remove(&self, target: Target<'_>) -> io::Result<()>;
+    /// Inspects each target; fails if any is absent.
+    fn inspect(&self, targets: &[Target<'_>]) -> io::Result<Vec<Observed>>;
+    fn list(&self, states: States, select: &Select) -> io::Result<Vec<Listed>>;
+    fn exec(&self, spec: &ExecSpec, streams: Streams) -> io::Result<Child>;
+    /// A process that exits when the container does.
+    fn wait(&self, id: &ContainerId) -> io::Result<Child>;
+    /// A process printing the last `tail` lines of the container's output on
+    /// its standard output.
+    fn logs(&self, id: &ContainerId, tail: u32) -> io::Result<Child>;
+    /// One sample per container, keyed by ID; the engine measures for about a second.
+    fn stats(&self, ids: &[&ContainerId]) -> io::Result<HashMap<String, Stats>>;
+    fn top(&self, id: &ContainerId) -> io::Result<Vec<Process>>;
+    /// Creates a local volume with `labels`; an existing one is left unchanged.
+    fn volume_create(&self, name: &str, labels: &[(&str, &str)]) -> io::Result<()>;
+    fn volume_inspect(&self, name: &str) -> io::Result<Vec<ObservedVolume>>;
+    fn volumes(&self, labels: &[(&str, &str)]) -> io::Result<Vec<ListedVolume>>;
+    /// Removes a volume; the engine refuses one still mounted.
+    fn volume_remove(&self, name: &str) -> io::Result<()>;
 }
 
 #[cfg(test)]

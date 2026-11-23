@@ -1,5 +1,6 @@
 
 use super::*;
+use std::process::Command;
 #[test]
 fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering() {
     let (mut state, run, node, service_id) = fixture();
@@ -403,7 +404,7 @@ fn restart_never_replays_uncertain_execution_and_save_failure_rolls_back() {
 fn capture_drains_large_output_without_unbounded_retention() {
     let mut command = Command::new("sh");
     command.args(["-c", "printf 'early\\n'; head -c 100000 /dev/zero | tr '\\0' x; printf '\\nlate\\n'; exit 7"]);
-    let result = capture(command, Duration::from_secs(5), || false, |_| {}).unwrap();
+    let result = capture(started(command), Duration::from_secs(5), || false, |_| {}).unwrap();
     assert_eq!(result.exit_code, Some(7));
     assert!(result.output.truncated);
     // Head and tail are each bounded; together with the marker they fit the budget.
@@ -417,7 +418,7 @@ fn capture_drains_large_output_without_unbounded_retention() {
     let mut command = Command::new("sh");
     command.args(["-c", "exec sleep 10"]);
     let start = Instant::now();
-    let result = capture(command, Duration::from_millis(50), || false, |_| {}).unwrap();
+    let result = capture(started(command), Duration::from_millis(50), || false, |_| {}).unwrap();
     assert!(result.timed_out);
     assert!(start.elapsed() < Duration::from_secs(2));
 }
@@ -508,7 +509,7 @@ fn shutdown_interrupts_capture_without_spinning_or_waiting_for_the_deadline() {
     let samples = std::sync::atomic::AtomicUsize::new(0);
     let start = Instant::now();
     let result = capture_with(
-        command,
+        started(command),
         Duration::from_secs(20),
         || false,
         |_| {
@@ -524,7 +525,7 @@ fn shutdown_interrupts_capture_without_spinning_or_waiting_for_the_deadline() {
     let mut command = Command::new("sh");
     command.args(["-c", "exit 3"]);
     let result = capture_with(
-        command,
+        started(command),
         Duration::from_secs(5),
         || false,
         |_| {},
@@ -545,7 +546,7 @@ fn capture_publishes_output_before_command_exit() {
     ]);
     let samples = Mutex::new(Vec::new());
     let result = capture(
-        command,
+        started(command),
         Duration::from_secs(5),
         || false,
         |output| samples.lock().unwrap().push(output.text()),
@@ -619,3 +620,6 @@ mod concurrency;
 mod wait;
 #[path = "tests/live_latency.rs"]
 mod live_latency;
+fn started(mut command: Command) -> impl FnOnce(Streams) -> io::Result<Child> {
+    move |streams| streams.apply(&mut command).spawn()
+}

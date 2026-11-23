@@ -233,7 +233,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
                 .flat_map(|a| a.command_jobs.clone())
                 .collect::<Vec<_>>();
             for job in jobs {
-                let _ = stop(&job);
+                let _ = stop(crate::engine::isolation(), &job);
             }
         }
     }
@@ -429,12 +429,12 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     let mut replacement = job.clone();
     replacement.container_id = Some("a".repeat(64));
     assert!(
-        stop(&replacement)
+        stop(crate::engine::isolation(), &replacement)
             .unwrap_err()
             .to_string()
             .contains("identity changed")
     );
-    assert!(inspect(&job).unwrap().running);
+    assert!(inspect(crate::engine::isolation(), &job).unwrap().running);
     // Reconstruct owner records exactly as a restarted process would. Inactive attempts
     // retain their independent captured image and immutable container ID.
     let recovered: State =
@@ -442,11 +442,12 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     let mut recovered = recovered;
     recovered.runtime.runs[0].status = "interrupted".into();
     crate::lifecycle::reconcile(
+        crate::engine::isolation(),
         &crate::lifecycle::owners(&recovered.runtime.runs),
         &recovered.services,
     )
     .unwrap();
-    assert!(inspect(&job).is_err());
+    assert!(inspect(crate::engine::isolation(), &job).is_err());
     // Let the original supervisor observe loss and release its final state fence.
     quiesce(&state, &run, &generation).unwrap();
     let handle = start(
@@ -512,7 +513,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
 
 #[test]
 fn command_create_vectors_are_pinned() {
-    use crate::engine::golden::{fill, pin};
+    use crate::engine::golden::{fill, pin_equivalent};
     let mut job = Job {
         id: "fixture".into(),
         generation: "generation".into(),
@@ -531,11 +532,11 @@ fn command_create_vectors_are_pinned() {
     };
     let name = job.name();
     let values = [("name", name.as_str())];
-    pin(&create_arguments(&job, "/golden/workspace", 501, 20, Some("/golden/scratch")), &fill(READ_ONLY, &values));
+    pin_equivalent(&control_isolation::Docker::create_arguments(&container(&job, "/golden/workspace", control_isolation::User { uid: 501, gid: 20 }, Some("/golden/scratch"))).unwrap(), &fill(READ_ONLY, &values));
     job.read_only = false;
     job.build_environment = true;
     job.profile = crate::worker_profile::Profile::Full;
-    pin(&create_arguments(&job, "/golden/workspace", 501, 20, None), &fill(WRITABLE_BUILD, &values));
+    pin_equivalent(&control_isolation::Docker::create_arguments(&container(&job, "/golden/workspace", control_isolation::User { uid: 501, gid: 20 }, None)).unwrap(), &fill(WRITABLE_BUILD, &values));
 }
 const READ_ONLY: &[&str] = &[
     "create",

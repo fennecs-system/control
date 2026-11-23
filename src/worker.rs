@@ -197,7 +197,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         };
                         (crate::lifecycle::owners(&s.runtime.runs),s.services.iter().filter(|s|s.resource.phase.reserves_capacity()).map(crate::services::Service::binding_snapshot).collect::<Vec<_>>())
                     };
-                    let reconciled = crate::lifecycle::reconcile(&owners,&services)
+                    let reconciled = crate::lifecycle::reconcile(crate::engine::isolation(),&owners,&services)
                         .and_then(|()| crate::recovery::reconcile(&state).map_err(|e| e.to_string()));
                     if let Ok(mut s) = state.lock() {
                         match &reconciled {
@@ -1085,7 +1085,7 @@ fn execute(
         .unwrap_or_else(crate::config::node_id)
         .map_err(blocked)?;
     let isolation = crate::engine::isolation();
-    if !crate::engine::ready() {
+    if !isolation.ready() {
         return Err(blocked("Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution."));
     }
     // Check Codex sign-in before any restore, so a missing login fails fast and leaves nothing behind.

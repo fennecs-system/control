@@ -37,16 +37,16 @@ impl crate::backend::Agent for Grok {
     fn credentials_ready(&self) -> Result<(), String> {
         credential().map(|_| ()).map_err(|_| LOGIN.to_owned())
     }
-    fn probe(&self, image: &str) -> Result<(), String> {
+    fn probe(&self, isolation: &dyn Isolation, image: &str) -> Result<(), String> {
         crate::config::node_id()
             .map_err(io::Error::other)
-            .and_then(|node| probe(crate::engine::isolation(), image, &node, &crate::config::state("grok-check").map_err(io::Error::other)?, &format!("control-grok-probe-{}", std::process::id())))
+            .and_then(|node| probe(isolation, image, &node, &crate::config::state("grok-check").map_err(io::Error::other)?, &format!("control-grok-probe-{}", std::process::id())))
             .map_err(|error| match error.kind() {
                 io::ErrorKind::TimedOut => PROBE_TIMED_OUT.to_owned(),
                 _ => "the offline Grok tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
             })
     }
-    fn text_run(&self, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
+    fn text_run(&self, _: &dyn Isolation, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
         text_container(call, &credential()?)
     }
     fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {

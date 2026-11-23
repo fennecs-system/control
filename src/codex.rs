@@ -36,11 +36,11 @@ impl crate::backend::Agent for Codex {
     fn credentials_ready(&self) -> Result<(), String> {
         credentials_ready().map_err(str::to_owned)
     }
-    fn probe(&self, image: &str) -> Result<(), String> {
-        offline_probe(image)
+    fn probe(&self, isolation: &dyn Isolation, image: &str) -> Result<(), String> {
+        offline_probe(isolation, image)
     }
-    fn text_run(&self, call: &crate::backend::TextCall<'_>) -> std::io::Result<RunSpec> {
-        text_run(call.image, call.name, call.workspace, call.node, call.model).map_err(std::io::Error::other)
+    fn text_run(&self, isolation: &dyn Isolation, call: &crate::backend::TextCall<'_>) -> std::io::Result<RunSpec> {
+        text_run(isolation, call.image, call.name, call.workspace, call.node, call.model).map_err(std::io::Error::other)
     }
     fn text(&self, reader: &mut dyn std::io::Read, max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> std::io::Result<control_ai::Output> {
         control_ai::json_lines(reader, control_ai::codex::Text::new(max), emit)
@@ -111,7 +111,7 @@ impl Credentials {
 
 /// The pre-run sandbox probe for `control doctor`: an empty canary stands in for
 /// auth.json, so no account is mounted and no model is called.
-pub(crate) fn offline_probe(image: &str) -> Result<(), String> {
+pub(crate) fn offline_probe(isolation: &dyn Isolation, image: &str) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let node = crate::config::node_id()?;
     let root = crate::config::state("codex-check")?;
@@ -124,7 +124,7 @@ pub(crate) fn offline_probe(image: &str) -> Result<(), String> {
         .map_err(|_| "Could not prepare embedded worker security profile.")?;
     let canary = Credentials { path: root.join("unused"), uid: owner.uid(), gid: owner.gid() };
     let name = format!("control-auth-check-doctor-{}-probe", std::process::id());
-    sandbox_probe(crate::engine::isolation(), image, &root, &canary, &name, &policy, &node)
+    sandbox_probe(isolation, image, &root, &canary, &name, &policy, &node)
 }
 pub(crate) fn credentials_ready() -> Result<(), &'static str> {
     Credentials::locate().map(|_| ())
@@ -190,12 +190,12 @@ pub(crate) fn permissions(spec: RunSpec) -> RunSpec {
 
 /// A bounded text request reuses the worker's credential isolation, without
 /// workspace tools, MCP, project files or resumable provider state.
-pub(crate) fn text_run(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->Result<RunSpec,String> {
+pub(crate) fn text_run(isolation:&dyn Isolation,image:&str,name:&str,workspace:&Path,node:&str,model:&str)->Result<RunSpec,String> {
     let auth=Credentials::locate()?;
     let root=workspace.parent().ok_or("Invalid summary workspace")?;
     let policy=root.join("worker-seccomp.json");
     fs::write(&policy,include_bytes!("../hosting/worker-seccomp.json")).map_err(|_|"Cannot prepare text sandbox")?;
-    sandbox_probe(crate::engine::isolation(),image,root,&auth,&format!("control-auth-check-{name}"),&policy,node)?;
+    sandbox_probe(isolation,image,root,&auth,&format!("control-auth-check-{name}"),&policy,node)?;
     Ok(text_container(image,name,workspace,&auth,&policy,node,model)?)
 }
 fn text_container(image:&str,name:&str,workspace:&Path,auth:&Credentials,policy:&Path,node:&str,model:&str)->Result<RunSpec,&'static str> {
@@ -239,7 +239,7 @@ pub(crate) fn sandbox_probe(
         if !matches!(outcome, Recv::Item(_)) {
             child.kill();
         }
-        crate::lifecycle::stop_resource(name, node, image, &workspace)?;
+        crate::lifecycle::stop_resource(isolation, name, node, image, &workspace)?;
     }
     let status = match &outcome { Recv::Item(Ok(status)) => Some(*status), _ => None };
     let written = fs::read(workspace.join(&result)).ok();
@@ -507,7 +507,7 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
     {
         let _ = child.kill();
         let _ = child.wait();
-        crate::lifecycle::stop_attempt(attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+        crate::lifecycle::stop_attempt(isolation, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
         return Err(failed("Could not deliver the objective."));
     }
     let started = Instant::now();

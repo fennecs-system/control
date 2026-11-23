@@ -152,7 +152,7 @@ fn concurrent_requests_cannot_oversubscribe_the_memory_pool() {
 #[ignore = "requires CONTROL_QA_SERVICE_IMAGE and local Linux Docker; isolated create/inspect probes, no models"]
 fn live_docker_enforces_all_shapes_without_changing_image_capabilities() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
-    let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
+    let profile = crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap();
     for shape in [Shape::Small, Shape::Medium, Shape::Large] {
         let (mut state, run, _, time) = fixture();
         request(&mut state, &run, time, "probe", Some(shape)).unwrap();
@@ -173,13 +173,12 @@ fn live_docker_enforces_all_shapes_without_changing_image_capabilities() {
                 let _ = crate::engine::query(&["volume", "rm", &self.volume]);
             }
         }
-        let container = Docker.create(service).unwrap();
+        let container = create_container(crate::engine::isolation(), service).unwrap();
         let _cleanup = Cleanup {
             container: container.clone(),
             volume: workspace::Workspace::of(service).unwrap().name().to_owned(),
         };
-        let inventory = Docker
-            .inventory(service.resource.owner.node.as_str())
+        let inventory = inventory(crate::engine::isolation(), service.resource.owner.node.as_str())
             .unwrap();
         let observed = &inventory[container.as_str()];
         verify(service, observed).unwrap();

@@ -31,7 +31,7 @@ fn a_full_spec_renders_one_exact_vector() {
         "--network=none", "--user", "501:20", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
         "--security-opt", "seccomp=/policy.json", "--security-opt=systempaths=unconfined", "--pids-limit=256", "--memory=2g",
         "--memory-swap=2048m", "--cpus=2", "--log-driver=local", "--log-opt=max-size=1m", "--log-opt=max-file=2",
-        "--tmpfs", "/home/agent:rw,nosuid,uid=501,gid=20,size=64m", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,mode=1777,size=1g",
+        "--tmpfs", "/home/agent:rw,nosuid,uid=501,gid=20,size=64m", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,mode=1777,size=1g",
         "--mount", "type=bind,src=/w,dst=/workspace", "--mount", "type=volume,source=vol,target=/data,readonly",
         "--mount", "type=bind,src=/a.json,dst=/home/agent/a.json,readonly", "--workdir", "/workspace", "--env", "HOME=/home/agent",
         "--entrypoint=/bin/bash", "sha256:img", "-c", "true",

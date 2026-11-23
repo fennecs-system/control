@@ -4,7 +4,7 @@ use super::*;
 use control_effect::sync::{CancelToken, Changes, Recv};
 use std::{
     io::Read,
-    process::{Command, Stdio},
+    process::Child,
     thread::JoinHandle,
     time::Instant,
 };
@@ -739,28 +739,28 @@ struct ResultOutput {
     timed_out: bool,
 }
 fn capture(
-    command: Command,
+    start: impl FnOnce(Streams) -> io::Result<Child>,
     timeout: Duration,
     cancel: impl Fn() -> bool,
     progress: impl Fn(&Output),
 ) -> io::Result<ResultOutput> {
-    capture_with(command, timeout, cancel, progress, &crate::shutdown::token())
+    capture_with(start, timeout, cancel, progress, &crate::shutdown::token())
 }
 /// Shutdown cancellation interrupts the command like a failed `cancel` check.
 fn capture_with(
-    command: Command,
+    start: impl FnOnce(Streams) -> io::Result<Child>,
     timeout: Duration,
     cancel: impl Fn() -> bool,
     progress: impl Fn(&Output),
     shutdown: &CancelToken,
 ) -> io::Result<ResultOutput> {
-    capture_fed(command, timeout, cancel, progress, shutdown, None)
+    capture_fed(start, timeout, cancel, progress, shutdown, None)
 }
 /// Writes a command's stdin on its own thread; dropping the pipe ends input.
 /// Killing the command breaks the pipe, so the writer cannot outlive it.
 pub(super) type Feed = Box<dyn FnOnce(std::process::ChildStdin) + Send>;
 fn capture_fed(
-    mut command: Command,
+    start: impl FnOnce(Streams) -> io::Result<Child>,
     timeout: Duration,
     cancel: impl Fn() -> bool,
     progress: impl Fn(&Output),
@@ -770,11 +770,7 @@ fn capture_fed(
     if timeout.is_zero() || cancel() {
         return Err(fail("Service command is no longer eligible"));
     }
-    let mut child = command
-        .stdin(if feed.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+    let mut child = start(Streams::new(if feed.is_some() { Stream::Piped } else { Stream::Null }, Stream::Piped, Stream::Null))?;
     let writer = match (feed, child.stdin.take()) {
         (Some(feed), Some(stdin)) => Some(std::thread::spawn(move || feed(stdin))),
         _ => None,
@@ -866,13 +862,13 @@ impl ProbeOutput {
 /// command still running at `timeout` is stopped inside the service under a
 /// marker derived from `owner`, which should be unique to concurrent probes.
 /// Queries the engine: call without the state lock.
-pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<ProbeOutput> {
-    let (id, user) = super::exec_target(service)?;
+pub(crate) fn probe(isolation: &dyn Isolation, service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<ProbeOutput> {
+    let (id, user) = super::exec_target(isolation, service)?;
     let marker = format!("probe-{}", &hash(owner.as_bytes())[..32]);
-    let run = crate::engine::exec(&id, &user, Some("/workspace"), &[(MARKER, marker.as_str())], &["bash", "-c", &launch(command)]);
-    let result = capture(run, timeout, || false, |_| {})?;
+    let run = in_service(id, user, &[(MARKER, marker.as_str())], control_isolation::Input::Closed, &launch(command));
+    let result = capture(|streams| isolation.exec(&run, streams), timeout, || false, |_| {})?;
     if result.timed_out || result.interrupted || result.exit_code.is_none() {
-        reap(service, &marker);
+        reap(isolation, service, &marker);
     }
     Ok(ProbeOutput { text: result.output.text(), exit_code: result.exit_code, timed_out: result.timed_out })
 }
@@ -882,10 +878,8 @@ pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Dura
 pub(crate) fn probe_target(state: &State, id: &str, usable: impl Fn(&Service) -> bool) -> Option<Service> {
     state.services.iter().find(|service| service.resource.id.as_str() == id && usable(service)).map(Service::binding_snapshot)
 }
-pub(super) fn logs(id: &str) -> io::Result<String> {
-    let mut command = crate::engine::cli();
-    command.args(["logs", "--tail", "80", id]);
-    let result = capture(command, Duration::from_secs(5), || false, |_| {})?;
+pub(super) fn logs(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<String> {
+    let result = capture(|_| isolation.logs(&id.as_str().into(), 80), Duration::from_secs(5), || false, |_| {})?;
     if result.exit_code != Some(0) || result.timed_out {
         return Err(fail("Could not retain service logs"));
     }
@@ -989,12 +983,29 @@ signal KILL
 sleep 0.2
 [ -z "$(members)" ]"#)
 }
-fn reap(service: &Service, execution: &str) -> bool {
+/// A `bash` script in a verified service as `user` from `/workspace`, with `env` set.
+fn in_service(container: control_isolation::ContainerId, user: User, env: &[(&str, &str)], input: control_isolation::Input, script: &str) -> ExecSpec {
+    ExecSpec {
+        container,
+        user: Some(user),
+        workdir: Some("/workspace".into()),
+        env: env.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())).collect(),
+        input,
+        argv: ["bash", "-c", script].map(str::to_owned).to_vec(),
+    }
+}
+fn reap(isolation: &dyn Isolation, service: &Service, execution: &str) -> bool {
     let Some(id) = service.resource.phase.container() else { return false };
-    let command = crate::engine::exec(id.as_str(), &format!("{}:{}", service.uid, service.gid), None, &[], &["bash", "-c", &reap_script(execution)]);
-    capture(command, Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
+    let command = ExecSpec {
+        container: id.as_str().into(),
+        user: Some(service.user()),
+        argv: ["bash", "-c", &reap_script(execution)].map(str::to_owned).to_vec(),
+        ..ExecSpec::default()
+    };
+    capture(|streams| isolation.exec(&command, streams), Duration::from_secs(10), || false, |_| {}).is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
 }
 fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
+    let isolation = crate::engine::isolation();
     // A copy reads its requesting attempt's live workspace. A source that is
     // gone, unsafe or over its bounds fails before anything enters the service.
     let copy = match execution.copy.as_ref().map(|transfer| copy::Job::prepare(&shared, &service, &execution.run, &execution.attempt, transfer)) {
@@ -1021,26 +1032,25 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
             .phase
             .container()
             .ok_or_else(|| fail("Service is not running"))?;
-        let text = crate::engine::query(&["inspect", "--format", INSPECT, id.as_str()])?;
-        let observed: Inspection = serde_json::from_str(text.trim()).map_err(fail)?;
+        let observed = super::inspect_one(isolation, id)?;
         verify(&service, &observed)?;
         if observed.status != "running" || service.resource.lease.expired(now()) {
             return Err(fail("Service is no longer running"));
         }
-        let user = format!("{}:{}", service.uid, service.gid);
+        let user = service.user();
         // Approved egress also brings the service's HTTPS_PROXY settings.
         let proxy = shared.lock().map(|state| crate::ports::proxy_env(&state, &service)).unwrap_or_default();
         let marker = [(MARKER, execution.id.as_str())].into_iter().chain(proxy.iter().copied()).collect::<Vec<_>>();
         // Both run as the service user under the same marker, so a copy that
         // outlives its client is reaped exactly like a command.
         let (command, feed) = match &copy {
-            Some(job) => (crate::engine::exec_input(id.as_str(), &user, Some("/workspace"), &marker, &["bash", "-c", copy::EXTRACT]), Some(job.feed())),
-            None => (crate::engine::exec(id.as_str(), &user, Some("/workspace"), &marker, &["bash", "-c", &launch(&execution.command)]), None),
+            Some(job) => (in_service(id.as_str().into(), user, &marker, control_isolation::Input::Attached, copy::EXTRACT), Some(job.feed())),
+            None => (in_service(id.as_str().into(), user, &marker, control_isolation::Input::Closed, &launch(&execution.command)), None),
         };
         let checked = std::cell::Cell::new(Instant::now());
         let authorized = std::cell::Cell::new(true);
         capture_fed(
-            command,
+            |streams| isolation.exec(&command, streams),
             Duration::from_secs(
                 execution
                     .timeout_seconds
@@ -1080,7 +1090,7 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         .is_ok_and(|r| !r.interrupted && !r.timed_out && r.exit_code.is_some());
     // A command that outlived its client is stopped inside the service; only an
     // unverifiable stop falls back to stopping the whole service.
-    let reaped = unfinished && result.is_ok() && reap(&service, &execution.id);
+    let reaped = unfinished && result.is_ok() && reap(isolation, &service, &execution.id);
     let uncertain = unfinished && !reaped;
     // Stop intent is durable before releasing an uncertain remote writer. Killing
     // a Docker client alone does not prove the command inside the service exited.

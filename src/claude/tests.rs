@@ -50,6 +50,7 @@ fn live_shutdown_stops_offline_workspace_command() {
     impl Drop for Probe {
         fn drop(&mut self) {
             let _ = crate::lifecycle::stop_resource(
+                crate::engine::isolation(),
                 &self.name,
                 "shutdown-fixture",
                 &self.image,
@@ -124,7 +125,7 @@ fn live_offline_workspace_isolated_and_persistent_across_processes() {
     let image = Backend::Claude.image().expect("Configure claude-image-id");
     let root = std::env::temp_dir().join(format!("control-claude-offline-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
-    probe(&image, "fixture-node", &root).unwrap();
+    probe(crate::engine::isolation(), &image, "fixture-node", &root).unwrap();
     let workspace = root.join("project");
     fs::create_dir(&workspace).unwrap();
     let first = shell(

@@ -143,7 +143,7 @@ fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive
         let expires = ports.iter().filter_map(|p| p.approval.as_ref().map(|a| a.expires)).max().unwrap_or(time);
         (authorized(&state, first, time)?, expires)
     };
-    let binding = crate::services::port_binding(&service, &key.container)?;
+    let binding = crate::services::port_binding(crate::engine::isolation(), &service, &key.container)?;
     let (shared, key, cancel) = (shared.clone(), key.clone(), cancel.clone());
     multiplex::serve(binding, PROXY_PORT, expires, alive, &|| {}, move |connection, link| {
         session(&shared, &key, &cancel, connection, link)

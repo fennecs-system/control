@@ -34,7 +34,7 @@ generic invariant that existing interfaces cannot express.
 | `control-client` | The loopback MCP client (`Hive`) and typed operator operations, operator decisions, the live-update follower, chat navigation and the chat-app channel core. Talks to the server only over HTTP/MCP and node files. |
 | `control-tui` | The terminal interface behind `control tui` and `control-harness`. Depends on `control-client`; owns ratatui and crossterm. |
 | `control-discord` | The Discord bridge (`control discord`, `control-discord`): gateway, components, delivery and the per-DM routing. Depends on `control-client` and `control-ingress`. |
-| `control-isolation` | Containers as data: `RunSpec` (image, program, user, mounts, secrets, tmpfs, limits, seccomp, network, logs, input) and the `Isolation` trait that carries one out, with the `Docker` backend. `std` and Serde only. |
+| `control-isolation` | Containers as data: `RunSpec` (image, program, user, mounts, secrets, tmpfs, limits, seccomp, network, logs, input) and the `Isolation` trait that carries out every container operation (run, create, start, kill, remove, inspect, list, exec, wait, logs, stats, top, image labels, volumes), with the `Docker` backend; engine output is parsed into typed observations by pure functions. `std`, Serde and `serde_json` only. |
 
 The `control` library (`src/lib.rs`) keeps only build information and the
 operator's permission policy, which the server alone uses. Discord follows typed
@@ -48,10 +48,11 @@ and DM binding are rechecked at delivery.
 build a `RunSpec` and hand it to an `Isolation` handle, and `Docker` renders it
 to one `docker run` argument vector in a pure function. Credentials are a
 separate `secrets` field, so every secret that enters a container is typed and
-listed in one place. Agent turn, text, probe, login and tool containers launch
-this way today; services, command jobs, previews, watches, lifecycle queries and
-image inspection still pass engine arguments through `src/engine.rs` and move
-behind the trait in later steps.
+listed in one place. Every container operation in the root goes through the
+trait: `src/engine.rs` only hands out the node's backend, and engine output
+(inspections, listings, stats) reaches callers as typed `Observed` values.
+The standalone `tools/browser` and `tools/rust-analysis` binaries still run
+the engine CLI themselves.
 
 ## MCP transports
 

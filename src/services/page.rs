@@ -146,7 +146,7 @@ pub(crate) fn forget(state: &mut State, id: Option<&str>, save: impl FnOnce(&Sta
 fn clean_up(shared: &Arc<Mutex<State>>, id: Option<&str>) -> io::Result<()> {
     let (keep, chat) = forget(&mut *shared.lock().map_err(|_| fail("State unavailable"))?, id, crate::storage::save)?;
     let node = crate::config::node_id().map_err(fail)?;
-    let (_, failures) = workspace::remove_unused(&node, &keep, chat.as_deref());
+    let (_, failures) = workspace::remove_unused(crate::engine::isolation(), &node, &keep, chat.as_deref());
     if failures.is_empty() { Ok(()) } else { Err(fail(format!("Stopped records were removed, but some workspaces remain: {}", failures.join("; ")))) }
 }
 const STOP_CONFIRM: &str = "Stop this service? Its container and any files outside /workspace are removed. The DM's /workspace is kept.";
@@ -154,8 +154,8 @@ const DELETE_CONFIRM: &str = "Delete this DM's retained /workspace? Its files ar
 const CLEANUP_CONFIRM: &str = "Delete the retained /workspace of every DM with no running service? Their files are lost and cannot be recovered.";
 
 struct Live {
-    stats: Option<crate::engine::Stats>,
-    processes: Vec<crate::engine::Process>,
+    stats: Option<control_isolation::Stats>,
+    processes: Vec<control_isolation::Process>,
 }
 
 /// The page renders from state at once; engine reads arrive through `live`,
@@ -242,7 +242,8 @@ fn observe(services: &[Service]) -> HashMap<String, Live> {
         return HashMap::new();
     }
     let deadline = Instant::now() + BUDGET;
-    let job: Job<io::Result<HashMap<String, Inspection>>> = Box::new(move || Docker.inventory(&node));
+    let isolation = crate::engine::isolation();
+    let job: Job<io::Result<HashMap<String, Inspection>>> = Box::new(move || inventory(isolation, &node));
     let Some(Ok(inventory)) = gather(vec![(String::new(), job)], deadline).remove("") else { return HashMap::new() };
     let verified = running
         .into_iter()
@@ -253,17 +254,17 @@ fn observe(services: &[Service]) -> HashMap<String, Live> {
         })
         .collect::<Vec<_>>();
     enum Read {
-        Stats(HashMap<String, crate::engine::Stats>),
-        Processes(Vec<crate::engine::Process>),
+        Stats(HashMap<String, control_isolation::Stats>),
+        Processes(Vec<control_isolation::Process>),
     }
     let ids = verified.iter().map(|(_, container)| container.clone()).collect::<Vec<_>>();
     let mut jobs: Vec<(String, Job<Read>)> = vec![(String::new(), Box::new(move || {
-        let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
-        Read::Stats(crate::engine::stats(&ids).unwrap_or_default())
+        let ids = ids.iter().map(|id| control_isolation::ContainerId::from(id.as_str())).collect::<Vec<_>>();
+        Read::Stats(isolation.stats(&ids.iter().collect::<Vec<_>>()).unwrap_or_default())
     }))];
     for (service, container) in &verified {
         let container = container.clone();
-        jobs.push((service.clone(), Box::new(move || Read::Processes(crate::engine::top(&container, PROCESSES).unwrap_or_default()))));
+        jobs.push((service.clone(), Box::new(move || Read::Processes(isolation.top(&container.as_str().into()).map(|top| top.into_iter().take(PROCESSES).collect()).unwrap_or_default()))));
     }
     let mut reads = gather(jobs, deadline);
     let mut stats = match reads.remove("") { Some(Read::Stats(stats)) => stats, _ => HashMap::new() };

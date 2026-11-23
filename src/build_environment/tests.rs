@@ -60,10 +60,10 @@ fn live_image_metadata_matches_source_and_rejects_changed_locks_and_symlinks() {
     }
     let _fixture = Fixture(root.clone());
     std::fs::write(root.join("Cargo.lock"), include_bytes!("../../Cargo.lock")).unwrap();
-    check(&image, &root).unwrap();
+    check(crate::engine::isolation(), &image, &root).unwrap();
     std::fs::write(root.join("Cargo.lock"), "changed lock").unwrap();
     assert!(
-        check(&image, &root)
+        check(crate::engine::isolation(), &image, &root)
             .unwrap_err()
             .to_string()
             .contains("stale for Cargo.lock")
@@ -74,5 +74,5 @@ fn live_image_metadata_matches_source_and_rejects_changed_locks_and_symlinks() {
         root.join("Cargo.lock"),
     )
     .unwrap();
-    assert!(check(&image, &root).is_err());
+    assert!(check(crate::engine::isolation(), &image, &root).is_err());
 }

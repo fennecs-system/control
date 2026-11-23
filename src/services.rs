@@ -14,7 +14,11 @@ mod workspace;
 pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) use commands::activity as command_activity;
 pub(crate) use commands::finished as finished_commands;
-pub(crate) use commands::{ProbeOutput, probe, probe_target};
+pub(crate) use commands::{ProbeOutput, probe_target};
+/// [`commands::probe`] on the node's engine, for observations and scores.
+pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<ProbeOutput> {
+    commands::probe(crate::engine::isolation(), service, command, owner, timeout)
+}
 #[cfg(test)]
 pub(crate) use commands::enqueue_test as enqueue_test_command;
 use crate::{
@@ -23,6 +27,7 @@ use crate::{
     tool_registry::AttemptRef,
 };
 use control_core::resources::*;
+use control_isolation::{Access, Exec, ExecSpec, Isolation, Limits, Logs, Mount, Network, RunSpec, Select, Size, Source, States, Stream, Streams, Target, Tmpfs, User};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -79,11 +84,15 @@ enum Storage {
 }
 impl Storage {
     fn is_memory(&self) -> bool { *self == Self::Memory }
-    fn options(self) -> HashMap<String, String> {
+    fn limit_mb(self) -> Option<NonZeroU32> {
         match self {
-            Self::Disk { limit_mb: Some(limit) } | Self::Workspace { limit_mb: Some(limit) } => HashMap::from([("size".into(), format!("{limit}M"))]),
-            _ => HashMap::new(),
+            Self::Disk { limit_mb } | Self::Workspace { limit_mb } => limit_mb,
+            Self::Memory => None,
         }
+    }
+    /// The engine's storage options, as it reports them back.
+    fn options(self) -> HashMap<String, String> {
+        self.limit_mb().map(|limit| ("size".to_owned(), format!("{limit}M"))).into_iter().collect()
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -197,6 +206,8 @@ impl Service {
     /// The one process limit used to create and to verify the container. Records
     /// without a captured value were created with the profile default; keeping it
     /// means a changed formula or setting never fences a live service.
+    /// The numeric owner its processes run as.
+    fn user(&self) -> User { User { uid: self.uid.get(), gid: self.gid } }
     fn pids_limit(&self) -> u64 { self.pids_limit.unwrap_or_else(|| self.profile.service_pids()) }
     /// Commands still running inside this service, for the process tree.
     pub(crate) fn running_commands(&self) -> Vec<String> { self.executions.iter().filter_map(commands::Execution::running_label).collect() }
@@ -347,10 +358,11 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     drop(s);
     if let Some(id) = service.resource.phase.container() {
         // Verify identity before reading another process's output.
-        let inspected = Docker.inventory(service.resource.owner.node.as_str())?;
+        let isolation = crate::engine::isolation();
+        let inspected = inventory(isolation, service.resource.owner.node.as_str())?;
         if let Some(observation) = inspected.get(id.as_str()) {
             verify(&service, observation)?;
-            let output = commands::logs(id.as_str())?;
+            let output = commands::logs(isolation, id)?;
             value["output"] = json!(output);
         }
     }
@@ -367,21 +379,16 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, n
         .try_into()
         .map_err(fail)?;
     drop(s);
-    let marker = crate::engine::query(&[
-        "image",
-        "inspect",
-        "--format",
-        "{{index .Config.Labels \"dev.control.service-runner\"}}",
-        image.as_str(),
-    ])?;
+    let isolation = crate::engine::isolation();
+    let marker = image_label(isolation, &image, "dev.control.service-runner")?;
     let version = marker.trim().parse::<u8>().unwrap_or(0);
     if !(1..=4).contains(&version) || (input.lease_seconds == -1 && version < 2) {
         return Err(fail(
             "Rebuild worker/Claude images with Nix setup before starting persistent services",
         ));
     }
-    let profile = crate::worker_profile::Profile::inspect(image.as_str())?;
-    quota_supported(&input, crate::engine::storage_quota)?;
+    let profile = crate::worker_profile::Profile::inspect(isolation, image.as_str())?;
+    quota_supported(&input, || isolation.disk_quota())?;
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
     // Revalidate the captured image after the engine query outside the state lock.
     if caller(&s, run, generation)?.0.attempts.last().and_then(|a| a.image.as_deref()) != Some(image.as_str()) {
@@ -584,7 +591,8 @@ fn transition(
     Ok(decision.effect)
 }
 
-#[derive(Clone, Deserialize)]
+/// The facts `verify` checks, from an engine observation.
+#[derive(Clone)]
 struct Inspection {
     id: String,
     name: String,
@@ -594,7 +602,6 @@ struct Inspection {
     chat: Option<String>,
     generation: Option<String>,
     status: String,
-    #[serde(default)]
     exit_code: Option<i32>,
     network: String,
     readonly: bool,
@@ -607,98 +614,126 @@ struct Inspection {
     memory: u64,
     cpu: u64,
     pids: u64,
-    mounts: Vec<Value>,
+    mounts: Vec<control_isolation::ObservedMount>,
     tmpfs: HashMap<String, String>,
-    #[serde(default)]
     storage_opts: Option<HashMap<String, String>>,
     entrypoint: Vec<String>,
     command: Vec<String>,
 }
-const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"resource":{{json (index .Config.Labels "dev.control.resource")}},"chat":{{json (index .Config.Labels "dev.control.chat")}},"generation":{{json (index .Config.Labels "dev.control.generation")}},"status":{{json .State.Status}},"exit_code":{{json .State.ExitCode}},"network":{{json .HostConfig.NetworkMode}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},"pid_mode":{{json .HostConfig.PidMode}},"restart":{{json .HostConfig.RestartPolicy.Name}},"caps":{{json .HostConfig.CapDrop}},"security":{{json .HostConfig.SecurityOpt}},"memory":{{json .HostConfig.Memory}},"cpu":{{json .HostConfig.NanoCpus}},"pids":{{json .HostConfig.PidsLimit}},"mounts":{{json .Mounts}},"tmpfs":{{if index .HostConfig "Tmpfs"}}{{json (index .HostConfig "Tmpfs")}}{{else}}{}{{end}},"storage_opts":{{json (index .HostConfig "StorageOpt")}},"entrypoint":{{json .Config.Entrypoint}},"command":{{json .Config.Cmd}}}"#;
-/// The engine `create` request for `service`, with its workspace volume if any.
-fn create_arguments(service: &Service, workspace: Option<&str>) -> Vec<String> {
+/// An observation as `verify` reads it. Values the engine left empty where a
+/// service always has one make the whole observation unusable.
+fn inspection(observed: control_isolation::Observed) -> io::Result<Inspection> {
+    let missing = || fail("Incomplete service container inspection");
+    let label = |name: &str| observed.label(&format!("dev.control.{name}")).map(str::to_owned);
+    Ok(Inspection {
+        node: label("node"),
+        resource: label("resource"),
+        chat: label("chat"),
+        generation: label("generation"),
+        id: observed.id.as_str().to_owned(),
+        exit_code: i32::try_from(observed.exit_code).ok(),
+        pids: observed.pids_limit.ok_or_else(missing)?,
+        caps: observed.cap_drop.ok_or_else(missing)?,
+        security: observed.security_opt.ok_or_else(missing)?,
+        entrypoint: observed.entrypoint.ok_or_else(missing)?,
+        command: observed.command.ok_or_else(missing)?,
+        name: observed.name,
+        image: observed.image,
+        status: observed.status,
+        network: observed.network,
+        readonly: observed.read_only_root,
+        privileged: observed.privileged,
+        user: observed.user,
+        pid_mode: observed.pid_mode,
+        restart: observed.restart,
+        memory: observed.memory,
+        cpu: observed.nano_cpus,
+        mounts: observed.mounts,
+        tmpfs: observed.tmpfs.into_iter().collect(),
+        storage_opts: observed.storage_opt.map(|options| options.into_iter().collect()),
+    })
+}
+/// The container for `service`, with its workspace volume if any.
+fn container(service: &Service, workspace: Option<&str>) -> RunSpec {
     let r = &service.resource;
-    let mut args = vec![
-        "create".to_owned(),
-        "--pull=never".into(),
-        "--restart=no".into(),
-        "--network=none".into(),
-        "--cap-drop=ALL".into(),
-        "--security-opt=no-new-privileges".into(),
-        format!("--pids-limit={}", service.pids_limit()),
-        format!("--memory={}", service.limits().memory_bytes),
-        format!("--cpus={}", service.limits().cpus),
-        "--log-driver=local".into(),
-        "--log-opt=max-size=1m".into(),
-        "--log-opt=max-file=2".into(),
-        "--name".into(),
-        service.name(),
-        "--user".into(),
-        format!("{}:{}", service.uid, service.gid),
-        "--env".into(),
-        "HOME=/home/agent".into(),
-        "--workdir=/workspace".into(),
-        "--entrypoint=control-service-runner".into(),
-    ];
-    if let Some(workspace) = workspace {
-        args.extend(["--mount".into(), format!("type=volume,source={},target=/workspace", workspace)]);
-    }
-    if service.readonly_root() { args.push("--read-only".into()); }
-    for (key, value) in service.storage.options() {
-        args.extend(["--storage-opt".into(), format!("{key}={value}")]);
-    }
-    for (key, value) in [
+    let limits = service.limits();
+    let labels = [
         ("node", r.owner.node.as_str().to_owned()),
         ("purpose", "service".into()),
         ("resource", r.id.as_str().to_owned()),
         ("chat", r.owner.chat.as_str().to_owned()),
         ("generation", r.generation.get().to_string()),
-    ] {
-        args.extend(["--label".into(), format!("dev.control.{key}={value}")]);
+    ]
+    .map(|(key, value)| (format!("dev.control.{key}"), value));
+    let owner = service.user();
+    let spec = RunSpec {
+        name: service.name(),
+        image: r.image.as_str().into(),
+        entrypoint: Some("control-service-runner".into()),
+        argv: vec![r.lease.expires().to_string(), r.lease.seconds().to_string(), service.command.0.to_string()],
+        user: Some(owner),
+        workdir: Some("/workspace".into()),
+        labels: labels.into(),
+        tmpfs: tmpfs_sizes(service).map(|(path, size, exec)| Tmpfs { nodev: true, exec, ..Tmpfs::new(path, Size::Mib(size)).owned(owner) }).collect(),
+        root: if service.readonly_root() { Access::ReadOnly } else { Access::ReadWrite },
+        limits: Limits {
+            pids: Some(service.pids_limit()),
+            memory: Some(Size::Bytes(limits.memory_bytes)),
+            cpus: Some(limits.cpus),
+            ..Limits::default()
+        },
+        network: Network::None,
+        logs: Logs::Local { max_size: Size::Mib(1), max_files: 2 },
+        disk: service.storage.limit_mb().map(|limit| Size::Mib(u64::from(limit.get()))),
+        ..RunSpec::default()
     }
-    for (path, options) in tmpfs(service) {
-        args.extend(["--tmpfs".into(), format!("{path}:{options}")]);
+    .env("HOME", "/home/agent");
+    match workspace {
+        Some(volume) => RunSpec { mounts: vec![Mount { source: Source::Volume(volume.into()), target: "/workspace".into(), access: Access::ReadWrite }], ..spec },
+        None => spec,
     }
-    args.extend([
-        r.image.as_str().to_owned(),
-        r.lease.expires().to_string(),
-        r.lease.seconds().to_string(),
-        service.command.0.to_string(),
-    ]);
-    args
 }
-fn tmpfs(service: &Service) -> HashMap<String, String> {
+/// Each in-memory filesystem's path, size in MiB and exec policy.
+fn tmpfs_sizes(service: &Service) -> impl Iterator<Item = (&'static str, u64, Exec)> {
     [("/workspace", service.profile.service_workspace_mb()), ("/tmp", 128), ("/home/agent", 32)]
         .into_iter()
         .filter(|(path, _)| service.storage == Storage::Memory || *path == "/tmp")
-        .map(|(path, size)| {
-            (
-                path.to_owned(),
-                format!(
-                    "rw,{}nosuid,nodev,uid={},gid={},size={size}m",
-                    if path=="/workspace"&&service.workspace_exec {"exec,"}else{""}, service.uid, service.gid
-                ),
-            )
+        .map(|(path, size)| (path, size, if path == "/workspace" && service.workspace_exec { Exec::Allow } else { Exec::Engine }))
+}
+/// The tmpfs options the engine reports for `service`, as it was given them.
+fn tmpfs(service: &Service) -> HashMap<String, String> {
+    tmpfs_sizes(service)
+        .map(|(path, size, exec)| {
+            let exec = if exec == Exec::Allow { "exec," } else { "" };
+            (path.to_owned(), format!("rw,{exec}nosuid,nodev,uid={},gid={},size={size}m", service.uid, service.gid))
         })
         .collect()
 }
 /// The verified, running container of `service` and the user to run as, for
 /// commands Control runs in it on a chat's behalf. Queries the engine: call
 /// without the state lock.
-pub(crate) fn exec_target(service: &Service) -> io::Result<(String, String)> {
+pub(crate) fn exec_target(isolation: &dyn Isolation, service: &Service) -> io::Result<(control_isolation::ContainerId, User)> {
     identity::authorize(&service.actor, Action::Task).map_err(fail)?;
     let id = service.resource.phase.container().ok_or_else(|| fail("Service is not running"))?;
-    let text = crate::engine::query(&["inspect", "--format", INSPECT, id.as_str()])?;
-    let observed: Inspection = serde_json::from_str(text.trim()).map_err(fail)?;
+    let observed = inspect_one(isolation, id)?;
     verify(service, &observed)?;
     if observed.status != "running" || service.resource.lease.expired(now()) {
         return Err(fail("Service is no longer running"));
     }
-    Ok((id.as_str().to_owned(), format!("{}:{}", service.uid, service.gid)))
+    Ok((id.as_str().into(), service.user()))
+}
+/// The one container `id` names, as `verify` reads it.
+fn inspect_one(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<Inspection> {
+    let [observed] = <[_; 1]>::try_from(isolation.inspect(&[Target::Id(&id.as_str().into())])?).map_err(|_| fail("Invalid service container inspection"))?;
+    inspection(observed)
+}
+/// A label of the service's image, empty when absent.
+fn image_label(isolation: &dyn Isolation, image: &ImageId, name: &str) -> io::Result<String> {
+    Ok(isolation.image_labels(&image.as_str().into())?.remove(name).unwrap_or_default())
 }
 /// Whether the service's image runner supervises watches (label 3 or later).
-pub(crate) fn supports_watches(service: &Service) -> io::Result<bool> {
-    let label = crate::engine::query(&["image", "inspect", "--format", "{{index .Config.Labels \"dev.control.service-runner\"}}", service.resource.image.as_str()])?;
+pub(crate) fn supports_watches(isolation: &dyn Isolation, service: &Service) -> io::Result<bool> {
+    let label = image_label(isolation, &service.resource.image, "dev.control.service-runner")?;
     Ok(label.trim().parse::<u8>().is_ok_and(|version| version >= 3))
 }
 struct Verified<'a> {
@@ -765,35 +800,31 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
         service,
     })
 }
-trait Engine {
-    fn inventory(&mut self, node: &str) -> io::Result<HashMap<String, Inspection>>;
-    /// Check the recorded ID without label filters before declaring it absent.
-    fn exists(&mut self, id: &ContainerId) -> io::Result<bool>;
-    fn create(&mut self, service: &Service) -> io::Result<ContainerId>;
-    fn start(&mut self, binding: &Verified<'_>) -> io::Result<()>;
-    fn remove(&mut self, binding: &Verified<'_>) -> io::Result<()>;
-    fn logs(&mut self, _binding: &Verified<'_>) -> io::Result<String> { Ok(String::new()) }
-}
-struct Docker;
 /// A live verified offline service capability, never an arbitrary container ID.
-pub(crate) struct PortBinding { id: ContainerId, user: String, expires: u64 }
+pub(crate) struct PortBinding { id: ContainerId, user: User, expires: u64 }
 #[derive(Clone, Copy)]
 pub(crate) enum RelayMode { Connect, Multiplex }
 impl PortBinding {
-    pub(crate) fn spawn(&self, mode: RelayMode, port: std::num::NonZeroU16, expires: u64) -> io::Result<std::process::Child> {
+    pub(crate) fn spawn(&self, isolation: &dyn Isolation, mode: RelayMode, port: std::num::NonZeroU16, expires: u64) -> io::Result<std::process::Child> {
         if expires <= now() || expires > self.expires { return Err(fail("Port lease exceeds its service")); }
-        crate::engine::cli().args(["exec", "-i", "--user", &self.user, self.id.as_str(), "/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Multiplex => "listen-multi" }, &port.to_string(), &expires.to_string()])
-            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
+        let relay = ExecSpec {
+            container: self.id.as_str().into(),
+            user: Some(self.user),
+            input: control_isolation::Input::Attached,
+            argv: ["/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Multiplex => "listen-multi" }, &port.to_string(), &expires.to_string()].map(str::to_owned).to_vec(),
+            ..ExecSpec::default()
+        };
+        isolation.exec(&relay, Streams::new(Stream::Piped, Stream::Piped, Stream::Null))
     }
 }
 /// Relay version this host speaks; images built for another fail closed.
 const RELAY: &str = "5";
-pub(crate) fn relay_capable(service: &Service) -> io::Result<()> {
+pub(crate) fn relay_capable(isolation: &dyn Isolation, service: &Service) -> io::Result<()> {
     // Image IDs are immutable. Avoid an extra engine query on every connection.
     static CAPABLE:std::sync::OnceLock<Mutex<std::collections::HashSet<ImageId>>>=std::sync::OnceLock::new();
     let cache=CAPABLE.get_or_init(Mutex::default);
     if cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?.contains(&service.resource.image) {return Ok(());}
-    let marker = crate::engine::query(&["image", "inspect", service.resource.image.as_str(), "--format", "{{index .Config.Labels \"dev.control.tcp-relay\"}}"])?;
+    let marker = image_label(isolation, &service.resource.image, "dev.control.tcp-relay")?;
     if marker.trim() != RELAY {
         return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays"));
     }
@@ -801,86 +832,59 @@ pub(crate) fn relay_capable(service: &Service) -> io::Result<()> {
     if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone());}
     Ok(())
 }
-pub(crate) fn port_binding(service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {
+pub(crate) fn port_binding(isolation: &dyn Isolation, service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {
     if !matches!(&service.resource.phase, Phase::Running(id) if id == expected) || service.resource.lease.expired(now()) { return Err(fail("Service is not running under this lease and generation")); }
-    relay_capable(service)?;
-    let data = crate::engine::query(&["inspect", "--format", INSPECT, expected.as_str()])?;
-    let observation: Inspection = serde_json::from_str(data.trim()).map_err(fail)?;
+    relay_capable(isolation, service)?;
+    let observation = inspect_one(isolation, expected)?;
     let binding = verify(service, &observation)?;
     if observation.status != "running" { return Err(fail("Service is not running")); }
-    Ok(PortBinding { id: binding.id, user: format!("{}:{}",service.uid,service.gid), expires: service.resource.lease.expires() })
+    Ok(PortBinding { id: binding.id, user: service.user(), expires: service.resource.lease.expires() })
 }
-impl Engine for Docker {
-    fn exists(&mut self, id: &ContainerId) -> io::Result<bool> {
-        crate::engine::query(&[
-            "ps", "-a", "--no-trunc", "--filter", &format!("id={}", id.as_str()),
-            "--format", "{{.ID}}",
-        ]).map(|ids| !ids.trim().is_empty())
+/// Every service container of `node`, keyed by engine ID.
+fn inventory(isolation: &dyn Isolation, node: &str) -> io::Result<HashMap<String, Inspection>> {
+    let labels = [("dev.control.node", node), ("dev.control.purpose", "service")].map(|(key, value)| (key.to_owned(), value.to_owned()));
+    let listed = isolation.list(States::All, &Select::Labels(labels.into()))?;
+    if listed.is_empty() {
+        return Ok(HashMap::new());
     }
-    fn logs(&mut self, binding: &Verified<'_>) -> io::Result<String> {
-        commands::logs(binding.id.as_str())
+    if listed.len() > MAX_RECORDS {
+        return Err(fail("Too many service containers; inspect node resources"));
     }
-    fn inventory(&mut self, node: &str) -> io::Result<HashMap<String, Inspection>> {
-        let text = crate::engine::query(&[
-            "ps",
-            "-a",
-            "--no-trunc",
-            "--filter",
-            &format!("label=dev.control.node={node}"),
-            "--filter",
-            "label=dev.control.purpose=service",
-            "--format",
-            "{{.ID}}",
-        ])?;
-        if text.trim().is_empty() {
-            return Ok(HashMap::new());
-        }
-        let ids = text
-            .split_whitespace()
-            .map(|id| ContainerId::try_from(id.to_owned()).map_err(fail))
-            .collect::<io::Result<Vec<_>>>()?;
-        if ids.len() > MAX_RECORDS {
-            return Err(fail("Too many service containers; inspect node resources"));
-        }
-        let mut args = vec!["inspect", "--format", INSPECT];
-        args.extend(ids.iter().map(ContainerId::as_str));
-        crate::engine::query(&args)?
-            .lines()
-            .map(|line| {
-                let record: Inspection = serde_json::from_str(line).map_err(fail)?;
-                Ok((record.id.clone(), record))
-            })
-            .collect()
+    let ids = listed.iter().map(|container| Target::Id(&container.id)).collect::<Vec<_>>();
+    isolation.inspect(&ids)?.into_iter().map(|observed| inspection(observed).map(|record| (record.id.clone(), record))).collect()
+}
+/// Checks the recorded ID without label filters before declaring it absent.
+fn exists(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<bool> {
+    Ok(!isolation.list(States::All, &Select::Id(id.as_str().into()))?.is_empty())
+}
+fn create_container(isolation: &dyn Isolation, service: &Service) -> io::Result<ContainerId> {
+    let workspace = workspace::Workspace::of(service);
+    if let Some(workspace) = &workspace { workspace.ensure(isolation)?; }
+    isolation
+        .create(&container(service, workspace.as_ref().map(workspace::Workspace::name)))
+        .map_err(|error| if !service.storage.options().is_empty() && ["storage-opt", "quota", "StorageOpt"].iter().any(|word|error.to_string().contains(word)) {
+            fail(format!("Could not create capped service: {error}. storage_limit_mb requires Docker storage-driver quota support; omit it for uncapped disk storage"))
+        } else {
+            error
+        })?
+        .as_str()
+        .to_owned()
+        .try_into()
+        .map_err(fail)
+}
+fn start_container(isolation: &dyn Isolation, binding: &Verified<'_>) -> io::Result<()> {
+    if !matches!(binding.service.resource.phase, Phase::Starting(_))
+        || binding.service.resource.lease.expired(now())
+    {
+        return Err(fail("Service is no longer eligible to start"));
     }
-    fn create(&mut self, service: &Service) -> io::Result<ContainerId> {
-        let workspace = workspace::Workspace::of(service);
-        if let Some(workspace) = &workspace { workspace.ensure()?; }
-        let args = create_arguments(service, workspace.as_ref().map(workspace::Workspace::name));
-        crate::engine::create(&args)
-            .map_err(|error| if !service.storage.options().is_empty() && ["storage-opt", "quota", "StorageOpt"].iter().any(|word|error.to_string().contains(word)) {
-                fail(format!("Could not create capped service: {error}. storage_limit_mb requires Docker storage-driver quota support; omit it for uncapped disk storage"))
-            } else {
-                error
-            })?
-            .trim()
-            .to_owned()
-            .try_into()
-            .map_err(fail)
+    isolation.start(&binding.id.as_str().into())
+}
+fn remove_container(isolation: &dyn Isolation, binding: &Verified<'_>) -> io::Result<()> {
+    if !matches!(binding.service.resource.phase, Phase::Stopping { .. }) {
+        return Err(fail("Service stop intent is not recorded"));
     }
-    fn start(&mut self, binding: &Verified<'_>) -> io::Result<()> {
-        if !matches!(binding.service.resource.phase, Phase::Starting(_))
-            || binding.service.resource.lease.expired(now())
-        {
-            return Err(fail("Service is no longer eligible to start"));
-        }
-        crate::engine::query(&["start", binding.id.as_str()]).map(|_| ())
-    }
-    fn remove(&mut self, binding: &Verified<'_>) -> io::Result<()> {
-        if !matches!(binding.service.resource.phase, Phase::Stopping { .. }) {
-            return Err(fail("Service stop intent is not recorded"));
-        }
-        crate::engine::query(&["rm", "-f", binding.id.as_str()]).map(|_| ())
-    }
+    isolation.remove(Target::Id(&binding.id.as_str().into()))
 }
 
 fn apply(
@@ -915,7 +919,7 @@ fn retain_output(shared:&Arc<Mutex<State>>, snapshot:&Service, output:String, ex
 }
 fn drive(
     shared: &Arc<Mutex<State>>,
-    engine: &mut impl Engine,
+    isolation: &dyn Isolation,
     node: &str,
     time: u64,
     save: impl Fn(&State) -> io::Result<()>,
@@ -934,7 +938,7 @@ fn drive(
     if services.is_empty() {
         return Ok(());
     }
-    let observations = engine.inventory(node)?;
+    let observations = inventory(isolation, node)?;
     let mut authorize = identity::authorizer();
     for service in services {
         let r = &service.resource;
@@ -960,7 +964,7 @@ fn drive(
         };
         let result = (|| -> io::Result<()> {
             match effect {
-                Effect::Create => create(shared, engine, &service, time, &save)?,
+                Effect::Create => create(shared, isolation, &service, time, &save)?,
                 Effect::Inspect => {
                     let observation = service
                         .resource
@@ -989,16 +993,16 @@ fn drive(
                         }
                     } else {
                         match service.resource.phase.container() {
-                            Some(id) if engine.exists(id)? => Event::Fence(Fault::IdentityMismatch),
+                            Some(id) if exists(isolation, id)? => Event::Fence(Fault::IdentityMismatch),
                             _ => Event::Missing,
                         }
                     };
                     if let Some((next, effect)) = apply(shared, &service, event, time, &save)? {
                         match effect {
-                            Effect::Create => create(shared, engine, &next, time, &save)?,
+                            Effect::Create => create(shared, isolation, &next, time, &save)?,
                             Effect::Start => {
                                 if eligible(shared, &next, time)? {
-                                    engine.start(&verify(
+                                    start_container(isolation, &verify(
                                         &next,
                                         observation
                                             .ok_or_else(|| fail("Missing service observation"))?,
@@ -1007,9 +1011,9 @@ fn drive(
                             }
                             Effect::Remove => {
                                 let binding=verify(&next, observation.ok_or_else(||fail("Missing service observation"))?)?;
-                                let output=engine.logs(&binding)?;
+                                let output=commands::logs(isolation, &binding.id)?;
                                 retain_output(shared,&next,output,observation.and_then(|o|o.exit_code).filter(|_|observation.is_some_and(|o|o.status=="exited"||o.status=="dead")),&save)?;
-                                engine.remove(&binding)?;
+                                remove_container(isolation, &binding)?;
                             }
                             Effect::Inspect => {}
                         }
@@ -1029,9 +1033,9 @@ fn drive(
 /// starts a corrected service instead of a retry loop holding its reservation.
 /// The stop still inspects before releasing, so a container a refused request
 /// left behind is verified and removed. The chat's workspace is never touched.
-fn create(shared: &Arc<Mutex<State>>, engine: &mut impl Engine, service: &Service, time: u64, save: &impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
+fn create(shared: &Arc<Mutex<State>>, isolation: &dyn Isolation, service: &Service, time: u64, save: &impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
     if !eligible(shared, service, time)? { return Ok(()); }
-    match engine.create(service) {
+    match create_container(isolation, service) {
         Ok(id) => apply(shared, service, Event::Created(id), time, save).map(drop),
         Err(error) => {
             diagnose(shared, Some(&service.resource.id), &error, save)?;
@@ -1083,7 +1087,7 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
         }
         let mut executions = Vec::new();
         serve(commands::changes(), TICK, &crate::shutdown::token(), || {
-            if let Err(error) = drive(&shared, &mut Docker, &node, now(), crate::storage::save) {
+            if let Err(error) = drive(&shared, crate::engine::isolation(), &node, now(), crate::storage::save) {
                 let _ = diagnose(&shared, None, &error, &crate::storage::save);
             }
         }, |executions: &mut Vec<_>| {
@@ -1124,8 +1128,8 @@ fn serve<T>(
 }
 /// Other resource reconciliation may skip only fully verified registered service
 /// identities, never every container bearing a service label.
-pub fn verified_names(services: &[Service], node: &str) -> io::Result<Vec<String>> {
-    let observations = Docker.inventory(node)?;
+pub fn verified_names(isolation: &dyn Isolation, services: &[Service], node: &str) -> io::Result<Vec<String>> {
+    let observations = inventory(isolation, node)?;
     verified_discovery_names(services,&observations)
 }
 fn verified_discovery_names(services:&[Service],observations:&HashMap<String,Inspection>)->io::Result<Vec<String>>{

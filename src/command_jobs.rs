@@ -3,6 +3,7 @@ mod tools;
 pub use tools::{JobCall, Tools};
 use crate::{tool_registry::AttemptRef, usage::Attempt, State};
 use control_effect::sync::{CancelToken, Recv};
+use control_isolation::{Access, Exec, Isolation, Limits, Logs, Network, Observed, RunSpec, Select, Size, States, Target, Tmpfs, User};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -15,7 +16,6 @@ use std::{
 
 const MAX_JOBS: usize = 32;
 const OUTPUT_BYTES: usize = 16000;
-const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"node":{{json (index .Config.Labels "dev.control.node")}},"attempt":{{json (index .Config.Labels "dev.control.attempt")}},"image":{{json .Config.Image}},"source":{{range .Mounts}}{{if eq .Destination "/workspace"}}{{json .Source}}{{end}}{{end}},"writable":{{range .Mounts}}{{if eq .Destination "/workspace"}}{{json .RW}}{{end}}{{end}},"network":{{json .HostConfig.NetworkMode}},"readonly_root":{{json .HostConfig.ReadonlyRootfs}},"running":{{json .State.Running}},"exit_code":{{json .State.ExitCode}}}"#;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
@@ -179,7 +179,7 @@ fn start(
         if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) { return Ok(job.summary()); }
         environment_image(attempt, &input.environment)?
     };
-    let profile = if input.environment != "worker" { crate::worker_profile::Profile::Lite } else { crate::worker_profile::Profile::inspect(&image)? };
+    let profile = if input.environment != "worker" { crate::worker_profile::Profile::Lite } else { crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image)? };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let owner_deadline = state.runtime.runs.iter().find(|r| r.id == run).and_then(|r| {
         r.attempts.last().and_then(|a| crate::attempt_control::deadline(&state, r, a).map(|limit| a.started_unix.saturating_add(limit)))
@@ -252,9 +252,9 @@ fn effective_deadline(now: u64, requested: u64, owner: Option<u64>) -> io::Resul
     if deadline <= now { return Err(fail("The attempt deadline has elapsed; use a persistent service for work that must outlive this attempt")); }
     Ok(deadline)
 }
-fn create(job: &Job) -> io::Result<String> {
+fn create(isolation: &dyn Isolation, job: &Job) -> io::Result<String> {
     let workspace = job.workspace()?.canonicalize()?;
-    if job.build_environment { crate::build_environment::check(&job.image, &workspace)?; }
+    if job.build_environment { crate::build_environment::check(isolation, &job.image, &workspace)?; }
     let meta = fs::symlink_metadata(&workspace)?;
     if !meta.is_dir() || meta.uid() == 0 {
         return Err(fail("Expected private non-root workspace"));
@@ -287,100 +287,43 @@ fn create(job: &Job) -> io::Result<String> {
     } else {
         None
     };
-    let arguments = create_arguments(job, path, meta.uid(), meta.gid(), scratch.as_deref());
-    let text =
-        crate::engine::query(&arguments.iter().map(String::as_str).collect::<Vec<_>>())?;
-    let id = text.trim();
-    if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(fail("Invalid command container identity"));
-    }
-    Ok(id.to_owned())
+    let owner = User { uid: meta.uid(), gid: meta.gid() };
+    isolation.create(&container(job, path, owner, scratch.as_deref())).map(|id| id.as_str().to_owned())
 }
-/// The engine `create` request for one command; `scratch` is the build target
-/// a read-only command writes to.
-fn create_arguments(job: &Job, path: &str, uid: u32, gid: u32, scratch: Option<&str>) -> Vec<String> {
+/// The container for one command; `scratch` is the build target a read-only
+/// command writes to.
+fn container(job: &Job, path: &str, owner: User, scratch: Option<&str>) -> RunSpec {
     let name = job.name();
-    let mut arguments: Vec<String> = [
-        "create",
-        "--pull=never",
-        "--name",
-        &name,
-        "--label",
-        &format!("dev.control.node={}", job.node),
-        "--label",
-        &format!("dev.control.attempt={name}"),
-        "--label",
-        "dev.control.purpose=command",
-        "--user",
-        &format!("{uid}:{gid}"),
-        "--cap-drop=ALL",
-        "--security-opt=no-new-privileges",
-        if job.build_environment {
-            "--pids-limit=512"
-        } else {
-            "--pids-limit=256"
-        },
-        if job.build_environment {
-            "--memory=4g"
-        } else {
-            "--memory=2g"
-        },
-        "--cpus=2",
-        "--network=none",
-        "--log-driver=local",
-        "--log-opt",
-        "max-size=1m",
-        "--log-opt",
-        "max-file=2",
-        "--tmpfs",
-        "/tmp:rw,exec,nosuid,nodev,size=1g",
-        "--tmpfs",
-        &format!(
-            "/home/agent:rw,nosuid,nodev,uid={uid},gid={gid},size=128m"
-        ),
-        "--env",
-        "HOME=/home/agent",
-        "--env",
-        "CARGO_BUILD_JOBS=2",
-        "--env",
-        if job.read_only {
-            "CARGO_TARGET_DIR=/build-target"
-        } else {
-            "CONTROL_WORKSPACE_WRITABLE=1"
-        },
-        "--mount",
-        &format!(
-            "type=bind,src={path},dst=/workspace{}",
-            if job.read_only { ",readonly" } else { "" }
-        ),
-        "--workdir",
-        "/workspace",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    if job.profile.readonly_root() { arguments.push("--read-only".into()); }
-    if let Some(scratch) = scratch {
-        arguments.extend([
-            "--mount".into(),
-            format!("type=bind,src={scratch},dst=/build-target"),
-        ]);
+    let (pids, memory) = if job.build_environment { (512, 4) } else { (256, 2) };
+    let access = if job.read_only { Access::ReadOnly } else { Access::ReadWrite };
+    let spec = RunSpec {
+        name: name.clone(),
+        image: job.image.as_str().into(),
+        argv: ["bash", "-c", "exec 2>&1; eval -- \"$1\"", "control-command", &job.command].map(str::to_owned).to_vec(),
+        user: Some(owner),
+        workdir: Some("/workspace".into()),
+        root: if job.profile.readonly_root() { Access::ReadOnly } else { Access::ReadWrite },
+        limits: Limits { pids: Some(pids), memory: Some(Size::Gib(memory)), cpus: Some(2), ..Limits::default() },
+        network: Network::None,
+        logs: Logs::Local { max_size: Size::Mib(1), max_files: 2 },
+        ..RunSpec::default()
     }
-    arguments.extend(
-        [
-            &job.image,
-            "bash",
-            "-c",
-            "exec 2>&1; eval -- \"$1\"",
-            "control-command",
-            &job.command,
-        ]
-        .into_iter()
-        .map(str::to_owned),
-    );
-    arguments
+    .label("dev.control.node", &job.node)
+    .label("dev.control.attempt", &name)
+    .label("dev.control.purpose", "command")
+    .tmpfs(Tmpfs { exec: Exec::Allow, nodev: true, ..Tmpfs::new("/tmp", Size::Gib(1)) })
+    .tmpfs(Tmpfs { nodev: true, ..Tmpfs::new("/home/agent", Size::Mib(128)).owned(owner) })
+    .env("HOME", "/home/agent")
+    .env("CARGO_BUILD_JOBS", "2")
+    .env(if job.read_only { "CARGO_TARGET_DIR" } else { "CONTROL_WORKSPACE_WRITABLE" }, if job.read_only { "/build-target" } else { "1" })
+    .bind(path, "/workspace", access);
+    match scratch {
+        Some(scratch) => spec.bind(scratch, "/build-target", Access::ReadWrite),
+        None => spec,
+    }
 }
-#[derive(Clone, Deserialize)]
+/// The facts `verify` checks, from an engine observation.
+#[cfg_attr(test, derive(Clone))]
 struct Inspection {
     id: String,
     name: String,
@@ -394,10 +337,28 @@ struct Inspection {
     running: bool,
     exit_code: i64,
 }
-fn inspect(job: &Job) -> io::Result<Inspection> {
-    let result = crate::engine::query(&["inspect", "--format", INSPECT, &job.name()])?;
-    let inspection: Inspection =
-        serde_json::from_str(result.trim()).map_err(|_| fail("Invalid command inspection"))?;
+impl Inspection {
+    /// `None` when a label or the `/workspace` mount every command has is missing.
+    fn of(observed: Observed) -> Option<Self> {
+        let workspace = observed.mount("/workspace")?;
+        Some(Self {
+            source: workspace.source.clone(),
+            writable: workspace.writable,
+            node: observed.label("dev.control.node")?.to_owned(),
+            attempt: observed.label("dev.control.attempt")?.to_owned(),
+            id: observed.id.as_str().to_owned(),
+            name: observed.name,
+            image: observed.image_ref,
+            network: observed.network,
+            readonly_root: observed.read_only_root,
+            running: observed.running,
+            exit_code: observed.exit_code,
+        })
+    }
+}
+fn inspect(isolation: &dyn Isolation, job: &Job) -> io::Result<Inspection> {
+    let observed = isolation.inspect(&[Target::Name(&job.name())])?;
+    let inspection = <[Observed; 1]>::try_from(observed).ok().and_then(|[observed]| Inspection::of(observed)).ok_or_else(|| fail("Invalid command inspection"))?;
     verify(job, &inspection)?;
     Ok(inspection)
 }
@@ -410,9 +371,7 @@ fn verify_identity(
     inspection: &Inspection,
     workspace: &std::path::Path,
 ) -> io::Result<()> {
-    if inspection.id.len() != 64
-        || !inspection.id.bytes().all(|b| b.is_ascii_hexdigit())
-        || job
+    if job
             .container_id
             .as_ref()
             .is_some_and(|id| id != &inspection.id)
@@ -431,9 +390,10 @@ fn verify_identity(
     }
     Ok(())
 }
-pub fn stop(job: &Job) -> io::Result<()> {
+pub fn stop(isolation: &dyn Isolation, job: &Job) -> io::Result<()> {
     let workspace = job.workspace()?.canonicalize()?;
     crate::lifecycle::stop_resource_id(
+        isolation,
         &job.name(),
         &job.node,
         &job.image,
@@ -443,15 +403,8 @@ pub fn stop(job: &Job) -> io::Result<()> {
     .map_err(fail)?;
     // A timed-out Docker start may still be in flight. Confirm removal, not just
     // a momentarily stopped state, so no late start can race publication.
-    let filter = job
-        .container_id
-        .as_ref()
-        .map(|id| format!("id={id}"))
-        .unwrap_or_else(|| format!("name=^/{}$", job.name()));
-    if !crate::engine::query(&["ps", "--all", "--quiet", "--filter", &filter])?
-        .trim()
-        .is_empty()
-    {
+    let select = job.container_id.as_deref().map_or_else(|| Select::Name(job.name()), |id| Select::Id(id.into()));
+    if !isolation.list(States::All, &select)?.is_empty() {
         return Err(fail(
             "Command resource removal unconfirmed; checkpoint remains fenced",
         ));
@@ -472,21 +425,9 @@ fn bounded_output(text: &str) -> String {
     }
     format!("[earlier output omitted]\n{}", &text[offset..])
 }
-fn logs(job: &Job) -> io::Result<String> {
-    use std::process::Stdio;
-    let mut child = crate::engine::scrubbed()
-        .args([
-            "logs",
-            "--tail",
-            "200",
-            job.container_id
-                .as_deref()
-                .ok_or_else(|| fail("Missing command container ID"))?,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+fn logs(isolation: &dyn Isolation, job: &Job) -> io::Result<String> {
+    let id = job.container_id.as_deref().ok_or_else(|| fail("Missing command container ID"))?;
+    let mut child = isolation.logs(&id.into(), 200)?;
     let mut reader = child.stdout.take().unwrap();
     let drain = std::thread::spawn(move || {
         let mut kept = Vec::new();
@@ -587,6 +528,7 @@ fn should_stop(shared: &Arc<Mutex<State>>, run: &str, job: &Job) -> bool {
     !active || live(&mut state, run, job).is_none_or(|j| j.status == "stopping")
 }
 fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
+    let isolation = crate::engine::isolation();
     if should_stop(&shared, &run, &job) {
         job.status = if now() >= job.deadline_unix {
             "timed_out"
@@ -597,13 +539,13 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         activity(&shared, &run, &job, true);
         return;
     }
-    match create(&job) {
+    match create(isolation, &job) {
         Ok(id) => {
             job.container_id = Some(id);
             // A created container cannot execute yet. Capture its immutable ID
             // durably before sending any start request to the daemon.
             if !activity(&shared, &run, &job, true) {
-                job.status = if stop(&job).is_ok() {
+                job.status = if stop(isolation, &job).is_ok() {
                     "failed"
                 } else {
                     "stopping"
@@ -616,7 +558,7 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         }
         Err(_) => {
             // Launch can time out after Docker admitted it. Verify and stop by durable name.
-            job.status = if stop(&job).is_ok() {
+            job.status = if stop(isolation, &job).is_ok() {
                 "failed"
             } else {
                 "stopping"
@@ -628,7 +570,7 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         }
     }
     if should_stop(&shared, &run, &job) {
-        job.status = if stop(&job).is_ok() {
+        job.status = if stop(isolation, &job).is_ok() {
             if now() >= job.deadline_unix {
                 "timed_out"
             } else {
@@ -641,8 +583,8 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         activity(&shared, &run, &job, true);
         return;
     }
-    if crate::engine::query(&["start", job.container_id.as_deref().unwrap()]).is_err() {
-        job.status = if stop(&job).is_ok() {
+    if isolation.start(&job.container_id.as_deref().unwrap().into()).is_err() {
+        job.status = if stop(isolation, &job).is_ok() {
             "failed"
         } else {
             "stopping"
@@ -657,10 +599,10 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
     activity(&shared, &run, &job, true);
     let mut persisted = Instant::now();
     let shutdown = crate::shutdown::token();
-    let mut exited = exit_waiter(&job);
+    let mut exited = exit_waiter(isolation, &job);
     loop {
-        let inspection = inspect(&job);
-        if let Ok(text) = logs(&job) {
+        let inspection = inspect(isolation, &job);
+        if let Ok(text) = logs(isolation, &job) {
             job.output = text;
         }
         let finish = match inspection {
@@ -682,7 +624,7 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
         };
         if let Some(status) = finish {
             // Never announce a finished writer until its exact resource is confirmed stopped.
-            job.status = if stop(&job).is_ok() {
+            job.status = if stop(isolation, &job).is_ok() {
                 status
             } else {
                 "stopping"
@@ -716,15 +658,8 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
     }
 }
 /// Wakes the supervisor as soon as the container exits, instead of at the next tick.
-fn exit_waiter(job: &Job) -> Option<crate::child::Watched> {
-    use std::process::Stdio;
-    let child = crate::engine::scrubbed()
-        .args(["wait", job.container_id.as_deref()?])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+fn exit_waiter(isolation: &dyn Isolation, job: &Job) -> Option<crate::child::Watched> {
+    let child = isolation.wait(&job.container_id.as_deref()?.into()).ok()?;
     crate::child::watch(child).ok()
 }
 

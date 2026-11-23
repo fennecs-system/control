@@ -810,10 +810,10 @@ impl crate::backend::Agent for Local {
     fn credentials_ready(&self) -> Result<(), String> {
         Ok(())
     }
-    fn probe(&self, _image: &str) -> Result<(), String> {
+    fn probe(&self, _: &dyn control_isolation::Isolation, _image: &str) -> Result<(), String> {
         Err(NO_IMAGE.to_owned())
     }
-    fn text_run(&self, _call: &crate::backend::TextCall<'_>) -> std::io::Result<control_isolation::RunSpec> {
+    fn text_run(&self, _: &dyn control_isolation::Isolation, _call: &crate::backend::TextCall<'_>) -> std::io::Result<control_isolation::RunSpec> {
         Err(std::io::Error::other(NOT_A_CLI))
     }
     fn text(&self, _reader: &mut dyn std::io::Read, _max: usize, _emit: &mut dyn FnMut(control_ai::Event)) -> std::io::Result<control_ai::Output> {

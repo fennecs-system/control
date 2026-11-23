@@ -42,16 +42,16 @@ impl crate::backend::Agent for Claude {
     fn credentials_ready(&self) -> Result<(), String> {
         credentials_ready().map_err(|_| "run control claude login; its private login stays outside the checkout".to_owned())
     }
-    fn probe(&self, image: &str) -> Result<(), String> {
+    fn probe(&self, isolation: &dyn Isolation, image: &str) -> Result<(), String> {
         crate::config::node_id()
             .map_err(io::Error::other)
-            .and_then(|node| probe(image, &node, &crate::config::state("claude-check").map_err(io::Error::other)?))
+            .and_then(|node| probe(isolation, image, &node, &crate::config::state("claude-check").map_err(io::Error::other)?))
             .map_err(|error| match error.kind() {
                 io::ErrorKind::TimedOut => PROBE_TIMED_OUT.to_owned(),
                 _ => "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
             })
     }
-    fn text_run(&self, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
+    fn text_run(&self, _: &dyn Isolation, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
         text_run(call.image, call.name, call.workspace, call.node, call.model)
     }
     fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {
@@ -197,7 +197,7 @@ pub(crate) fn shell_bounded(isolation:&dyn Isolation,image:&str,name:&str,node:&
     if !meta.is_dir() {
         return Err(fail("Workspace is not a directory"));
     }
-    let readonly_root = crate::worker_profile::Profile::inspect(image)?.readonly_root();
+    let readonly_root = crate::worker_profile::Profile::inspect(isolation, image)?.readonly_root();
     let spec = shell_container(image, name, node, workspace, command, readonly, readonly_root, User { uid: meta.uid(), gid: meta.gid() })?;
     let mut child = isolation.spawn(&spec, Streams::new(Stream::Null, Stream::Piped, Stream::Piped))?;
     let stdout = drain(child.stdout.take().unwrap(), 12000);
@@ -212,7 +212,7 @@ pub(crate) fn shell_bounded(isolation:&dyn Isolation,image:&str,name:&str,node:&
             waited => {
                 let _ = child.kill();
                 let _ = child.wait();
-                crate::lifecycle::stop_resource(name, node, image, workspace).map_err(fail)?;
+                crate::lifecycle::stop_resource(isolation, name, node, image, workspace).map_err(fail)?;
                 let kind = if matches!(waited, Ok(None)) && !crate::shutdown::requested() { io::ErrorKind::TimedOut } else { io::ErrorKind::Other };
                 break Err(io::Error::new(kind, "Workspace command stopped after its deadline or a process error"));
             }
@@ -263,9 +263,9 @@ pub fn claim(workspace: &Path, nonce: &str) -> io::Result<()> {
 /// A probe stopped at its bound: the engine was slow, isolation was not refuted.
 pub(crate) const PROBE_TIMED_OUT: &str = "Claude tool isolation probe timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
 /// The offline isolation probe; a timeout fails with [`io::ErrorKind::TimedOut`].
-pub fn probe(image: &str, node: &str, root: &Path) -> io::Result<()> {
+pub fn probe(isolation: &dyn Isolation, image: &str, node: &str, root: &Path) -> io::Result<()> {
     probe_named(
-        crate::engine::isolation(),
+        isolation,
         image,
         node,
         root,
@@ -543,7 +543,7 @@ pub fn command(args: &[String]) -> io::Result<()> {
         }
         Some("check") if args.len() == 1 => {
             let root = crate::config::state("claude-check").map_err(fail)?;
-            probe(&image, &crate::config::node_id().map_err(fail)?, &root)?;
+            probe(crate::engine::isolation(), &image, &crate::config::node_id().map_err(fail)?, &root)?;
             println!("Claude offline workspace isolation verified. No account credentials were mounted or model called.");
             Ok(())
         }

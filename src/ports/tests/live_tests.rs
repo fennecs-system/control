@@ -202,7 +202,7 @@ fn live_service_commands_download_and_connect_two_private_services() {
         })
         .unwrap();
         value["workspace_exec"] = json!(true);
-        value["profile"] = json!(crate::worker_profile::Profile::inspect(&image).unwrap());
+        value["profile"] = json!(crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap());
         value["command"] = json!(if name == "probe" {
             "printf 'short probe stdout\\n'; printf 'short probe stderr\\n' >&2; exit 7"
         } else {
@@ -266,7 +266,7 @@ fn live_service_commands_download_and_connect_two_private_services() {
             {
                 for service in &state.services {
                     if let Some(id) = service.resource.phase.container()
-                        && crate::services::port_binding(service, id).is_ok()
+                        && crate::services::port_binding(crate::engine::isolation(), service, id).is_ok()
                     {
                         let _ = crate::engine::cli()
                             .args(["rm", "-f", id.as_str()])
@@ -636,7 +636,7 @@ printf verified-download >> /workspace/completions
     let running = read();
     let source = &running.services[0];
     let container = source.resource.phase.container().unwrap();
-    crate::services::port_binding(source, container).unwrap();
+    crate::services::port_binding(crate::engine::isolation(), source, container).unwrap();
     wait(
         || {
             crate::engine::query(&["exec", container.as_str(), "cat", "/workspace/crash-marker"])
@@ -707,7 +707,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     service.resource.phase = Phase::Requested;
     service.resource.lease = control_core::resources::Lease::new(now(), 180).unwrap();
     let mut value = serde_json::to_value(&*service).unwrap();
-    value["profile"] = json!(crate::worker_profile::Profile::inspect(&image).unwrap());
+    value["profile"] = json!(crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap());
     value["workspace_exec"] = json!(true);
     value["command"] = json!(format!(
         "cat > /tmp/fixture.rs <<'CONTROL_RUST'\n{PROGRAM}\nCONTROL_RUST\nrustc --edition=2024 -O /tmp/fixture.rs -o /workspace/fixture\nexec /workspace/fixture"
@@ -761,8 +761,8 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
         .container()
         .unwrap()
         .clone();
-    crate::services::relay_capable(&state.services[0]).unwrap();
-    crate::services::port_binding(&state.services[0], &container).unwrap();
+    crate::services::relay_capable(crate::engine::isolation(), &state.services[0]).unwrap();
+    crate::services::port_binding(crate::engine::isolation(), &state.services[0], &container).unwrap();
     struct Cleanup(ContainerId);
     impl Drop for Cleanup {
         fn drop(&mut self) {
@@ -1132,7 +1132,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     held.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     held.write_all(b"waiting").unwrap();
     let current = read();
-    crate::services::port_binding(&current.services[0], &container).unwrap();
+    crate::services::port_binding(crate::engine::isolation(), &current.services[0], &container).unwrap();
     assert!(
         crate::engine::cli()
             .args(["kill", container.as_str()])

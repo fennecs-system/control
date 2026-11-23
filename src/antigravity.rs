@@ -38,16 +38,16 @@ impl crate::backend::Agent for Antigravity {
     fn credentials_ready(&self) -> Result<(), String> {
         login().map(|_| ()).map_err(|_| LOGIN.to_owned())
     }
-    fn probe(&self, image: &str) -> Result<(), String> {
+    fn probe(&self, isolation: &dyn Isolation, image: &str) -> Result<(), String> {
         crate::config::node_id()
             .map_err(io::Error::other)
-            .and_then(|node| probe(crate::engine::isolation(), image, &node, &crate::config::state("antigravity-check").map_err(io::Error::other)?, &format!("control-antigravity-probe-{}", std::process::id())))
+            .and_then(|node| probe(isolation, image, &node, &crate::config::state("antigravity-check").map_err(io::Error::other)?, &format!("control-antigravity-probe-{}", std::process::id())))
             .map_err(|error| match error.kind() {
                 io::ErrorKind::TimedOut => PROBE_TIMED_OUT.to_owned(),
                 _ => "the offline Antigravity tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
             })
     }
-    fn text_run(&self, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
+    fn text_run(&self, _: &dyn Isolation, call: &crate::backend::TextCall<'_>) -> io::Result<RunSpec> {
         let login = login()?;
         // The text call's scratch root is private and removed after a success.
         let root = call.workspace.parent().ok_or_else(|| fail("Invalid text-call workspace"))?;

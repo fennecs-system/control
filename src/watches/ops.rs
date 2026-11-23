@@ -5,7 +5,6 @@ use crate::{State, identity, tool_registry::AttemptRef, watch_frame::Event};
 use serde_json::{Value, json};
 use std::{
     io::{self, Write},
-    process::Stdio,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -21,11 +20,16 @@ fn node() -> io::Result<control_core::resources::NodeId> {
 }
 /// Runs a runner subcommand in the service, feeding `input` on stdin.
 fn runner(service: &crate::services::Service, arguments: &[&str], input: &str) -> io::Result<Option<i32>> {
-    let (container, user) = crate::services::exec_target(service)?;
-    let mut command = crate::engine::cli();
-    command.args(["exec", "-i", "--user", &user, &container, "control-service-runner"]).args(arguments)
-        .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
-    let mut child = command.spawn()?;
+    let isolation = crate::engine::isolation();
+    let (container, user) = crate::services::exec_target(isolation, service)?;
+    let runner = control_isolation::ExecSpec {
+        container,
+        user: Some(user),
+        input: control_isolation::Input::Attached,
+        argv: ["control-service-runner"].iter().chain(arguments).map(|word| (*word).to_owned()).collect(),
+        ..Default::default()
+    };
+    let mut child = isolation.exec(&runner, control_isolation::Streams::new(control_isolation::Stream::Piped, control_isolation::Stream::Null, control_isolation::Stream::Null))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(input.as_bytes())?;
     }
@@ -130,7 +134,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             };
             // Approved egress brings HTTPS_PROXY, as for exec, when it fits the runner's bound.
             let launched = if command.len() + proxy.len() <= 16_000 { format!("{proxy}{command}") } else { command.clone() };
-            if !crate::services::supports_watches(&service)? {
+            if !crate::services::supports_watches(crate::engine::isolation(), &service)? {
                 return Err(fail("This service's image predates watches; start a new service from rebuilt worker images"));
             }
             let mut arguments = vec!["watch-put", &id, if permanent { "permanent" } else { "transient" }];
