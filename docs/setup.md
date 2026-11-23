@@ -10,9 +10,10 @@ On macOS you need Nix with flakes, Git, a running Docker-compatible Linux engine
 and a Linux Nix builder of the matching architecture: `aarch64-linux` for Apple
 Silicon, `x86_64-linux` for Intel. A Linux host builds its own images.
 
-`nix run .#setup` builds the Nix package (with the embedded Rust/WASM UI) and the
-Codex worker image, loads the image and saves its immutable ID. Optional flags
-after `--`:
+`nix build` builds `./result/bin/control` with the embedded Rust/WASM UI; it
+needs neither Docker nor the Linux builder. `nix run .#setup` builds the Codex
+worker image, loads it, saves its immutable ID and refreshes `./result`. Optional
+flags after `--`:
 
 | Flag | Adds |
 | --- | --- |
@@ -34,8 +35,8 @@ call a model or start services. Rerun it after pulling changes.
 
 Output links under `${XDG_DATA_HOME:-$HOME/.local/share}/control/` protect the
 package and images from garbage collection; `package/bin/control` there is the
-stable executable. Setup also copies it to `target/release/control` and registers
-the checkout as the source root for `/improve`.
+stable executable. Setup also registers the checkout as the source root for
+`/improve`, and refreshes `target/release/control` only if an older checkout has one.
 
 ## Linux builder on macOS
 
@@ -76,7 +77,8 @@ model/tool check and uses model quota.
 
 ## Private configuration
 
-`control` below means `./target/release/control` or an installed copy.
+`control` below means `./result/bin/control` or an installed copy;
+`nix run . -- ARGS` also runs it, and plain `nix run` starts the server.
 `control config init` creates private configuration from a template without
 overwriting existing files; `control config path` prints the directory.
 `--source-root PATH` sets the improvement source and `--provider codex|claude|grok|antigravity`

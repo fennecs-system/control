@@ -21,7 +21,7 @@ self-update cannot write to the image and is not used.
 
 ```sh
 nix run .#setup -- --antigravity
-./target/release/control antigravity check
+./result/bin/control antigravity check
 ```
 
 ## Logins

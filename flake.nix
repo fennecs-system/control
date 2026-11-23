@@ -43,6 +43,8 @@
             '';
           };
         in {
+          # `nix run` starts the server; `nix run . -- doctor` and other commands pass through.
+          default = { type = "app"; program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.control}/bin/control"; };
           setup = { type = "app"; program = "${setup}/bin/control-setup"; };
           inference = { type = "app"; program = "${inference}/bin/control-inference"; };
           codex = { type = "app"; program = "${pkgs.codex}/bin/codex"; };
@@ -75,5 +77,7 @@
           inference-image-vulkan = import ./tools/inference/image.nix { inherit pkgs; acceleration = "vulkan"; };
           inference-image-cuda = import ./tools/inference/image.nix { inherit pkgs; acceleration = "cuda"; };
         });
+      # Building the package runs the workspace tests; images stay out of checks (they need a Linux builder on macOS).
+      checks = eachSystem (pkgs: { inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) control; });
     };
 }

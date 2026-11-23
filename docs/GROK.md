@@ -14,8 +14,8 @@ is not enough for its largest one):
 
 ```sh
 nix run .#setup -- --grok
-./target/release/control grok check
-./target/release/control grok login
+./result/bin/control grok check
+./result/bin/control grok login
 ```
 
 `check` tests offline workspace isolation without mounting a login or calling a

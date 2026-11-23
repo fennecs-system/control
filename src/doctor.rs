@@ -22,12 +22,12 @@ pub fn run() -> io::Result<()> {
     check(
         "configuration",
         private(&config, true),
-        "run ./target/release/control config init; directory mode must be 0700",
+        "run control config init; directory mode must be 0700",
     );
     check(
         "state",
         private(&state, true),
-        "run ./target/release/control config init; state directory mode must be 0700",
+        "run control config init; state directory mode must be 0700",
     );
     // Read the way offline readers see it: snapshot plus patch log, no lock,
     // nothing repaired. Errors name no contents.
@@ -49,7 +49,7 @@ pub fn run() -> io::Result<()> {
     check(
         "node identity",
         crate::config::node_id().is_ok(),
-        "run ./target/release/control config init or inspect the node-id file",
+        "run control config init or inspect the node-id file",
     );
     check(
         "embedded UI",

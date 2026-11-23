@@ -70,7 +70,7 @@ impl crate::backend::Agent for Grok {
 }
 const MAILBOX: &str = "grok-mailbox";
 const PROBE: &str = "grok-isolation-probe";
-const LOGIN: &str = "run ./target/release/control grok login; its private login stays outside the checkout";
+const LOGIN: &str = "run control grok login; its private login stays outside the checkout";
 const PROBE_TIMED_OUT: &str = "Grok tool isolation probe timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
 /// Headless, unattended and stateless: no update check, subagents, web search,
 /// memory or plan mode, and every remaining tool call approved.

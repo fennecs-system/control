@@ -41,8 +41,8 @@ With a Linux Nix builder and a running container engine:
 
 ```sh
 nix run .#setup -- --claude
-./target/release/control claude check
-./target/release/control claude login
+./result/bin/control claude check
+./result/bin/control claude login
 ```
 
 `check` tests offline workspace isolation without mounting a login or calling a

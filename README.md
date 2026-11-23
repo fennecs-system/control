@@ -16,19 +16,20 @@ if you need a builder or want the individual build steps.
 ```sh
 git clone https://github.com/fennecs-system/control.git
 cd control
-nix run .#setup
+nix build           # ./result/bin/control, with the web UI built in
+nix run .#setup     # build, load and pin the worker image; initialize configuration
 ```
 
 Sign in to Codex, check the installation, then start the server:
 
 ```sh
 nix run .#codex -- -c 'cli_auth_credentials_store="file"' login
-./target/release/control doctor
-./target/release/control serve
+./result/bin/control doctor
+./result/bin/control serve
 ```
 
-In another terminal, run `./target/release/control open` for the web UI, or
-`./target/release/control tui` for terminal chat. Add `--directory /path/to/project`
+In another terminal, run `./result/bin/control open` for the web UI, or
+`./result/bin/control tui` for terminal chat. Add `--directory /path/to/project`
 to request an isolated project workspace. Try a small task, then a
 follow-up about the same files. Open **Artifacts** to inspect the result.
 
@@ -52,7 +53,7 @@ Codex is the default. To start with Claude inside Control:
 
 ```sh
 nix run .#setup -- --claude
-./target/release/control claude login
+./result/bin/control claude login
 ```
 
 On a fresh node, `--claude` selects Claude's `sonnet` model. Rerunning setup
@@ -80,8 +81,8 @@ You can also use Control's tools from your existing Claude Code or Codex CLI.
 With Control running, register its MCP server from the checkout:
 
 ```sh
-claude mcp add --transport stdio control -- "$PWD/target/release/control" mcp
-nix run .#codex -- mcp add control -- "$PWD/target/release/control" mcp
+claude mcp add --transport stdio control -- "$PWD/result/bin/control" mcp
+nix run .#codex -- mcp add control -- "$PWD/result/bin/control" mcp
 ```
 
 This bridge provides read-only chat, lens, room and artifact access, plus search,
@@ -99,7 +100,7 @@ provider/model. Team budgets and execution concurrency are configured separately
 
 ## Commands
 
-Run `./target/release/control <command>`:
+Run `./result/bin/control <command>`:
 
 | Command | Purpose |
 | --- | --- |
