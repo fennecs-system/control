@@ -1070,6 +1070,7 @@ pub fn viewable<'a>(chats: &'a [Session], id: &str) -> Result<&'a Session, &'sta
 pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     let session = viewable(&state.chats, id)?;
     let runs = crate::conversation::Conversation::of(state, session);
+    let holds = crate::providers::accounts::Holds::of(&state.runtime);
     let pending_questions = crate::design::pending_json(state, id, crate::design::UnixSeconds::now());
     Ok(
         json!({"id":session.id,"title":crate::callsigns::name_or_id(&state.chats,&session.id),"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_importing":crate::projects::importing(&session.id).is_some(),"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"persona":session.persona,"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
@@ -1078,7 +1079,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         let mut message = json!({"text":m.text,"reply":reply,"status":status.as_str(),"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))});
         if run.is_some_and(|r| r.source.as_str() == "advisor-note") { message["advisor_note"] = json!(true); }
         if m.is_notice(run) { message["notice"] = json!(true); }
-        if let Some(held) = run.and_then(|r| crate::providers::accounts::held_run(&state.runtime, r)) { message["held"] = json!(held); }
+        if let Some(held) = run.and_then(|r| holds.held(r)) { message["held"] = json!(held); }
         message
     }).collect::<Vec<_>>(),"pending_questions":pending_questions,"decision_revision":crate::design::decision_revision(state)}),
     )
@@ -1118,18 +1119,20 @@ pub fn list(state: &State) -> Value {
 }
 /// Each chat's first queued run its account holds, in the hold's words.
 fn held_chats(state: &State) -> std::collections::HashMap<&str, String> {
+    let holds = crate::providers::accounts::Holds::of(&state.runtime);
+    if !holds.possible() {
+        return std::collections::HashMap::new();
+    }
     state
         .runtime
         .runs
         .iter()
-        .filter_map(|run| {
-            Some((
-                run.chat_id.as_deref()?,
-                crate::providers::accounts::held_run(&state.runtime, run)?,
-            ))
-        })
-        .fold(std::collections::HashMap::new(), |mut held, (chat, reason)| {
-            held.entry(chat).or_insert(reason);
+        .filter(|run| run.status == RunStatus::Queued)
+        // The hold first: it is one look in a list of accounts, and most
+        // queued turns are not held.
+        .filter_map(|run| Some((run.chat_id.as_deref()?, run, holds.hold(run)?)))
+        .fold(std::collections::HashMap::new(), |mut held, (chat, run, hold)| {
+            held.entry(chat).or_insert_with(|| holds.reason(&hold, run));
             held
         })
 }

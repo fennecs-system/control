@@ -75,6 +75,7 @@ struct Attempt {
 pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
     let session = super::viewable(&state.chats, id)?;
     let runs = crate::conversation::Conversation::of(state, session);
+    let holds = crate::providers::accounts::Holds::of(&state.runtime);
     let project_message = crate::projects::message_index(session);
     let mut events = String::new();
     let entries = session
@@ -110,7 +111,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
                 RunStatus::Interrupted => "Interrupted",
                 RunStatus::Completed | RunStatus::Continued | RunStatus::Unrecognised(_) => "",
             };
-            let held = run.and_then(|run| crate::providers::accounts::held_run(&state.runtime, run));
+            let held = run.and_then(|run| holds.held(run));
             let hold = state
                 .runtime
                 .paused

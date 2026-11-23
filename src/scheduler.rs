@@ -217,8 +217,9 @@ pub fn next(runtime: &Runtime) -> Option<usize> {
 /// into the scheduling core. Held bot turns, and turns held by their account's cap or cooldown, do not block
 /// other conversations.
 pub(crate) fn next_in(state: &crate::State) -> Option<usize> {
+    let holds = crate::providers::accounts::Holds::of(&state.runtime);
     next_where(&state.runtime, |run| {
-        crate::bots::may_start(state, run) && crate::providers::accounts::hold(&state.runtime, run).is_none()
+        crate::bots::may_start(state, run) && holds.hold(run).is_none()
     })
 }
 fn next_where(runtime: &Runtime, permitted: impl Fn(&crate::runtime::Run) -> bool) -> Option<usize> {
