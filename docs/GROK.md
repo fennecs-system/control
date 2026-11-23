@@ -25,9 +25,12 @@ read it; another uid cannot, directly or through `/proc/1/root`, and it is not
 in the environment. Run it after any image update. `login` runs Grok's own device-code sign-in (`grok login --device-auth`)
 inside the image: open the address it prints and enter its code; never paste
 codes or credentials into chat. The login lives under `~/.config/control/grok/`.
-Control checks its metadata and mounts only `auth.json`, read-only, into task
-runs. `CONTROL_GROK_AUTH_FILE` can point to another absolute, private credential
-file. Repeat `login` when the session expires.
+Control checks its metadata and mounts that folder, writable, at
+`/home/agent/.grok-login` (`GROK_AUTH_PATH`), so a token Grok refreshes is kept;
+only `auth.json`, its lock and Grok's in-flight copies stay there after a turn
+(docs/LOCAL-MODELS.md). `CONTROL_GROK_AUTH_FILE` can point to another absolute,
+private credential file, which is mounted read-only. Repeat `login` when the
+session expires.
 
 An xAI API key instead (billed per use): `control accounts add grok NAME --kind
 api-key`, then `pbpaste | control grok key --account NAME`. Grok documents the
@@ -63,5 +66,5 @@ A failure never falls back to another backend or the host.
 
 Written from the CLI's source and checked by tests on recorded shapes, not run
 with a login: which model names an account may select, how a usage limit is
-worded in the stream, and whether a token refresh during a turn needs to write
-`auth.json` (the mount is read-only, as for the other backends).
+worded in the stream, and how often a refresh during a turn rewrites
+`auth.json` (its folder is mounted writable, so a refresh is kept).

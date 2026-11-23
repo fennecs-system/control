@@ -88,12 +88,13 @@ const SECCOMP: &[u8] = include_bytes!("../../../hosting/worker-seccomp.json");
 /// The fixed message when nothing in Codex's diagnostics is recognised.
 pub const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
 
-/// The credential file a container mounts and its owner: the granted login,
-/// or an empty canary for a probe.
+/// The credential file a container mounts, its owner and whether the CLI may
+/// write it back: the granted login, or an empty canary for a probe.
 pub struct Credentials {
     pub path: PathBuf,
     pub uid: u32,
     pub gid: u32,
+    pub write: control_agent::Write,
 }
 impl From<&Granted> for Credentials {
     fn from(granted: &Granted) -> Self {
@@ -102,9 +103,12 @@ impl From<&Granted> for Credentials {
             path: granted.path().to_path_buf(),
             uid,
             gid,
+            write: granted.write(),
         }
     }
 }
+/// Where the sign-in is in the container.
+pub const AUTH: &str = "/home/agent/.codex/auth.json";
 
 /// The pre-run sandbox probe for `control doctor`: an empty canary stands in for
 /// auth.json, so no account is mounted and no model is called.
@@ -122,6 +126,7 @@ pub fn offline_probe(node: &dyn Node, isolation: &dyn Isolation, image: &str) ->
         path: root.join("unused"),
         uid: owner.uid(),
         gid: owner.gid(),
+        write: control_agent::Write::ReadOnly,
     };
     let name = format!("control-auth-check-doctor-{}-probe", std::process::id());
     sandbox_probe(node, isolation, image, &root, &canary, &name, &policy, &node_id)
@@ -186,21 +191,34 @@ pub fn container_spec_scoped(
         name.starts_with("control-auth-check-") || name.starts_with("control-summary-"),
     )
     .tmpfs(Tmpfs::new("/tmp", Size::Mib(512)))
-    .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).owned(owner))
+    // Private like every CLI's home: an engine that presents a mounted file
+    // as owned by whoever reads it leaves only the home's mode to keep other
+    // uids from the sign-in.
+    .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).private(owner))
     .tmpfs(Tmpfs::new("/home/agent/.codex", Size::Mib(64)).owned(owner))
     .bind(workspace, "/workspace", Access::ReadWrite)
+    // Codex writes a refreshed sign-in back in place (`FileAuthStorage::save`
+    // truncates and rewrites `auth.json`: no temporary file, rename or lock;
+    // codex-rs/login/src/auth/storage.rs at rust-v0.164.0), so the file alone
+    // is mounted, writable only when the host made the login refreshable.
     .secret(
         "codex/auth.json",
         &auth.path,
-        "/home/agent/.codex/auth.json",
-        Access::ReadOnly,
+        AUTH,
+        match auth.write {
+            control_agent::Write::Refreshable => Access::ReadWrite,
+            control_agent::Write::ReadOnly => Access::ReadOnly,
+        },
     )
     .env("HOME", "/home/agent")
     .env("CODEX_HOME", "/home/agent/.codex");
-    Ok(match review {
+    let spec = match review {
         Some(source) => spec.bind(source, "/review", Access::ReadOnly),
         None => spec,
-    })
+    };
+    control_agent::cli::secrets_private(&spec)
+        .map_err(|_| "Codex would mount its sign-in outside its private home.")?;
+    Ok(spec)
 }
 
 pub fn permissions(spec: RunSpec) -> RunSpec {
@@ -304,6 +322,7 @@ pub fn sandbox_probe(
         path: canary,
         uid: auth.uid,
         gid: auth.gid,
+        write: control_agent::Write::ReadOnly,
     };
     // PID 1 must be the inner execution supervisor, not the account-bearing harness.
     // Its memory is naturally readable by its own child; the outer harness is outside this PID namespace.
@@ -549,9 +568,24 @@ pub fn read_report(path: &Path) -> std::io::Result<String> {
 
 impl Turns for Codex {
     fn turn(&self, turn: Turn<'_>, host: &mut dyn Host) -> Outcome {
-        execute(turn, host)
+        // A named account's folder keeps only its sign-in: what an earlier login
+        // left beside it goes after the turn (best effort, as for every CLI).
+        let folder = turn
+            .login
+            .as_ref()
+            .ok()
+            .filter(|login| login.write() == control_agent::Write::Refreshable)
+            .and_then(|login| login.path().parent().map(Path::to_path_buf));
+        let outcome = execute(turn, host);
+        if let Some(folder) = folder {
+            let _ = control_agent::sweep(&folder, FOLDER_KEEPS);
+        }
+        outcome
     }
 }
+/// What a Codex account folder keeps: `auth.json` alone, which holds a
+/// sign-in or the key `codex login --with-api-key` wrote.
+const FOLDER_KEEPS: &[control_agent::Keep] = &[control_agent::Keep::Name("auth.json")];
 fn launched(result: Result<String, Failure>, usage: Option<control_ai::Usage>) -> Outcome {
     Outcome::Launched { result, usage }
 }
@@ -845,14 +879,15 @@ pub fn command(command: control_agent::Command<'_>) -> std::io::Result<()> {
     let sign_in = match (action.as_str(), key) {
         ("--help" | "-h" | "help", _) => {
             println!(
-                "control codex login --account NAME: sign a named account in with a device code inside the pinned worker image\ncontrol codex key --account NAME: save an API-key account's key from standard input with Codex's own offline API-key login\ncontrol codex check: offline sandbox check; no credentials or model calls"
+                "control codex login --account NAME: sign a named account in with a device code inside the pinned worker image\ncontrol codex key --account NAME: save an API-key account's key from standard input with Codex's own offline API-key login\ncontrol codex check: offline sandbox check, then a fake-credential canary in a turn container (the operator's own sign-in read-only, a named account's writable by the CLI alone, a key read-only); no real credentials or model calls"
             );
             return Ok(());
         }
         ("check", _) => {
-            offline_probe(node, isolation, &image()?).map_err(|e| fail(&e))?;
+            let image = image()?;
+            offline_probe(node, isolation, &image).map_err(|e| fail(&e))?;
             println!("Codex offline sandbox verified. No account credentials were mounted or model called.");
-            return Ok(());
+            return canary(node, isolation, &image);
         }
         ("login", _) => SignIn::Device,
         ("key", Some(key)) => SignIn::Key(key),
@@ -896,7 +931,38 @@ pub fn command(command: control_agent::Command<'_>) -> std::io::Result<()> {
     if !finished.success() {
         return Err(fail("Codex login did not complete"));
     }
+    // Signing in again replaces auth.json in place; the logs and state the
+    // login left in its home go, since turns mount auth.json alone.
+    control_agent::sweep(&directory, FOLDER_KEEPS)?;
     fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
+}
+/// The credential canary in a turn's own container, on a fake credential:
+/// the operator's own sign-in must not be writable, a named account's must be
+/// writable by the CLI alone, and a key is read-only.
+fn canary(node: &dyn Node, isolation: &dyn Isolation, image: &str) -> std::io::Result<()> {
+    use control_agent::cli::{Canary, canary_check};
+    let node_id = node.id().map_err(std::io::Error::other)?;
+    let root = fs::canonicalize(node.check_root("codex-check").map_err(std::io::Error::other)?)?;
+    let policy = root.join("worker-seccomp.json");
+    fs::write(&policy, SECCOMP)?;
+    let workspace = root.join("canary-workspace");
+    fs::create_dir_all(&workspace)?;
+    let name = format!("control-auth-check-{}-canary", std::process::id());
+    [
+        Canary::ReadOnly(control_agent::Form::Session),
+        Canary::Refreshable(control_agent::Keeps::InPlace),
+        Canary::ReadOnly(control_agent::Form::ApiKey),
+    ]
+    .into_iter()
+    .try_for_each(|login| {
+        canary_check(isolation, &root, login, AUTH, |granted| {
+            let auth = Credentials::from(granted);
+            turn_container(
+                image, &name, &workspace, &auth, &policy, &node_id, None, "canary", false,
+            )
+            .map_err(std::io::Error::other)
+        })
+    })
 }
 /// How `control codex` signs an account in.
 enum SignIn<'a> {

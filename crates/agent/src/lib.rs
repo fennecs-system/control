@@ -10,8 +10,10 @@ pub mod host;
 mod key;
 pub mod mailbox_wake;
 
-pub use failure::{CANCELLED, Cancelled, Cause, Failure, Status, UNFINISHED_TOOL, WAITING, classify, timeout_message};
-pub use granted::{Form, Granted};
+pub use failure::{
+    CANCELLED, Cancelled, Cause, Failure, SignIn, Status, UNFINISHED_TOOL, WAITING, classify, timeout_message,
+};
+pub use granted::{Folder, Form, Granted, Keep, Keeps, Names, Write, sweep, sweep_plan};
 pub use host::{Control, Events, Host, Node, Stop};
 pub use key::{ApiKey, KeyError};
 

@@ -154,7 +154,7 @@ fn accounts(json: &str) -> crate::accounts::Store<Backend> {
     crate::accounts::Store::parse(json.as_bytes()).unwrap()
 }
 const TWO_CODEX: &str = r#"{"accounts":[
-    {"backend":"codex","name":"second","kind":"subscription"},
+    {"backend":"codex","name":"second","kind":"subscription","cap":1},
     {"backend":"codex","name":"off","kind":"api_key","enabled":false}]}"#;
 
 #[test]
@@ -427,7 +427,7 @@ fn an_account_at_its_cap_holds_its_next_turn_and_says_why() {
             .all(|run| run.target.account.as_str() == "second")
     );
     assert_eq!(crate::scheduler::next_in(&state), Some(0));
-    // Codex rewrites its own sign-in, so a named Codex account runs one at a time.
+    // This account is capped at one by the operator.
     state.runtime.runs[0].status = RunStatus::Running;
     assert_eq!(crate::scheduler::next_in(&state), None, "the second turn is held");
     let held = crate::providers::accounts::hold(&state.runtime, &state.runtime.runs[1]).unwrap();
