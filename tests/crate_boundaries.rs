@@ -47,7 +47,7 @@ fn workspace() -> Vec<(String, Vec<String>)> {
 #[test]
 fn leaf_crates_and_clients_do_not_depend_upwards() {
     let graph = workspace();
-    ["control", "control-client", "control-delivery", "control-diff", "control-url-names", "control-ingress"]
+    ["control", "control-client", "control-delivery", "control-diff", "control-url-names", "control-ingress", "control-isolation"]
         .iter()
         .for_each(|name| assert!(graph.iter().any(|(package, _)| package == name), "{name} is not a workspace member"));
     assert_eq!(violations(&graph), Vec::<(&str, &str)>::new());
