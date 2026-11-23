@@ -34,7 +34,9 @@ impl Backend for Test {
         match self {
             Self::Codex => Some(KeyFile {
                 name: "auth.json",
-                writer: KeyWriter::Cli,
+                writer: KeyWriter::Cli {
+                    field: "OPENAI_API_KEY",
+                },
             }),
             Self::Claude => None,
         }

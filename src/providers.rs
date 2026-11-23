@@ -974,10 +974,17 @@ fn render_accounts(runtime: &crate::runtime::Runtime) -> String {
                 if *name == default { " <span class='model-default'>Default</span>" } else { "" },
                 account.kind.as_str(),
                 match (signed_in, account.kind) {
-                    (true, crate::accounts::AccountKind::ApiKey) => "Key saved",
-                    (false, crate::accounts::AccountKind::ApiKey) => "No key yet",
-                    (true, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => "Signed in",
-                    (false, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => "No login yet",
+                    (true, crate::accounts::AccountKind::ApiKey) => format!(
+                        "Key saved · {}",
+                        crate::escape(&crate::ports::key_relay::decision(backend).describe())
+                    ),
+                    (false, crate::accounts::AccountKind::ApiKey) => "No key yet".to_owned(),
+                    (true, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
+                        "Signed in".to_owned()
+                    }
+                    (false, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
+                        "No login yet".to_owned()
+                    }
                 },
                 match (account.enabled, cooling) {
                     (false, _) => "Disabled".to_owned(),

@@ -2,8 +2,9 @@
 //! stream and one agent turn. Codex runs its own sandboxed shell, so its turn
 //! container mounts the workspace itself.
 use control_agent::{
-    Agent, Cancelled, Cause, Checked, Control, Failure, Granted, Host, ImagePin, Login, Node, Outcome, Runs,
-    SANDBOX_PROBE_WAIT, Stop, TextCall, Turn, Turns, WORKER_IMAGE, cli::handoff_grace_over, mailbox_wake::MailboxWake,
+    Agent, Cancelled, Cause, Checked, Control, Failure, Form, Granted, Host, ImagePin, KeyDelivery, Login, Node,
+    Outcome, Runs, SANDBOX_PROBE_WAIT, Stop, TextCall, Turn, Turns, WORKER_IMAGE, cli::handoff_grace_over,
+    mailbox_wake::MailboxWake,
 };
 use control_effect::sync::Recv;
 use control_isolation::{Access, Input, Isolation, Limits, Network, Proc, RunSpec, Size, Stream, Streams, Tmpfs, User};
@@ -73,6 +74,9 @@ impl Agent for Codex {
     fn own_web_search(&self) -> bool {
         true
     }
+    fn key_delivery(&self) -> KeyDelivery {
+        KeyDelivery::Proxied(&control_inject::OPENAI)
+    }
 }
 
 pub const PERMISSIONS: [&str; 6] = [
@@ -89,12 +93,14 @@ const SECCOMP: &[u8] = include_bytes!("../../../hosting/worker-seccomp.json");
 pub const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
 
 /// The credential file a container mounts, its owner and whether the CLI may
-/// write it back: the granted login, or an empty canary for a probe.
+/// write it back: the granted login, or an empty canary for a probe. For a
+/// proxied key, the file is a placeholder `auth.json` and `relay` is set.
 pub struct Credentials {
     pub path: PathBuf,
     pub uid: u32,
     pub gid: u32,
     pub write: control_agent::Write,
+    pub relay: Option<control_agent::Proxied>,
 }
 impl From<&Granted> for Credentials {
     fn from(granted: &Granted) -> Self {
@@ -104,8 +110,45 @@ impl From<&Granted> for Credentials {
             uid,
             gid,
             write: granted.write(),
+            relay: None,
         }
     }
+}
+impl Credentials {
+    /// What a turn mounts for `granted`. A proxied key becomes an `auth.json`
+    /// in the attempt's `private` directory that holds only the placeholder,
+    /// in the shape Codex reads an API key (`OPENAI_API_KEY`); the account's
+    /// real `auth.json` stays on the host.
+    pub fn granted(granted: &Granted, private: &Path) -> std::io::Result<Self> {
+        match granted.form() {
+            Form::Session | Form::ApiKey | Form::CloudDefault => Ok(Self::from(granted)),
+            Form::Proxied => {
+                let relay = granted.relay()?;
+                let path = private.join(control_agent::cli::PLACEHOLDER);
+                let contents = serde_json::json!({"OPENAI_API_KEY": relay.placeholder()}).to_string();
+                control_agent::cli::private_file(&path, &contents)?;
+                Ok(Self {
+                    path,
+                    relay: Some(relay.clone()),
+                    ..Self::from(granted)
+                })
+            }
+        }
+    }
+}
+/// The Codex settings that send a proxied turn's model requests to the relay:
+/// a custom provider on the Responses API that uses the API key in
+/// `auth.json` (the placeholder) and no WebSockets, which the relay does not
+/// carry; analytics off, since nothing else leaves the container.
+fn relay_settings(relay: &control_agent::Proxied) -> [String; 3] {
+    [
+        "model_provider=\"control\"".to_owned(),
+        format!(
+            "model_providers.control={{name=\"Control key relay\",base_url=\"{}/v1\",wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
+            relay.origin()
+        ),
+        "analytics.enabled=false".to_owned(),
+    ]
 }
 /// Where the sign-in is in the container.
 pub const AUTH: &str = "/home/agent/.codex/auth.json";
@@ -127,6 +170,7 @@ pub fn offline_probe(node: &dyn Node, isolation: &dyn Isolation, image: &str) ->
         uid: owner.uid(),
         gid: owner.gid(),
         write: control_agent::Write::ReadOnly,
+        relay: None,
     };
     let name = format!("control-auth-check-doctor-{}-probe", std::process::id());
     sandbox_probe(node, isolation, image, &root, &canary, &name, &policy, &node_id)
@@ -197,21 +241,25 @@ pub fn container_spec_scoped(
     .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).private(owner))
     .tmpfs(Tmpfs::new("/home/agent/.codex", Size::Mib(64)).owned(owner))
     .bind(workspace, "/workspace", Access::ReadWrite)
-    // Codex writes a refreshed sign-in back in place (`FileAuthStorage::save`
-    // truncates and rewrites `auth.json`: no temporary file, rename or lock;
-    // codex-rs/login/src/auth/storage.rs at rust-v0.164.0), so the file alone
-    // is mounted, writable only when the host made the login refreshable.
-    .secret(
-        "codex/auth.json",
-        &auth.path,
-        AUTH,
-        match auth.write {
-            control_agent::Write::Refreshable => Access::ReadWrite,
-            control_agent::Write::ReadOnly => Access::ReadOnly,
-        },
-    )
     .env("HOME", "/home/agent")
     .env("CODEX_HOME", "/home/agent/.codex");
+    let spec = match &auth.relay {
+        // A placeholder, not a secret: worthless off the relay.
+        Some(_) => spec.bind(&auth.path, AUTH, Access::ReadOnly),
+        // Codex writes a refreshed sign-in back in place (`FileAuthStorage::save`
+        // truncates and rewrites `auth.json`: no temporary file, rename or lock;
+        // codex-rs/login/src/auth/storage.rs at rust-v0.164.0), so the file alone
+        // is mounted, writable only when the host made the login refreshable.
+        None => spec.secret(
+            "codex/auth.json",
+            &auth.path,
+            AUTH,
+            match auth.write {
+                control_agent::Write::Refreshable => Access::ReadWrite,
+                control_agent::Write::ReadOnly => Access::ReadOnly,
+            },
+        ),
+    };
     let spec = match review {
         Some(source) => spec.bind(source, "/review", Access::ReadOnly),
         None => spec,
@@ -323,6 +371,7 @@ pub fn sandbox_probe(
         uid: auth.uid,
         gid: auth.gid,
         write: control_agent::Write::ReadOnly,
+        relay: None,
     };
     // PID 1 must be the inner execution supervisor, not the account-bearing harness.
     // Its memory is naturally readable by its own child; the outer harness is outside this PID namespace.
@@ -605,11 +654,11 @@ fn execute(turn: Turn<'_>, host: &mut dyn Host) -> Outcome {
     } = turn;
     let blocked = |m: &str| Failure::Blocked(m.to_owned());
     let failed = |m: &str| Failure::Failed(m.to_owned());
-    let auth = match login {
-        Ok(granted) => Credentials::from(&granted),
+    let root = absolute.parent().unwrap();
+    let auth = match login.and_then(|granted| Credentials::granted(&granted, root)) {
+        Ok(auth) => auth,
         Err(error) => return blocked(&error.to_string()).into(),
     };
-    let root = absolute.parent().unwrap();
     let policy = root.join("worker-seccomp.json");
     if fs::write(&policy, SECCOMP).is_err() {
         return failed("Could not prepare embedded worker security profile.").into();
@@ -839,14 +888,21 @@ fn turn_container(
         )
         .collect::<Vec<_>>()
     });
-    Ok(spec
+    let relay = auth.relay.as_ref().map(relay_settings);
+    let spec = spec
         .args(
             rooms
                 .into_iter()
                 .flatten()
+                .chain(relay.into_iter().flatten())
                 .flat_map(|setting| ["-c".to_owned(), setting]),
         )
-        .args(["-"]))
+        .args(["-"]);
+    // A proxied turn has no network and starts once its relay listens.
+    Ok(match &auth.relay {
+        Some(relay) => relay.offline(spec),
+        None => spec,
+    })
 }
 
 #[cfg(test)]
@@ -962,6 +1018,13 @@ fn canary(node: &dyn Node, isolation: &dyn Isolation, image: &str) -> std::io::R
             )
             .map_err(std::io::Error::other)
         })
+    })?;
+    control_agent::cli::proxied_canary_check(isolation, &root, AUTH, |granted| {
+        let auth = Credentials::granted(granted, &root)?;
+        turn_container(
+            image, &name, &workspace, &auth, &policy, &node_id, None, "canary", false,
+        )
+        .map_err(std::io::Error::other)
     })
 }
 /// How `control codex` signs an account in.

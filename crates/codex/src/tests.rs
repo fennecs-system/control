@@ -14,6 +14,7 @@ fn codex_launch_vectors_are_pinned() {
         uid: 501,
         gid: 20,
         write: control_agent::Write::ReadOnly,
+        relay: None,
     };
     let workspace = root.join("workspace");
     let text = text_container(
@@ -396,6 +397,7 @@ fn a_refreshable_sign_in_is_its_file_writable_in_place() {
             uid: 501,
             gid: 20,
             write,
+            relay: None,
         };
         let spec = turn_container(
             "sha256:img",

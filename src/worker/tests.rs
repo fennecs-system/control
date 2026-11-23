@@ -1949,6 +1949,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
         uid: meta.uid(),
         gid: meta.gid(),
         write: control_agent::Write::ReadOnly,
+        relay: None,
     };
     fs::write(&auth.path, b"{}").unwrap();
     let policy = root.join("seccomp.json");
@@ -1999,6 +2000,7 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
         uid: 502,
         gid: 20,
         write: control_agent::Write::ReadOnly,
+        relay: None,
     };
     let spec = container_spec(
         "sha256:test",

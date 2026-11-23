@@ -1,5 +1,5 @@
 use super::*;
-use crate::ports::inject::{ANTHROPIC, AttemptId, OPENAI, Shape, Token};
+use control_inject::{ANTHROPIC, AttemptId, OPENAI, Shape, Token};
 use std::{
     net::{SocketAddr, TcpListener},
     path::Path,

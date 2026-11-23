@@ -45,8 +45,9 @@ pub enum KeyWriter {
     /// Control saves the key as given, privately.
     Host,
     /// The CLI's own API-key login turns the key into its sign-in file
-    /// (Codex's `auth.json`), run once in its pinned image.
-    Cli,
+    /// (Codex's `auth.json`), run once in its pinned image; the key is this
+    /// JSON field of that file, which is where the host's key relay reads it.
+    Cli { field: &'static str },
 }
 
 /// An account's name: `[a-z0-9-]{1,32}`. `default` is reserved for the

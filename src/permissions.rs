@@ -150,6 +150,11 @@ pub struct Permissions {
     pub agent_chat_tools: bool,
     /// Automatic approval of routine port and bot requests.
     pub auto_approval: AutoApproval,
+    /// Refuse a turn on an API-key account whose backend would mount its key
+    /// into the container instead of injecting it through the key relay
+    /// (docs/PORTS.md, "Key-injecting relay"). Off by default; with it off,
+    /// such accounts show a warning.
+    pub require_proxied_keys: bool,
 }
 
 const FILE: &str = "permissions.json";

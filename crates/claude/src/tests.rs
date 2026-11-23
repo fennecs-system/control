@@ -107,6 +107,7 @@ fn claude_launch_vectors_are_pinned() {
         "control-run-1",
         "node-1",
         &auth,
+        &root,
         &root.join("claude-mailbox"),
         "sha256:img",
         "opus",
@@ -293,7 +294,16 @@ fn the_login_is_read_only_beneath_the_private_home_of_the_cli_uid() {
     let root = Path::new("/golden/root");
     for (form, target) in [(Form::Session, CREDENTIALS), (Form::ApiKey, KEY)] {
         let auth = Granted::located(form, "/golden/auth/login".into(), owner);
-        let turn = turn_container("control-run-1", "node-1", &auth, &root.join("m"), "sha256:img", "opus").unwrap();
+        let turn = turn_container(
+            "control-run-1",
+            "node-1",
+            &auth,
+            &root,
+            &root.join("m"),
+            "sha256:img",
+            "opus",
+        )
+        .unwrap();
         let text = text_container(
             "sha256:img",
             "control-summary-1",
@@ -331,7 +341,7 @@ fn an_api_key_is_mounted_and_read_by_claudes_own_helper() {
     );
     assert_eq!(KEY_SETTINGS, format!(r#"{{"apiKeyHelper":"cat {KEY}"}}"#));
     let specs = [
-        turn_container("control-run-1", "node", &granted, &root, "sha256:img", "sonnet").unwrap(),
+        turn_container("control-run-1", "node", &granted, &root, &root, "sha256:img", "sonnet").unwrap(),
         text_container("sha256:img", "control-summary-1", &root, "node", "sonnet", &granted).unwrap(),
     ];
     for spec in specs {
@@ -358,7 +368,7 @@ fn an_api_key_is_mounted_and_read_by_claudes_own_helper() {
     }
     // A sign-in keeps its own file and no settings flag.
     let session = Granted::located(Form::Session, key.clone(), granted.owner());
-    let spec = turn_container("control-run-1", "node", &session, &root, "sha256:img", "sonnet").unwrap();
+    let spec = turn_container("control-run-1", "node", &session, &root, &root, "sha256:img", "sonnet").unwrap();
     assert_eq!(spec.secrets[0].target, "/home/agent/.claude/.credentials.json");
     assert!(!spec.argv.contains(&"--settings".to_owned()));
     assert!(Claude.private_names().contains(&KEY_FILE));
@@ -404,6 +414,7 @@ fn a_refreshable_sign_in_mounts_its_own_folder_writable() {
         "control-run-1",
         "node-1",
         &auth,
+        &root,
         &root.join("claude-mailbox"),
         "sha256:img",
         "opus",

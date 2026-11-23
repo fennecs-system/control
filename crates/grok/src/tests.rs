@@ -36,7 +36,16 @@ fn message(ended: Option<&str>, stderr: &[u8]) -> String {
 #[test]
 fn the_container_mounts_the_login_read_only_and_keeps_grok_state_on_a_tmpfs() {
     let auth = login("container");
-    let args = args(&container("control-run-1", "node", &granted(&auth), "sha256:img").unwrap());
+    let args = args(
+        &container(
+            "control-run-1",
+            "node",
+            &granted(&auth),
+            Path::new("/private"),
+            "sha256:img",
+        )
+        .unwrap(),
+    );
     let joined = args.join(" ");
     assert!(joined.contains(&format!(
         "type=bind,src={},dst=/home/agent/.grok/auth.json,readonly",
@@ -129,6 +138,7 @@ fn grok_launch_vectors_are_pinned() {
         "control-run-1",
         "node-1",
         &granted,
+        &root,
         &root.join("grok-config.toml"),
         &root.join("grok-prompt"),
         &root.join(MAILBOX),
@@ -349,6 +359,7 @@ fn an_api_key_is_mounted_and_exported_only_inside_grok() {
         "control-run-1",
         "node-1",
         &granted,
+        &root,
         &root.join("grok-config.toml"),
         &root.join("grok-prompt"),
         &root,
@@ -409,6 +420,7 @@ fn the_login_is_read_only_beneath_the_private_home_of_the_cli_uid() {
             "control-run-1",
             "node-1",
             &granted,
+            &root,
             &root.join("grok-config.toml"),
             &root.join("grok-prompt"),
             &root.join(MAILBOX),
@@ -493,6 +505,7 @@ fn a_refreshable_sign_in_mounts_its_own_folder_writable() {
         "control-run-1",
         "node-1",
         &granted,
+        &root,
         &root.join("grok-config.toml"),
         &root.join("grok-prompt"),
         &root.join(MAILBOX),
