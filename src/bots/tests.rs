@@ -1642,7 +1642,7 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
     );
     watching(&mut state, &chat, "w-new");
     let working = mailbox
-        .publication(Some(&previous), &id, "attempt", "cp", live(&state))
+        .publication(Some(&previous), &id, "attempt", "cp", live(&state.watches))
         .unwrap()
         .unwrap();
     assert_eq!(working.revision, 8);

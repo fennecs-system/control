@@ -421,7 +421,7 @@ pub(super) fn overview(
         esc(model.as_deref().unwrap_or("off")),
         svg(chat, &cells, len, edits, view.map_or("?", |v| v.model.as_str()), focus),
         esc(&detail),
-        super::turn::section(state, session),
+        super::turn::section(&state.runtime.compaction, session),
         esc(metadata),
     )
 }

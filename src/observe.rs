@@ -132,8 +132,14 @@ fn declared(runs: &[crate::runtime::Run], observations: &Observations, run: &str
 fn target(state: &State, chat: &str, service: &str) -> Option<Service> {
     let session = state.chats.iter().find(|session| session.id == chat)?;
     let latest = &state.runtime.runs[crate::chat::latest_task(state, chat, &session.actor)?];
-    crate::services::probe_target(state, service, |s| {
-        s.live() && crate::services::accessible(state, s, &s.resource.owner.node, latest)
+    crate::services::probe_target(&state.services, service, |s| {
+        s.live()
+            && crate::services::accessible(
+                crate::chat::Lineage::of(&state.chats),
+                s,
+                &s.resource.owner.node,
+                latest,
+            )
     })
 }
 /// A watch's newest explicit notification, else its latest lines, and whether
@@ -656,7 +662,12 @@ fn set_with(
                 if !state.services.iter().any(|s| {
                     s.resource.id.as_str() == service
                         && s.live()
-                        && crate::services::accessible(&state, s, &s.resource.owner.node, run)
+                        && crate::services::accessible(
+                            crate::chat::Lineage::of(&state.chats),
+                            s,
+                            &s.resource.owner.node,
+                            run,
+                        )
                 }) {
                     return Err(io::Error::other("Observe only a running service this chat can use"));
                 }
@@ -667,7 +678,12 @@ fn set_with(
                     w.chat == chat
                         || state.services.iter().any(|s| {
                             s.resource.id.as_str() == w.service
-                                && crate::services::accessible(&state, s, &s.resource.owner.node, run)
+                                && crate::services::accessible(
+                                    crate::chat::Lineage::of(&state.chats),
+                                    s,
+                                    &s.resource.owner.node,
+                                    run,
+                                )
                         })
                 });
                 if !owned {

@@ -495,7 +495,7 @@ fn commit(
                     id,
                     generation,
                     checkpoint,
-                    crate::watches::delivery::live(s),
+                    crate::watches::delivery::live(&s.watches),
                 )
             });
         match candidate {
@@ -812,7 +812,7 @@ fn checkpoint_prepared(
         .attempts
         .last()
         .and_then(|a| a.github_source.clone())
-        .or_else(|| crate::github::inherit(state, parent.as_deref()));
+        .or_else(|| crate::github::inherit(&state.runtime.runs, parent.as_deref()));
     let continuity_index = state.chats.iter().position(|c| {
         Some(&c.id) == state.runtime.runs[index].chat_id.as_ref() && c.continuity.is_none() && captured.is_some()
     });
@@ -1344,7 +1344,10 @@ fn execute(
         })?;
     }
     if let Some((state, run)) = bridge {
-        let packages = crate::packages::planned(state, run).map_err(|e| failed(&e.to_string()))?;
+        let packages = state
+            .lock()
+            .map(|s| crate::packages::planned(&s.runtime.runs, &s.packages, run))
+            .map_err(|_| failed("State unavailable"))?;
         if !packages.is_empty() {
             project_operation(bridge, id, "tool-packages", "Copying tool packages", || {
                 crate::packages::copy_into(&crate::packages::store()?, &packages, &workspace)

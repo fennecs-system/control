@@ -128,7 +128,10 @@ pub(super) fn reconcile(
     let mut ids = Vec::new();
     for child in children {
         let leaf = delegation::leaf(state, &child.id)?;
-        follow_up.grant(crate::services::grants(state, leaf));
+        follow_up.grant(crate::services::grants(
+            crate::services::ServiceAuthority::of(state),
+            leaf,
+        ));
         summaries.push(format!(
             "{} · {} · /dm/{}\n{}",
             child.id,

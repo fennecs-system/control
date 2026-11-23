@@ -169,12 +169,9 @@ pub fn cli(args: &[String]) -> io::Result<()> {
     );
     Ok(())
 }
-pub fn inherit(state: &State, parent: Option<&str>) -> Option<Source> {
+pub fn inherit(runs: &[crate::runtime::Run], parent: Option<&str>) -> Option<Source> {
     let parent = parent?;
-    state
-        .runtime
-        .runs
-        .iter()
+    runs.iter()
         .filter(|r| r.action == Action::Improve)
         .flat_map(|r| &r.attempts)
         .find(|a| a.artifact.as_deref() == Some(parent))

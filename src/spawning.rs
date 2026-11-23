@@ -295,7 +295,7 @@ pub fn request(
     // A persona is captured once per batch; its standing decides the role.
     let bundle = match input.persona.as_deref() {
         Some(persona) => Some(
-            crate::personas::capture(state, persona)
+            crate::personas::capture(&state.personas, &state.documents, persona)
                 .map_err(|_| "Unknown persona, or its SOUL.md cannot be captured; control.personas.list names them.")?,
         ),
         None => None,
@@ -429,7 +429,7 @@ pub fn request(
     {
         Some(genes) => (
             Some(
-                crate::lens_library::resolve(state, &genes)
+                crate::lens_library::resolve(crate::lens_library::Sources::of(state), &genes)
                     .map_err(|_| "Selected genes cannot be resolved; check the persona's DNA or the lenses given.")?,
             ),
             Some(genes),
@@ -457,7 +457,7 @@ pub fn request(
         resource_grants: if judge {
             Vec::new()
         } else {
-            crate::services::grants(state, run)
+            crate::services::grants(crate::services::ServiceAuthority::of(state), run)
         },
         actor,
         action,

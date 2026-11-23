@@ -231,7 +231,8 @@ impl control_mcp::Tools for Operator<'_> {
                     crate::rooms::tool(state, name, arguments).map_err(Into::into)
                 }
                 Some(crate::tool_registry::Route::Lens) => {
-                    crate::lens_library::tool(state, name, arguments).map_err(Into::into)
+                    crate::lens_library::tool(crate::lens_library::Sources::of(state), name, arguments)
+                        .map_err(Into::into)
                 }
                 // Served by `mcp_http` before the state lock is taken.
                 Some(crate::tool_registry::Route::Package) => {

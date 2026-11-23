@@ -30,9 +30,9 @@ fn index(runs: &[crate::runtime::Run], attempt: &AttemptRef<'_>) -> io::Result<u
 /// require the watch record, and watch ids are never reused, so a deleted
 /// watch's watermark cannot guard against redelivery and is retired at
 /// publication. Rooms and conversations keep their watermarks.
-pub(crate) fn live(state: &State) -> impl Fn(&Range) -> bool + '_ {
+pub(crate) fn live(watches: &[crate::watches::Watch]) -> impl Fn(&Range) -> bool + '_ {
     |range| match range {
-        Range::Watch { watch, .. } => state.watches.iter().any(|w| &w.id == watch),
+        Range::Watch { watch, .. } => watches.iter().any(|w| &w.id == watch),
         Range::Room { .. } | Range::Conversation { .. } => true,
     }
 }

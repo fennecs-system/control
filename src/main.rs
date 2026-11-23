@@ -209,7 +209,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         "editor" | "knowledge" => knowledge::render(&state.documents,&state.collective,if view=="editor"{"scratchpad"}else{""},None),
         "knowledge-page" => channel.to_owned(),
         "rooms" => rooms::render(state,channel),
-        "lenses" => lens_library::render(state,if lens=="none"{"engineering"}else{lens},None,None,false),
+        "lenses" => lens_library::render(lens_library::Sources::of(state),if lens=="none"{"engineering"}else{lens},None,None,false),
         "lens-page" => channel.to_owned(),
         "persona-page" => channel.to_owned(),
         "personas" => personas::render(state, "lead", None, None),

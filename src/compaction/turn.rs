@@ -201,19 +201,17 @@ fn prune(parent: &std::path::Path, registered: &[String]) {
 }
 
 /// The step trees of `chat`'s recent attempts owned by `actor`, newest first.
-fn turns<'a>(state: &'a State, chat: &str, actor: &crate::identity::Actor) -> impl Iterator<Item = &'a Turn> {
+fn turns<'a>(memory: &'a Memory, chat: &str, actor: &crate::identity::Actor) -> impl Iterator<Item = &'a Turn> {
     let (chat, actor) = (chat.to_owned(), actor.clone());
-    state
-        .runtime
-        .compaction
+    memory
         .turns
         .iter()
         .rev()
         .filter(move |t| t.chat == chat && t.actor == actor && !t.roots.is_empty())
 }
 /// The listing `control_history_read` adds beside the chat's roots.
-pub(super) fn listing(state: &State, chat: &str, actor: &crate::identity::Actor) -> Value {
-    turns(state, chat, actor).map(|t| json!({"run":t.run,"attempt":t.generation,"unit":"steps of this attempt (1-based start+1..end)",
+pub(super) fn listing(memory: &Memory, chat: &str, actor: &crate::identity::Actor) -> Value {
+    turns(memory, chat, actor).map(|t| json!({"run":t.run,"attempt":t.generation,"unit":"steps of this attempt (1-based start+1..end)",
         "roots":t.roots.iter().map(|r| json!({"key":r.key,"start":r.start,"end":r.start + (1u64 << r.level),"level":r.level})).collect::<Vec<_>>()}))
         .collect::<Vec<_>>().into()
 }
@@ -241,8 +239,11 @@ pub(super) fn links(base: &str, listing: &Value) -> String {
 /// The Memory Tree section for `session`'s recent local turns: their step
 /// trees' roots, from memory only (no disk reads), each linked to the
 /// evidence reader that expands it.
-pub(crate) fn section(state: &State, session: &crate::chat::Session) -> String {
-    let items = links(&evidence_url(&session.id), &listing(state, &session.id, &session.actor));
+pub(crate) fn section(memory: &Memory, session: &crate::chat::Session) -> String {
+    let items = links(
+        &evidence_url(&session.id),
+        &listing(memory, &session.id, &session.actor),
+    );
     if items.is_empty() {
         return String::new();
     }
@@ -251,8 +252,8 @@ pub(crate) fn section(state: &State, session: &crate::chat::Session) -> String {
     )
 }
 /// The attempt holding root `key` of `chat`, with the root.
-pub(super) fn locate(state: &State, chat: &str, actor: &crate::identity::Actor, key: &str) -> Option<(String, Root)> {
-    turns(state, chat, actor).find_map(|t| {
+pub(super) fn locate(memory: &Memory, chat: &str, actor: &crate::identity::Actor, key: &str) -> Option<(String, Root)> {
+    turns(memory, chat, actor).find_map(|t| {
         t.roots
             .iter()
             .find(|r| r.key == key)
@@ -269,7 +270,7 @@ pub(super) struct Search {
     turns: Vec<(String, String, Vec<Root>)>,
 }
 pub(super) fn plan(
-    state: &State,
+    memory: &Memory,
     chat: &str,
     actor: &crate::identity::Actor,
     query: &str,
@@ -290,7 +291,7 @@ pub(super) fn plan(
         query: query.into(),
         terms,
         limit,
-        turns: turns(state, chat, actor)
+        turns: turns(memory, chat, actor)
             .map(|t| (t.run.clone(), t.generation.clone(), t.roots.clone()))
             .collect(),
     })

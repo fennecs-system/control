@@ -639,7 +639,7 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
                 || run
                     .chat_id
                     .as_deref()
-                    .is_some_and(|chat| crate::chat::within(state, chat, chat_id)))
+                    .is_some_and(|chat| crate::chat::Lineage::of(&state.chats).within(chat, chat_id)))
                 && run.actor == chat.actor
                 && run.status == "waiting"
                 && run.question.as_ref().is_some_and(Question::pending)

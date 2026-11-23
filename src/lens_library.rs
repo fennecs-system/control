@@ -16,11 +16,28 @@ pub fn inputs(documents: &[crate::knowledge::Document]) -> Vec<DocumentInput> {
         })
         .collect()
 }
-pub fn resolve(state: &State, roots: &[String]) -> Result<Resolved, String> {
-    state.lens_library.resolve_with(
+/// What resolving genes reads: the library, the knowledge documents genes
+/// embed and the tool packages they offer.
+#[derive(Clone, Copy)]
+pub(crate) struct Sources<'a> {
+    library: &'a control_context::Library,
+    documents: &'a [crate::knowledge::Document],
+    packages: &'a [crate::packages::Manifest],
+}
+impl<'a> Sources<'a> {
+    pub(crate) fn of(state: &'a State) -> Self {
+        Self {
+            library: &state.lens_library,
+            documents: &state.documents,
+            packages: &state.packages,
+        }
+    }
+}
+pub(crate) fn resolve(sources: Sources<'_>, roots: &[String]) -> Result<Resolved, String> {
+    sources.library.resolve_with(
         roots,
-        &inputs(&state.documents),
-        &crate::packages::inputs(&state.packages),
+        &inputs(sources.documents),
+        &crate::packages::inputs(sources.packages),
     )
 }
 /// Whether the selected lenses, with their includes, offer the catalogue tool
@@ -104,11 +121,11 @@ pub fn prompt(context: &Resolved, role: Audience) -> String {
     }
     text
 }
-pub fn tool(state: &State, name: &str, args: &serde_json::Value) -> Result<serde_json::Value, &'static str> {
+pub fn tool(sources: Sources<'_>, name: &str, args: &serde_json::Value) -> Result<serde_json::Value, &'static str> {
     match name {
-        "control.lenses.list" => Ok(serde_json::json!(state.lens_library.current())),
-        "control.lens.read" => state
-            .lens_library
+        "control.lenses.list" => Ok(serde_json::json!(sources.library.current())),
+        "control.lens.read" => sources
+            .library
             .get(args["id"].as_str().ok_or("Missing lens ID.")?)
             .map(|d| serde_json::json!(d))
             .ok_or("Lens not found."),
@@ -120,7 +137,7 @@ pub fn tool(state: &State, name: &str, args: &serde_json::Value) -> Result<serde
                 .iter()
                 .map(|v| v.as_str().map(str::to_owned).ok_or("Invalid lens ID."))
                 .collect::<Result<Vec<_>, _>>()?;
-            resolve(state, &roots)
+            resolve(sources, &roots)
                 .map(|r| serde_json::json!(r))
                 .map_err(|_| "Context cannot be resolved. Inspect the lens library.")
         }
@@ -259,10 +276,16 @@ fn roles(roles: &[Audience]) -> String {
         roles.iter().map(|role| role.as_str()).collect::<Vec<_>>().join(", ")
     }
 }
-pub fn render(state: &State, id: &str, submitted: Option<&Definition>, notice: Option<&str>, saved: bool) -> String {
-    let current = state.lens_library.current();
+pub fn render(
+    sources: Sources<'_>,
+    id: &str,
+    submitted: Option<&Definition>,
+    notice: Option<&str>,
+    saved: bool,
+) -> String {
+    let current = sources.library.current();
     let blank = Definition::default();
-    let definition = submitted.or_else(|| state.lens_library.get(id)).unwrap_or(&blank);
+    let definition = submitted.or_else(|| sources.library.get(id)).unwrap_or(&blank);
     let mut included_by = HashMap::<&str, usize>::new();
     for lens in &current {
         for include in &lens.includes {
@@ -296,7 +319,7 @@ pub fn render(state: &State, id: &str, submitted: Option<&Definition>, notice: O
             escape(message)
         ));
     }
-    let existing = state.lens_library.get(&definition.id).is_some();
+    let existing = sources.library.get(&definition.id).is_some();
     if existing {
         html.push_str(&format!(
             "<div class='dna-detail-head'><h3>{}</h3><span>{} · v{} · used by {}</span></div>",
@@ -341,12 +364,12 @@ pub fn render(state: &State, id: &str, submitted: Option<&Definition>, notice: O
         "Descriptive tool hints, not an execution allowlist. Host permissions are enforced separately.",
         &tools,
     ));
-    let mut documents = state
+    let mut documents = sources
         .documents
         .iter()
         .map(|doc| checkbox("document", &doc.id, &doc.title, definition.documents.contains(&doc.id)))
         .collect::<String>();
-    if state.documents.is_empty() {
+    if sources.documents.is_empty() {
         documents.push_str("<p class='muted'>No documents yet. Add them in Knowledge.</p>");
     }
     html.push_str(&group(
@@ -357,7 +380,7 @@ pub fn render(state: &State, id: &str, submitted: Option<&Definition>, notice: O
     ));
     let mut packages = String::new();
     let mut shown = std::collections::BTreeSet::new();
-    for package in state.packages.iter().filter(|p| p.revoked.is_none()) {
+    for package in sources.packages.iter().filter(|p| p.revoked.is_none()) {
         let reference = format!("{}@{}", package.name, package.version);
         shown.insert(reference.clone());
         packages.push_str(&checkbox(
@@ -376,7 +399,7 @@ pub fn render(state: &State, id: &str, submitted: Option<&Definition>, notice: O
             true,
         ));
     }
-    if state.packages.is_empty() && definition.packages.is_empty() {
+    if sources.packages.is_empty() && definition.packages.is_empty() {
         packages.push_str("<p class='muted'>No packages admitted. Use control package import.</p>");
     }
     html.push_str(&group("Tool packages", definition.packages.len(), "Opt runs into operator-admitted packages. Each choice pins one version; runs get a private copy at /workspace/.control-tools/NAME.", &packages));
@@ -399,7 +422,7 @@ pub fn render(state: &State, id: &str, submitted: Option<&Definition>, notice: O
     html.push_str("<button class='primary'>Save gene ↗</button></form>");
     if !definition.id.is_empty()
         && submitted.is_none()
-        && let Err(error) = resolve(state, std::slice::from_ref(&definition.id))
+        && let Err(error) = resolve(sources, std::slice::from_ref(&definition.id))
     {
         html.push_str(&format!("<p class='save-error'>{}</p>", escape(&error)));
     }
@@ -436,7 +459,7 @@ pub fn handle(
             .and_then(|s| s.parse::<u64>().ok())
             .is_some_and(|v| state.lens_library.get(id).is_some_and(|d| d.revision == v));
         let content = render(
-            state,
+            Sources::of(state),
             id,
             None,
             if saved {
@@ -470,7 +493,7 @@ pub fn handle(
                 );
             }
             Err(error) => {
-                let html = render(state, &draft.id, Some(&draft), Some(&error), false);
+                let html = render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false);
                 let _ = control_http::respond(
                     stream,
                     "409 Conflict",

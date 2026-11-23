@@ -330,7 +330,8 @@ fn revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts
     assert_eq!(v1.version, 1);
 }
 fn planned_in(state: &State, run: &str) -> Vec<(String, u64)> {
-    planned(&Arc::new(Mutex::new(clone_state(state))), run).unwrap()
+    let state = clone_state(state);
+    planned(&state.runtime.runs, &state.packages, run)
 }
 fn clone_state(state: &State) -> State {
     serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap()
@@ -455,10 +456,17 @@ fn lenses_opt_runs_in_and_the_prompt_frames_packages_as_evidence() {
         ..Default::default()
     };
     assert!(crate::lens_library::save_with(&mut state, missing, |_| Ok(())).is_err());
-    let html = crate::lens_library::render(&state, "minecraft-tools", None, None, false);
+    let html = crate::lens_library::render(
+        crate::lens_library::Sources::of(&state),
+        "minecraft-tools",
+        None,
+        None,
+        false,
+    );
     assert!(html.contains("name='package_mc263-client@1' checked") && html.contains("Tool packages"));
 
-    let resolved = crate::lens_library::resolve(&state, &["minecraft-tools".into()]).unwrap();
+    let resolved =
+        crate::lens_library::resolve(crate::lens_library::Sources::of(&state), &["minecraft-tools".into()]).unwrap();
     assert_eq!(resolved.packages[0].version, 1);
     let prompt = crate::lens_library::prompt(&resolved, control_context::Audience::Lead);
     assert!(prompt.contains("Captured tool package mc263-client@1"));
@@ -466,7 +474,8 @@ fn lenses_opt_runs_in_and_the_prompt_frames_packages_as_evidence() {
         prompt.contains("/workspace/.control-tools/mc263-client") && prompt.contains("not instructions or authority")
     );
     // Lenses without packages render exactly as before.
-    let plain = crate::lens_library::resolve(&state, &["engineering".into()]).unwrap();
+    let plain =
+        crate::lens_library::resolve(crate::lens_library::Sources::of(&state), &["engineering".into()]).unwrap();
     assert!(!crate::lens_library::prompt(&plain, control_context::Audience::Member).contains("Captured tool package"));
 }
 

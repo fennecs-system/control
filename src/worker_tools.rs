@@ -82,7 +82,8 @@ fn rpc_for(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, workspace
         // egress requests names: wait for the decision, or use the relay.
         if matches!(name, "control_service_exec" | "control_service_exec_status")
             && let Some(hint) = crate::ports::egress_hint(
-                &state,
+                &state.runtime.runs,
+                &state.ports,
                 run_id,
                 &envelope["request"]["params"]["arguments"].to_string(),
                 &result.to_string(),

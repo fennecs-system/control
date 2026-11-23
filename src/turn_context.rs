@@ -736,7 +736,7 @@ pub(crate) fn view(
                     && r.actor == viewer.actor
                     && r.chat_id
                         .as_deref()
-                        .is_some_and(|id| crate::chat::within(state, id, chat))
+                        .is_some_and(|id| crate::chat::Lineage::of(&state.chats).within(id, chat))
             })
         })
         .ok_or_else(|| io::Error::other("Context trace is outside this conversation"))?;

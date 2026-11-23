@@ -187,7 +187,7 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
     let Some(chat) = run.chat_id.as_deref() else {
         return Ok(());
     };
-    let tree = chat::tree(state, chat);
+    let tree = chat::Lineage::of(&state.chats).tree(chat);
     let cutoff = now.saturating_sub(SPAWN_WINDOW_MS);
     let mine = |candidate: &runtime::Run| candidate.chat_id.as_deref().is_some_and(|id| tree.contains(id));
     let automatic = |kind: &RunKind| kind.speaker() == control_context::agent_policy::MessageSpeaker::Control;
@@ -265,7 +265,7 @@ pub(crate) fn refusal(
     let advisor = chat.and_then(|chat| {
         state
             .bots
-            .team_advisor(chat::team_root(state, chat))
+            .team_advisor(chat::Lineage::of(&state.chats).team_root(chat))
             .filter(|advisor| *advisor != chat)
     });
     match (message.strip_suffix(REPORT), advisor) {
@@ -435,8 +435,8 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             return Err("Delegated child actor mismatch.");
         }
         let feedback = feedback(&child);
-        let mut resources = crate::services::grants(state, &parent);
-        for grant in crate::services::grants(state, &child) {
+        let mut resources = crate::services::grants(crate::services::ServiceAuthority::of(state), &parent);
+        for grant in crate::services::grants(crate::services::ServiceAuthority::of(state), &child) {
             if !resources.contains(&grant) {
                 resources.push(grant);
             }
@@ -488,7 +488,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let resources = if d.input.role == Role::Judge {
             vec![]
         } else {
-            crate::services::grants(state, &parent)
+            crate::services::grants(crate::services::ServiceAuthority::of(state), &parent)
         };
         crate::scheduler::admit(&state.runtime)?;
         // A child joins its team room: the parent chat's link, else its lead's.

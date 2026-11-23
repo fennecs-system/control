@@ -278,7 +278,7 @@ fn dna_page() {
             let start = Instant::now();
             for _ in 0..10 {
                 black_box(crate::lens_library::render(
-                    black_box(&state),
+                    black_box(crate::lens_library::Sources::of(&state)),
                     &selected,
                     None,
                     None,
@@ -288,7 +288,8 @@ fn dna_page() {
             samples.push(start.elapsed().as_nanos() / 10);
         }
         samples.sort_unstable();
-        let bytes = crate::lens_library::render(&state, &selected, None, None, false).len();
+        let bytes =
+            crate::lens_library::render(crate::lens_library::Sources::of(&state), &selected, None, None, false).len();
         println!(
             "{}",
             serde_json::json!({"workload":"web_dna_page","genes":genes,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":bytes})

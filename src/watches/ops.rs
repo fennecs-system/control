@@ -160,7 +160,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         watch.chat == chat
             || state.services.iter().any(|service| {
                 service.resource.id.as_str() == watch.service
-                    && crate::services::accessible(state, service, &node, &caller)
+                    && crate::services::accessible(crate::chat::Lineage::of(&state.chats), service, &node, &caller)
             })
     };
     match call {
@@ -197,7 +197,12 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                     .iter()
                     .find(|service| {
                         service.resource.id.as_str() == service_id
-                            && crate::services::accessible(&state, service, &node, &caller)
+                            && crate::services::accessible(
+                                crate::chat::Lineage::of(&state.chats),
+                                service,
+                                &node,
+                                &caller,
+                            )
                     })
                     .ok_or_else(|| fail("Service is not owned by this chat or its team"))?
                     .binding_snapshot();

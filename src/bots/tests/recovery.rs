@@ -448,7 +448,10 @@ fn finished_watches_are_collected_once_processed_without_redelivery() {
         !state.watches.iter().any(|w| w.id == "w-done"),
         "terminal and processed through its last frame"
     );
-    assert!(!live(&state)(&range), "the next publication retires its watermark");
+    assert!(
+        !live(&state.watches)(&range),
+        "the next publication retires its watermark"
+    );
     // Nothing can read it again, so nothing can be redelivered.
     let id = state.runtime.runs[0].id.clone();
     state.runtime.runs[0].status = "running".into();
