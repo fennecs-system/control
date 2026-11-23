@@ -565,3 +565,32 @@ fn the_room_plan_follows_room_access_rules() {
     assert!(room_failure(&mut state, &other_run, "control_room_plan", json!({"room":team})).contains("another task"));
     assert_eq!(room_call(&mut state, &other_run, "control_room_plan", json!({}), "3-3")["room"], format!("general/{other}"));
 }
+/// Pins the room server's envelopes: method checks come before the run's
+/// authority, and every other refusal is -32602 outside tools/call.
+#[test]
+fn room_envelopes_are_pinned() {
+    let mut state = State::default();
+    let request = |request: Value| json!({"nonce":"1","request":request});
+    for (envelope, expected) in [
+        (request(json!({"jsonrpc":"2.0","method":"notifications/initialized"})), Value::Null),
+        (request(json!({"jsonrpc":"1.0","id":1,"method":"ping"})), json!({"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}})),
+        (request(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}})), json!({"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"tools/call requires params.name"}})),
+        (request(json!({"jsonrpc":"2.0","id":3,"method":"prompts/list"})), json!({"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Unsupported room method."}})),
+        (request(json!({"jsonrpc":"2.0","id":4,"method":"initialize"})), json!({"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Run is not active."}})),
+        (request(json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"control_room_list"}})),
+            json!({"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"Run is not active."}],"isError":true}})),
+    ] {
+        assert_eq!(worker_rpc(&mut state, "missing", &envelope), expected, "{envelope}");
+    }
+    let (_, run) = active(&mut state, None);
+    let initialized = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":6,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})));
+    assert_eq!(initialized, json!({"jsonrpc":"2.0","id":6,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}}));
+    assert_eq!(worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":7,"method":"ping"}))), json!({"jsonrpc":"2.0","id":7,"result":{}}));
+    let listed = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":8,"method":"tools/list"})));
+    assert_eq!(listed, json!({"jsonrpc":"2.0","id":8,"result":{"tools":worker_definitions(false)}}));
+    let unknown = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"control_nope"}})));
+    assert_eq!(unknown, json!({"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"Tool is not allowed for this worker."}],"isError":true}}));
+    let listed = worker_rpc(&mut state, &run, &request(json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"control_room_list"}})));
+    assert_eq!(listed["result"].as_object().unwrap().len(), 2, "room results carry no structuredContent: {listed}");
+    assert_eq!(listed["result"]["isError"], false);
+}

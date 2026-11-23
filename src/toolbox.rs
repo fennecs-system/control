@@ -59,36 +59,8 @@ pub fn call(name: &str, args: &Value) -> io::Result<Value> {
 }
 pub fn result(value: io::Result<Value>) -> Value {
     match value {
-        Ok(value) => {
-            json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false})
-        }
-        Err(error) => failure(&error.to_string()),
-    }
-}
-fn failure(message: &str) -> Value {
-    json!({"content":[{"type":"text","text":message}],"isError":true})
-}
-/// A failed `tools/call`. MCP reports tool execution and argument validation
-/// failures as results the model can read and correct; Codex never correlates
-/// a JSON-RPC error with its pending call, so the call would hang instead.
-/// Unknown and policy-denied tool names use this too, so the model sees why.
-pub fn tool_error(id: &Value, message: &str) -> Value {
-    json!({"jsonrpc":"2.0","id":id,"result":failure(message)})
-}
-/// Reserved for faults no tool result can describe: an invalid JSON-RPC
-/// request, an unknown method, or a `tools/call` without a tool name.
-pub fn protocol_error(id: &Value, code: i64, message: &str) -> Value {
-    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
-}
-/// Protocol-level checks shared by the worker MCP servers before dispatch.
-pub fn request_fault(request: &Value) -> Option<Value> {
-    let id = request.get("id").unwrap_or(&Value::Null);
-    if request["jsonrpc"] != "2.0" {
-        Some(protocol_error(id, -32600, "Invalid JSON-RPC request"))
-    } else if request["method"] == "tools/call" && !request["params"]["name"].is_string() {
-        Some(protocol_error(id, -32602, "tools/call requires params.name"))
-    } else {
-        None
+        Ok(value) => control_mcp::data(&value),
+        Err(error) => control_mcp::failure(&error.to_string()),
     }
 }
 /// The message of a failed tool result; None for successes and protocol errors.

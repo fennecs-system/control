@@ -48,7 +48,7 @@ fn plain_json_text_results_are_compacted_too() {
 
 #[test]
 fn errors_and_schema_results_are_never_rewritten() {
-    let failure = crate::toolbox::tool_error(&json!(1), "Refused: retry control_x {\"a\":\"\"}");
+    let failure = control_mcp::tool_error(&json!(1), "Refused: retry control_x {\"a\":\"\"}");
     let mut response = failure.clone();
     reply("control_service_exec", &Value::Null, &mut response);
     assert_eq!(response, failure);

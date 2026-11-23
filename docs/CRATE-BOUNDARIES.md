@@ -18,6 +18,7 @@ generic invariant that existing interfaces cannot express.
 | --- | --- |
 | `control-context` | Pure lens selection and composition, captured context, shared command and tool-policy definitions, attempt mailboxes and working notes. No mutable application state or resource permissions. |
 | `control-http` | Typed HTTP response serialization and security headers. Routing, authorization and state stay in callers. |
+| `control-mcp` | MCP's JSON-RPC envelope: protocol-version negotiation, method routing, `initialize`, `tools/list` and `tools/call` handling, batches, and the reply, error and tool-result shapes. A `Tools` trait supplies one audience's list and runs its calls. No state, I/O, authorization or tools. |
 | `control-ai` | Provider record decoding into normalized activity, usage and final results, plus the bounded text-call contract. No credentials, networking, containers or UI. |
 | `control-core` | Borrowed scheduling inputs, validated slot capacity, pure admission/dispatch/attempt-generation predicates and typed persistent-resource transitions. `std` only; optional Serde validates identities and leases at persistence boundaries. See [persistent tools](PERSISTENT-TOOLS.md). |
 | `control-effect` | `std` only. `machine` defines the `Machine` trait: events and supplied time in, stamped, durability-tagged effects out, with no clocks, I/O or locks. `sync` provides `CancelToken`, a bounded cancellable channel and the `Changes` generation counter so drivers wait instead of polling. Interpreters revalidate an effect's stamp before acting. The API follows Tokio's shapes so an async driver can replace a blocking one. Not a scheduler or event bus. |
@@ -35,6 +36,18 @@ operator's permission policy, which the server alone uses. Discord follows typed
 delivery events from the outbox (`crates/client/src/outbox.rs`) and reads no
 other application state except which inbound DMs were accepted. Authorization
 and DM binding are rechecked at delivery.
+
+## MCP transports
+
+Every MCP server answers through `control-mcp` and keeps its own framing,
+authentication and tools. The operator endpoint (`/mcp`, `src/mcp_http.rs`)
+parses a body once; GitHub, package and toolbox calls run before the state
+lock, in that order, and everything else reaches the operator MCP under it.
+The chat bridge (`control mcp --chat`) and the read-only bridge (`control mcp`)
+share the stdio framing. The room and worker servers check a run's authority
+in their own order and build their replies with `control-mcp`. Audiences do not
+share tool sets or authorization, and each server keeps its own wording for
+malformed requests.
 
 ## Agent backends
 
@@ -122,9 +135,6 @@ Possible later splits:
 - `control-web` for server-side HTTP/UI adapters, once web routing and rendering
   call explicit projections and authorization. `control-web-ui` could rename the
   existing browser client.
-- `control-mcp` for JSON-RPC negotiation, tool discovery schemas and protocol
-  errors over the existing tool catalogue. HTTP and stdio can share its protocol
-  logic while keeping their own framing and authentication.
 
 Extract each one only once its application interface is real, rather than
 exporting the whole state to a cosmetic crate. These crates can still run in one

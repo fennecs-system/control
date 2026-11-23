@@ -136,48 +136,44 @@ fn transact(
     result
 }
 
-pub fn rpc(state: &mut State, request: &Value) -> Value {
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let error =
-        |code, message| json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}});
-    if request["jsonrpc"] != "2.0" || !request.is_object() {
-        return error(-32600, "Invalid request.");
+const OPERATOR: control_mcp::Server = control_mcp::Server {
+    name: "control",
+    version: env!("CARGO_PKG_VERSION"),
+    instructions: None,
+    invalid: (control_mcp::INVALID_REQUEST, "Invalid request."),
+    unknown: (control_mcp::METHOD_NOT_FOUND, "Method not found."),
+};
+/// The operator's tools, run under the state lock the caller holds.
+struct Operator<'a>(&'a mut State);
+impl control_mcp::Tools for Operator<'_> {
+    fn list(&mut self) -> Vec<Value> {
+        crate::tool_registry::http_definitions()
     }
-    let result = match request["method"].as_str().unwrap_or("") {
-        "initialize" => {
-            let version = control_context::tool_policy::negotiate(request["params"]["protocolVersion"].as_str());
-            json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"control","version":env!("CARGO_PKG_VERSION")}})
-        }
-        "ping" => json!({}),
-        "tools/list" => json!({"tools":crate::tool_registry::http_definitions()}),
-        "tools/call" => {
-            let name = request["params"]["name"].as_str().unwrap_or("");
-            let arguments = &request["params"]["arguments"];
-            let result = if crate::knowledge_tools::known(name) {
-                crate::knowledge_tools::local(state, name, arguments, storage::save)
-            } else if crate::tool_registry::checkpoint(name)
-            {
-                change(state, name, arguments)
-            } else {
-                match crate::tool_registry::lookup(name).map(|tool|tool.route) {
-                    Some(crate::tool_registry::Route::Artifacts) => crate::artifacts::tool(state, name, arguments),
-                    Some(crate::tool_registry::Route::Room) => crate::rooms::tool(state, name, arguments),
-                    Some(crate::tool_registry::Route::Lens) => crate::lens_library::tool(state, name, arguments),
-                    // Served by `packages::http` before the state lock is taken.
-                    Some(crate::tool_registry::Route::Package) => Err("Package tools are served by the HTTP MCP endpoint."),
-                    _ => chat::tool(state, name, arguments),
-                }
-            };
-            match result {
-                Ok(value) => {
-                    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false})
-                }
-                Err(message) => json!({"content":[{"type":"text","text":message}],"isError":true}),
+    fn call(&mut self, call: control_mcp::Call<'_>) -> Value {
+        let (state, name, arguments) = (&mut *self.0, call.name, call.arguments);
+        let result = if crate::knowledge_tools::known(name) {
+            crate::knowledge_tools::local(state, name, arguments, storage::save)
+        } else if crate::tool_registry::checkpoint(name) {
+            change(state, name, arguments)
+        } else {
+            match crate::tool_registry::lookup(name).map(|tool|tool.route) {
+                Some(crate::tool_registry::Route::Artifacts) => crate::artifacts::tool(state, name, arguments),
+                Some(crate::tool_registry::Route::Room) => crate::rooms::tool(state, name, arguments),
+                Some(crate::tool_registry::Route::Lens) => crate::lens_library::tool(state, name, arguments),
+                // Served by `mcp_http` before the state lock is taken.
+                Some(crate::tool_registry::Route::Package) => Err("Package tools are served by the HTTP MCP endpoint."),
+                _ => chat::tool(state, name, arguments),
             }
+        };
+        match result {
+            Ok(value) => control_mcp::data(&value),
+            Err(message) => control_mcp::failure(message),
         }
-        _ => return error(-32601, "Method not found."),
-    };
-    json!({"jsonrpc":"2.0","id":id,"result":result})
+    }
+}
+/// The operator MCP: `/mcp` over HTTP and the chat bridge's in-process calls.
+pub fn rpc(state: &mut State, request: &Value) -> Value {
+    control_mcp::serve(&OPERATOR, request, &mut Operator(state))
 }
 
 pub fn handle(
@@ -202,67 +198,6 @@ pub fn handle(
             "text/plain",
             "",
             "Location: /dms?improve=1\r\n",
-        );
-        return true;
-    }
-    if path == "/mcp" {
-        if method != "POST" {
-            respond(
-                stream,
-                "405 Method Not Allowed",
-                "text/plain",
-                "Use MCP POST requests.",
-                "Allow: POST\r\n",
-            );
-            return true;
-        }
-        let version = header
-            .lines()
-            .filter_map(|s| s.split_once(':'))
-            .find(|(k, _)| k.eq_ignore_ascii_case("mcp-protocol-version"))
-            .map(|(_, v)| v.trim());
-        if version.is_some_and(|v| !control_context::tool_policy::supported(v)) {
-            respond(
-                stream,
-                "400 Bad Request",
-                "text/plain",
-                "Unsupported MCP protocol version.",
-                "",
-            );
-            return true;
-        }
-        let request = match serde_json::from_slice::<Value>(body) {
-            Ok(value) => value,
-            Err(_) => {
-                respond(stream,"400 Bad Request","application/json",&json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Invalid JSON."}}).to_string(),"");
-                return true;
-            }
-        };
-        if request.get("id").is_none()
-            && request["method"]
-                .as_str()
-                .is_some_and(|m| m.starts_with("notifications/"))
-        {
-            respond(stream, "202 Accepted", "application/json", "", "");
-            return true;
-        }
-        // A notification must never execute a mutating tool and silently lose its acknowledgement.
-        if request.get("id").is_none() {
-            respond(
-                stream,
-                "400 Bad Request",
-                "text/plain",
-                "A request ID is required.",
-                "",
-            );
-            return true;
-        }
-        respond(
-            stream,
-            "200 OK",
-            "application/json",
-            &rpc(state, &request).to_string(),
-            "",
         );
         return true;
     }

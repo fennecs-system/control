@@ -1,5 +1,5 @@
 use crate::{escape, toolbox};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::net::TcpStream;
 
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str) {
@@ -9,44 +9,9 @@ pub fn handle(
     stream: &mut TcpStream,
     method: &str,
     target: &str,
-    header: &str,
     body: &[u8],
 ) -> bool {
     let (path, _) = target.split_once('?').unwrap_or((target, ""));
-    if path == "/mcp" && method == "POST" {
-        let Ok(request) = serde_json::from_slice::<Value>(body) else {
-            return false;
-        };
-        let name = request["params"]["name"].as_str().unwrap_or("");
-        if request["method"] != "tools/call" || !toolbox::known(name) {
-            return false;
-        }
-        let version = header
-            .lines()
-            .filter_map(|s| s.split_once(':'))
-            .find(|(key, _)| key.eq_ignore_ascii_case("mcp-protocol-version"))
-            .map(|(_, v)| v.trim());
-        if request["jsonrpc"] != "2.0"
-            || request.get("id").is_none()
-            || version.is_some_and(|v| !control_context::tool_policy::supported(v))
-        {
-            respond(
-                stream,
-                "400 Bad Request",
-                "text/plain",
-                "Invalid MCP request.",
-            );
-        } else {
-            let value = toolbox::result(toolbox::call(name, &request["params"]["arguments"]));
-            respond(
-                stream,
-                "200 OK",
-                "application/json",
-                &json!({"jsonrpc":"2.0","id":request["id"],"result":value}).to_string(),
-            );
-        }
-        return true;
-    }
     if !["/tools/search", "/tools/rust"].contains(&path) {
         return false;
     }
