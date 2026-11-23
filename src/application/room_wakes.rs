@@ -2,6 +2,7 @@
 //! and retains exclusive ownership while interpreting the resulting plans.
 //! A minimal borrowed-view example lives in room_wakes/tests.rs.
 use super::{conversations::Session, runs::Run};
+use crate::delegation::DelegationState;
 use crate::runtime::RunStatus;
 use crate::{
     identity::{Action, Actor},
@@ -63,8 +64,16 @@ pub(crate) fn continuation_leaf(history: &[Run], origin: usize, runs: &HashMap<&
         let delegated = run
             .delegation
             .as_ref()
-            .filter(|delegation| delegation.generation == generation && delegation.child.is_some())
-            .and_then(|delegation| delegation.continuation.as_deref())
+            .filter(|delegation| delegation.generation == generation)
+            .and_then(|delegation| match delegation.state() {
+                DelegationState::Continued {
+                    child: Some(_),
+                    continuation,
+                } => Some(continuation),
+                DelegationState::Requested
+                | DelegationState::Admitted { .. }
+                | DelegationState::Continued { child: None, .. } => None,
+            })
             .map(|id| (id, RunKind::DelegationResult));
         let (id, kind) = match (question, delegated) {
             (Some(edge), None) | (None, Some(edge)) => edge,

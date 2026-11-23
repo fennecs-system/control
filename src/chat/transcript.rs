@@ -173,7 +173,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
             });
             let delegated = run
                 .and_then(|r| r.delegation.as_ref())
-                .and_then(|d| d.child.as_deref())
+                .and_then(|d| d.state().child())
                 .and_then(|run_id| state.runtime.runs.get(run_id))
                 .and_then(|r| r.chat_id.as_deref())
                 .filter(|child| valid_id(child))
