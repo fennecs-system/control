@@ -28,7 +28,7 @@ impl Api for Mock {
             return Ok(self.pull.clone());
         }
         if self.reject_write {
-            return Err(fail("Simulated lost response or revoked authority"));
+            return Err(io::Error::other("Simulated lost response or revoked authority"));
         }
         Ok(self.response.clone())
     }

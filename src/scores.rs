@@ -79,12 +79,7 @@ pub enum Trigger {
     Milestone,
 }
 
-fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
-}
-fn fail(message: impl ToString) -> io::Error {
-    io::Error::other(message.to_string())
-}
+use crate::config::unix_seconds as now;
 
 /// The score on the output's last non-empty line: a JSON object of 1 to
 /// [`MAX_KEYS`] finite numbers under short plain names. Earlier lines are free
@@ -315,44 +310,44 @@ pub fn decode(args: &Value) -> io::Result<ScoreCall> {
         #[serde(default)]
         clear: bool,
     }
-    let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| fail("Expected name, service_id, command, interval_seconds or clear"))?;
+    let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| io::Error::other("Expected name, service_id, command, interval_seconds or clear"))?;
     let name = input.name.unwrap_or_else(|| "score".into());
     if name.is_empty() || name.chars().count() > 32 || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
-        return Err(fail("A probe name is 1 to 32 letters, digits, '_' or '-'"));
+        return Err(io::Error::other("A probe name is 1 to 32 letters, digits, '_' or '-'"));
     }
     if input.clear {
         return Ok(ScoreCall::Clear { name });
     }
     let (Some(service_id), Some(command)) = (input.service_id, input.command) else {
-        return Err(fail("Declaring a probe needs service_id and command"));
+        return Err(io::Error::other("Declaring a probe needs service_id and command"));
     };
     if command.trim().is_empty() || command.len() > MAX_COMMAND_BYTES {
-        return Err(fail(format!("The command must be 1 to {MAX_COMMAND_BYTES} bytes")));
+        return Err(io::Error::other(format!("The command must be 1 to {MAX_COMMAND_BYTES} bytes")));
     }
     let interval_seconds = input.interval_seconds.unwrap_or(DEFAULT_INTERVAL);
     if !(MIN_INTERVAL..=MAX_INTERVAL).contains(&interval_seconds) {
-        return Err(fail(format!("interval_seconds must be {MIN_INTERVAL} to {MAX_INTERVAL}")));
+        return Err(io::Error::other(format!("interval_seconds must be {MIN_INTERVAL} to {MAX_INTERVAL}")));
     }
     Ok(ScoreCall::Declare { name, service_id, command, interval_seconds })
 }
 fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> io::Result<Value> {
     let shared = host.0;
-    let node = control_core::resources::NodeId::try_from(crate::config::node_id().map_err(fail)?).map_err(fail)?;
+    let node = control_core::resources::NodeId::try_from(crate::config::node_id().map_err(io::Error::other)?).map_err(|error| io::Error::other(error.to_string()))?;
     let (caller, chat) = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let run = state.runtime.runs.iter()
             .find(|run| run.id == attempt.run && run.status == "running" && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
-            .ok_or_else(|| fail("Attempt is not active"))?;
-        crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
+            .ok_or_else(|| io::Error::other("Attempt is not active"))?;
+        crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
         if crate::delegation::is_judge(run) {
-            return Err(fail("Judges cannot declare score probes"));
+            return Err(io::Error::other("Judges cannot declare score probes"));
         }
-        let chat = run.chat_id.clone().ok_or_else(|| fail("A chat is required"))?;
+        let chat = run.chat_id.clone().ok_or_else(|| io::Error::other("A chat is required"))?;
         (run.clone(), chat)
     };
     match call {
         ScoreCall::Clear { name } => {
-            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
             let previous = state.scores.clone();
             state.scores.retain(|probe| !(probe.chat == chat && probe.name == name));
             let removed = previous.len() != state.scores.len();
@@ -364,24 +359,24 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
         }
         ScoreCall::Declare { name, service_id, command, interval_seconds } => {
             let service = {
-                let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+                let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
                 let replacing = state.scores.iter().any(|probe| probe.chat == chat && probe.name == name);
                 if !replacing && state.scores.iter().filter(|probe| probe.chat == chat).count() >= MAX_PER_CHAT {
-                    return Err(fail(format!("This chat already has {MAX_PER_CHAT} probes; clear one first")));
+                    return Err(io::Error::other(format!("This chat already has {MAX_PER_CHAT} probes; clear one first")));
                 }
                 if !replacing && state.scores.len() >= MAX_PROBES {
-                    return Err(fail("This node already keeps the maximum number of score probes"));
+                    return Err(io::Error::other("This node already keeps the maximum number of score probes"));
                 }
                 state.services.iter()
                     .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(&state, service, &node, &caller))
-                    .ok_or_else(|| fail("Service is not owned by this chat or its team"))?
+                    .ok_or_else(|| io::Error::other("Service is not owned by this chat or its team"))?
                     .binding_snapshot()
             };
             // Test before accepting: a probe that cannot score is rejected now,
             // not discovered failing later.
-            let values = sample(&service, &command, TEST_TIMEOUT).map_err(|error| fail(format!("The probe was not saved: {error}")))?;
+            let values = sample(&service, &command, TEST_TIMEOUT).map_err(|error| io::Error::other(format!("The probe was not saved: {error}")))?;
             let time = now();
-            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
             let milestones = milestones(&state, &chat);
             let mut probe = Probe { chat: chat.clone(), name: name.clone(), service: service_id, generation: service.resource.generation.get(), command,
                 interval_seconds, declared_unix: time, last_unix: time, milestones, error: String::new(), samples: VecDeque::new() };
@@ -390,7 +385,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
             state.scores.retain(|existing| !(existing.chat == chat && existing.name == name));
             if state.scores.len() >= MAX_PROBES {
                 state.scores = previous;
-                return Err(fail("This node already keeps the maximum number of score probes"));
+                return Err(io::Error::other("This node already keeps the maximum number of score probes"));
             }
             state.scores.push(probe);
             if let Err(error) = crate::storage::save(&state) {

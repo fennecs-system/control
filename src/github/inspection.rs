@@ -17,11 +17,11 @@ impl AttemptTools for Tools {
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         if name == "control_github_write" {
-            let operation = serde_json::from_value(args.clone()).map_err(|_| fail("Expected a typed GitHub operation"))?;
+            let operation = serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Expected a typed GitHub operation"))?;
             return super::operations::execute(cx.host.0, Caller::Attempt { run: cx.attempt.run, generation: cx.attempt.generation }, operation);
         }
         let query: Query = serde_json::from_value(args.clone())
-            .map_err(|_| fail("Expected a PR number, section and optional page"))?;
+            .map_err(|_| io::Error::other("Expected a PR number, section and optional page"))?;
         execute(
             cx.host.0,
             Caller::Attempt {
@@ -58,20 +58,20 @@ pub(super) fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
                 .runs
                 .iter()
                 .find(|r| r.id == run && r.status == "running")
-                .ok_or_else(|| fail("Attempt is not active"))?;
+                .ok_or_else(|| io::Error::other("Attempt is not active"))?;
             if run.action != Action::Improve
                 || crate::delegation::is_judge(run)
                 || crate::delegation::pausing(run)
                 || run.attempts.last().and_then(|a| a.workspace_id.as_deref()) != Some(generation)
             {
-                return Err(fail(
+                return Err(io::Error::other(
                     "GitHub inspection requires an active improvement attempt",
                 ));
             }
             (
                 run.chat_id
                     .as_deref()
-                    .ok_or_else(|| fail("Attempt has no conversation"))?,
+                    .ok_or_else(|| io::Error::other("Attempt has no conversation"))?,
                 Some(&run.actor),
             )
         }
@@ -80,11 +80,11 @@ pub(super) fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
         .chats
         .iter()
         .find(|c| c.id == chat)
-        .ok_or_else(|| fail("Chat not found"))?;
+        .ok_or_else(|| io::Error::other("Chat not found"))?;
     if actor.is_some_and(|actor| actor != &session.actor) {
-        return Err(fail("Conversation owner changed"));
+        return Err(io::Error::other("Conversation owner changed"));
     }
-    crate::identity::authorize(&session.actor, Action::Improve).map_err(fail)?;
+    crate::identity::authorize(&session.actor, Action::Improve).map_err(io::Error::other)?;
     Ok(())
 }
 
@@ -97,14 +97,14 @@ pub(super) struct ReadApi<'a> {
 impl ReadApi<'_> {
     pub(super) fn check(&self) -> io::Result<()> {
         if crate::shutdown::requested() {
-            return Err(fail("Control is stopping"));
+            return Err(io::Error::other("Control is stopping"));
         }
         authorize(
-            &*self.shared.lock().map_err(|_| fail("State unavailable"))?,
+            &*self.shared.lock().map_err(|_| io::Error::other("State unavailable"))?,
             self.caller,
         )?;
         if configuration()?.as_ref() != Some(self.config) {
-            return Err(fail("GitHub binding changed; repeat the read explicitly"));
+            return Err(io::Error::other("GitHub binding changed; repeat the read explicitly"));
         }
         Ok(())
     }
@@ -112,23 +112,23 @@ impl ReadApi<'_> {
 impl Api for ReadApi<'_> {
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> io::Result<Value> {
         if method != "GET" || body.is_some() {
-            return Err(fail("GitHub inspection only permits reads"));
+            return Err(io::Error::other("GitHub inspection only permits reads"));
         }
         self.check()?;
         self.rest.request(method, path, None)
     }
 }
 fn execute(shared: &Arc<Mutex<State>>, caller: Caller<'_>, query: Query) -> io::Result<Value> {
-    query.validate().map_err(fail)?;
+    query.validate().map_err(io::Error::other)?;
     let _guard = INSPECTION
         .try_lock()
-        .map_err(|_| fail("A GitHub inspection is already running; retry explicitly"))?;
+        .map_err(|_| io::Error::other("A GitHub inspection is already running; retry explicitly"))?;
     authorize(
-        &*shared.lock().map_err(|_| fail("State unavailable"))?,
+        &*shared.lock().map_err(|_| io::Error::other("State unavailable"))?,
         caller,
     )?;
     let config = configuration()?.ok_or_else(|| {
-        fail("Configure a repository and credential reference with control github configure")
+        io::Error::other("Configure a repository and credential reference with control github configure")
     })?;
     let api = ReadApi {
         shared,
@@ -174,9 +174,9 @@ pub(super) fn project(value: &Value, fields: &[&str], body_bytes: usize) -> Valu
     Value::Object(result)
 }
 fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
-    query.validate().map_err(fail)?;
+    query.validate().map_err(io::Error::other)?;
     if !repository(repo) {
-        return Err(fail("Invalid repository binding"));
+        return Err(io::Error::other("Invalid repository binding"));
     }
     let prefix = format!("pulls/{}", query.pull_request);
     let pull = api.request("GET", &request_path(repo, &prefix), None)?;
@@ -185,7 +185,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
             .as_str()
             .is_some_and(|name| name.eq_ignore_ascii_case(repo))
     {
-        return Err(fail("PR not found in the configured repository"));
+        return Err(io::Error::other("PR not found in the configured repository"));
     }
     let head = object_sha(&pull["head"], "sha")?;
     let mut result = json!({"repository":repo,"pull_request":query.pull_request,"head_sha":head,"section":query.section,"page":query.page,
@@ -290,7 +290,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
                 .as_str()
                 .is_some_and(|name| name.eq_ignore_ascii_case(repo))
         {
-            return Err(fail(
+            return Err(io::Error::other(
                 "PR head belongs to another repository; its CI is outside this binding",
             ));
         }
@@ -306,7 +306,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
             .map_or(&page, |key| &page[key])
             .as_array()
             .filter(|items| items.len() <= PAGE_SIZE)
-            .ok_or_else(|| fail("GitHub returned an invalid or unavailable page"))?;
+            .ok_or_else(|| io::Error::other("GitHub returned an invalid or unavailable page"))?;
         result["items"] = json!(
             items
                 .iter()
@@ -326,11 +326,11 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
         }
     }
     if serde_json::to_vec(&result)
-        .map_err(|_| fail("Could not encode GitHub evidence"))?
+        .map_err(|_| io::Error::other("Could not encode GitHub evidence"))?
         .len()
         > OUTPUT_BYTES
     {
-        return Err(fail("GitHub evidence exceeds the output bound"));
+        return Err(io::Error::other("GitHub evidence exceeds the output bound"));
     }
     Ok(result)
 }
@@ -345,12 +345,12 @@ pub(crate) fn mcp(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
     }
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let result = if id.is_null() || request["jsonrpc"] != "2.0" {
-        Err(fail(
+        Err(io::Error::other(
             "GitHub inspection requires an acknowledged JSON-RPC request",
         ))
     } else {
         serde_json::from_value::<Input>(request["params"]["arguments"].clone())
-            .map_err(|_| fail("Expected chat_id and a bounded query"))
+            .map_err(|_| io::Error::other("Expected chat_id and a bounded query"))
             .and_then(|input| execute(shared, Caller::Chat(&input.chat_id), input.query))
     };
     control_mcp::reply(&id, crate::toolbox::result(result))

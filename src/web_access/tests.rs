@@ -122,7 +122,7 @@ impl Transport for Fixture {
         self.requests.push(url.to_string());
         self.replies
             .pop_front()
-            .ok_or_else(|| fail("Unexpected request"))
+            .ok_or_else(|| io::Error::other("Unexpected request"))
     }
 }
 fn html(s: &str) -> Reply {
@@ -140,7 +140,7 @@ fn redirects_and_dns_rebinding_cannot_escape_the_grant() {
             if g.permits("chat-1", &Actor::LocalOperator, u, 101) {
                 Ok(())
             } else {
-                Err(fail("denied"))
+                Err(io::Error::other("denied"))
             }
         })
         .is_err()
@@ -176,7 +176,7 @@ fn revocation_during_resolution_or_response_is_fail_closed() {
         let result = fetch(&mut transport, "https://example.com/", |_| {
             checks += 1;
             if checks >= revoke_on {
-                Err(fail("revoked"))
+                Err(io::Error::other("revoked"))
             } else {
                 Ok(())
             }
@@ -194,7 +194,7 @@ fn revocation_during_resolution_or_response_is_fail_closed() {
             if allowed {
                 Ok(())
             } else {
-                Err(fail("expired"))
+                Err(io::Error::other("expired"))
             }
         })
         .is_err()
@@ -324,7 +324,7 @@ fn offline_render_does_not_reserve_http_capacity_and_rechecks_authority() {
         &counter,
         |_| {
             if revoked.get() {
-                Err(fail("revoked"))
+                Err(io::Error::other("revoked"))
             } else {
                 Ok(())
             }

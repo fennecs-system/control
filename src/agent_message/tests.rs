@@ -372,7 +372,7 @@ fn peers_preserve_stops_action_scope_judges_and_atomic_delivery() {
                 ..attempt
             },
             call(),
-            |_| Err(fail("disk full"))
+            |_| Err(io::Error::other("disk full"))
         )
         .is_err()
     );
@@ -437,7 +437,7 @@ fn peer_messages_share_only_explicitly_selected_accessible_service_generations()
             .is_empty()
     );
     let before = serde_json::to_vec(&state).unwrap();
-    assert!(handle(&mut state, &attempt, call(), |_| Err(fail("disk full"))).is_err());
+    assert!(handle(&mut state, &attempt, call(), |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(
         serde_json::to_vec(&state).unwrap(),
         before,
@@ -474,7 +474,7 @@ fn peer_archive_failure_rolls_back_message_receipt_and_grants_before_save() {
         |evidence| {
             assert_eq!(evidence.status, "completed");
             assert_eq!(evidence.source, "peer-message");
-            Err(fail("journal full"))
+            Err(io::Error::other("journal full"))
         },
         |_| panic!("a failed archive must not checkpoint inline evidence"),
     );

@@ -34,9 +34,6 @@ pub struct Entry {
     pub media_type: String,
 }
 
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 fn root() -> io::Result<PathBuf> {
     crate::config::state("artifacts").map_err(io::Error::other)
 }
@@ -74,14 +71,14 @@ fn hash(bytes: &[u8]) -> String {
 pub(crate) fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
     if !valid_path(relative) || !fs::symlink_metadata(root)?.is_dir() {
-        return Err(fail("Invalid artifact path"));
+        return Err(io::Error::other("Invalid artifact path"));
     }
     let mut path = root.to_owned();
     let components: Vec<_> = Path::new(relative).components().collect();
     for component in &components[..components.len() - 1] {
         path.push(component.as_os_str());
         if !fs::symlink_metadata(&path)?.is_dir() {
-            return Err(fail("Artifact directories must not be symlinks"));
+            return Err(io::Error::other("Artifact directories must not be symlinks"));
         }
     }
     path.push(components.last().unwrap().as_os_str());
@@ -91,14 +88,14 @@ pub(crate) fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<V
         .custom_flags(flags)
         .open(path)?;
     if !file.metadata()?.is_file() || file.metadata()?.len() > limit {
-        return Err(fail(
+        return Err(io::Error::other(
             "Artifact exceeds the file limit or is not a regular file",
         ));
     }
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        return Err(fail("Artifact exceeds the file limit"));
+        return Err(io::Error::other("Artifact exceeds the file limit"));
     }
     Ok(bytes)
 }
@@ -145,7 +142,7 @@ pub(crate) fn diff_snapshot(root: &Path) -> io::Result<control_diff::Snapshot> {
 
 pub(crate) fn diff_open_child(directory: &fs::File, name: &std::ffi::OsStr) -> io::Result<fs::File> {
     use std::os::{fd::{AsRawFd,FromRawFd},unix::ffi::OsStrExt};
-    let name=std::ffi::CString::new(name.as_bytes()).map_err(|_|fail("Invalid diff filename"))?;
+    let name=std::ffi::CString::new(name.as_bytes()).map_err(|_|io::Error::other("Invalid diff filename"))?;
     // One relative component and a pinned parent descriptor: no intermediate
     // symlink can redirect a live workspace read into the host filesystem.
     let fd=unsafe{libc::openat(directory.as_raw_fd(),name.as_ptr(),libc::O_RDONLY|libc::O_NOFOLLOW|libc::O_NONBLOCK|libc::O_CLOEXEC)};
@@ -188,7 +185,7 @@ fn private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     fs::DirBuilder::new().recursive(true).mode(0o700).create(
         path.parent()
-            .ok_or_else(|| fail("Invalid artifact destination"))?,
+            .ok_or_else(|| io::Error::other("Invalid artifact destination"))?,
     )?;
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -221,19 +218,19 @@ fn walk(
 ) -> io::Result<()> {
     let label = |path: &Path| path.strip_prefix(source).unwrap_or(path).to_string_lossy().into_owned();
     if depth > 32 {
-        return Err(fail(&format!("{}: directory depth limit (32) exceeded", label(directory))));
+        return Err(io::Error::other(format!("{}: directory depth limit (32) exceeded", label(directory))));
     }
     let mut entries = fs::read_dir(directory)?
         .take(FILE_COUNT * 4 + 1)
         .collect::<io::Result<Vec<_>>>()?;
     if entries.len() > FILE_COUNT * 4 {
-        return Err(fail(&format!("{}: more than {} directory entries", label(directory), FILE_COUNT * 4)));
+        return Err(io::Error::other(format!("{}: more than {} directory entries", label(directory), FILE_COUNT * 4)));
     }
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         *visited += 1;
         if *visited > FILE_COUNT * 8 {
-            return Err(fail(&format!("{}: tree entry limit ({}) exceeded", label(&entry.path()), FILE_COUNT * 8)));
+            return Err(io::Error::other(format!("{}: tree entry limit ({}) exceeded", label(&entry.path()), FILE_COUNT * 8)));
         }
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
@@ -264,7 +261,7 @@ fn walk(
                 omit(manifest, relative, "Over the 16 MiB total limit");
             } else {
                 let bytes = safe_read(source, &relative, FILE_BYTES)
-                    .map_err(|e| fail(&format!("{relative}: {e}")))?;
+                    .map_err(|e| io::Error::other(format!("{relative}: {e}")))?;
                 if *total + bytes.len() as u64 > TOTAL_BYTES {
                     omit(manifest, relative, "Over the 16 MiB total limit");
                     continue;
@@ -289,7 +286,7 @@ fn walk(
 }
 pub(crate) fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Manifest> {
     if !crate::chat::valid_id(id) {
-        return Err(fail("Invalid artifact ID"));
+        return Err(io::Error::other("Invalid artifact ID"));
     }
     let staging = root.join(format!("{id}.staging"));
     fs::create_dir_all(root)?;
@@ -311,12 +308,12 @@ pub(crate) fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Man
         &mut visited,
         0,
     )
-    .map_err(|e| fail(&format!("{e}. Outputs are retained in {}.", source.display())))?;
+    .map_err(|e| io::Error::other(format!("{e}. Outputs are retained in {}.", source.display())))?;
     // This manifest is also the next turn's workspace, not just a viewer index.
     // Never promote a partial checkpoint: even an unchanged file could otherwise
     // disappear on restore when another file pushes the workspace over a limit.
     if let Some(omitted) = manifest.omitted.first() {
-        return Err(fail(&format!(
+        return Err(io::Error::other(format!(
             "{}: {}. Cannot publish an incomplete workspace checkpoint. Outputs are retained in {}.",
             omitted.path, omitted.reason, source.display()
         )));
@@ -324,14 +321,14 @@ pub(crate) fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Man
     manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
     let bytes = serde_json::to_vec(&manifest).map_err(io::Error::other)?;
     if bytes.len() > 256 * 1024 {
-        return Err(fail("Artifact manifest limit exceeded"));
+        return Err(io::Error::other("Artifact manifest limit exceeded"));
     }
     private_write(&staging.join("manifest.json"), &bytes)?;
     // Publish files before any durable chat pointer refers to them: one batched
     // sync of every file and directory, then the atomic rename.
     sync_tree(&staging)?;
     if root.join(id).exists() {
-        return Err(fail("Artifact ID already published"));
+        return Err(io::Error::other("Artifact ID already published"));
     }
     fs::rename(staging, root.join(id))?;
     fs::File::open(root)?.sync_all()?;
@@ -366,11 +363,11 @@ pub fn manifest(id: &str) -> io::Result<Manifest> {
 }
 pub(crate) fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
     if !crate::chat::valid_id(id) {
-        return Err(fail("Invalid artifact ID"));
+        return Err(io::Error::other("Invalid artifact ID"));
     }
     let bytes = safe_read(&root.join(id), "manifest.json", 256 * 1024)?;
     let manifest: Manifest =
-        serde_json::from_slice(&bytes).map_err(|_| fail("Invalid artifact manifest"))?;
+        serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Invalid artifact manifest"))?;
     let mut paths = std::collections::HashSet::new();
     if manifest.id != id
         || manifest.omitted.len() > OMITTED_LIMIT + 1
@@ -388,7 +385,7 @@ pub(crate) fn manifest_in(root: &Path, id: &str) -> io::Result<Manifest> {
                 || !f.sha256.bytes().all(|b| b.is_ascii_hexdigit())
         })
     {
-        return Err(fail("Invalid artifact manifest"));
+        return Err(io::Error::other("Invalid artifact manifest"));
     }
     Ok(manifest)
 }
@@ -400,10 +397,10 @@ pub(crate) fn read_in(root: &Path, manifest: &Manifest, path: &str) -> io::Resul
         .files
         .iter()
         .find(|f| f.path == path)
-        .ok_or_else(|| fail("Artifact not in manifest"))?;
+        .ok_or_else(|| io::Error::other("Artifact not in manifest"))?;
     let bytes = safe_read(&root.join(&manifest.id).join("files"), path, FILE_BYTES)?;
     if bytes.len() as u64 != entry.bytes || hash(&bytes) != entry.sha256 {
-        return Err(fail("Artifact content differs from its published manifest"));
+        return Err(io::Error::other("Artifact content differs from its published manifest"));
     }
     Ok(bytes)
 }

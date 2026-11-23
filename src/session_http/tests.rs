@@ -481,7 +481,7 @@ fn browser_fixture(long_messages_only: bool) {
             } else if let Some(query) = path.strip_prefix("/?") {
                 let html =
                     crate::public_render(&served.lock().unwrap(), &crate::fields(query), "none");
-                respond(&mut stream, "200 OK", "text/html; charset=utf-8", &html, "");
+                let _ = control_http::respond(&mut stream, "200 OK", "text/html; charset=utf-8", html.as_bytes(), "", control_http::Policy::Embedded);
             } else {
                 crate::session_http::handle(
                     &mut stream,
@@ -1738,4 +1738,27 @@ fn operator_mcp_envelopes_are_pinned() {
     }
     let listed = rpc(&mut state, &json!({"jsonrpc":"2.0","id":10,"method":"tools/list"}));
     assert_eq!(listed, json!({"jsonrpc":"2.0","id":10,"result":{"tools":crate::tool_registry::http_definitions()}}));
+}
+
+/// Every header of the chat routes' three response kinds (a redirect, a plain
+/// refusal and a page that loads the client), so a change to how they respond
+/// cannot move a byte. Bodies pass through unchanged; the two short ones are
+/// pinned too.
+#[test]
+fn chat_route_response_bytes_are_pinned() {
+    const SECURITY: &str = "Cache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\n";
+    const EMBEDDED: &str = "Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\n";
+    const CHAT: &str = "Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\n";
+    let mut state = State::default();
+    let mut get = |target: &str| {
+        let mut response = Vec::new();
+        assert!(handle(&mut response, &mut state, "GET", target, "none", "", &[]), "{target}");
+        String::from_utf8(response).unwrap()
+    };
+    assert_eq!(get("/?view=evolution"), format!("HTTP/1.1 303 See Other\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n{SECURITY}{EMBEDDED}location: /dms?improve=1\r\n\r\n"));
+    assert_eq!(get("/dm/..."), format!("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n{SECURITY}{EMBEDDED}\r\nChat not found."));
+    let page = get("/dms?new=1");
+    let (head, body) = page.split_once("\r\n\r\n").unwrap();
+    assert!(body.contains("/tool-window/chat-bootstrap.js"));
+    assert_eq!(head, format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{SECURITY}{}", body.len(), CHAT.trim_end()));
 }

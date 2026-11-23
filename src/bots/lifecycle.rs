@@ -209,12 +209,11 @@ pub(super) fn bottlenecks(state: &State, claims: &[&Claim], threshold: usize) ->
     }
     let live = state.collective.claims.iter()
         .filter(|claim| matches!(claim.status, Status::Working | Status::Blocked) && waiting.waited(&claim.room, &claim.key));
-    let mut found = Vec::new();
-    for held in live {
+    let mut found: Vec<_> = live.filter_map(|held| {
         let reach = waiting.reach(&held.room, &held.key, Some(&held.owner));
         let (seen, members, cycle) = (&reach.dependents, &reach.members, reach.cycle);
         if members.len() < threshold {
-            continue;
+            return None;
         }
         let mut keys = seen.iter().map(|claim| claim.key.as_str()).collect::<Vec<_>>();
         keys.sort_unstable();
@@ -224,7 +223,7 @@ pub(super) fn bottlenecks(state: &State, claims: &[&Claim], threshold: usize) ->
         }
         identity.add(held.incarnation);
         let seq = state.collective.claim_seq;
-        found.push((identity.finish(), Bottleneck {
+        Some((identity.finish(), Bottleneck {
             room: held.room.clone(),
             key: held.key.clone(),
             owner: held.owner.clone(),
@@ -236,8 +235,8 @@ pub(super) fn bottlenecks(state: &State, claims: &[&Claim], threshold: usize) ->
             waiting: seen.iter().take(CHATS).map(|claim| Waiter { key: claim.key.clone(), chat: claim.owner.clone() }).collect(),
             dependents: u32::try_from(seen.len()).unwrap_or(u32::MAX),
             cycle,
-        }));
-    }
+        }))
+    }).collect();
     // Widest first; the bound keeps the most consequential.
     found.sort_by(|(_, a), (_, b)| b.members.len().cmp(&a.members.len()).then(b.dependents.cmp(&a.dependents)).then_with(|| (&a.room, &a.key).cmp(&(&b.room, &b.key))));
     found.truncate(BOTTLENECKS);

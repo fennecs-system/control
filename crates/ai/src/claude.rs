@@ -1,9 +1,6 @@
 use crate::{Activity, Decoder, Event, Output, Tokens, Usage};
 use serde_json::Value;
 use std::io;
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 #[derive(Default)]
 pub struct Claude<'a> {
     allowed_tools: &'a [&'a str],
@@ -213,20 +210,20 @@ impl Claude<'_> {
     }
     fn finish_result(self) -> io::Result<(String, Option<Tokens>)> {
         if let Some(failure) = &self.failure {
-            return Err(fail(&format!("{failure}.")));
+            return Err(io::Error::other(format!("{failure}.")));
         }
         if self.bad_tools {
-            return Err(fail(
+            return Err(io::Error::other(
                 "Claude started with an unexpected tool configuration and was stopped before doing work.",
             ));
         }
         if self.invalid {
-            return Err(fail(
+            return Err(io::Error::other(
                 "Claude returned an invalid result or unexpected tool configuration",
             ));
         }
         self.result.map(|text| (text, self.tokens)).ok_or_else(|| {
-            fail("Claude did not return a successful final result; check login or usage limits")
+            io::Error::other("Claude did not return a successful final result; check login or usage limits")
         })
     }
 }

@@ -93,21 +93,13 @@ impl Manifest {
     }
 }
 
-fn fail(message: impl Into<String>) -> io::Error {
-    io::Error::other(message.into())
-}
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::config::unix_seconds as now;
 pub(crate) fn store() -> io::Result<PathBuf> {
-    crate::config::state("tool-packages").map_err(fail)
+    crate::config::state("tool-packages").map_err(io::Error::other)
 }
 fn tree(store: &Path, name: &str, version: u64) -> io::Result<PathBuf> {
     if !control_context::valid_id(name) {
-        return Err(fail("Invalid package name"));
+        return Err(io::Error::other("Invalid package name"));
     }
     Ok(store.join(name).join("versions").join(version.to_string()).join("tree"))
 }
@@ -176,13 +168,13 @@ fn text(value: Option<String>, limit: usize, multiline: bool, label: &str) -> io
     if value.chars().count() > limit
         || value.chars().any(|c| c.is_control() && !(multiline && matches!(c, '\n' | '\t')))
     {
-        return Err(fail(format!("Keep {label} within {limit} characters{}", if multiline { "" } else { " on one line" })));
+        return Err(io::Error::other(format!("Keep {label} within {limit} characters{}", if multiline { "" } else { " on one line" })));
     }
     Ok(value)
 }
 fn identifier(value: Option<String>, label: &str) -> io::Result<Option<String>> {
     match value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()) {
-        Some(v) if !crate::application::valid_id(&v) => Err(fail(format!("Invalid {label} ID"))),
+        Some(v) if !crate::application::valid_id(&v) => Err(io::Error::other(format!("Invalid {label} ID"))),
         other => Ok(other),
     }
 }
@@ -200,34 +192,34 @@ fn relative_path(path: &str) -> bool {
         && path.split('/').all(|part| !part.is_empty() && part != "." && part != ".." && !crate::projects::excluded_name(part))
 }
 fn git(args: &[&OsStr], step: &str) -> io::Result<Vec<u8>> {
-    crate::projects::git_output(args, &[]).map_err(|_| fail(format!("Git could not {step}")))
+    crate::projects::git_output(args, &[]).map_err(|_| io::Error::other(format!("Git could not {step}")))
 }
 /// Validate the commit's listing before any checkout: regular files only,
 /// no links or submodules, no excluded names, bounded size and count.
 fn check_listing(listing: &[u8]) -> io::Result<(usize, u64)> {
     let (mut files, mut bytes) = (0usize, 0u64);
     for record in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
-        let record = std::str::from_utf8(record).map_err(|_| fail("Package file names must be UTF-8"))?;
-        let (meta, path) = record.split_once('\t').ok_or_else(|| fail("Unexpected Git listing"))?;
+        let record = std::str::from_utf8(record).map_err(|_| io::Error::other("Package file names must be UTF-8"))?;
+        let (meta, path) = record.split_once('\t').ok_or_else(|| io::Error::other("Unexpected Git listing"))?;
         let mut meta = meta.split_whitespace();
         let (mode, size) = (meta.next().unwrap_or(""), meta.nth(2).unwrap_or(""));
         match mode {
             "100644" | "100755" => {}
-            "120000" => return Err(fail(format!("Package contains a symlink: {path}"))),
-            "160000" => return Err(fail(format!("Package contains a submodule: {path}"))),
-            _ => return Err(fail(format!("Package contains an unsupported entry: {path}"))),
+            "120000" => return Err(io::Error::other(format!("Package contains a symlink: {path}"))),
+            "160000" => return Err(io::Error::other(format!("Package contains a submodule: {path}"))),
+            _ => return Err(io::Error::other(format!("Package contains an unsupported entry: {path}"))),
         }
         if !relative_path(path) {
-            return Err(fail(format!("Package path is excluded or too deep: {path}. Remove credential, environment, Control or generated files (for example node_modules) and install them with setup commands instead.")));
+            return Err(io::Error::other(format!("Package path is excluded or too deep: {path}. Remove credential, environment, Control or generated files (for example node_modules) and install them with setup commands instead.")));
         }
         files += 1;
-        bytes = bytes.saturating_add(size.parse::<u64>().map_err(|_| fail("Unexpected Git listing"))?);
+        bytes = bytes.saturating_add(size.parse::<u64>().map_err(|_| io::Error::other("Unexpected Git listing"))?);
         if files > MAX_ENTRIES || bytes > MAX_BYTES {
-            return Err(fail(format!("A package version is limited to {MAX_ENTRIES} files and {} MiB", MAX_BYTES >> 20)));
+            return Err(io::Error::other(format!("A package version is limited to {MAX_ENTRIES} files and {} MiB", MAX_BYTES >> 20)));
         }
     }
     if files == 0 {
-        return Err(fail("Package commit has no files"));
+        return Err(io::Error::other("Package commit has no files"));
     }
     Ok((files, bytes))
 }
@@ -235,7 +227,7 @@ fn check_listing(listing: &[u8]) -> io::Result<(usize, u64)> {
 /// other entry type is rejected.
 fn count_tree(directory: &Path, depth: usize) -> io::Result<usize> {
     if depth > MAX_DEPTH {
-        return Err(fail("Package directory is too deep"));
+        return Err(io::Error::other("Package directory is too deep"));
     }
     let mut count = 0;
     for entry in fs::read_dir(directory)? {
@@ -246,7 +238,7 @@ fn count_tree(directory: &Path, depth: usize) -> io::Result<usize> {
         } else if kind.is_file() {
             count += 1;
         } else {
-            return Err(fail("Package checkout contains a link or special file"));
+            return Err(io::Error::other("Package checkout contains a link or special file"));
         }
     }
     Ok(count)
@@ -269,21 +261,21 @@ pub(crate) fn import_at(
 ) -> io::Result<Manifest> {
     let name = input.name.trim().to_owned();
     if !control_context::valid_id(&name) {
-        return Err(fail("Package names use lowercase letters, digits and dashes (at most 64)"));
+        return Err(io::Error::other("Package names use lowercase letters, digits and dashes (at most 64)"));
     }
     let rev = input.rev.clone().unwrap_or_else(|| "HEAD".into());
     if !valid_rev(&rev) {
-        return Err(fail("Use a branch, tag or HEAD for rev"));
+        return Err(io::Error::other("Use a branch, tag or HEAD for rev"));
     }
     if input.commit.as_ref().is_some_and(|c| c.len() < 7 || c.len() > 64 || !c.bytes().all(|b| b.is_ascii_hexdigit())) {
-        return Err(fail("Expected commit must be 7 to 64 hexadecimal characters"));
+        return Err(io::Error::other("Expected commit must be 7 to 64 hexadecimal characters"));
     }
     if !Path::new(&input.path).is_absolute() || input.path.contains(['\n', '\r', '\0']) {
-        return Err(fail("Use an absolute path to a Git repository on this node"));
+        return Err(io::Error::other("Use an absolute path to a Git repository on this node"));
     }
     let source = crate::projects::check_source(Path::new(&input.path))?;
     if !fs::symlink_metadata(source.join(".git")).is_ok_and(|m| !m.file_type().is_symlink()) {
-        return Err(fail("The package folder must be a Git repository with a commit"));
+        return Err(io::Error::other("The package folder must be a Git repository with a commit"));
     }
     let provenance = Provenance {
         admitted_by: Actor::LocalOperator,
@@ -295,7 +287,7 @@ pub(crate) fn import_at(
         evidence: text(input.evidence, 1000, true, "evidence")?,
         recheck: text(input.recheck, 300, false, "the recheck condition")?,
     };
-    let _store = STORE.lock().map_err(|_| fail("Package store unavailable"))?;
+    let _store = STORE.lock().map_err(|_| io::Error::other("Package store unavailable"))?;
     let package = store.join(&name);
     private_dir(&package.join("versions"))?;
     let repository = package.join("repository.git");
@@ -319,27 +311,27 @@ pub(crate) fn import_at(
         &["--git-dir".as_ref(), git_dir, "rev-parse".as_ref(), "--verify".as_ref(), format!("{incoming}^{{commit}}").as_ref()],
         "resolve the imported commit",
     )?)
-    .map_err(|_| fail("Unexpected commit ID"))?
+    .map_err(|_| io::Error::other("Unexpected commit ID"))?
     .trim()
     .to_owned();
     git(&["--git-dir".as_ref(), git_dir, "update-ref".as_ref(), "-d".as_ref(), incoming.as_ref()], "clear the import reference")?;
     if !(commit.len() == 40 || commit.len() == 64) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(fail("Unexpected commit ID"));
+        return Err(io::Error::other("Unexpected commit ID"));
     }
     if let Some(expected) = &input.commit && !commit.starts_with(&expected.to_ascii_lowercase()) {
-        return Err(fail(format!("{rev} is commit {commit}, not {expected}")));
+        return Err(io::Error::other(format!("{rev} is commit {commit}, not {expected}")));
     }
     let version = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let versions = state.packages.iter().filter(|m| m.name == name);
         if let Some(existing) = versions.clone().find(|m| m.commit == commit) {
             if existing.revoked.is_some() {
-                return Err(fail(format!("Commit {commit} was admitted as {name} v{} and revoked", existing.version)));
+                return Err(io::Error::other(format!("Commit {commit} was admitted as {name} v{} and revoked", existing.version)));
             }
             return Ok(existing.clone());
         }
         if state.packages.len() >= MAX_VERSIONS {
-            return Err(fail("Package version capacity reached; operator maintenance required"));
+            return Err(io::Error::other("Package version capacity reached; operator maintenance required"));
         }
         versions.map(|m| m.version).max().unwrap_or(0) + 1
     };
@@ -362,16 +354,16 @@ pub(crate) fn import_at(
               "--force".as_ref(), commit.as_ref(), "--".as_ref(), ".".as_ref()],
             &[("GIT_INDEX_FILE", staging.join("index").as_os_str())],
         )
-        .map_err(|_| fail("Git could not extract the package files"))?;
+        .map_err(|_| io::Error::other("Git could not extract the package files"))?;
         fs::remove_file(staging.join("index"))?;
         // A case-insensitive file system can merge two listed names into one.
         if count_tree(&checkout, 0)? != files {
-            return Err(fail("Package file names collide on this file system"));
+            return Err(io::Error::other("Package file names collide on this file system"));
         }
         let declared: Declared = match crate::artifacts::safe_read(&checkout, "control-tool.json", 64 * 1024) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| fail("The package's control-tool.json is invalid"))?,
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| io::Error::other("The package's control-tool.json is invalid"))?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => Declared::default(),
-            Err(_) => return Err(fail("The package's control-tool.json is unreadable")),
+            Err(_) => return Err(io::Error::other("The package's control-tool.json is unreadable")),
         };
         let readme = || {
             crate::artifacts::safe_read(&checkout, "README.md", 64 * 1024).ok()
@@ -380,18 +372,18 @@ pub(crate) fn import_at(
         };
         let description = text(input.description.or(declared.description).or_else(readme), 300, false, "the description")?;
         if description.is_empty() {
-            return Err(fail("Add a description (no README.md heading or control-tool.json description was found)"));
+            return Err(io::Error::other("Add a description (no README.md heading or control-tool.json description was found)"));
         }
         let setup = input.setup.or(declared.setup).unwrap_or_default();
         if setup.len() > 8 {
-            return Err(fail("List at most eight setup commands"));
+            return Err(io::Error::other("List at most eight setup commands"));
         }
         let setup = setup.into_iter().map(|s| text(Some(s), 300, false, "each setup command")).collect::<io::Result<Vec<_>>>()?;
         let entry = input.entry.or(declared.entry).map(|e| e.trim().to_owned()).filter(|e| !e.is_empty());
         if let Some(entry) = &entry
             && (!relative_path(entry) || !fs::symlink_metadata(checkout.join(entry)).is_ok_and(|m| m.is_file()))
         {
-            return Err(fail(format!("Entry {entry} is not a file in the package")));
+            return Err(io::Error::other(format!("Entry {entry} is not a file in the package")));
         }
         let manifest = Manifest {
             name: name.clone(),
@@ -429,9 +421,9 @@ pub(crate) fn import_at(
     fs::File::open(&versions)?.sync_all()?;
     let tag = format!("refs/tags/v{version}");
     git(&["--git-dir".as_ref(), git_dir, "update-ref".as_ref(), tag.as_ref(), commit.as_ref()], "tag the version")?;
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
     if state.packages.iter().any(|m| m.name == name && (m.version == version || m.commit == commit)) {
-        return Err(fail("The package changed during import; retry"));
+        return Err(io::Error::other("The package changed during import; retry"));
     }
     state.packages.push(manifest.clone());
     if save(&state).is_err() {
@@ -439,7 +431,7 @@ pub(crate) fn import_at(
         drop(state);
         let _ = fs::remove_dir_all(&destination);
         let _ = git(&["--git-dir".as_ref(), git_dir, "update-ref".as_ref(), "-d".as_ref(), tag.as_ref()], "remove the tag");
-        return Err(fail("Could not save the package index; nothing was admitted"));
+        return Err(io::Error::other("Could not save the package index; nothing was admitted"));
     }
     Ok(manifest)
 }
@@ -534,7 +526,7 @@ fn read_page(store: &Path, manifest: &Manifest, input: &Read, worker: bool) -> i
     let root = tree(store, &manifest.name, manifest.version)?;
     match crate::artifacts::safe_read(&root, &path, MAX_TEXT_READ) {
         Ok(bytes) => {
-            let text = String::from_utf8(bytes).map_err(|_| fail("That package file is not UTF-8 text"))?;
+            let text = String::from_utf8(bytes).map_err(|_| io::Error::other("That package file is not UTF-8 text"))?;
             let offset = input.offset.unwrap_or(0);
             let mut chars = text.chars().skip(offset);
             let page = chars.by_ref().take(input.limit.unwrap_or(4000)).collect::<String>();
@@ -542,7 +534,7 @@ fn read_page(store: &Path, manifest: &Manifest, input: &Read, worker: bool) -> i
             value["file"] = json!({"path":path,"text":page,"next_offset":next});
         }
         Err(_) if input.path.is_none() => value["file"] = Value::Null,
-        Err(_) => return Err(fail("Package file not found, excluded, too large or not a regular file")),
+        Err(_) => return Err(io::Error::other("Package file not found, excluded, too large or not a regular file")),
     }
     Ok(value)
 }
@@ -570,27 +562,27 @@ pub(crate) fn known(name: &str) -> bool {
 pub(crate) fn operator(shared: &Arc<Mutex<State>>, name: &str, args: &Value) -> io::Result<Value> {
     match name {
         "control.package.import" => {
-            let input: Import = serde_json::from_value(args.clone()).map_err(|_| fail("Expected name, path and optional manifest fields"))?;
+            let input: Import = serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Expected name, path and optional manifest fields"))?;
             import(shared, input).map(|m| json!(m))
         }
         "control.package.revoke" => {
-            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
             revoke(&mut state, args["name"].as_str().unwrap_or(""), args["version"].as_u64().unwrap_or(0),
-                args["reason"].as_str().unwrap_or(""), crate::storage::save).map_err(fail)
+                args["reason"].as_str().unwrap_or(""), crate::storage::save).map_err(io::Error::other)
         }
         "control.packages.search" => {
-            let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            search(state.packages.iter(), args, false).map_err(fail)
+            let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+            search(state.packages.iter(), args, false).map_err(io::Error::other)
         }
         "control.package.read" => {
-            let input = read_input(args).map_err(fail)?;
+            let input = read_input(args).map_err(io::Error::other)?;
             let manifest = {
-                let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-                select(state.packages.iter(), &input).cloned().ok_or_else(|| fail("Package not found"))?
+                let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+                select(state.packages.iter(), &input).cloned().ok_or_else(|| io::Error::other("Package not found"))?
             };
             read_page(&store()?, &manifest, &input, false)
         }
-        _ => Err(fail("Unknown package tool")),
+        _ => Err(io::Error::other("Unknown package tool")),
     }
 }
 
@@ -600,8 +592,8 @@ pub(crate) fn operator(shared: &Arc<Mutex<State>>, name: &str, args: &Value) -> 
 pub struct Tools;
 fn captured(state: &State, run: &str) -> io::Result<Vec<Manifest>> {
     let run = state.runtime.runs.iter().find(|r| r.id == run && r.status == "running")
-        .ok_or_else(|| fail("Run is not active"))?;
-    crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
+        .ok_or_else(|| io::Error::other("Run is not active"))?;
+    crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     Ok(run.context.as_ref().map(|c| c.packages.iter().filter_map(|p| current(state, p).cloned()).collect()).unwrap_or_default())
 }
 impl AttemptTools for Tools {
@@ -616,15 +608,15 @@ impl AttemptTools for Tools {
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         let packages = {
-            let state = cx.host.0.lock().map_err(|_| fail("State unavailable"))?;
+            let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
             captured(&state, cx.attempt.run)?
         };
         if name == "control_packages_search" {
-            return search(packages.iter(), args, true).map_err(fail);
+            return search(packages.iter(), args, true).map_err(io::Error::other);
         }
-        let mut input = read_input(args).map_err(fail)?;
+        let mut input = read_input(args).map_err(io::Error::other)?;
         input.version = None;
-        let manifest = select(packages.iter(), &input).ok_or_else(|| fail("This run did not capture that package"))?;
+        let manifest = select(packages.iter(), &input).ok_or_else(|| io::Error::other("This run did not capture that package"))?;
         read_page(&store()?, manifest, &input, true)
     }
 }
@@ -634,7 +626,7 @@ impl AttemptTools for Tools {
 /// The run's captured versions that are still admitted. Revoked versions are
 /// skipped, so an attempt that starts after revocation does not receive them.
 pub(crate) fn planned(shared: &Arc<Mutex<State>>, run: &str) -> io::Result<Vec<(String, u64)>> {
-    let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
     let Some(run) = state.runtime.runs.iter().find(|r| r.id == run) else { return Ok(Vec::new()) };
     Ok(run.context.as_ref().map(|c| c.packages.iter().filter(|p| current(&state, p).is_some())
         .map(|p| (p.name.clone(), p.version)).collect()).unwrap_or_default())
@@ -649,7 +641,7 @@ pub(crate) fn copy_into(store: &Path, packages: &[(String, u64)], workspace: &Pa
     fs::create_dir(&root)?;
     for (name, version) in packages {
         crate::projects::copy_working(&tree(store, name, *version)?, &root.join(name))
-            .map_err(|error| fail(format!("Could not copy tool package {name} v{version}: {error}")))?;
+            .map_err(|error| io::Error::other(format!("Could not copy tool package {name} v{version}: {error}")))?;
     }
     Ok(packages.iter().map(|(name, _)| name.clone()).collect())
 }
@@ -664,7 +656,7 @@ pub(crate) fn prompt(packages: &[control_context::PackageInput]) -> String {
 
 const USAGE: &str = "control package import NAME /absolute/path [--rev REF] [--commit SHA] [--description TEXT] [--usage TEXT] [--setup CMD]... [--entry PATH] [--run ID] [--chat ID] [--agent ID] [--evidence TEXT] [--recheck TEXT]\ncontrol package revoke NAME VERSION --reason TEXT\ncontrol package list [QUERY]\ncontrol package show NAME [VERSION]";
 pub(crate) fn cli_request(args: &[String]) -> io::Result<(&'static str, Value)> {
-    let usage = || fail(USAGE);
+    let usage = || io::Error::other(USAGE);
     let positional = args.iter().skip(1).take_while(|a| !a.starts_with("--")).cloned().collect::<Vec<_>>();
     let mut options = serde_json::Map::new();
     let mut flags = args.iter().skip(1 + positional.len());

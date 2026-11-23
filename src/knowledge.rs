@@ -31,12 +31,7 @@ pub fn migrate(state: &mut State) -> bool {
     }
     false
 }
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::config::unix_seconds as now;
 fn key(title: &str) -> String {
     title
         .trim()
@@ -318,9 +313,6 @@ pub fn render(state: &State, selection: &str, saved: Option<u64>) -> String {
         &format!("<a href='{active}' aria-current='page'>"),
     )
 }
-fn respond(stream: &mut impl Write, status: &str, body: &str, extra: &str) {
-    let _ = control_http::respond(stream, status, "text/html; charset=utf-8", body.as_bytes(), extra, control_http::Policy::Page);
-}
 pub fn handle(
     stream: &mut impl Write,
     state: &mut State,
@@ -340,10 +332,10 @@ pub fn handle(
             let _ = control_http::respond(stream,status,"application/json",value.to_string().as_bytes(),"",control_http::Policy::Page);
             return true;
         }
-        match result {
-            Ok(())=>respond(stream,"303 See Other","","Location: /knowledge?mode=review\r\n"),
-            Err(message)=>respond(stream,status(message),&crate::error_page(message,"/knowledge?mode=review"),""),
-        }
+        let _ = match result {
+            Ok(())=>control_http::respond(stream, "303 See Other", "text/html; charset=utf-8", b"", "Location: /knowledge?mode=review\r\n", control_http::Policy::Page),
+            Err(message)=>control_http::respond(stream, status(message), "text/html; charset=utf-8", crate::error_page(message,"/knowledge?mode=review").as_bytes(), "", control_http::Policy::Page),
+        };
         return true;
     }
     if path == "/knowledge" && method == "GET" {
@@ -353,17 +345,8 @@ pub fn handle(
             .map(String::as_str)
             .unwrap_or("");
         let saved = query.get("saved").and_then(|s| s.parse().ok());
-        respond(
-            stream,
-            "200 OK",
-            &crate::render(
-                state,
-                "knowledge-page",
-                lens,
-                &render(state, selection, saved),
-            ),
-            "",
-        );
+        let page = crate::render(state, "knowledge-page", lens, &render(state, selection, saved));
+        let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Page);
         return true;
     }
     if ["/knowledge/save", "/save"].contains(&path) && method == "POST" {
@@ -371,7 +354,7 @@ pub fn handle(
         if path == "/save" {
             migrate(state);
             let Some(doc) = state.documents.iter().find(|d| d.id == "scratchpad") else {
-                respond(stream, "400 Bad Request", "No draft to save.", "");
+                let _ = control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", b"No draft to save.", "", control_http::Policy::Page);
                 return true;
             };
             fields.insert("id".into(), doc.id.clone());
@@ -397,21 +380,11 @@ pub fn handle(
                     .find(|d| d.id == id)
                     .unwrap()
                     .revision;
-                respond(
-                    stream,
-                    "303 See Other",
-                    "",
-                    &format!("Location: /knowledge?doc={id}&saved={revision}#saved\r\n"),
-                );
+                let _ = control_http::respond(stream, "303 See Other", "text/html; charset=utf-8", b"", &format!("Location: /knowledge?doc={id}&saved={revision}#saved\r\n"), control_http::Policy::Page);
             }
             Err(message) => {
                 let content=format!("<h2>Save needs attention</h2><p class='save-error' role='alert'>{}</p><a href='/knowledge'>Open current notes ↗</a>{}",escape(message),editor(None,Some(&fields)));
-                respond(
-                    stream,
-                    "409 Conflict",
-                    &crate::render(state, "knowledge-page", lens, &content),
-                    "",
-                );
+                let _ = control_http::respond(stream, "409 Conflict", "text/html; charset=utf-8", crate::render(state, "knowledge-page", lens, &content).as_bytes(), "", control_http::Policy::Page);
             }
         }
         return true;

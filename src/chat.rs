@@ -471,7 +471,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     }
     if let Some(option)=commands::tail(text.trim(),Kind::Services) {
         // Each stop saves at once, like the services page; the reply is checkpointed by the caller.
-        let reply=crate::services::command(state,id,option,crate::services::now(),crate::storage::save)?;
+        let reply=crate::services::command(state,id,option,crate::config::unix_seconds(),crate::storage::save)?;
         let session=state.chats.iter_mut().find(|session|session.id==id).ok_or("Chat not found.")?;
         session.messages.push(Message { speaker: Default::default(), text:text.trim().into(),run_id:None,reply});
         session.revision=session.revision.saturating_add(1);

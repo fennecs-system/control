@@ -20,9 +20,6 @@ const PAYLOAD: usize = 512 * 1024;
 const STORE_BYTES: usize = 64 * 1024 * 1024;
 const WEEK: u64 = 7 * 86400;
 type Result<T> = io::Result<T>;
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -32,7 +29,7 @@ fn unhex(s: &str, size: usize) -> Result<Vec<u8>> {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
-        return Err(fail("Invalid lowercase hex length or encoding"));
+        return Err(io::Error::other("Invalid lowercase hex length or encoding"));
     }
     (0..s.len())
         .step_by(2)
@@ -42,7 +39,7 @@ fn unhex(s: &str, size: usize) -> Result<Vec<u8>> {
 fn public(id: &str) -> Result<Vec<u8>> {
     unhex(
         id.strip_prefix("ed25519:")
-            .ok_or_else(|| fail("Expected ed25519 node ID"))?,
+            .ok_or_else(|| io::Error::other("Expected ed25519 node ID"))?,
         32,
     )
 }
@@ -65,23 +62,23 @@ fn options() -> Result<OpenOptions> {
         use std::os::unix::fs::OpenOptionsExt;
         o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        return Err(fail("Safe file IO unsupported on this platform"));
+        return Err(io::Error::other("Safe file IO unsupported on this platform"));
         o.mode(0o600);
     }
     #[cfg(not(unix))]
-    return Err(fail("Safe file IO unsupported on this platform"));
+    return Err(io::Error::other("Safe file IO unsupported on this platform"));
     Ok(o)
 }
 fn regular(f: &File, private: bool) -> Result<()> {
     let meta = f.metadata()?;
     if !meta.is_file() {
-        return Err(fail("Expected a regular file"));
+        return Err(io::Error::other("Expected a regular file"));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if private && meta.permissions().mode() & 0o077 != 0 {
-            return Err(fail("Federation state files must be private (0600)"));
+            return Err(io::Error::other("Federation state files must be private (0600)"));
         }
     }
     Ok(())
@@ -117,13 +114,13 @@ impl Bundle {
                 .sum::<usize>()
                 > 256
         {
-            return Err(fail("Bundle cardinality limit"));
+            return Err(io::Error::other("Bundle cardinality limit"));
         }
         let mut ids = BTreeSet::new();
         for d in &self.definitions {
             if !ids.insert(&d.id) || d.tools.len() > 256 || d.tools.iter().any(|t| t.len() > 65536)
             {
-                return Err(fail("Duplicate definition or excessive tools"));
+                return Err(io::Error::other("Duplicate definition or excessive tools"));
             }
         }
         ids.clear();
@@ -134,12 +131,12 @@ impl Bundle {
                 || d.title.len() > 65536
                 || d.body.len() > 65536
             {
-                return Err(fail("Invalid or duplicate document"));
+                return Err(io::Error::other("Invalid or duplicate document"));
             }
         }
         let roots: BTreeSet<_> = self.roots.iter().collect();
         if roots.len() != self.roots.len() {
-            return Err(fail("Duplicate root"));
+            return Err(io::Error::other("Duplicate root"));
         }
         let library = Library {
             definitions: self.definitions.clone(),
@@ -154,7 +151,7 @@ impl Bundle {
         if resolved.lenses.len() != self.definitions.len()
             || resolved.documents.len() != self.documents.len()
         {
-            return Err(fail(
+            return Err(io::Error::other(
                 "Bundle must contain exactly the reachable dependency closure",
             ));
         }
@@ -228,7 +225,7 @@ impl Store {
         // State roots are operator-owned. Reject symlinked final directory components.
         fs::create_dir_all(dir)?;
         if fs::symlink_metadata(dir)?.file_type().is_symlink() {
-            return Err(fail("State directory must not be a symlink"));
+            return Err(io::Error::other("State directory must not be a symlink"));
         }
         #[cfg(unix)]
         {
@@ -243,24 +240,24 @@ impl Store {
             .open(dir.join("lock"))?;
         regular(&lock, true)?;
         lock.try_lock()
-            .map_err(|_| fail("Another federation command owns the state lock"))?;
+            .map_err(|_| io::Error::other("Another federation command owns the state lock"))?;
         let keypath = dir.join("identity.pk8");
         let bytes = match read(&keypath, 1024, true) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 // Never regenerate a missing identity for an existing ledger.
                 if fs::symlink_metadata(dir.join("ledger.json")).is_ok() {
-                    return Err(fail("Identity missing from existing federation store"));
+                    return Err(io::Error::other("Identity missing from existing federation store"));
                 }
                 let pk = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
-                    .map_err(|_| fail("Key generation failed"))?;
+                    .map_err(|_| io::Error::other("Key generation failed"))?;
                 create(&keypath, pk.as_ref())?;
                 pk.as_ref().to_vec()
             }
             Err(e) => return Err(e),
         };
         let key = Ed25519KeyPair::from_pkcs8(&bytes)
-            .map_err(|_| fail("Invalid private identity file"))?;
+            .map_err(|_| io::Error::other("Invalid private identity file"))?;
         File::open(dir)?.sync_all()?;
         let ledger = match read(&dir.join("ledger.json"), STORE_BYTES, true) {
             Ok(b) => serde_json::from_slice(&b).map_err(io::Error::other)?,
@@ -280,7 +277,7 @@ impl Store {
     fn save(&mut self, next: Ledger) -> Result<()> {
         let data = serde_json::to_vec(&next).map_err(io::Error::other)?;
         if data.len() > STORE_BYTES {
-            return Err(fail("Federation store byte quota reached"));
+            return Err(io::Error::other("Federation store byte quota reached"));
         }
         // Unique create-new temporary names, never follow or truncate a planted path.
         let temp = self.dir.join(format!(
@@ -307,7 +304,7 @@ impl Store {
             || roots.len() > 128
             || roots.iter().any(|r| !control_context::valid_id(r))
         {
-            return Err(fail("Invalid peer, label or explicit root scope"));
+            return Err(io::Error::other("Invalid peer, label or explicit root scope"));
         }
         let mut next = self.ledger.clone();
         let peer = Peer {
@@ -321,7 +318,7 @@ impl Store {
             *p = peer;
         } else {
             if next.peers.len() >= 128 {
-                return Err(fail("Peer limit reached"));
+                return Err(io::Error::other("Peer limit reached"));
             }
             next.peers.push(peer);
         }
@@ -332,25 +329,25 @@ impl Store {
         next.peers
             .iter_mut()
             .find(|p| p.id == id)
-            .ok_or_else(|| fail("Unknown peer"))?
+            .ok_or_else(|| io::Error::other("Unknown peer"))?
             .revoked = true;
         self.save(next)
     }
     fn export(&mut self, bundle: Bundle, recipient: &str, timestamp: u64) -> Result<Envelope> {
         public(recipient)?;
         if recipient == self.id() {
-            return Err(fail("Cannot export to self"));
+            return Err(io::Error::other("Cannot export to self"));
         }
         bundle.validate()?;
         let payload = serde_json::to_string(&bundle).map_err(io::Error::other)?;
         if payload.len() > PAYLOAD {
-            return Err(fail("Payload limit exceeded"));
+            return Err(io::Error::other("Payload limit exceeded"));
         }
         let mut next = self.ledger.clone();
         next.sequence = next
             .sequence
             .checked_add(1)
-            .ok_or_else(|| fail("Sequence exhausted"))?;
+            .ok_or_else(|| io::Error::other("Sequence exhausted"))?;
         let mut e = Envelope {
             protocol: PROTOCOL.into(),
             sender: self.id(),
@@ -361,7 +358,7 @@ impl Store {
             issued_at: timestamp,
             expires_at: timestamp
                 .checked_add(86400)
-                .ok_or_else(|| fail("Clock overflow"))?,
+                .ok_or_else(|| io::Error::other("Clock overflow"))?,
             payload,
             signature: String::new(),
         };
@@ -377,33 +374,33 @@ impl Store {
             || e.sender == e.recipient
             || e.payload.len() > PAYLOAD
         {
-            return Err(fail("Invalid envelope protocol, kind, recipient or size"));
+            return Err(io::Error::other("Invalid envelope protocol, kind, recipient or size"));
         }
         let peer = self
             .ledger
             .peers
             .iter()
             .find(|p| p.id == e.sender && !p.revoked)
-            .ok_or_else(|| fail("Sender not trusted or revoked"))?;
+            .ok_or_else(|| io::Error::other("Sender not trusted or revoked"))?;
         if e.expires_at <= timestamp
             || e.issued_at > timestamp.saturating_add(300)
             || e.expires_at <= e.issued_at
             || e.expires_at - e.issued_at > WEEK
         {
-            return Err(fail("Invalid or expired validity interval"));
+            return Err(io::Error::other("Invalid or expired validity interval"));
         }
         if e.resource_id != hash(&e.payload) {
-            return Err(fail("Payload digest mismatch"));
+            return Err(io::Error::other("Payload digest mismatch"));
         }
         signature::UnparsedPublicKey::new(&signature::ED25519, public(&e.sender)?)
             .verify(&e.preimage(), &unhex(&e.signature, 64)?)
-            .map_err(|_| fail("Invalid signature"))?;
+            .map_err(|_| io::Error::other("Invalid signature"))?;
         let bundle: Bundle = serde_json::from_str(&e.payload).map_err(io::Error::other)?;
         bundle.validate()?;
         if bundle.roots.iter().any(|r| !peer.roots.contains(r))
             || (!peer.allow_documents && !bundle.documents.is_empty())
         {
-            return Err(fail("Bundle exceeds peer root/document scope"));
+            return Err(io::Error::other("Bundle exceeds peer root/document scope"));
         }
         if let Some(previous) = self
             .ledger
@@ -412,12 +409,12 @@ impl Store {
             .find(|p| p.sender == e.sender && p.sequence == e.sequence)
         {
             if previous.preimage() != e.preimage() || previous.signature != e.signature {
-                return Err(fail("Sequence conflict"));
+                return Err(io::Error::other("Sequence conflict"));
             }
             return Ok(false);
         }
         if self.ledger.imports.len() >= 256 {
-            return Err(fail(
+            return Err(io::Error::other(
                 "Import quota reached; replay records are never evicted",
             ));
         }
@@ -439,7 +436,7 @@ fn parse_options(
     while i < args.len() {
         if switches.contains(&args[i].as_str()) {
             if out.iter().any(|(k, _)| k == &args[i]) {
-                return Err(fail("Repeated switch"));
+                return Err(io::Error::other("Repeated switch"));
             }
             out.push((args[i].clone(), String::new()));
             i += 1;
@@ -447,14 +444,14 @@ fn parse_options(
             let value = args
                 .get(i + 1)
                 .filter(|v| !v.starts_with("--"))
-                .ok_or_else(|| fail("Missing option value"))?;
+                .ok_or_else(|| io::Error::other("Missing option value"))?;
             if args[i] != "--root" && out.iter().any(|(k, _)| k == &args[i]) {
-                return Err(fail("Repeated option"));
+                return Err(io::Error::other("Repeated option"));
             }
             out.push((args[i].clone(), value.clone()));
             i += 2;
         } else {
-            return Err(fail("Unknown argument; use control federation help"));
+            return Err(io::Error::other("Unknown argument; use control federation help"));
         }
     }
     Ok(out)
@@ -463,7 +460,7 @@ fn value<'a>(opts: &'a [(String, String)], name: &str) -> Result<&'a str> {
     opts.iter()
         .find(|(k, _)| k == name)
         .map(|(_, v)| v.as_str())
-        .ok_or_else(|| fail(&format!("Missing {name}")))
+        .ok_or_else(|| io::Error::other(format!("Missing {name}")))
 }
 fn selected(root: &str, include: bool) -> Result<Bundle> {
     // Read a snapshot only; storage::load mutates run status on startup and must not be used here.
@@ -484,7 +481,7 @@ fn selected(root: &str, include: bool) -> Result<Bundle> {
         .resolve(&roots, &docs)
         .map_err(io::Error::other)?;
     if !include && !resolved.documents.is_empty() {
-        return Err(fail(
+        return Err(io::Error::other(
             "Lens contains documents; explicit --include-documents required",
         ));
     }
@@ -552,7 +549,7 @@ pub fn run(args: &[String]) -> Result<()> {
             let e = store.export(bundle, recipient, now()?)?;
             let bytes = serde_json::to_vec_pretty(&e).map_err(io::Error::other)?;
             if bytes.len() > CARRIER {
-                return Err(fail("Carrier limit exceeded"));
+                return Err(io::Error::other("Carrier limit exceeded"));
             }
             create(output, &bytes)?;
             println!(
@@ -605,10 +602,10 @@ pub fn run(args: &[String]) -> Result<()> {
                 .ledger
                 .imports
                 .get(index)
-                .ok_or_else(|| fail("Unknown quarantine index"))?;
+                .ok_or_else(|| io::Error::other("Unknown quarantine index"))?;
             println!("Sender: {}\nResource: {}\nSequence: {}\nExpires: {}\nQuarantined; no local activation.\n{}",e.sender,e.resource_id,e.sequence,e.expires_at,display(&e.payload));
         }
-        _ => return Err(fail(HELP)),
+        _ => return Err(io::Error::other(HELP)),
     }
     Ok(())
 }

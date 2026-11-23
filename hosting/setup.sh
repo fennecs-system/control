@@ -48,13 +48,15 @@ for image in "${images[@]}"; do
 done
 
 printf '%s\n' 'Building the Nix package with its embedded Rust/WASM UI…'
+# The data-directory link roots the package for services; ./result is the checkout's
+# own link, the same one `nix build` makes.
 package_path=$(nix build .#control --out-link "$data_dir/package" --print-out-paths)
-# Preserve the existing checkout commands while the named output link roots the
-# package and its runtime libraries against garbage collection.
-mkdir -p target/release
-install -m 755 "$package_path/bin/control" target/release/control
-./target/release/control config init
-config_dir=$(./target/release/control config path)
+nix build .#control
+# Keep a checkout that predates ./result on its old command path; fresh clones get no target/.
+if [ -e target/release/control ]; then install -m 755 "$package_path/bin/control" target/release/control; fi
+control=$package_path/bin/control
+"$control" config init
+config_dir=$("$control" config path)
 
 verify_pin() {
   local digest=${1#sha256:}
@@ -90,12 +92,12 @@ save_pin() {
   pin_temp=''
 }
 for image in "${images[@]}"; do save_pin "${image}-image-id" "${image_id[$image]}"; done
-./target/release/control config init --provider "$provider" --source-root "$(pwd -P)"
+"$control" config init --provider "$provider" --source-root "$(pwd -P)"
 
 printf '%s\n' 'Setup complete. Checking prerequisites (no model call or credential contents read)…' \
   'Before you sign in, a provider credential failure below is expected.'
-if ! ./target/release/control doctor; then
+if ! "$control" doctor; then
   printf '%s\n' 'Build and image setup succeeded; sign in, then follow any remaining doctor advice.'
 fi
-printf '%s\n' 'Next: sign in to your chosen provider, then run ./target/release/control serve.' \
-  'Open another terminal and run ./target/release/control open.'
+printf '%s\n' 'Next: sign in to your chosen provider, then run ./result/bin/control serve.' \
+  'Open another terminal and run ./result/bin/control open.'

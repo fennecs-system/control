@@ -173,7 +173,7 @@ impl Hive {
             .unwrap_or_else(|| control_config::state("operator-session"))
             .map_err(failure)?;
         let metadata = fs::symlink_metadata(&path).map_err(|_| {
-            failure("Start the server first: ./target/release/control serve, then ./target/release/control open.")
+            failure("Start the server first: control serve, then control open.")
         })?;
         use std::os::unix::fs::PermissionsExt;
         if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {

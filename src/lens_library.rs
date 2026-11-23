@@ -296,9 +296,6 @@ pub fn render(
     html.push_str("</section></div>");
     html
 }
-fn response(stream: &mut impl Write, status: &str, body: &str, extra: &str, mime: &str) {
-    let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, control_http::Policy::Page);
-}
 pub fn handle(
     stream: &mut impl Write,
     state: &mut State,
@@ -309,13 +306,7 @@ pub fn handle(
     body: &[u8],
 ) -> bool {
     if path == "/dna/export" && method == "GET" {
-        response(
-            stream,
-            "200 OK",
-            &serde_json::to_string_pretty(&state.lens_library).unwrap(),
-            "Content-Disposition: attachment; filename=control-lenses.json\r\n",
-            "application/json",
-        );
+        let _ = control_http::respond(stream, "200 OK", "application/json", serde_json::to_string_pretty(&state.lens_library).unwrap().as_bytes(), "Content-Disposition: attachment; filename=control-lenses.json\r\n", control_http::Policy::Page);
         return true;
     }
     if path == "/dna" && method == "GET" {
@@ -339,34 +330,16 @@ pub fn handle(
             },
             saved,
         );
-        response(
-            stream,
-            "200 OK",
-            &crate::render(state, "lens-page", lens, &content),
-            "",
-            "text/html; charset=utf-8",
-        );
+        let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", crate::render(state, "lens-page", lens, &content).as_bytes(), "", control_http::Policy::Page);
         return true;
     }
     if path == "/dna/save" && method == "POST" {
         let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
         match save_with(state, draft.clone(), crate::storage::save) {
-            Ok(d) => response(
-                stream,
-                "303 See Other",
-                "",
-                &format!("Location: /dna?id={}&saved={}\r\n", d.id, d.revision),
-                "text/plain",
-            ),
+            Ok(d) => { let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dna?id={}&saved={}\r\n", d.id, d.revision), control_http::Policy::Page); }
             Err(error) => {
                 let html = render(state, &draft.id, Some(&draft), Some(&error), false);
-                response(
-                    stream,
-                    "409 Conflict",
-                    &crate::render(state, "lens-page", lens, &html),
-                    "",
-                    "text/html; charset=utf-8",
-                );
+                let _ = control_http::respond(stream, "409 Conflict", "text/html; charset=utf-8", crate::render(state, "lens-page", lens, &html).as_bytes(), "", control_http::Policy::Page);
             }
         }
         return true;

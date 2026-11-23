@@ -69,7 +69,7 @@ fn output_browser_omits_empty_checkpoints_and_duplicate_versions() {
     .unwrap();
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].files[0].bytes, 0);
-    assert!(visible_outputs(["broken"], |_| Err(fail("bad manifest"))).is_err());
+    assert!(visible_outputs(["broken"], |_| Err(io::Error::other("bad manifest"))).is_err());
 }
 #[test]
 fn artifact_tools_keep_chat_authority_and_reject_actor_overrides() {

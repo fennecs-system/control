@@ -751,7 +751,7 @@ fn run() -> std::io::Result<()> {
     let services = services::supervise(state.clone());
     let ports = ports::supervise(state.clone());
     let scores = scores::supervise(state.clone());
-    println!("control · {} · run ./target/release/control open in another terminal to sign in", config::server_url());
+    println!("control · {} · run control open in another terminal to sign in", config::server_url());
     let mut listener_error = None;
     let mut requests = http_admission::Requests::new();
     while !shutdown::requested() {

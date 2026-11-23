@@ -43,7 +43,7 @@ impl crate::backend::Agent for Codex {
         text_run(isolation, call.image, call.name, call.workspace, call.node, call.model).map_err(std::io::Error::other)
     }
     fn text(&self, reader: &mut dyn std::io::Read, max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> std::io::Result<control_ai::Output> {
-        control_ai::json_lines(reader, Text { inner: Default::default(), text: None, bad: false, max }, emit)
+        control_ai::json_lines(reader, control_ai::codex::Text::new(max), emit)
     }
     fn private_names(&self) -> &'static [&'static str] {
         &[".codex"]
@@ -403,57 +403,6 @@ pub(crate) fn finish_codex_tools(
     interrupt_unfinished_tools(bridge, generation);
     attempt.termination = Some(crate::attempt_control::Termination::ProviderError);
     Err(("interrupted", "The provider ended with an unfinished MCP tool call. Inspect pending requests and service status before retrying: the tool's outcome is unconfirmed. The published checkpoint is unchanged; check recovery evidence for unpublished work.".into()))
-}
-
-/// A text request's reply: one final agent message and no tool records.
-struct Text {
-    inner: control_ai::codex::Codex,
-    text: Option<String>,
-    bad: bool,
-    max: usize,
-}
-impl control_ai::Decoder for Text {
-    fn decode(&mut self, value: &serde_json::Value, emit: &mut dyn FnMut(control_ai::Event)) {
-        self.inner.decode(value, &mut |_| {});
-        if value["type"]
-            .as_str()
-            .is_some_and(|s| s.starts_with("item."))
-        {
-            match value["item"]["type"].as_str() {
-                Some("agent_message") if value["type"] == "item.completed" => {
-                    self.text = value["item"]["text"]
-                        .as_str()
-                        .filter(|text| text.len() <= self.max)
-                        .map(str::to_owned);
-                    if self.text.is_none() {
-                        self.bad = true;
-                        emit(control_ai::Event::RejectedTools);
-                    }
-                }
-                Some("agent_message" | "reasoning") => {}
-                _ => {
-                    self.bad = true;
-                    emit(control_ai::Event::RejectedTools);
-                }
-            }
-        }
-        if value["type"] == "error" || value["type"] == "turn.failed" {
-            self.bad = true;
-        }
-    }
-    fn malformed(&mut self) {
-        self.bad = true;
-    }
-    fn finish(self) -> std::io::Result<control_ai::Output> {
-        if self.bad {
-            return Err(std::io::Error::other(
-                "CLI summary contained invalid/tool records",
-            ));
-        }
-        let mut output = self.inner.finish()?;
-        output.text = self.text;
-        Ok(output)
-    }
 }
 
 /// One Codex turn's inputs from the generic worker.

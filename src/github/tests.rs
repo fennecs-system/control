@@ -78,7 +78,7 @@ impl Api for Mock {
             .is_some_and(|suffix| method == "POST" && path.ends_with(suffix))
         {
             self.fail.borrow_mut().take();
-            return Err(fail("Synthetic lost acknowledgement"));
+            return Err(io::Error::other("Synthetic lost acknowledgement"));
         }
         Ok(result)
     }
@@ -384,7 +384,7 @@ fn disk_failure_prevents_a_reachable_branch_or_pull_request() {
     let api = Mock::new();
     let mut publication = publication();
     assert!(
-        finish(&api, &mut publication, &edit(), |_| Err(fail(
+        finish(&api, &mut publication, &edit(), |_| Err(io::Error::other(
             "Synthetic disk full"
         )))
         .is_err()

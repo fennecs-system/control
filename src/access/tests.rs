@@ -68,3 +68,13 @@ fn used_or_malformed_sign_in_links_never_fall_through_to_a_404() {
     let (handled, response) = gate_response(&access, "/dms", "");
     assert!(handled && response.starts_with("HTTP/1.1 401") && !response.contains("already used"));
 }
+
+/// The whole response, so a change to how the gate responds cannot move a byte.
+#[test]
+fn gate_response_bytes_are_pinned() {
+    let access = Access::for_tests(&"b".repeat(64));
+    let head = "Cache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\n";
+    assert_eq!(gate_response(&access, "/health", ""), (true, format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 19\r\n{head}\r\nControl is running.")));
+    let signed_in = format!("Cookie: control_operator={}", "b".repeat(64));
+    assert_eq!(gate_response(&access, "/unlock", &signed_in), (true, format!("HTTP/1.1 303 See Other\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n{head}location: /\r\n\r\n")));
+}
