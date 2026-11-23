@@ -566,8 +566,9 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         return Err("Control is stopping; try again after restart.");
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Model) {
-        let reply = crate::providers::selection::command(state, id, option)?;
-        let session = state.chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
+        let State { chats, runtime, .. } = state;
+        let session = chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
+        let reply = crate::providers::selection::command(session, runtime, option)?;
         session.messages.push(Message {
             speaker: Default::default(),
             text: text.trim().into(),

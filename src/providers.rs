@@ -153,13 +153,13 @@ fn initialize_in(directory: &std::path::Path, backend: crate::backend::Backend) 
     result.and(cleanup)
 }
 
-pub fn save_settings(state: &crate::State) -> std::io::Result<()> {
+pub fn save_settings(runtime: &crate::runtime::Runtime) -> std::io::Result<()> {
     let settings = Settings {
-        models: configured(&state.runtime),
-        backend: state.runtime.backend,
-        model: state.runtime.configured_model(),
-        text_models: state.runtime.compaction.models.clone(),
-        compaction: state.runtime.compaction.settings.clone(),
+        models: configured(runtime),
+        backend: runtime.backend,
+        model: runtime.configured_model(),
+        text_models: runtime.compaction.models.clone(),
+        compaction: runtime.compaction.settings.clone(),
     };
     let bytes = serde_json::to_vec_pretty(&settings).map_err(std::io::Error::other)?;
     crate::config::write_private("model.json", &bytes)
@@ -619,12 +619,12 @@ fn render_memory(runtime: &crate::runtime::Runtime) -> String {
     html
 }
 fn save_text(
-    state: &mut crate::State,
+    runtime: &mut crate::runtime::Runtime,
     fields: &HashMap<String, String>,
-    save: impl FnOnce(&crate::State) -> std::io::Result<()>,
+    save: impl FnOnce(&crate::runtime::Runtime) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
-    let mut models = state.runtime.compaction.models.clone();
-    let mut settings = state.runtime.compaction.settings.clone();
+    let mut models = runtime.compaction.models.clone();
+    let mut settings = runtime.compaction.settings.clone();
     let get = |name| fields.get(name).map(String::as_str).unwrap_or("");
     // Add and edit parse the same fields; edit keeps the entry's name and adapter.
     let parse = |id: &str, cli| -> Result<crate::model_calls::Endpoint, &'static str> {
@@ -696,51 +696,51 @@ fn save_text(
             "Another entry already uses this endpoint and model ID. Edit that entry instead: one entry serves summaries, generation and agent turns.",
         );
     }
-    let default = Model::captured(state.runtime.backend, state.runtime.configured_model());
+    let default = Model::captured(runtime.backend, runtime.configured_model());
     if default.backend == crate::backend::Backend::Local && !local_default(&models, &default) {
         return Err(LOCAL_DEFAULT);
     }
-    apply_text(state, models, settings, save)
+    apply_text(runtime, models, settings, save)
 }
 /// Compaction settings changed by a chat command (`/memory on|off`), through
 /// the same validation, save and rollback as the Models page.
 pub(crate) fn save_compaction(
-    state: &mut crate::State,
+    runtime: &mut crate::runtime::Runtime,
     settings: crate::compaction::Settings,
-    save: impl FnOnce(&crate::State) -> std::io::Result<()>,
+    save: impl FnOnce(&crate::runtime::Runtime) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
-    let models = state.runtime.compaction.models.clone();
-    apply_text(state, models, settings, save)
+    let models = runtime.compaction.models.clone();
+    apply_text(runtime, models, settings, save)
 }
 fn apply_text(
-    state: &mut crate::State,
+    runtime: &mut crate::runtime::Runtime,
     models: Vec<crate::model_calls::Endpoint>,
     settings: crate::compaction::Settings,
-    save: impl FnOnce(&crate::State) -> std::io::Result<()>,
+    save: impl FnOnce(&crate::runtime::Runtime) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     validate_text(&models, &settings)
         .map_err(|_| "Invalid model/window settings: check endpoint, limits, unique names and selected model")?;
-    let previous_models = std::mem::replace(&mut state.runtime.compaction.models, models);
-    let previous_settings = std::mem::replace(&mut state.runtime.compaction.settings, settings);
-    if save(state).is_err() {
-        state.runtime.compaction.models = previous_models;
-        state.runtime.compaction.settings = previous_settings;
+    let previous_models = std::mem::replace(&mut runtime.compaction.models, models);
+    let previous_settings = std::mem::replace(&mut runtime.compaction.settings, settings);
+    if save(runtime).is_err() {
+        runtime.compaction.models = previous_models;
+        runtime.compaction.settings = previous_settings;
         return Err("Could not confirm model settings were saved; reload before retrying");
     }
-    state.runtime.compaction.changed();
+    runtime.compaction.changed();
     crate::worker::wake();
     Ok(())
 }
 pub fn save_with(
-    state: &mut crate::State,
+    runtime: &mut crate::runtime::Runtime,
     fields: &HashMap<String, String>,
-    save: impl FnOnce(&crate::State) -> std::io::Result<()>,
+    save: impl FnOnce(&crate::runtime::Runtime) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     if fields
         .get("action")
         .is_some_and(|a| a.starts_with("text-") || a == "compaction")
     {
-        return save_text(state, fields, save);
+        return save_text(runtime, fields, save);
     }
     let action = fields.get("action").map(String::as_str).unwrap_or("use");
     let local = action == "select"
@@ -762,10 +762,10 @@ pub fn save_with(
         model: model.to_owned(),
         ..Default::default()
     };
-    let mut models = configured(&state.runtime);
+    let mut models = configured(runtime);
     let mut selected = Model {
-        backend: state.runtime.backend,
-        model: state.runtime.configured_model(),
+        backend: runtime.backend,
+        model: runtime.configured_model(),
         ..Default::default()
     };
     match action {
@@ -796,7 +796,7 @@ pub fn save_with(
             };
         }
         "select" => {
-            if local && !local_default(&state.runtime.compaction.models, &entry) {
+            if local && !local_default(&runtime.compaction.models, &entry) {
                 return Err("This local model no longer serves tool calls. Reload the list.");
             }
             if !local && !models.iter().any(|m| m.same(&entry)) {
@@ -842,13 +842,13 @@ pub fn save_with(
     if models.len() > 64 {
         return Err("At most 64 models can be configured.");
     }
-    let previous = state.runtime.model.replace(selected.model);
-    let previous_backend = std::mem::replace(&mut state.runtime.backend, selected.backend);
-    let previous_models = std::mem::replace(&mut state.runtime.models, models);
-    if save(state).is_err() {
-        state.runtime.model = previous;
-        state.runtime.backend = previous_backend;
-        state.runtime.models = previous_models;
+    let previous = runtime.model.replace(selected.model);
+    let previous_backend = std::mem::replace(&mut runtime.backend, selected.backend);
+    let previous_models = std::mem::replace(&mut runtime.models, models);
+    if save(runtime).is_err() {
+        runtime.model = previous;
+        runtime.backend = previous_backend;
+        runtime.models = previous_models;
         return Err("Could not confirm the model setting was saved. Reload settings before retrying.");
     }
     Ok(())
