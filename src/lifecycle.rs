@@ -78,10 +78,9 @@ fn expected_path(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str>
     let workspace = crate::runtime::workspace(id)?;
     if let Some(job)=attempt.command_jobs.iter().find(|job|job.name()==name) {return job.workspace().map_err(|_|"Missing command workspace");}
     if name == main {
-        return Ok(if attempt.backend == crate::backend::Backend::Claude {
-            workspace.parent().unwrap().join("claude-mailbox")
-        } else {
-            workspace
+        return Ok(match attempt.backend.agent().mailbox() {
+            Some(mailbox) => workspace.parent().unwrap().join(mailbox),
+            None => workspace,
         });
     }
     if name == format!("{main}-tool") {
@@ -89,13 +88,7 @@ fn expected_path(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str>
     }
     if name==format!("{main}-preview") && attempt.project.is_some() {return Ok(workspace);}
     if name == format!("{main}-probe") {
-        return Ok(workspace.parent().unwrap().join(
-            if attempt.backend == crate::backend::Backend::Claude {
-                "claude-isolation-probe"
-            } else {
-                "sandbox-probe/workspace"
-            },
-        ));
+        return Ok(workspace.parent().unwrap().join(attempt.backend.agent().probe_workspace()));
     }
     Err("Container is not an exact persisted attempt resource.")
 }

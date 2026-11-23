@@ -84,7 +84,8 @@ pub fn run() -> io::Result<()> {
     let mut runtime = crate::runtime::Runtime::default();
     crate::providers::load_settings(&mut runtime)?;
     // Every backend with a pinned image is checked; the selected one must be complete.
-    for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
+    for backend in crate::backend::Backend::hosted() {
+        let agent = backend.agent();
         let image = backend.image();
         if image.is_none() && backend != runtime.backend {
             continue;
@@ -93,47 +94,24 @@ pub fn run() -> io::Result<()> {
         check(
             &format!("{name}: pinned image"),
             image.is_some(),
-            match backend {
-                crate::backend::Backend::Codex => {
-                    "set worker-image-id in the configuration directory to the Nix image digest"
-                }
-                crate::backend::Backend::Claude => {
-                    "set claude-image-id in the configuration directory to the Nix image digest"
-                }
-                crate::backend::Backend::Local => "local endpoints run no worker image",
-            },
+            agent.image_hint(),
         );
         if let (true, Some(image)) = (engine, &image) {
             let installed = crate::engine::query(&["image", "inspect", image, "--format", "{{.Id}}"]).is_ok();
             check(&format!("{name}: image installed"), installed, "load the Nix-built image into the engine");
             if installed {
                 // Offline isolation probe with an empty canary credential: no account is mounted and no model is called.
-                let probe = match backend {
-                    crate::backend::Backend::Codex => crate::worker::offline_probe(image),
-                    crate::backend::Backend::Claude => crate::config::node_id()
-                        .map_err(io::Error::other)
-                        .and_then(|node| crate::claude::probe(image, &node, &crate::config::state("claude-check").map_err(io::Error::other)?))
-                        .map_err(|error| match error.kind() {
-                            io::ErrorKind::TimedOut => crate::claude::PROBE_TIMED_OUT.to_owned(),
-                            _ => "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
-                        }),
-                    crate::backend::Backend::Local => Err("local endpoints run no worker image".to_owned()),
-                };
+                let probe = agent.probe(image);
                 match probe {
                     Ok(()) => check(&format!("{name}: offline sandbox probe"), true, ""),
                     Err(reason) => check(&format!("{name}: offline sandbox probe"), false, &reason),
                 }
             }
         }
-        let credentials = match backend {
-            crate::backend::Backend::Codex => crate::worker::credentials_ready(),
-            crate::backend::Backend::Claude => crate::claude::credentials_ready()
-                .map_err(|_| "run ./target/release/control claude login; its private login stays outside the checkout"),
-            crate::backend::Backend::Local => Ok(()),
-        };
+        let credentials = agent.credentials_ready();
         match credentials {
             Ok(()) => check(&format!("{name}: credential metadata"), true, ""),
-            Err(reason) => check(&format!("{name}: credential metadata"), false, reason),
+            Err(reason) => check(&format!("{name}: credential metadata"), false, &reason),
         }
     }
     if config.join("discord.env").exists() || config.join("discord-access.json").exists() {

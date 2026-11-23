@@ -766,5 +766,50 @@ fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: Compactor
     run(live, model, limits, budget, prompt, &Policy { max_steps, thinking, resumed, ..Policy::default() })
 }
 
+/// An operator-configured private endpoint. Control runs the tool loop itself;
+/// the CLI backends run their own.
+pub(crate) struct Local;
+impl crate::backend::Agent for Local {
+    fn id(&self) -> &'static str {
+        "local"
+    }
+    fn label(&self) -> &'static str {
+        "Local endpoint"
+    }
+    fn name(&self) -> &'static str {
+        "Local"
+    }
+    fn default_model(&self) -> String {
+        String::new()
+    }
+    fn default_capable(&self) -> bool {
+        false
+    }
+    /// The Codex worker image, used only for credential-free workspace commands.
+    fn image(&self) -> Option<String> {
+        crate::runtime::worker_image()
+    }
+    fn image_hint(&self) -> &'static str {
+        NO_IMAGE
+    }
+    fn credentials_ready(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn probe(&self, _image: &str) -> Result<(), String> {
+        Err(NO_IMAGE.to_owned())
+    }
+    fn text_command(&self, _call: &crate::backend::TextCall<'_>) -> std::io::Result<std::process::Command> {
+        Err(std::io::Error::other(NOT_A_CLI))
+    }
+    fn text(&self, _reader: &mut dyn std::io::Read, _max: usize, _emit: &mut dyn FnMut(control_ai::Event)) -> std::io::Result<control_ai::Output> {
+        Err(std::io::Error::other(NOT_A_CLI))
+    }
+    fn host_shell(&self) -> bool {
+        true
+    }
+}
+const NO_IMAGE: &str = "local endpoints run no worker image";
+const NOT_A_CLI: &str = "Local endpoints are not CLI adapters";
+
 #[cfg(test)]
 mod tests;

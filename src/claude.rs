@@ -16,6 +16,60 @@ use std::{
 };
 
 type Outcome = Result<String, (&'static str, String)>;
+pub(crate) struct Claude;
+impl crate::backend::Agent for Claude {
+    fn id(&self) -> &'static str {
+        "claude"
+    }
+    fn label(&self) -> &'static str {
+        "Anthropic / Claude Code"
+    }
+    fn name(&self) -> &'static str {
+        "Claude"
+    }
+    fn default_model(&self) -> String {
+        "sonnet".into()
+    }
+    fn image(&self) -> Option<String> {
+        std::fs::read_to_string(crate::config::directory().ok()?.join("claude-image-id"))
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| crate::runtime::pinned_image(s))
+    }
+    fn image_hint(&self) -> &'static str {
+        "set claude-image-id in the configuration directory to the Nix image digest"
+    }
+    fn credentials_ready(&self) -> Result<(), String> {
+        credentials_ready().map_err(|_| "run ./target/release/control claude login; its private login stays outside the checkout".to_owned())
+    }
+    fn probe(&self, image: &str) -> Result<(), String> {
+        crate::config::node_id()
+            .map_err(io::Error::other)
+            .and_then(|node| probe(image, &node, &crate::config::state("claude-check").map_err(io::Error::other)?))
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::TimedOut => PROBE_TIMED_OUT.to_owned(),
+                _ => "the offline Claude tool-isolation probe failed; check the pinned image and container sandbox support".to_owned(),
+            })
+    }
+    fn text_command(&self, call: &crate::backend::TextCall<'_>) -> io::Result<Command> {
+        text_command(call.image, call.name, call.workspace, call.node, call.model)
+    }
+    fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {
+        control_ai::json_lines(reader, control_ai::claude::Claude::new(&[]), emit)
+    }
+    fn private_names(&self) -> &'static [&'static str] {
+        &[".claude", ".claude.json", ".mcp.json"]
+    }
+    fn host_shell(&self) -> bool {
+        true
+    }
+    fn mailbox(&self) -> Option<&'static str> {
+        Some("claude-mailbox")
+    }
+    fn probe_workspace(&self) -> &'static str {
+        "claude-isolation-probe"
+    }
+}
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
