@@ -26,7 +26,7 @@ fn test_builds_never_resolve_operator_node_directories() {
         ("config::directory", crate::config::directory().map_err(std::io::Error::other)),
         ("config::state_directory", crate::config::state_directory().map_err(std::io::Error::other)),
         ("config::state", crate::config::state("state.json").map_err(std::io::Error::other)),
-        ("outbox::path", control_client::outbox::path().map_err(std::io::Error::other)),
+        ("outbox::path", control_delivery::path().map_err(std::io::Error::other)),
         ("history::path", crate::history::path(None)),
         ("packages::store", crate::packages::store()),
         ("runtime::workspace", crate::runtime::workspace("run").map_err(std::io::Error::other)),

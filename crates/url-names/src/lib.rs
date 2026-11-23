@@ -6,7 +6,7 @@
 //! the path tail and query: 301 for reads, 308 for anything else so a form's
 //! method and body survive. Internal identifiers, state fields and tool names
 //! (`control.chat.*`, `control.lenses.*`) keep their names. See
-//! `url_names/tests.rs` for the full mapping.
+//! `tests.rs` for the full mapping.
 
 /// Old first path segment and its current name. `/chat` alone was the POST
 /// alias for creating a DM, so it maps to the list that now accepts that POST.

@@ -149,12 +149,16 @@ dependencies = [
  "control-config",
  "control-context",
  "control-core",
+ "control-delivery",
+ "control-diff",
  "control-discord",
  "control-effect",
  "control-http",
  "control-identity",
+ "control-ingress",
  "control-journal",
  "control-tui",
+ "control-url-names",
  "libc",
  "reqwest",
  "ring",
@@ -187,6 +191,7 @@ version = "0.1.0"
 dependencies = [
  "control-config",
  "control-context",
+ "control-delivery",
  "control-effect",
  "control-identity",
  "reqwest",
@@ -224,13 +229,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-delivery"
+version = "0.1.0"
+dependencies = [
+ "control-config",
+ "control-identity",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "control-diff"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "control-discord"
 version = "0.1.0"
 dependencies = [
  "control-client",
  "control-config",
  "control-context",
+ "control-delivery",
+ "control-diff",
  "control-identity",
+ "control-ingress",
  "control-journal",
  "reqwest",
  "ring",
@@ -260,6 +285,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-ingress"
+version = "0.1.0"
+dependencies = [
+ "control-config",
+ "control-context",
+ "control-identity",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "control-journal"
 version = "0.1.0"
 dependencies = [
@@ -277,13 +313,19 @@ dependencies = [
  "control-client",
  "control-config",
  "control-context",
+ "control-diff",
  "control-http",
+ "control-url-names",
  "crossterm",
  "ratatui",
  "reqwest",
  "ring",
  "serde_json",
 ]
+
+[[package]]
+name = "control-url-names"
+version = "0.1.0"
 
 [[package]]
 name = "convert_case"

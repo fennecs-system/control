@@ -1040,7 +1040,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                     if patch.is_empty() {continue;}
                     let mut body=String::new();
                     for line in patch.lines() {
-                        let class=match control_client::diff::kind(line) {control_client::diff::Kind::Add=>"diff-add",control_client::diff::Kind::Remove=>"diff-remove",control_client::diff::Kind::Header=>"diff-header",control_client::diff::Kind::Context=>"diff-context"};
+                        let class=match control_diff::kind(line) {control_diff::Kind::Add=>"diff-add",control_diff::Kind::Remove=>"diff-remove",control_diff::Kind::Header=>"diff-header",control_diff::Kind::Context=>"diff-context"};
                         body.push_str(&format!("<span class='diff-line {class}'>{}</span>",escape(line)));
                     }
                     html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),index+1,escape(&event.text)));
