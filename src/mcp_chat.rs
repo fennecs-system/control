@@ -21,7 +21,7 @@ pub(crate) trait Remote {
     /// Folder or port decisions, which the server takes through the same
     /// confirmed forms as the web panels rather than as chat commands.
     fn decide(&mut self, _chat: &str, _kind: &str, _request: &str, _allow: bool, _loopback: bool) -> io::Result<String> {
-        Err(fail("Decisions are not available here."))
+        Err(io::Error::other("Decisions are not available here."))
     }
 }
 impl Remote for Hive {
@@ -30,12 +30,12 @@ impl Remote for Hive {
     }
     fn decide(&mut self, chat: &str, kind: &str, request: &str, allow: bool, loopback: bool) -> io::Result<String> {
         match (kind, allow) {
-            ("folder", true) => self.approve_project(chat, request)?.result.map(|()| "Folder opened.".to_owned()).map_err(fail),
+            ("folder", true) => self.approve_project(chat, request)?.result.map(|()| "Folder opened.".to_owned()).map_err(io::Error::other),
             ("folder", false) => self.dismiss_project(chat, request),
             ("port", _) => self.decide_port(chat, request, if allow { PortDecision::Allow } else { PortDecision::Deny }, loopback)
                 .map(|()| if allow { "Port allowed." } else { "Port denied." }.to_owned()),
             ("knowledge", _) => self.review_knowledge(request, allow).map(|()| if allow { "Proposal accepted." } else { "Proposal rejected." }.to_owned()),
-            _ => Err(fail("Unknown decision.")),
+            _ => Err(io::Error::other("Unknown decision.")),
         }
     }
 }
@@ -46,9 +46,6 @@ const LIST: usize = 30;
 const LIST_MAX: usize = 200;
 const TEAM_MAX: usize = 200;
 
-fn fail(message: impl Into<String>) -> io::Error {
-    io::Error::other(message.into())
-}
 
 struct Tool {
     name: &'static str,
@@ -107,14 +104,14 @@ fn number(args: &Value, key: &str, default: usize, min: usize, max: usize) -> io
     match args.get(key) {
         None | Some(Value::Null) => Ok(default),
         Some(value) => value.as_u64().map(|n| n as usize).filter(|n| (min..=max).contains(n))
-            .ok_or_else(|| fail(format!("{key} must be an integer from {min} to {max}."))),
+            .ok_or_else(|| io::Error::other(format!("{key} must be an integer from {min} to {max}."))),
     }
 }
 fn flag(args: &Value, key: &str) -> io::Result<bool> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(false),
         Some(Value::Bool(value)) => Ok(*value),
-        _ => Err(fail(format!("{key} must be true or false."))),
+        _ => Err(io::Error::other(format!("{key} must be true or false."))),
     }
 }
 /// A string argument the server will see as one command token.
@@ -123,27 +120,27 @@ fn token<'a>(args: &'a Value, key: &str) -> io::Result<Option<&'a str>> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) if !value.is_empty() && value.len() <= 128
             && value.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:/@".contains(c)) => Ok(Some(value)),
-        _ => Err(fail(format!("{key} must be a single word of letters, digits and -_.:/@."))),
+        _ => Err(io::Error::other(format!("{key} must be a single word of letters, digits and -_.:/@."))),
     }
 }
 fn chat_id(args: &Value) -> io::Result<&str> {
     args["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-        .ok_or_else(|| fail("Specify a chat id, as chats_list shows it."))
+        .ok_or_else(|| io::Error::other("Specify a chat id, as chats_list shows it."))
 }
 fn genes(args: &Value) -> io::Result<Option<Vec<String>>> {
     match args.get("genes") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Array(values)) if values.len() <= 32 => values.iter()
-            .map(|v| v.as_str().map(str::to_owned).ok_or_else(|| fail("genes must be lens IDs.")))
+            .map(|v| v.as_str().map(str::to_owned).ok_or_else(|| io::Error::other("genes must be lens IDs.")))
             .collect::<io::Result<Vec<_>>>().map(Some),
-        _ => Err(fail("genes must be a list of at most 32 lens IDs.")),
+        _ => Err(io::Error::other("genes must be a list of at most 32 lens IDs.")),
     }
 }
 fn rows(remote: &mut impl Remote) -> io::Result<Vec<Value>> {
     Ok(remote.tool("control.chats.list", json!({}))?.as_array().cloned().unwrap_or_default())
 }
 fn row<'a>(rows: &'a [Value], id: &str) -> io::Result<&'a Value> {
-    rows.iter().find(|row| row["id"] == id).ok_or_else(|| fail("Chat not found."))
+    rows.iter().find(|row| row["id"] == id).ok_or_else(|| io::Error::other("Chat not found."))
 }
 fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or("").to_owned()
@@ -292,10 +289,10 @@ fn chat_requests(remote: &mut impl Remote, args: &Value, approvals: Approvals) -
 fn chat_open(remote: &mut impl Remote, args: &Value, approvals: Approvals) -> io::Result<String> {
     let id = chat_id(args)?;
     let paths = args["paths"].as_array().filter(|p| (1..=16).contains(&p.len()))
-        .ok_or_else(|| fail("paths must list 1 to 16 absolute folder paths."))?
-        .iter().map(|p| p.as_str().filter(|p| p.starts_with('/')).ok_or_else(|| fail("paths must be absolute."))).collect::<io::Result<Vec<_>>>()?;
+        .ok_or_else(|| io::Error::other("paths must list 1 to 16 absolute folder paths."))?
+        .iter().map(|p| p.as_str().filter(|p| p.starts_with('/')).ok_or_else(|| io::Error::other("paths must be absolute."))).collect::<io::Result<Vec<_>>>()?;
     if paths.len() > 1 && !approvals.folder {
-        return Err(fail("A chat holds one pending folder request at a time. Request one path, or enable folder approvals in Manage → Permissions to open several."));
+        return Err(io::Error::other("A chat holds one pending folder request at a time. Request one path, or enable folder approvals in Manage → Permissions to open several."));
     }
     let mut out = Vec::new();
     for path in paths {
@@ -306,7 +303,7 @@ fn chat_open(remote: &mut impl Remote, args: &Value, approvals: Approvals) -> io
             break;
         }
         let detail = remote.tool("control.chat.read", json!({"id":id}))?;
-        let request = detail["project"]["request"].as_str().ok_or_else(|| fail("Folder request was not recorded."))?.to_owned();
+        let request = detail["project"]["request"].as_str().ok_or_else(|| io::Error::other("Folder request was not recorded."))?.to_owned();
         out.push(format!("{path}: {}", remote.decide(id, "folder", &request, true, false)?));
     }
     Ok(out.join("\n"))
@@ -316,23 +313,23 @@ fn chat_decide(remote: &mut impl Remote, args: &Value, approvals: Approvals) -> 
     let id = chat_id(args)?;
     let kind = args["kind"].as_str().unwrap_or("");
     if !approvals.allows(kind) {
-        return Err(fail("The operator has not let this bridge decide that kind of request (Manage → Permissions)."));
+        return Err(io::Error::other("The operator has not let this bridge decide that kind of request (Manage → Permissions)."));
     }
-    let request = token(args, "request")?.ok_or_else(|| fail("Specify the request ID chat_requests shows."))?;
+    let request = token(args, "request")?.ok_or_else(|| io::Error::other("Specify the request ID chat_requests shows."))?;
     let allow = match args["decision"].as_str() {
         Some("allow") => Some(true),
         Some("deny") => Some(false),
         None if kind == "question" => None,
-        _ => return Err(fail("decision must be allow or deny.")),
+        _ => return Err(io::Error::other("decision must be allow or deny.")),
     };
     match (kind, allow) {
         ("question", _) => {
-            let answer = args["answer"].as_str().map(str::trim).filter(|a| !a.is_empty()).ok_or_else(|| fail("Specify the answer: an option number or your direction."))?;
+            let answer = args["answer"].as_str().map(str::trim).filter(|a| !a.is_empty()).ok_or_else(|| io::Error::other("Specify the answer: an option number or your direction."))?;
             command(remote, id, format!("/answer {request} {answer}"))
         }
         ("bot", Some(allow)) => command(remote, id, format!("/bot {} {request}", if allow { "allow" } else { "deny" })),
         (_, Some(allow)) => remote.decide(id, kind, request, allow, flag(args, "loopback")?),
-        _ => Err(fail("decision must be allow or deny.")),
+        _ => Err(io::Error::other("decision must be allow or deny.")),
     }
 }
 
@@ -349,15 +346,15 @@ fn chat_create(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let title = match args.get("title") {
         None | Some(Value::Null) => None,
         // Refuse a name /rename would refuse before the chat exists, not after.
-        Some(Value::String(title)) if !title.trim().is_empty() => Some(crate::callsigns::validate(title).map_err(fail)?),
-        _ => return Err(fail("title must be non-empty text.")),
+        Some(Value::String(title)) if !title.trim().is_empty() => Some(crate::callsigns::validate(title).map_err(io::Error::other)?),
+        _ => return Err(io::Error::other("title must be non-empty text.")),
     };
     let model = token(args, "model")?;
     let persona = token(args, "persona")?;
     let mut create = json!({"mode":"chat"});
     if let Some(genes) = genes(args)? { create["lenses"] = json!(genes); }
     let detail = remote.tool("control.chat.create", create)?;
-    let id = detail["id"].as_str().ok_or_else(|| fail("Invalid chat response."))?.to_owned();
+    let id = detail["id"].as_str().ok_or_else(|| io::Error::other("Invalid chat response."))?.to_owned();
     // The chat exists now; report any later step's failure with its ID.
     let mut notes = Vec::new();
     let steps = [
@@ -377,18 +374,18 @@ fn chat_create(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
 
 fn chat_send(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let id = chat_id(args)?;
-    let message = args["message"].as_str().filter(|m| !m.trim().is_empty()).ok_or_else(|| fail("Specify a message."))?;
+    let message = args["message"].as_str().filter(|m| !m.trim().is_empty()).ok_or_else(|| io::Error::other("Specify a message."))?;
     if message.trim_start().starts_with('/') {
-        return Err(fail("Slash commands are not sent through this bridge. Use chat_model, chat_genes or chat_cancel; folder, bot, answer and improve commands stay with the operator."));
+        return Err(io::Error::other("Slash commands are not sent through this bridge. Use chat_model, chat_genes or chat_cancel; folder, bot, answer and improve commands stay with the operator."));
     }
     let rows = rows(remote)?;
     if row(&rows, id)?["mode"] != "chat" {
-        return Err(fail("This chat is in improve mode; the operator sends to it in Control."));
+        return Err(io::Error::other("This chat is in improve mode; the operator sends to it in Control."));
     }
     // Plain text answers a waiting design question; that decision stays with the operator.
     let groups = remote.tool("control.requests.list", json!({}))?;
     if groups.as_array().into_iter().flatten().flat_map(|g| g["pending_questions"].as_array().into_iter().flatten()).any(|q| q["chat_id"] == id) {
-        return Err(fail("This chat is waiting on a design question; the operator answers it in Control (chat_requests lists it)."));
+        return Err(io::Error::other("This chat is waiting on a design question; the operator answers it in Control (chat_requests lists it)."));
     }
     let detail = remote.tool("control.chat.send", json!({"id":id,"message":message}))?;
     let count = detail["messages"].as_array().map_or(0, Vec::len);
@@ -405,7 +402,7 @@ fn chat_model(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
 }
 fn chat_genes(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let id = chat_id(args)?;
-    let genes = genes(args)?.ok_or_else(|| fail("Specify genes, or an empty list to clear them."))?;
+    let genes = genes(args)?.ok_or_else(|| io::Error::other("Specify genes, or an empty list to clear them."))?;
     let detail = remote.tool("control.chat.lenses", json!({"id":id,"lenses":genes}))?;
     let set = detail["lenses"].as_array().map(|g| g.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     Ok(format!("Genes for future messages in {id}: {}.", if set.is_empty() { "none" } else { &set }))
@@ -414,7 +411,7 @@ fn chat_cancel(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let id = chat_id(args)?;
     let run = token(args, "run_id")?;
     let text = match (flag(args, "all")?, run) {
-        (true, Some(_)) => return Err(fail("Use all or run_id, not both.")),
+        (true, Some(_)) => return Err(io::Error::other("Use all or run_id, not both.")),
         (true, None) => "/cancel all".to_owned(),
         (false, Some(run)) => format!("/cancel {run}"),
         (false, None) => "/cancel".to_owned(),
@@ -434,7 +431,7 @@ fn chat_stop_services(remote: &mut impl Remote, args: &Value) -> io::Result<Stri
 /// inside `Hive`, and the server's chat views carry none).
 pub(crate) fn call(remote: &mut impl Remote, name: &str, args: &Value, approvals: Approvals) -> io::Result<String> {
     let args = if args.is_null() { &json!({}) } else { args };
-    if !args.is_object() { return Err(fail("Arguments must be an object.")); }
+    if !args.is_object() { return Err(io::Error::other("Arguments must be an object.")); }
     let text = match name {
         "chats_list" => chats_list(remote, args),
         "chat_read" => chat_read(remote, args),
@@ -449,7 +446,7 @@ pub(crate) fn call(remote: &mut impl Remote, name: &str, args: &Value, approvals
         "chat_open" => chat_open(remote, args, approvals),
         "control_design_ask" => design_ask(remote, args),
         "chat_decide" => chat_decide(remote, args, approvals),
-        _ => Err(fail("Unknown tool. This bridge serves chat tools only.")),
+        _ => Err(io::Error::other("Unknown tool. This bridge serves chat tools only.")),
     }?;
     Ok(clip(&text, OUTPUT))
 }

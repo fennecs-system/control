@@ -5,7 +5,7 @@
 //! parents), creates DMs only as its own children, and never decides requests
 //! or opens folders (it has `control_project_request` for that). Calls run the
 //! operator endpoint's functions in process, one state lock per call.
-use super::{Remote, call, fail};
+use super::{Remote, call};
 use crate::{State, tool_registry::{AttemptCall, AttemptTools}};
 use serde_json::{Value, json};
 use std::{collections::HashSet, io, sync::{Arc, Mutex}};
@@ -29,39 +29,39 @@ impl Scoped<'_> {
 }
 impl Remote for Scoped<'_> {
     fn tool(&mut self, name: &str, arguments: Value) -> io::Result<Value> {
-        let mut state = self.shared.lock().map_err(|_| fail("State unavailable"))?;
+        let mut state = self.shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let team = self.team(&state);
         let write = WRITES.contains(&name);
         if !write && !READS.contains(&name) {
-            return Err(fail("Not available to agents."));
+            return Err(io::Error::other("Not available to agents."));
         }
         if let Some(id) = arguments["id"].as_str() {
             if !team.contains(id) {
-                return Err(fail("Only chats in your own task (your chat and the chats spawned below it)."));
+                return Err(io::Error::other("Only chats in your own task (your chat and the chats spawned below it)."));
             }
             if write && id == self.own {
-                return Err(fail("Agents change the DMs they spawned, not their own chat."));
+                return Err(io::Error::other("Agents change the DMs they spawned, not their own chat."));
             }
         }
         // Only the commands chat_model and chat_cancel build; never a decision.
         let command = arguments["message"].as_str().map(str::trim_start).filter(|m| m.starts_with('/'));
         if command.is_some_and(|m| !["/model", "/cancel"].iter().any(|c| m == *c || m.starts_with(&format!("{c} ")))) {
-            return Err(fail("Agents send plain text, /model or /cancel only."));
+            return Err(io::Error::other("Agents send plain text, /model or /cancel only."));
         }
         if name == "control.chat.create" && team.len() >= MAX_TEAM {
-            return Err(fail(format!("This task already has {MAX_TEAM} chats.")));
+            return Err(io::Error::other(format!("This task already has {MAX_TEAM} chats.")));
         }
         let response = crate::session_http::rpc(&mut state, &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}));
         let result = &response["result"];
         if result["isError"] == true {
-            return Err(fail(result["content"][0]["text"].as_str().unwrap_or("Tool request failed.")));
+            return Err(io::Error::other(result["content"][0]["text"].as_str().unwrap_or("Tool request failed.")));
         }
         let mut data = result["structuredContent"]["data"].clone();
         match name {
             // A DM an agent creates is its own child, so it stays in its task.
             "control.chat.create" => {
-                let id = data["id"].as_str().ok_or_else(|| fail("Invalid chat response."))?.to_owned();
-                let session = state.chats.iter_mut().find(|s| s.id == id).ok_or_else(|| fail("Chat not found."))?;
+                let id = data["id"].as_str().ok_or_else(|| io::Error::other("Invalid chat response."))?.to_owned();
+                let session = state.chats.iter_mut().find(|s| s.id == id).ok_or_else(|| io::Error::other("Chat not found."))?;
                 session.parent_chat = Some(self.own.clone());
                 session.revision = session.revision.saturating_add(1);
                 crate::storage::save(&state)?;
@@ -107,19 +107,19 @@ impl AttemptTools for Tools {
     }
     fn call(&self, cx: &AttemptCall<'_>, _name: &str, args: &Value) -> io::Result<Value> {
         if !control::permissions::read().agent_chat_tools {
-            return Err(fail("The operator has not enabled chat tools for agents (Manage → Permissions)."));
+            return Err(io::Error::other("The operator has not enabled chat tools for agents (Manage → Permissions)."));
         }
-        let tool = args["tool"].as_str().filter(|tool| TOOLS.contains(tool)).ok_or_else(|| fail("tool must be one of the chat tools."))?;
+        let tool = args["tool"].as_str().filter(|tool| TOOLS.contains(tool)).ok_or_else(|| io::Error::other("tool must be one of the chat tools."))?;
         let own = {
-            let state = cx.host.0.lock().map_err(|_| fail("State unavailable"))?;
+            let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
             let run = state.runtime.runs.iter()
                 .find(|run| run.id == cx.attempt.run && run.status == "running" && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(cx.attempt.generation))
-                .ok_or_else(|| fail("Attempt is not active"))?;
-            crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
+                .ok_or_else(|| io::Error::other("Attempt is not active"))?;
+            crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
             if crate::delegation::is_judge(run) {
-                return Err(fail("Judges cannot drive chats."));
+                return Err(io::Error::other("Judges cannot drive chats."));
             }
-            run.chat_id.clone().ok_or_else(|| fail("A chat is required"))?
+            run.chat_id.clone().ok_or_else(|| io::Error::other("A chat is required"))?
         };
         let arguments = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
         let text = call(&mut Scoped { shared: cx.host.0, own }, tool, &arguments, control::permissions::Approvals::default())?;

@@ -30,7 +30,7 @@ fn authorize_write(state: &State, caller: Caller<'_>) -> io::Result<()> {
             .runs
             .iter()
             .find(|r| r.id == run)
-            .ok_or_else(|| fail("Attempt is not active"))?;
+            .ok_or_else(|| io::Error::other("Attempt is not active"))?;
         if run
             .attempts
             .last()
@@ -42,7 +42,7 @@ fn authorize_write(state: &State, caller: Caller<'_>) -> io::Result<()> {
                 .as_ref()
                 .is_some_and(|q| q.generation == generation && q.answer.is_none())
         {
-            return Err(fail(
+            return Err(io::Error::other(
                 "Attempt is handing off or waiting for a decision; no GitHub writes may run",
             ));
         }
@@ -57,7 +57,7 @@ impl Api for WriteApi<'_> {
                 .0
                 .shared
                 .lock()
-                .map_err(|_| fail("State unavailable"))?,
+                .map_err(|_| io::Error::other("State unavailable"))?,
             self.0.caller,
         )?;
         self.0.rest.request(method, path, body)
@@ -69,17 +69,17 @@ pub(super) fn execute(
     caller: Caller<'_>,
     operation: Operation,
 ) -> io::Result<Value> {
-    operation.validate().map_err(fail)?;
+    operation.validate().map_err(io::Error::other)?;
     let _guard = MUTATION.try_lock().map_err(|_| {
-        fail("A GitHub mutation is already running; inspect remote state before retrying")
+        io::Error::other("A GitHub mutation is already running; inspect remote state before retrying")
     })?;
     authorize_write(
-        &*shared.lock().map_err(|_| fail("State unavailable"))?,
+        &*shared.lock().map_err(|_| io::Error::other("State unavailable"))?,
         caller,
     )?;
-    let config = configuration()?.ok_or_else(|| fail("Configure GitHub tools before writing"))?;
+    let config = configuration()?.ok_or_else(|| io::Error::other("Configure GitHub tools before writing"))?;
     if matches!(operation, Operation::Merge { .. }) && !config.allow_merge {
-        return Err(fail(
+        return Err(io::Error::other(
             "Merge is disabled in this node's GitHub binding; the operator must configure --allow-merge",
         ));
     }
@@ -107,12 +107,12 @@ fn mutate(
     allow_merge: bool,
     operation: &Operation,
 ) -> io::Result<Value> {
-    operation.validate().map_err(fail)?;
+    operation.validate().map_err(io::Error::other)?;
     if !repository(repo) {
-        return Err(fail("Invalid repository binding"));
+        return Err(io::Error::other("Invalid repository binding"));
     }
     if matches!(operation, Operation::Merge { .. }) && !allow_merge {
-        return Err(fail("Merge is disabled in this node's GitHub binding"));
+        return Err(io::Error::other("Merge is disabled in this node's GitHub binding"));
     }
     let number = operation.pull_request();
     let path = request_path(repo, &format!("pulls/{number}"));
@@ -122,7 +122,7 @@ fn mutate(
             .as_str()
             .is_some_and(|name| name.eq_ignore_ascii_case(repo))
     {
-        return Err(fail("PR not found in the configured repository"));
+        return Err(io::Error::other("PR not found in the configured repository"));
     }
     let head = object_sha(&pull["head"], "sha")?;
     let result = match operation {
@@ -133,7 +133,7 @@ fn mutate(
                 Some(json!({"body":body})),
             )?;
             if response["id"].as_u64().is_none() {
-                return Err(fail(
+                return Err(io::Error::other(
                     "Comment outcome is unknown; inspect PR comments before explicitly retrying",
                 ));
             }
@@ -149,7 +149,7 @@ fn mutate(
             }
             let response = api.request("PATCH", &path, Some(Value::Object(input)))?;
             if response["number"].as_u64() != Some(u64::from(number)) {
-                return Err(fail(
+                return Err(io::Error::other(
                     "Update outcome is unknown; inspect the PR before explicitly retrying",
                 ));
             }
@@ -161,12 +161,12 @@ fn mutate(
             ..
         } => {
             if !head.eq_ignore_ascii_case(expected_head_sha) {
-                return Err(fail(
+                return Err(io::Error::other(
                     "PR head changed; inspect the current head before merging",
                 ));
             }
             if pull["base"]["ref"].as_str() != Some(base) {
-                return Err(fail("Merge target differs from the configured base branch"));
+                return Err(io::Error::other("Merge target differs from the configured base branch"));
             }
             if pull["merged"].as_bool() == Some(true) {
                 return Ok(
@@ -174,7 +174,7 @@ fn mutate(
                 );
             }
             if pull["state"].as_str() != Some("open") || pull["draft"].as_bool() != Some(false) {
-                return Err(fail("Only an open, non-draft PR can be merged"));
+                return Err(io::Error::other("Only an open, non-draft PR can be merged"));
             }
             let response = api.request(
                 "PUT",
@@ -182,7 +182,7 @@ fn mutate(
                 Some(json!({"sha":expected_head_sha.to_ascii_lowercase(),"merge_method":method})),
             )?;
             if response["merged"].as_bool() != Some(true) {
-                return Err(fail(
+                return Err(io::Error::other(
                     "Merge was not confirmed; inspect PR state and branch rules before retrying",
                 ));
             }
@@ -204,12 +204,12 @@ pub(crate) fn mcp(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
     }
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let result = if id.is_null() || request["jsonrpc"] != "2.0" {
-        Err(fail(
+        Err(io::Error::other(
             "GitHub mutations require an acknowledged JSON-RPC request",
         ))
     } else {
         serde_json::from_value::<Input>(request["params"]["arguments"].clone())
-            .map_err(|_| fail("Expected chat_id and a typed GitHub operation"))
+            .map_err(|_| io::Error::other("Expected chat_id and a typed GitHub operation"))
             .and_then(|input| execute(shared, Caller::Chat(&input.chat_id), input.operation))
     };
     control_mcp::reply(&id, crate::toolbox::result(result))

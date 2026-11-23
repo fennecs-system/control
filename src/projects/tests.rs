@@ -262,7 +262,7 @@ fn checkpoints_keep_large_files_and_git_separate_from_bounded_previews() {
         &mut attempt,
         &fixture.0.join("seed"),
         "generation-1",
-        || Err(fail("viewer limit")),
+        || Err(io::Error::other("viewer limit")),
     )
     .unwrap();
     assert_eq!(attempt.project_checkpoint.as_deref(), Some("generation-1"));

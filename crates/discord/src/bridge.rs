@@ -235,12 +235,7 @@ fn nonce(receipt: &str) -> String {
     receipt.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use config::unix_seconds as now;
 fn dm_channel(row: &Value, user: DiscordId) -> Option<DiscordId> {
     let recipients = row["recipients"].as_array()?;
     if row["type"].as_u64() != Some(1)

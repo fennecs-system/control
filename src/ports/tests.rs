@@ -445,7 +445,7 @@ fn pending_requests_are_idempotent_owned_and_rollback_on_save_failure() {
             "nonce-a",
             input(Direction::Ingress),
             "node-a".to_owned().try_into().unwrap(),
-            |_| Err(fail("disk full"))
+            |_| Err(io::Error::other("disk full"))
         )
         .is_err()
     );
@@ -503,7 +503,7 @@ fn an_operator_service_stop_ends_its_approved_ports() {
     assert!(authorized(&state, &state.ports[0], time).is_ok());
     let service = state.services[0].resource.id.as_str().to_owned();
     let before = serde_json::to_vec(&state).unwrap();
-    assert!(crate::services::stop(&mut state, &service, time, |_| Err(fail("disk full"))).is_err());
+    assert!(crate::services::stop(&mut state, &service, time, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(
         serde_json::to_vec(&state).unwrap(),
         before,
@@ -572,7 +572,7 @@ fn approval_is_exact_endpoint_and_durable_service_generation_not_a_network_grant
     let target = "127.0.0.1:31001".parse().unwrap();
     assert!(approve(&mut s, &id, 60, false, Some(target), time, |_| Ok(())).is_err());
     assert!(
-        approve(&mut s, &id, 60, true, Some(target), time, |_| Err(fail(
+        approve(&mut s, &id, 60, true, Some(target), time, |_| Err(io::Error::other(
             "disk full"
         )))
         .is_err()

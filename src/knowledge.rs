@@ -31,12 +31,7 @@ pub fn migrate(state: &mut State) -> bool {
     }
     false
 }
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::config::unix_seconds as now;
 fn key(title: &str) -> String {
     title
         .trim()

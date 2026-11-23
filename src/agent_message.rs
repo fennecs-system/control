@@ -59,13 +59,10 @@ fn run(ops: &dyn MessageOps, attempt: &AttemptRef<'_>, args: &Value) -> io::Resu
     serde_json::to_value(ops.message(attempt, MessageCall { chat_id: input.chat_id, text: input.text, services: input.services, urgent: input.urgent })?).map_err(io::Error::other)
 }
 
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 /// The blocking driver owns the lock, clock, policy/config reads, persistence
 /// and dispatcher. The operation underneath receives only borrowed domain data.
 fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: MessageCall) -> io::Result<MessageResult> {
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
     transact(&mut state, attempt, call, |run| crate::history::archive_run(run).map(|_| ()), crate::storage::save, crate::worker::wake)
 }
 #[cfg(test)]
@@ -85,11 +82,11 @@ fn transact(state: &mut State, attempt: &AttemptRef<'_>, call: MessageCall,
     transact_at(state, attempt, call, (id, at_ms), archive, save, wake)
 }
 fn prepare(state: &State, attempt: &AttemptRef<'_>, call: MessageCall, id: String) -> io::Result<operation::Decision> {
-    let origin = operation::active(&state.runtime.runs, attempt).map_err(fail)?;
-    identity::authorize(&origin.actor, origin.action).map_err(fail)?;
-    let decision = operation::plan(operation::View {runs:&state.runtime.runs,chats:&state.chats,services:&state.services,sent:&state.agent_messages,bots:&state.bots},attempt,call,id).map_err(fail)?;
+    let origin = operation::active(&state.runtime.runs, attempt).map_err(io::Error::other)?;
+    identity::authorize(&origin.actor, origin.action).map_err(io::Error::other)?;
+    let decision = operation::plan(operation::View {runs:&state.runtime.runs,chats:&state.chats,services:&state.services,sent:&state.agent_messages,bots:&state.bots},attempt,call,id).map_err(io::Error::other)?;
     if let operation::Decision::Deliver(delivery) = &decision {
-        identity::authorize(&delivery.run.actor, delivery.run.action).map_err(fail)?;
+        identity::authorize(&delivery.run.actor, delivery.run.action).map_err(io::Error::other)?;
     }
     Ok(decision)
 }

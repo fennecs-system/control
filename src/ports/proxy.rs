@@ -136,10 +136,10 @@ fn run(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>) {
 }
 fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive: &dyn Fn() -> bool) -> io::Result<()> {
     let (service, expires) = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let time = now();
         let ports = grants(&state, key, time).collect::<Vec<_>>();
-        let first = ports.first().ok_or_else(|| fail("No approved egress"))?;
+        let first = ports.first().ok_or_else(|| io::Error::other("No approved egress"))?;
         let expires = ports.iter().filter_map(|p| p.approval.as_ref().map(|a| a.expires)).max().unwrap_or(time);
         (authorized(&state, first, time)?, expires)
     };
@@ -171,7 +171,7 @@ fn pair() -> io::Result<(TcpStream, TcpStream)> {
             return Ok((near, far));
         }
     }
-    Err(fail("Proxy pair was intercepted"))
+    Err(io::Error::other("Proxy pair was intercepted"))
 }
 
 /// A parsed proxy request.
@@ -191,10 +191,10 @@ fn read_head(client: &mut TcpStream) -> io::Result<(Vec<u8>, Vec<u8>)> {
             return Ok((data, rest));
         }
         if data.len() > HEAD_LIMIT {
-            return Err(fail("Request head exceeds 8 KiB"));
+            return Err(io::Error::other("Request head exceeds 8 KiB"));
         }
         match client.read(&mut chunk)? {
-            0 => return Err(fail("Request ended before its head")),
+            0 => return Err(io::Error::other("Request ended before its head")),
             n => data.extend_from_slice(&chunk[..n]),
         }
     }

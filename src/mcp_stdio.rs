@@ -7,9 +7,6 @@ use std::{
     io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
 };
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 fn image() -> io::Result<String> {
     let image = std::env::var("CONTROL_BROWSER_IMAGE")
         .ok()
@@ -20,7 +17,7 @@ fn image() -> io::Result<String> {
         .trim()
         .to_owned();
     if !crate::browser::valid_image(&image) {
-        return Err(fail("No pinned browser image. Run `nix run .#setup -- --browser` to build it and record browser-image-id in the node configuration directory."));
+        return Err(io::Error::other("No pinned browser image. Run `nix run .#setup -- --browser` to build it and record browser-image-id in the node configuration directory."));
     }
     Ok(image)
 }
@@ -32,7 +29,7 @@ pub(crate) fn source(root: &Path, input: &str) -> io::Result<PathBuf> {
             Some("html" | "htm")
         )
     {
-        return Err(fail(
+        return Err(io::Error::other(
             "Select an HTML preview inside the configured tool root",
         ));
     }
@@ -55,7 +52,7 @@ pub(crate) fn render_preview_with_timeout(
     let directory = crate::config::state("browser").map_err(io::Error::other)?;
     fs::create_dir_all(&directory)?;
     if fs::symlink_metadata(&directory)?.file_type().is_symlink() {
-        return Err(fail("Artifact directory must not be a symlink"));
+        return Err(io::Error::other("Artifact directory must not be a symlink"));
     }
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
     let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
@@ -68,9 +65,9 @@ pub(crate) fn render_preview_with_timeout(
         .custom_flags(flags)
         .open(directory.join("lock"))?;
     if !lock.metadata()?.is_file() {
-        return Err(fail("Invalid browser lock file"));
+        return Err(io::Error::other("Invalid browser lock file"));
     }
-    lock.try_lock().map_err(|_| fail("Browser tool is busy"))?;
+    lock.try_lock().map_err(|_| io::Error::other("Browser tool is busy"))?;
     let mut count = 0;
     let mut bytes = 0u64;
     for entry in fs::read_dir(&directory)? {
@@ -80,13 +77,13 @@ pub(crate) fn render_preview_with_timeout(
         }
         let metadata = entry.path().symlink_metadata()?;
         if !metadata.is_file() {
-            return Err(fail("Unexpected browser artifact entry"));
+            return Err(io::Error::other("Unexpected browser artifact entry"));
         }
         count += 1;
         bytes = bytes.saturating_add(metadata.len());
     }
     if count >= 64 || bytes > 248 * 1024 * 1024 {
-        return Err(fail(
+        return Err(io::Error::other(
             "Browser artifact quota reached. Remove old captures before retrying.",
         ));
     }
@@ -106,7 +103,7 @@ fn capture(root: &Path, args: &Value) -> io::Result<Value> {
         height: Option<u16>,
     }
     let args: Input = serde_json::from_value(args.clone())
-        .map_err(|_| fail("Expected input HTML path and optional width/height"))?;
+        .map_err(|_| io::Error::other("Expected input HTML path and optional width/height"))?;
     let input = source(root, &args.input)?;
     let result = render_preview(
         &input,
@@ -166,7 +163,7 @@ impl control_mcp::Tools for Bridge<'_> {
         } else if crate::tool_registry::bridge_forward(name) {
             hive(self.connection).and_then(|h| h.rpc("tools/call", call.params.clone()))
         } else {
-            Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures, Rust snippets and solvers"))
+            Err(io::Error::other("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures, Rust snippets and solvers"))
         };
         result.unwrap_or_else(|e| control_mcp::failure(&e.to_string()))
     }
@@ -181,7 +178,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
             fs::canonicalize(directory)?
         }
         [flag] if flag == "--chat" => return crate::mcp_chat::run(),
-        _ => return Err(fail("control mcp [--root /absolute/preview/directory | --chat]")),
+        _ => return Err(io::Error::other("control mcp [--root /absolute/preview/directory | --chat]")),
     };
     // Codex launches this native host application; worker containers never receive its credential.
     let mut connection = None;
@@ -231,7 +228,7 @@ pub(crate) fn serve(mut dispatch: impl FnMut(&Value) -> Value) -> io::Result<()>
 }
 pub fn browser_cli(args: &[String]) -> io::Result<()> {
     if !(args.len() == 2 || args.len() == 4) || args[0] != "capture" {
-        return Err(fail("control browser capture PREVIEW.html [WIDTH HEIGHT]"));
+        return Err(io::Error::other("control browser capture PREVIEW.html [WIDTH HEIGHT]"));
     }
     let width = args
         .get(2)
