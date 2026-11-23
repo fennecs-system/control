@@ -1073,7 +1073,6 @@ fn execute(
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
-    let local = attempt.backend == crate::backend::Backend::Local;
     let captured = if attempt.backend.agent().own_prompt() {None} else {crate::turn_context::input(attempt).map_err(|e|failed(&e.to_string()))?};
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before launch.".into()));
@@ -1120,7 +1119,7 @@ fn execute(
     let absolute =
         fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
     let (output, outputs) = match attempt.backend {
-        crate::backend::Backend::Local | crate::backend::Backend::Grok => {
+        crate::backend::Backend::Local | crate::backend::Backend::Grok | crate::backend::Backend::Antigravity => {
             let room = bridge.and_then(|(state, run_id)| {
                 let s = state.lock().ok()?;
                 let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
@@ -1129,10 +1128,10 @@ fn execute(
             // The loop ends every model request with the declared observation,
             // after the cache-stable prefix and outside the step transcript.
             let prompt = captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some()));
-            if local {
-                (crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?, "Local agent outputs")
-            } else {
-                (crate::grok::execute(id, prompt, attempt, bridge, &absolute, &image, &node)?, "Grok outputs")
+            match attempt.backend {
+                crate::backend::Backend::Grok => (crate::grok::execute(id, prompt, attempt, bridge, &absolute, &image, &node)?, "Grok outputs"),
+                crate::backend::Backend::Antigravity => (crate::antigravity::execute(id, prompt, attempt, bridge, &absolute, &image, &node)?, "Antigravity outputs"),
+                _ => (crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?, "Local agent outputs"),
             }
         }
         crate::backend::Backend::Claude => (crate::claude::execute(id, objective, attempt, bridge, &absolute, &image, &node)?, "Claude outputs"),

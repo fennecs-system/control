@@ -6,13 +6,14 @@ while [ "$#" -ne 0 ]; do
   case "$1" in
     --claude) images+=(claude); provider=claude ;;
     --grok) images+=(grok) ;;
+    --antigravity) images+=(antigravity) ;;
     --browser) images+=(browser) ;;
     --build-environment) images+=(build) ;;
     --solver) images+=(solver) ;;
     --full) profile=full ;;
     --help|-h)
-      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--grok] [--full] [--browser] [--build-environment] [--solver]' \
-        'Build the Nix package and Codex worker, load images and save immutable pins; optionally add Claude Code, Grok Build, browser capture, offline Rust/WASM build environments and optimisation/constraint solvers (HiGHS, Z3, OR-Tools CP-SAT).' \
+      printf '%s\n' 'Usage: nix run .#setup [-- --claude] [--grok] [--antigravity] [--full] [--browser] [--build-environment] [--solver]' \
+        'Build the Nix package and Codex worker, load images and save immutable pins; optionally add Claude Code, Grok Build, the Antigravity CLI, browser capture, offline Rust/WASM build environments and optimisation/constraint solvers (HiGHS, Z3, OR-Tools CP-SAT).' \
         '--full adds private single-user Nix, Node/npm, JDK, Python and curl to worker images; lite remains the default.' \
         'Requires a running Docker-compatible engine; macOS also needs a Linux Nix builder.' \
         'Preserves private configuration and state. Does not sign in or start services.'
@@ -38,7 +39,7 @@ printf '%s\n' "Building Nix ${CONTROL_SETUP_LINUX_SYSTEM} images: ${images[*]}â€
 declare -A image_path image_id
 for image in "${images[@]}"; do
   image_output=$image
-  if [ "$profile" = full ] && [[ "$image" = worker || "$image" = claude || "$image" = grok ]]; then image_output="${image}-full"; fi
+  if [ "$profile" = full ] && [[ "$image" = worker || "$image" = claude || "$image" = grok || "$image" = antigravity ]]; then image_output="${image}-full"; fi
   if ! image_path[$image]=$(nix build ".#packages.${CONTROL_SETUP_LINUX_SYSTEM}.${image_output}-image" --out-link "$data_dir/${image_output}-image" --print-out-paths); then
     printf '%s\n' "Could not build the ${CONTROL_SETUP_LINUX_SYSTEM} ${image} image. On macOS this needs a Linux Nix builder;" \
       'see "Linux builder on macOS" in docs/setup.md.' >&2
@@ -71,7 +72,7 @@ check_pin_target() {
 for image in "${images[@]}"; do
   docker load -i "${image_path[$image]}"
   image_tag=nix
-  if [ "$profile" = full ] && [[ "$image" = worker || "$image" = claude || "$image" = grok ]]; then image_tag=nix-full; fi
+  if [ "$profile" = full ] && [[ "$image" = worker || "$image" = claude || "$image" = grok || "$image" = antigravity ]]; then image_tag=nix-full; fi
   image_id[$image]=$(docker image inspect "control-${image}:${image_tag}" --format '{{.Id}}')
   verify_pin "${image_id[$image]}"
   check_pin_target "${image}-image-id"

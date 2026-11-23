@@ -13,7 +13,7 @@
             lib = nixpkgs.lib;
             nvidia = license: lib.hasInfix "CUDA" (license.fullName or "") || lib.hasInfix "NVIDIA" (license.fullName or "");
           in
-          lib.getName pkg == "claude-code" || lib.any nvidia (lib.toList (pkg.meta.license or [ ]));
+          builtins.elem (lib.getName pkg) [ "claude-code" "antigravity-cli" ] || lib.any nvidia (lib.toList (pkg.meta.license or [ ]));
       }));
     in {
       devShells = eachSystem (pkgs: {
@@ -66,6 +66,8 @@
           claude-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; profile = "full"; };
           grok-image = import ./examples/worker-image.nix { inherit pkgs; backend = "grok"; };
           grok-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "grok"; profile = "full"; };
+          antigravity-image = import ./examples/worker-image.nix { inherit pkgs; backend = "antigravity"; };
+          antigravity-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "antigravity"; profile = "full"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
           inference-image = import ./tools/inference/image.nix { inherit pkgs; };
