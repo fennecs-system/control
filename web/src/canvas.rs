@@ -30,6 +30,12 @@ impl Rect {
     pub fn aspect(&self) -> String {
         format!("{:.2} / {:.2}", self.w, self.h)
     }
+    /// A CSS length: the tallest this rectangle is drawn when fitted, since a
+    /// fit never enlarges past [`MAX_FIT`]. CSS bounds the canvas by it so a
+    /// short drawing gets a short canvas rather than a band of empty space.
+    pub fn fit_height(&self) -> String {
+        format!("{:.0}px", self.h * MAX_FIT)
+    }
 }
 
 /// What part of the drawing is on screen: the drawing point at the element's
@@ -260,6 +266,7 @@ fn attach_one(document: &web_sys::Document, root: web_sys::HtmlElement) -> Resul
     // height) once its viewBox follows the view, so zooming never resizes it.
     if let Some(svg) = svg.dyn_ref::<web_sys::SvgElement>() {
         svg.style().set_property("aspect-ratio", &bounds.aspect())?;
+        svg.style().set_property("--fit-height", &bounds.fit_height())?;
     }
     root.class_list().add_1("live")?;
     let mut view = View::new(bounds, root.client_width() as f64, root.client_height() as f64);

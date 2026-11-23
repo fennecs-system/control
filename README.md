@@ -58,6 +58,9 @@ nix run .#setup -- --claude
 On a fresh node, `--claude` selects Claude's `sonnet` model. Rerunning setup
 preserves your saved models and selection.
 
+[Grok Build](docs/GROK.md) is a third backend: `nix run .#setup -- --grok`, then
+`control grok login`, and `/model grok:MODEL` in a chat.
+
 Choose a saved model under **Manage → Models & providers**. **+ New model** adds
 another model; clicking its row selects it for new runs.
 

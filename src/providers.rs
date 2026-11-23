@@ -66,14 +66,14 @@ pub fn initialization_options(
     for pair in options {
         match pair[0].as_str() {
             "--provider" if provider.is_none() => {
-                provider = Some(hosted(&pair[1]).ok_or_else(|| std::io::Error::other("Provider must be codex or claude"))?);
+                provider = Some(hosted(&pair[1]).ok_or_else(|| std::io::Error::other("Provider must be codex, claude or grok"))?);
             }
             "--source-root" if source.is_none() && std::path::Path::new(&pair[1]).is_absolute() => {
                 source = Some(std::path::PathBuf::from(&pair[1]))
             }
             _ => {
                 return Err(std::io::Error::other(
-                    "Use config init [--provider codex|claude] [--source-root /absolute/checkout]",
+                    "Use config init [--provider codex|claude|grok] [--source-root /absolute/checkout]",
                 ))
             }
         }

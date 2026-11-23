@@ -421,11 +421,14 @@ fn preview_pages() {
     let mounted = crate::process_tree::ZOOM_SLOT.replace(" hidden></div>", "><button type='button' data-zoom='in' aria-label='Zoom in'>+</button><button type='button' data-zoom='out' aria-label='Zoom out'>−</button><button type='button' data-zoom='fit' aria-label='Fit to view'>Fit</button></div>");
     let directory = std::path::Path::new(&directory);
     std::fs::create_dir_all(directory).unwrap();
-    // The client also sizes the live canvas to the drawing's proportions.
-    let view_box = page.split("viewBox='-2 -2 ").nth(1).unwrap().split('\'').next().unwrap().replace(' ', " / ");
+    // The client also sizes the live canvas to the drawing's proportions and
+    // its fitted height (`MAX_FIT` 1.25 in web/src/canvas.rs).
+    let view_box = page.split("viewBox='-2 -2 ").nth(1).unwrap().split('\'').next().unwrap().to_owned();
+    let fit_height = view_box.split(' ').nth(1).unwrap().parse::<f64>().unwrap() * 1.25;
+    let view_box = view_box.replace(' ', " / ");
     let client = page.replace(crate::process_tree::ZOOM_SLOT, &mounted)
         .replace("<div class='process-tree' id='process-tree'", "<div class='process-tree live' id='process-tree'")
-        .replace(" preserveAspectRatio='xMidYMax meet'", &format!(" style='aspect-ratio:{view_box}' preserveAspectRatio='xMidYMax meet'"));
+        .replace(" preserveAspectRatio='xMidYMax meet'", &format!(" style='aspect-ratio:{view_box};--fit-height:{fit_height:.0}px' preserveAspectRatio='xMidYMax meet'"));
     std::fs::write(directory.join("bots-client.html"), client).unwrap();
     std::fs::write(directory.join("bots.html"), page).unwrap();
 }
@@ -446,11 +449,15 @@ fn every_toolbar_control_shares_one_height() {
     assert!(runtime.contains(".bots-search button{flex:none;padding:0 12px;border:1px solid var(--line);"));
     assert!(runtime.contains(".canvas-controls button{min-width:var(--toolbar-h);padding:0 10px;border:1px solid var(--line);"));
     // The tree canvas takes the drawing's proportions (the client sets them;
-    // without it the SVG's own), bounded per depth and by 70% of the viewport.
-    assert!(runtime.contains(".process-tree{--tree-max:min(1400px,70dvh);") && runtime.contains(".process-tree svg{display:block;flex:none;width:100%;height:auto;min-height:0;max-height:var(--tree-max);"));
+    // without it the SVG's own), bounded per depth and by 82% of the viewport.
+    assert!(runtime.contains(".process-tree{--tree-max:min(1400px,82dvh);") && runtime.contains(".process-tree svg{display:block;flex:none;width:100%;height:auto;min-height:0;max-height:var(--tree-max);"));
     // Even a one-level tree gets room to read (bounded on short phone screens).
-    assert!(runtime.contains("min-height:min(420px,60dvh);overflow:hidden") && runtime.contains(".process-tree[data-levels=\"1\"]{--tree-max:min(420px,60dvh)}"));
-    assert!(runtime.contains(".process-tree.live svg{min-height:min(420px,60dvh)}") && !runtime.contains("136px"));
+    assert!(runtime.contains("min-height:min(420px,60dvh);overflow:hidden") && runtime.contains(".process-tree[data-levels=\"1\"]{--tree-max:min(440px,60dvh)}"));
+    // The live canvas is no taller than the fitted drawing (the client sets
+    // `--fit-height`), so a shallow forest leaves no empty band; the page drops
+    // its reading width for the scene.
+    assert!(runtime.contains(".process-tree.live{min-height:0}.process-tree.live svg{max-height:min(var(--tree-max),var(--fit-height,var(--tree-max)))}") && !runtime.contains("136px"));
+    assert!(runtime.contains("main:has(.bots-scene){max-width:none}"));
     for (css, rule) in [(runtime, ".canvas-controls button{"), (runtime, ".bots-search input{"), (runtime, ".bots-search button{")] {
         let body = css.split(rule).nth(1).unwrap().split('}').next().unwrap();
         assert!(!format!(";{body}").contains(";height") && !body.contains("padding:8px"), "{rule}{body}");
