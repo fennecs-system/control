@@ -1568,3 +1568,5 @@ fn worker_envelopes_are_pinned() {
         json!([{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid JSON-RPC batch element"}}])
     );
 }
+
+mod characterisation;
