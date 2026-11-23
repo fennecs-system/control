@@ -377,10 +377,17 @@ fn fetch(
     }
     unreachable!()
 }
-fn permitted(state: &State, chat: &str, actor: &Actor, url: &Url, time: u64) -> io::Result<()> {
+fn permitted(
+    chats: &[crate::chat::Session],
+    grants: &[Grant],
+    chat: &str,
+    actor: &Actor,
+    url: &Url,
+    time: u64,
+) -> io::Result<()> {
     crate::identity::authorize(actor, crate::identity::Action::Task).map_err(io::Error::other)?;
-    if !state.chats.iter().any(|c| c.id == chat && &c.actor == actor)
-        || !state.web_grants.iter().any(|g| g.permits(chat, actor, url, time))
+    if !chats.iter().any(|c| c.id == chat && &c.actor == actor)
+        || !grants.iter().any(|g| g.permits(chat, actor, url, time))
     {
         return Err(io::Error::other(
             "Origin not approved for this chat. Ask the operator to grant access at /tools/browser.",
@@ -417,7 +424,7 @@ pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Res
         }) {
             return Err(io::Error::other("Attempt is no longer active"));
         }
-        permitted(&state, &chat, &actor, url, now())
+        permitted(&state.chats, &state.web_grants, &chat, &actor, url, now())
     };
     fetch_evidence(&mut Http, &input, &FETCH_ACTIVE, authorize, evidence)
 }
