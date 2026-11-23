@@ -1101,7 +1101,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         value["pending_bots"]=crate::bots::pending_json(state,id);
         value["pending_knowledge"]=json!(crate::knowledge_tools::pending_json(state,id));
         value["bot_revision"]=json!(crate::bots::decision_revision(state));
-        value["port_revision"]=json!(crate::ports::decision_revision(state));
+        value["port_revision"]=json!(crate::ports::decision_revision(&state.ports));
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
         value["bot"]=crate::bots::status(state,id).map_or(Value::Null,Value::from);
@@ -1118,7 +1118,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
 }
 pub fn list(state: &State) -> Value {
     let decision_revision = crate::design::decision_revision(state);
-    let port_revision = crate::ports::decision_revision(state);
+    let port_revision = crate::ports::decision_revision(&state.ports);
     let bot_revision = crate::bots::decision_revision(state);
     let callsigns = crate::callsigns::all(&state.chats);
     let status = statuses(state);
@@ -1195,7 +1195,7 @@ pub fn pending_requests(state: &State) -> Value {
         .map(|s| s.id.as_str());
     let chats = waiting
         .chain(crate::bots::pending_chats(state))
-        .chain(crate::ports::pending_chats(state))
+        .chain(crate::ports::pending_chats(&state.ports))
         .chain(crate::intel::pending_chats(state))
         .chain(crate::knowledge_tools::pending_chats(state))
         .chain(folders);

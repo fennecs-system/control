@@ -442,7 +442,7 @@ fn an_operator_service_stop_ends_its_approved_ports() {
     request(&mut state, &run, Direction::Ingress).unwrap();
     let id = state.ports[0].id.as_str().to_owned();
     approve(&mut state, &id, 60, false, None, time, |_| Ok(())).unwrap();
-    assert!(authorized(&state, &state.ports[0], time).is_ok());
+    assert!(authorized(PortAuthority::of(&state), &state.ports[0], time).is_ok());
     let service = state.services[0].resource.id.as_str().to_owned();
     let before = serde_json::to_vec(&state).unwrap();
     assert!(crate::services::stop(&mut state, &service, time, |_| Err(io::Error::other("disk full"))).is_err());
@@ -453,7 +453,7 @@ fn an_operator_service_stop_ends_its_approved_ports() {
     );
     crate::services::stop(&mut state, &service, time, |_| Ok(())).unwrap();
     assert!(matches!(state.services[0].resource.phase, Phase::Stopping { .. }));
-    assert!(authorized(&state, &state.ports[0], time).is_err());
+    assert!(authorized(PortAuthority::of(&state), &state.ports[0], time).is_err());
     crate::services::stop(&mut state, &service, time, |_| panic!("already stopping")).unwrap();
     assert!(crate::services::stop(&mut state, "svc-missing", time, |_| Ok(())).is_err());
 }
@@ -468,15 +468,15 @@ fn service_lifetime_approval_is_explicit_revocable_and_survives_reload() {
     assert!(state.ports[0].summary()["expires_unix"].is_null());
     assert_eq!(state.ports[0].summary()["until_stopped"], true);
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    assert!(authorized(&restored, &restored.ports[0], time + 86400).is_ok());
+    assert!(authorized(PortAuthority::of(&restored), &restored.ports[0], time + 86400).is_ok());
     state.ports[0].status = Status::Stopping;
-    assert!(authorized(&state, &state.ports[0], time + 86400).is_err());
+    assert!(authorized(PortAuthority::of(&state), &state.ports[0], time + 86400).is_err());
     state.ports[0].status = Status::Approved;
     state.services[0].resource.phase = Phase::Stopping {
         container: None,
         reason: control_core::resources::StopReason::Requested,
     };
-    assert!(authorized(&state, &state.ports[0], time + 86400).is_err());
+    assert!(authorized(PortAuthority::of(&state), &state.ports[0], time + 86400).is_err());
 }
 #[test]
 fn approval_clamps_to_service_deadline_after_operator_review() {
@@ -511,20 +511,20 @@ fn approval_is_exact_endpoint_and_durable_service_generation_not_a_network_grant
     assert!(s.ports[0].approval.is_none());
     approve(&mut s, &id, 60, true, Some(target), time, |_| Ok(())).unwrap();
     let port = s.ports[0].clone();
-    assert!(authorized(&s, &port, time).is_ok());
-    assert!(authorized(&s, &port, time - 1).is_err());
-    assert!(authorized(&s, &port, time + 60).is_err());
+    assert!(authorized(PortAuthority::of(&s), &port, time).is_ok());
+    assert!(authorized(PortAuthority::of(&s), &port, time - 1).is_err());
+    assert!(authorized(PortAuthority::of(&s), &port, time + 60).is_err());
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
     assert!(!restored.ports[0].ready);
-    assert!(authorized(&restored, &port, time).is_ok());
+    assert!(authorized(PortAuthority::of(&restored), &port, time).is_ok());
     s.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
-    assert!(authorized(&s, &port, time).is_err());
+    assert!(authorized(PortAuthority::of(&s), &port, time).is_err());
     s.services[0].resource.generation = Generation::INITIAL;
     s.services[0].resource.phase = Phase::Running("c".repeat(64).try_into().unwrap());
-    assert!(authorized(&s, &port, time).is_err());
+    assert!(authorized(PortAuthority::of(&s), &port, time).is_err());
     s.services[0].resource.phase = Phase::Running("b".repeat(64).try_into().unwrap());
     s.ports[0].status = Status::Stopping;
-    assert!(authorized(&s, &port, time).is_err());
+    assert!(authorized(PortAuthority::of(&s), &port, time).is_err());
 }
 #[test]
 fn local_targets_require_exact_literal_operator_approval_and_no_dns_bypass() {
@@ -691,7 +691,7 @@ fn peer_routes_admit_only_owned_ingress_of_another_service() {
         )
         .is_err()
     );
-    let route = route(&state, state.ports.last().unwrap());
+    let route = route(&state.ports, state.ports.last().unwrap());
     assert!(route.contains("peer ingress echo (service svc-a :31000)"), "{route}");
     let peer = state.ports.iter().position(|p| p.id.as_str() == ingress).unwrap();
     state.ports[peer].status = Status::Stopped;
@@ -731,12 +731,12 @@ fn peer_route_connects_only_while_the_ingress_listens() {
     )
     .unwrap();
     let egress = state.ports.last().unwrap().clone();
-    assert!(!peer_listening(&state, &egress));
+    assert!(!peer_listening(&state.ports, &egress));
     state.ports.iter_mut().find(|p| p.id.as_str() == ingress).unwrap().ready = true;
-    assert!(peer_listening(&state, &egress));
+    assert!(peer_listening(&state.ports, &egress));
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    assert!(!peer_listening(&restored, &egress));
-    assert!(peer_listening(&state, &state.ports[0]));
+    assert!(!peer_listening(&restored.ports, &egress));
+    assert!(peer_listening(&state.ports, &state.ports[0]));
 }
 #[test]
 fn delegated_peer_routes_capture_exact_authority_across_owner_chats() {
@@ -785,19 +785,19 @@ fn delegated_peer_routes_capture_exact_authority_across_owner_chats() {
     .unwrap();
     let route = state.ports.last().unwrap().clone();
     assert_ne!(route.chat, state.ports[0].chat);
-    assert!(authorized(&state, &route, time).is_ok());
+    assert!(authorized(PortAuthority::of(&state), &route, time).is_ok());
     // The captured route survives model-turn history removal and restart.
     state.runtime.runs.clear();
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    assert!(authorized(&restored, &route, time).is_ok());
+    assert!(authorized(PortAuthority::of(&restored), &route, time).is_ok());
     state.ports.last_mut().unwrap().peer_grant = None;
-    assert!(authorized(&state, &route, time).is_err());
+    assert!(authorized(PortAuthority::of(&state), &route, time).is_err());
     *state.ports.last_mut().unwrap() = route.clone();
     state.ports[0].actor = Actor::Unknown;
-    assert!(authorized(&state, &route, time).is_err());
+    assert!(authorized(PortAuthority::of(&state), &route, time).is_err());
     state.ports[0].actor = route.actor.clone();
     state.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
-    assert!(authorized(&state, &route, time).is_err());
+    assert!(authorized(PortAuthority::of(&state), &route, time).is_err());
 }
 #[test]
 fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
@@ -837,17 +837,20 @@ fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
     approve(&mut state, &egress, 60, true, Some(listener), time, |_| Ok(())).unwrap();
     let port = state.ports.iter().find(|p| p.id.as_str() == egress).unwrap().clone();
     assert!(!port.approval.as_ref().unwrap().allow_loopback);
-    assert!(authorized(&state, &port, time).is_ok());
-    assert_eq!(intent(&state, &port, &port.node, time), Intent::Serve);
+    assert!(authorized(PortAuthority::of(&state), &port, time).is_ok());
+    assert_eq!(
+        intent(PortAuthority::of(&state), &port, &port.node, time),
+        Intent::Serve
+    );
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    assert!(authorized(&restored, &port, time).is_ok());
+    assert!(authorized(PortAuthority::of(&restored), &port, time).is_ok());
     let mut legacy = serde_json::to_value(&state).unwrap();
     for port in legacy["ports"].as_array_mut().unwrap() {
         port.as_object_mut().unwrap().remove("peer_grant");
     }
     let legacy: State = serde_json::from_value(legacy).unwrap();
     assert!(
-        authorized(&legacy, &port, time).is_ok(),
+        authorized(PortAuthority::of(&legacy), &port, time).is_ok(),
         "Existing same-chat peer approvals remain valid"
     );
     let peer = |state: &mut State| {
@@ -868,7 +871,7 @@ fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
         .as_mut()
         .unwrap()
         .host_port = 40002;
-    assert!(authorized(&state, &port, time).is_err());
+    assert!(authorized(PortAuthority::of(&state), &port, time).is_err());
     state
         .ports
         .iter_mut()
@@ -881,8 +884,8 @@ fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
         .find(|p| p.id.as_str() == ingress)
         .unwrap()
         .status = Status::Stopping;
-    assert!(authorized(&state, &port, time).is_err());
-    assert_eq!(intent(&state, &port, &port.node, time), Intent::Stop);
+    assert!(authorized(PortAuthority::of(&state), &port, time).is_err());
+    assert_eq!(intent(PortAuthority::of(&state), &port, &port.node, time), Intent::Stop);
     state
         .ports
         .iter_mut()
@@ -890,7 +893,7 @@ fn peer_route_follows_the_approved_ingress_and_closes_with_it() {
         .unwrap()
         .clone_from(&original);
     state.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
-    assert!(authorized(&state, &port, time).is_err());
+    assert!(authorized(PortAuthority::of(&state), &port, time).is_err());
 }
 #[test]
 fn legacy_port_records_without_peer_still_load() {

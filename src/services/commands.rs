@@ -1266,7 +1266,7 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         // Approved egress also brings the service's HTTPS_PROXY settings.
         let proxy = shared
             .lock()
-            .map(|state| crate::ports::proxy_env(&state, &service))
+            .map(|state| crate::ports::proxy_env(&state.ports, &service))
             .unwrap_or_default();
         let marker = [(MARKER, execution.id.as_str())]
             .into_iter()
