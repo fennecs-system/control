@@ -116,7 +116,7 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&state.lens_library,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
     html
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
@@ -1248,7 +1248,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         escape(&crate::callsigns::name_or_id(&state.chats, id)),
         crate::scores::line(state, id),
         command_menu(&session.actor),
-        crate::lens_library::choices(state, &lenses, "session-message")
+        crate::lens_library::choices(&state.lens_library, &lenses, "session-message")
     ))
 }
 fn command_text(text: &str) -> String {

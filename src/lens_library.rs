@@ -5,9 +5,8 @@ use std::{
     io::{self, Write},
 };
 
-pub fn inputs(state: &State) -> Vec<DocumentInput> {
-    state
-        .documents
+pub fn inputs(documents: &[crate::knowledge::Document]) -> Vec<DocumentInput> {
+    documents
         .iter()
         .map(|d| DocumentInput {
             id: d.id.clone(),
@@ -18,19 +17,21 @@ pub fn inputs(state: &State) -> Vec<DocumentInput> {
         .collect()
 }
 pub fn resolve(state: &State, roots: &[String]) -> Result<Resolved, String> {
-    state
-        .lens_library
-        .resolve_with(roots, &inputs(state), &crate::packages::inputs(state))
+    state.lens_library.resolve_with(
+        roots,
+        &inputs(&state.documents),
+        &crate::packages::inputs(&state.packages),
+    )
 }
 /// Whether the selected lenses, with their includes, offer the catalogue tool
 /// `tool`. This decides whether an opt-in option exists at all (availability),
 /// never whether a call is authorized; host policy and operator approvals do
 /// that. It walks definitions only, without resolving documents.
-pub(crate) fn offers(state: &State, roots: &[String], tool: &str) -> bool {
+pub(crate) fn offers(library: &control_context::Library, roots: &[String], tool: &str) -> bool {
     let mut pending = roots.iter().map(String::as_str).collect::<Vec<_>>();
     for _ in 0..256 {
         let Some(id) = pending.pop() else { return false };
-        let Some(definition) = state.lens_library.get(id) else {
+        let Some(definition) = library.get(id) else {
             continue;
         };
         if definition.tools.iter().any(|offered| offered == tool) {
@@ -181,14 +182,14 @@ pub(crate) fn save_with(
     draft.packages.dedup();
     let mut candidate = state.lens_library.clone();
     candidate.definitions.push(draft.clone());
-    candidate.validate(&inputs(state))?;
+    candidate.validate(&inputs(&state.documents))?;
     // Validation checks package syntax only; the edited lens must also resolve
     // against the admitted versions now.
     if !draft.packages.is_empty() {
         candidate.resolve_with(
             std::slice::from_ref(&draft.id),
-            &inputs(state),
-            &crate::packages::inputs(state),
+            &inputs(&state.documents),
+            &crate::packages::inputs(&state.packages),
         )?;
     }
     let previous = std::mem::replace(&mut state.lens_library, candidate);
@@ -198,11 +199,11 @@ pub(crate) fn save_with(
     }
     Ok(draft)
 }
-pub fn choices(state: &State, selected: &[String], form: &str) -> String {
+pub fn choices(library: &control_context::Library, selected: &[String], form: &str) -> String {
     let mut html = format!(
         "<input type='hidden' name='composition' value='1' form='{form}'><div class='chat-tags'><details class='lens-selector'><summary>+ Genes</summary></details><div class='tag-options'>"
     );
-    for lens in state.lens_library.current() {
+    for lens in library.current() {
         html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(&lens.id),escape(&lens.id),if selected.contains(&lens.id){" checked"}else{""},escape(&lens.name)));
     }
     html.push_str("</div><a class='lens-library-shortcut' href='/dna' aria-label='Open DNA library'>↗</a></div>");

@@ -105,9 +105,8 @@ fn tree(store: &Path, name: &str, version: u64) -> io::Result<PathBuf> {
 }
 
 /// Admitted, unrevoked versions offered to lens resolution.
-pub fn inputs(state: &State) -> Vec<control_context::PackageInput> {
-    state
-        .packages
+pub fn inputs(packages: &[Manifest]) -> Vec<control_context::PackageInput> {
+    packages
         .iter()
         .filter(|m| m.admitted())
         .map(|m| control_context::PackageInput {
@@ -118,9 +117,8 @@ pub fn inputs(state: &State) -> Vec<control_context::PackageInput> {
         })
         .collect()
 }
-fn current<'a>(state: &'a State, package: &control_context::PackageInput) -> Option<&'a Manifest> {
-    state
-        .packages
+fn current<'a>(packages: &'a [Manifest], package: &control_context::PackageInput) -> Option<&'a Manifest> {
+    packages
         .iter()
         .find(|m| m.name == package.name && m.version == package.version && m.commit == package.commit && m.admitted())
 }
@@ -839,10 +837,8 @@ pub(crate) fn operator(shared: &Arc<Mutex<State>>, name: &str, args: &Value) -> 
 
 /// Worker discovery covers only the versions the run captured.
 pub struct Tools;
-fn captured(state: &State, run: &str) -> io::Result<Vec<Manifest>> {
-    let run = state
-        .runtime
-        .runs
+fn captured(runs: &[crate::runtime::Run], packages: &[Manifest], run: &str) -> io::Result<Vec<Manifest>> {
+    let run = runs
         .iter()
         .find(|r| r.id == run && r.status == "running")
         .ok_or_else(|| io::Error::other("Run is not active"))?;
@@ -850,7 +846,12 @@ fn captured(state: &State, run: &str) -> io::Result<Vec<Manifest>> {
     Ok(run
         .context
         .as_ref()
-        .map(|c| c.packages.iter().filter_map(|p| current(state, p).cloned()).collect())
+        .map(|c| {
+            c.packages
+                .iter()
+                .filter_map(|p| current(packages, p).cloned())
+                .collect()
+        })
         .unwrap_or_default())
 }
 impl AttemptTools for Tools {
@@ -900,7 +901,7 @@ impl AttemptTools for Tools {
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         let packages = {
             let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
-            captured(&state, cx.attempt.run)?
+            captured(&state.runtime.runs, &state.packages, cx.attempt.run)?
         };
         if name == "control_packages_search" {
             return search(packages.iter(), args, true).map_err(io::Error::other);
@@ -928,7 +929,7 @@ pub(crate) fn planned(shared: &Arc<Mutex<State>>, run: &str) -> io::Result<Vec<(
         .map(|c| {
             c.packages
                 .iter()
-                .filter(|p| current(&state, p).is_some())
+                .filter(|p| current(&state.packages, p).is_some())
                 .map(|p| (p.name.clone(), p.version))
                 .collect()
         })

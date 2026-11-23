@@ -291,7 +291,7 @@ fn behaviours_apply_on_spawn_through_existing_primitives() {
         "{prompt}"
     );
     // A later bot request for it defaults to the persona's schedule.
-    assert_eq!(schedule(&state, &child_chat), Some(30));
+    assert_eq!(schedule(&state.runtime.runs, &child_chat), Some(30));
 }
 
 #[test]

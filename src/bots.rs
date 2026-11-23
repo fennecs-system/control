@@ -2128,7 +2128,9 @@ pub(crate) fn offered(state: &State, top: &str, tool: &str) -> bool {
         .chats
         .iter()
         .find(|session| session.id == top && session.parent_chat.is_none())
-        .is_some_and(|session| crate::lens_library::offers(state, &crate::chat::selected_lenses(session), tool))
+        .is_some_and(|session| {
+            crate::lens_library::offers(&state.lens_library, &crate::chat::selected_lenses(session), tool)
+        })
 }
 /// Whether the tree rooted at `top` opted in to any team observer: an
 /// advisor, a monitor or an acceptance check.
@@ -2140,7 +2142,7 @@ pub(crate) fn team_observer_offered(state: &State, top: &str) -> bool {
 /// The gene a team observer with this DNA needs on its root, as its tool and
 /// the refusal that names it. A judge without observer DNA is the advisor.
 pub(crate) fn team_gene(state: &State, lenses: &[String]) -> (&'static str, &'static str) {
-    let offers = |tool| crate::lens_library::offers(state, lenses, tool);
+    let offers = |tool| crate::lens_library::offers(&state.lens_library, lenses, tool);
     if offers(ACCEPTANCE_TOOL) {
         (ACCEPTANCE_TOOL, ACCEPTANCE_OFF)
     } else if offers(MONITOR_TOOL) {
@@ -2154,7 +2156,7 @@ pub(crate) fn team_gene(state: &State, lenses: &[String]) -> (&'static str, &'st
 pub(crate) fn team_gate(state: &State, chat: &str) -> Result<&'static str, &'static str> {
     let (tool, off) = team_gene(
         state,
-        crate::personas::captured(state, chat).map_or(&[][..], |bundle| &bundle.lenses),
+        crate::personas::captured(&state.runtime.runs, chat).map_or(&[][..], |bundle| &bundle.lenses),
     );
     if offered_for(state, chat, tool) {
         Ok(tool)
@@ -2175,7 +2177,11 @@ pub(crate) fn antibody_offered(state: &State, top: &str) -> bool {
         .find(|session| session.id == top && session.parent_chat.is_none())
         .is_some_and(|session| {
             session.actor == identity::Actor::LocalOperator
-                && crate::lens_library::offers(state, &crate::chat::selected_lenses(session), ANTIBODY_TOOL)
+                && crate::lens_library::offers(
+                    &state.lens_library,
+                    &crate::chat::selected_lenses(session),
+                    ANTIBODY_TOOL,
+                )
         })
 }
 /// [`antibody_offered`] for the task tree `chat` belongs to.
@@ -2297,7 +2303,7 @@ fn handle_with(
                 return Err(io::Error::other(TIMERS_OFF));
             }
             // A persona's schedule behaviour is the default interval.
-            let every_minutes = every_minutes.or_else(|| crate::personas::schedule(state, &chat_id));
+            let every_minutes = every_minutes.or_else(|| crate::personas::schedule(&state.runtime.runs, &chat_id));
             if !attempt.nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
                 || attempt.nonce.is_empty()
                 || attempt.nonce.len() > 128
