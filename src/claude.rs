@@ -144,7 +144,7 @@ pub(crate) fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
         &format!("dev.control.attempt={name}"),
         "--label",
         // Login and offline checks are supervised by their command, not run reconciliation.
-        if ["control-claude-login-", "control-claude-probe-", "control-grok-login-", "control-grok-probe-", "control-summary-"].iter().any(|prefix| name.starts_with(prefix)) { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
+        if ["control-claude-login-", "control-claude-probe-", "control-grok-login-", "control-grok-probe-", "control-antigravity-login-", "control-antigravity-probe-", "control-summary-"].iter().any(|prefix| name.starts_with(prefix)) { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
         "--user",
         &format!("{uid}:{gid}"),
         "--read-only",

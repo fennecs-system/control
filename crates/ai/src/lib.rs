@@ -1,5 +1,6 @@
 //! Provider protocol boundary: no credentials, runtime state, networking or execution.
 //! Transports frame provider records; decoders normalize them into owned, bounded events.
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod grok;
