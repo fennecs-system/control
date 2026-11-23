@@ -43,6 +43,14 @@ fn omitted_lists_are_empty_and_common_confidence_words_are_accepted() {
     assert_eq!(payload.findings[0].confidence, Confidence::Supported);
     assert_eq!(payload.findings[1].confidence, Confidence::Tentative);
     payload.validate().unwrap();
+    // Runs AG–AI: local models wrote "high" and 0.95 and lost a step to each
+    // refusal. Confidence is read for what it means and never fails a handoff.
+    let read = |written: &str| serde_json::from_str::<Finding>(&format!(r#"{{"claim":"c","confidence":{written}}}"#)).unwrap().confidence;
+    assert_eq!([read(r#""high""#), read("0.95"), read(r#""Verified""#)], [Confidence::Supported; 3]);
+    assert_eq!([read(r#""medium""#), read("0.4"), read(r#""low""#)], [Confidence::Tentative; 3]);
+    assert_eq!([read(r#""dunno""#), read("0"), read("null"), read("[1]")], [Confidence::Unknown; 4]);
+    assert_eq!(serde_json::from_str::<Finding>(r#"{"claim":"c"}"#).unwrap().confidence, Confidence::Unknown);
+    assert_eq!(serde_json::to_string(&Confidence::Supported).unwrap(), r#""supported""#);
     // The subgoal stays required, and unknown fields still fail closed.
     assert!(serde_json::from_str::<Payload>(r#"{"findings":[]}"#).is_err());
     assert!(serde_json::from_str::<Payload>(r#"{"subgoal":"x","notes":[]}"#).is_err());

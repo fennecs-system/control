@@ -11,7 +11,7 @@ fn payload_schema() -> Value {
     let text = json!({"type":"string","maxLength":1000});
     json!({"type":"object","properties":{
         "subgoal":{"type":"string","minLength":1,"maxLength":1000},
-        "findings":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"claim":text,"confidence":{"type":"string","enum":["unknown","tentative","supported"]}},"required":["claim","confidence"],"additionalProperties":false}},
+        "findings":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"claim":text,"confidence":{"type":"string","enum":["unknown","tentative","supported"]}},"required":["claim"],"additionalProperties":false}},
         "tried":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"approach":text,"outcome":text},"required":["approach","outcome"],"additionalProperties":false}},
         "pending":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"action":text,"expected":text},"required":["action","expected"],"additionalProperties":false}},
         "next":{"type":"array","maxItems":8,"items":{"type":"object","properties":{"condition":text,"action":text},"required":["condition","action"],"additionalProperties":false}}
