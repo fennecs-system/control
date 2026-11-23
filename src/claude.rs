@@ -40,7 +40,7 @@ impl crate::backend::Agent for Claude {
         "set claude-image-id in the configuration directory to the Nix image digest"
     }
     fn credentials_ready(&self) -> Result<(), String> {
-        credentials_ready().map_err(|_| "run ./target/release/control claude login; its private login stays outside the checkout".to_owned())
+        credentials_ready().map_err(|_| "run control claude login; its private login stays outside the checkout".to_owned())
     }
     fn probe(&self, image: &str) -> Result<(), String> {
         crate::config::node_id()

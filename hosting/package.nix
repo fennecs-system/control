@@ -41,7 +41,7 @@ pkgs.rustPlatform.buildRustPackage {
   };
   CONTROL_BUILD_REVISION = if revision == null then "" else revision;
   cargoLock.lockFile = ../Cargo.lock;
-  cargoBuildFlags = [ "--bin" "control" ] ++ lib.optional (!withTerminal) "--no-default-features";
+  cargoBuildFlags = [ "--bins" ] ++ lib.optional (!withTerminal) "--no-default-features";
   cargoTestFlags = [ "--workspace" ] ++ lib.optional (!withTerminal) "--no-default-features";
   nativeCheckInputs = [ pkgs.gitMinimal ] ++ lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.util-linux;
   preBuild = ''
