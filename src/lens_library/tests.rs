@@ -199,15 +199,7 @@ fn export_response_bytes_are_pinned() {
     let mut state = State::default();
     let body = serde_json::to_string_pretty(&state.lens_library).unwrap();
     let mut out = Vec::new();
-    assert!(handle(
-        &mut out,
-        &mut state,
-        "GET",
-        "/dna/export",
-        &HashMap::new(),
-        "",
-        b""
-    ));
+    assert!(handle(&mut out, &mut state, "GET", "/dna/export", &HashMap::new(), b""));
     assert_eq!(
         String::from_utf8(out).unwrap(),
         format!(

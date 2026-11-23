@@ -42,7 +42,7 @@ fn approved(upstream: SocketAddr) -> (Arc<Mutex<State>>, Key) {
     .unwrap();
     let id = state.ports[0].id.as_str().to_owned();
     assert!(
-        env(&state, &state.services[0]).is_empty(),
+        env(&state.ports, &state.services[0]).is_empty(),
         "no proxy settings before approval"
     );
     approve(&mut state, &id, 60, true, Some(upstream), now(), |_| Ok(())).unwrap();
@@ -174,9 +174,9 @@ fn revoked_grants_refuse_new_connects_and_close_open_tunnels() {
     assert_eq!(response(&mut open), "");
     task.join().unwrap();
     let state = shared.lock().unwrap();
-    assert!(grants(&state, &key, now()).next().is_none());
+    assert!(grants(PortAuthority::of(&state), &key, now()).next().is_none());
     assert!(
-        env(&state, &state.services[0]).is_empty(),
+        env(&state.ports, &state.services[0]).is_empty(),
         "settings leave with the last approved egress"
     );
 }
@@ -186,7 +186,10 @@ fn proxy_settings_and_usage_appear_only_with_approved_egress() {
     let (shared, _) = approved(echo());
     let state = shared.lock().unwrap();
     let service = &state.services[0];
-    let names = env(&state, service).iter().map(|(name, _)| *name).collect::<Vec<_>>();
+    let names = env(&state.ports, service)
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>();
     assert_eq!(
         names,
         [
@@ -198,8 +201,8 @@ fn proxy_settings_and_usage_appear_only_with_approved_egress() {
             "no_proxy"
         ]
     );
-    assert!(env(&state, service).contains(&("HTTPS_PROXY", "http://127.0.0.1:3129")));
-    assert!(exports(&state, service).starts_with("export HTTPS_PROXY=http://127.0.0.1:3129 "));
+    assert!(env(&state.ports, service).contains(&("HTTPS_PROXY", "http://127.0.0.1:3129")));
+    assert!(exports(&state.ports, service).starts_with("export HTTPS_PROXY=http://127.0.0.1:3129 "));
     let usage = state.ports[0].summary()["usage"].as_str().unwrap().to_owned();
     assert!(
         usage.contains("HTTPS_PROXY")
@@ -208,7 +211,7 @@ fn proxy_settings_and_usage_appear_only_with_approved_egress() {
         "{usage}"
     );
     let (fresh, _, _) = fixture();
-    assert!(env(&fresh, &fresh.services[0]).is_empty() && exports(&fresh, &fresh.services[0]).is_empty());
+    assert!(env(&fresh.ports, &fresh.services[0]).is_empty() && exports(&fresh.ports, &fresh.services[0]).is_empty());
 }
 
 #[test]

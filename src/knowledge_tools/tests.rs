@@ -141,7 +141,10 @@ fn proposal_checkpoint_retries_provenance_and_operator_admission() {
     assert_eq!(accepted["admitted"], true);
     assert_eq!(accepted["evidence"], "artifact:checked-result");
     assert_eq!(accepted["source"]["run"], id);
-    assert!(crate::knowledge::render(&restored, "review", None).contains("artifact:checked-result"));
+    assert!(
+        crate::knowledge::render(&restored.documents, &restored.collective, "review", None)
+            .contains("artifact:checked-result")
+    );
 }
 #[test]
 fn validation_bounds_and_authority_fail_closed() {
@@ -369,7 +372,6 @@ fn a_proposal_is_an_operator_request_decided_only_through_review() {
             "POST",
             "/review",
             &Default::default(),
-            "general",
             body.as_bytes()
         ));
         String::from_utf8(out).unwrap()

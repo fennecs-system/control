@@ -350,17 +350,19 @@ fn validate_input(input: &Input) -> io::Result<()> {
     }
     Ok(())
 }
-fn selected(state: &State, chat: &str, input: &Input) -> io::Result<(Attempt, Actor)> {
+fn selected(
+    chats: &[crate::chat::Session],
+    runs: &[crate::runtime::Run],
+    chat: &str,
+    input: &Input,
+) -> io::Result<(Attempt, Actor)> {
     validate_input(input)?;
-    let session = state
-        .chats
+    let session = chats
         .iter()
         .find(|c| c.id == chat)
         .ok_or_else(|| io::Error::other("Chat not found"))?;
     crate::identity::authorize(&session.actor, Action::Improve).map_err(io::Error::other)?;
-    let run = state
-        .runtime
-        .runs
+    let run = runs
         .iter()
         .find(|r| {
             r.id == input.run_id
@@ -729,7 +731,7 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
         .map_err(|_| io::Error::other("A GitHub publication is already running"))?;
     let (attempt, actor) = {
         let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        selected(&state, chat, &input)?
+        selected(&state.chats, &state.runtime.runs, chat, &input)?
     };
     let config = configuration()?.ok_or_else(|| {
         io::Error::other("Configure a repository and credential reference with control github configure")
@@ -742,7 +744,7 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
     let edits = changes(source, artifact)?;
     let mut publication = {
         let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        selected(&state, chat, &input)?;
+        selected(&state.chats, &state.runtime.runs, chat, &input)?;
         if let Some(existing) = state
             .github_publications
             .iter()
@@ -825,15 +827,12 @@ pub fn refresh_availability() {
         std::sync::atomic::Ordering::Relaxed,
     );
 }
-pub fn panel(state: &State, chat: &str) -> String {
+pub fn panel(publications: &[Publication], runs: &[crate::runtime::Run], chat: &str) -> String {
     let mut html = String::new();
-    for publication in state.github_publications.iter().filter(|p| {
-        state
-            .runtime
-            .runs
-            .iter()
-            .any(|r| r.id == p.run && r.chat_id.as_deref() == Some(chat))
-    }) {
+    for publication in publications
+        .iter()
+        .filter(|p| runs.iter().any(|r| r.id == p.run && r.chat_id.as_deref() == Some(chat)))
+    {
         if let Some(url) = &publication.url {
             html.push_str(&format!(
                 "<p><a href='{}' target='_blank' rel='noopener noreferrer'>Pull request ↗</a></p>",
@@ -844,17 +843,14 @@ pub fn panel(state: &State, chat: &str) -> String {
     if !CONFIGURED.load(std::sync::atomic::Ordering::Relaxed) {
         return html;
     }
-    if let Some(run) = state.runtime.runs.iter().rev().find(|r| {
+    if let Some(run) = runs.iter().rev().find(|r| {
         r.chat_id.as_deref() == Some(chat)
             && r.action == Action::Improve
             && r.status == "completed"
             && r.attempts
                 .last()
                 .is_some_and(|a| a.github_source.is_some() && a.artifact.is_some())
-    }) && !state
-        .github_publications
-        .iter()
-        .any(|p| p.run == run.id && p.url.is_some())
+    }) && !publications.iter().any(|p| p.run == run.id && p.url.is_some())
     {
         html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/dm/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(&run.id),crate::escape(&run.objective.chars().take(160).collect::<String>())));
     }

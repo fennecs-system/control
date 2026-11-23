@@ -544,7 +544,7 @@ pub(crate) fn notify(
     let tree = Tree::new(state);
     let own = tree.root(chat);
     if !crate::lens_library::offers(
-        state,
+        &state.lens_library,
         &crate::chat::selected_lenses(
             state
                 .chats

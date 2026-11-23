@@ -311,7 +311,7 @@ fn revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts
     let shared = shared();
     let v1 = import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap();
     let mut state = shared.lock().unwrap();
-    let admitted = inputs(&state);
+    let admitted = inputs(&state.packages);
     let run = running(&mut state, admitted);
     assert_eq!(planned_in(&state, &run), vec![("mc263-client".to_string(), 1)]);
     assert!(revoke(&mut state, "mc263-client", 1, "bad", |_| Err(io::Error::other("full"))).is_err());
@@ -319,7 +319,7 @@ fn revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts
     assert!(revoke(&mut state, "mc263-client", 1, "", |_| Ok(())).is_err());
     revoke(&mut state, "mc263-client", 1, "Light data is wrong", |_| Ok(())).unwrap();
     assert!(revoke(&mut state, "mc263-client", 1, "again", |_| Ok(())).is_err());
-    assert!(inputs(&state).is_empty());
+    assert!(inputs(&state.packages).is_empty());
     // The captured run keeps its record but a new attempt receives nothing.
     assert!(planned_in(&state, &run).is_empty());
     drop(state);
@@ -345,7 +345,7 @@ fn workers_discover_only_captured_packages_and_read_them_as_evidence() {
     import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap();
     let (opted, plain) = {
         let mut state = shared.lock().unwrap();
-        let admitted = inputs(&state);
+        let admitted = inputs(&state.packages);
         (running(&mut state, admitted), running(&mut state, Vec::new()))
     };
     let host = crate::tool_registry::LocalHost(&shared);

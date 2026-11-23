@@ -122,9 +122,9 @@ struct Rendered {
 type Prober = fn(&Service, &str, &str, Duration) -> io::Result<ProbeOutput>;
 
 /// The chat a run belongs to, when that chat declared an observation.
-fn declared(state: &State, run: &str) -> Option<(String, Declaration)> {
-    let chat = state.runtime.runs.iter().rev().find(|r| r.id == run)?.chat_id.clone()?;
-    let declaration = state.observations.declared.get(&chat)?.clone();
+fn declared(runs: &[crate::runtime::Run], observations: &Observations, run: &str) -> Option<(String, Declaration)> {
+    let chat = runs.iter().rev().find(|r| r.id == run)?.chat_id.clone()?;
+    let declaration = observations.declared.get(&chat)?.clone();
     Some((chat, declaration))
 }
 /// The service a command source runs in, while the chat's latest task can
@@ -138,8 +138,8 @@ fn target(state: &State, chat: &str, service: &str) -> Option<Service> {
 }
 /// A watch's newest explicit notification, else its latest lines, and whether
 /// it has ended. No engine query: these are already in state.
-fn watch_value(state: &State, id: &str) -> Option<(String, Option<String>)> {
-    let watch = state.watches.iter().find(|w| w.id == id)?;
+fn watch_value(watches: &[crate::watches::Watch], id: &str) -> Option<(String, Option<String>)> {
+    let watch = watches.iter().find(|w| w.id == id)?;
     let text = watch
         .notifications
         .as_ref()
@@ -268,7 +268,13 @@ fn refresh(
     Some(receiver)
 }
 /// The observation for `chat`, capped to its declaration's bytes.
-fn render(state: &State, chat: &str, declaration: &Declaration, now: u64) -> Rendered {
+fn render(
+    watches: &[crate::watches::Watch],
+    observations: &Observations,
+    chat: &str,
+    declaration: &Declaration,
+    now: u64,
+) -> Rendered {
     let label = match &declaration.source {
         Source::Command { service, command } => {
             let short = command.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -277,15 +283,13 @@ fn render(state: &State, chat: &str, declaration: &Declaration, now: u64) -> Ren
         }
         Source::Watch { watch } => format!(
             "watch {}",
-            state
-                .watches
+            watches
                 .iter()
                 .find(|w| w.id == *watch)
                 .map_or(watch.clone(), |w| format!("{} ({watch})", w.name))
         ),
     };
-    let latest = state
-        .observations
+    let latest = observations
         .latest
         .get(chat)
         .filter(|latest| latest.source == declaration.source);
@@ -319,8 +323,8 @@ fn render(state: &State, chat: &str, declaration: &Declaration, now: u64) -> Ren
     }
 }
 /// The attempt a run is executing, as `run/generation`.
-fn attempt_key(state: &State, run: &str) -> Option<String> {
-    let found = state.runtime.runs.iter().rev().find(|r| r.id == run)?;
+fn attempt_key(runs: &[crate::runtime::Run], run: &str) -> Option<String> {
+    let found = runs.iter().rev().find(|r| r.id == run)?;
     Some(format!(
         "{run}/{}",
         found.attempts.last()?.workspace_id.as_deref().unwrap_or("")
@@ -348,11 +352,11 @@ fn block_with(
 ) -> Option<(Rendered, Option<String>)> {
     let (chat, declaration, receiver) = {
         let mut state = shared.lock().ok()?;
-        let (chat, declaration) = declared(&state, run)?;
+        let (chat, declaration) = declared(&state.runtime.runs, &state.observations, run)?;
         let now = now_ms();
         let receiver = match &declaration.source {
             Source::Watch { watch } => {
-                let (text, note) = watch_value(&state, watch)
+                let (text, note) = watch_value(&state.watches, watch)
                     .map_or((None, Some("watch not found".into())), |(text, note)| {
                         (Some(text), note)
                     });
@@ -367,7 +371,10 @@ fn block_with(
         let _ = receiver.recv_timeout(wait);
     }
     let state = shared.lock().ok()?;
-    Some((render(&state, &chat, &declaration, now_ms()), attempt_key(&state, run)))
+    Some((
+        render(&state.watches, &state.observations, &chat, &declaration, now_ms()),
+        attempt_key(&state.runtime.runs, run),
+    ))
 }
 /// Remembers what `attempt` was last shown, for the unchanged marker.
 fn shown(shared: &Arc<Mutex<State>>, attempt: Option<String>, hash: u64) {
@@ -565,7 +572,7 @@ pub(crate) fn polling_note(shared: &Arc<Mutex<State>>, run: &str, name: &str, ar
         return None;
     }
     let chat = found.chat_id.as_deref()?;
-    let attempt = attempt_key(state, run)?;
+    let attempt = attempt_key(&state.runtime.runs, run)?;
     if state.observations.declared.contains_key(chat) {
         state.observations.polling.remove(&attempt);
         return None;
@@ -636,7 +643,9 @@ fn set_with(
             (None, None, None, true) => None,
             (None, None, None, false) => {
                 let current = state.observations.declared.get(&chat).cloned();
-                let preview = current.as_ref().map(|d| render(&state, &chat, d, now_ms()).text);
+                let preview = current
+                    .as_ref()
+                    .map(|d| render(&state.watches, &state.observations, &chat, d, now_ms()).text);
                 return Ok(json!({"observation":summary(current.as_ref()),"preview":preview}));
             }
             (Some(service), Some(command), None, false) => {

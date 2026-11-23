@@ -201,7 +201,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                     })
                     .ok_or_else(|| fail("Service is not owned by this chat or its team"))?
                     .binding_snapshot();
-                let proxy = crate::ports::proxy_exports(&state, &service);
+                let proxy = crate::ports::proxy_exports(&state.ports, &service);
                 (service, proxy)
             };
             // Approved egress brings HTTPS_PROXY, as for exec, when it fits the runner's bound.

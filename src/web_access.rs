@@ -377,10 +377,17 @@ fn fetch(
     }
     unreachable!()
 }
-fn permitted(state: &State, chat: &str, actor: &Actor, url: &Url, time: u64) -> io::Result<()> {
+fn permitted(
+    chats: &[crate::chat::Session],
+    grants: &[Grant],
+    chat: &str,
+    actor: &Actor,
+    url: &Url,
+    time: u64,
+) -> io::Result<()> {
     crate::identity::authorize(actor, crate::identity::Action::Task).map_err(io::Error::other)?;
-    if !state.chats.iter().any(|c| c.id == chat && &c.actor == actor)
-        || !state.web_grants.iter().any(|g| g.permits(chat, actor, url, time))
+    if !chats.iter().any(|c| c.id == chat && &c.actor == actor)
+        || !grants.iter().any(|g| g.permits(chat, actor, url, time))
     {
         return Err(io::Error::other(
             "Origin not approved for this chat. Ask the operator to grant access at /tools/browser.",
@@ -417,7 +424,7 @@ pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Res
         }) {
             return Err(io::Error::other("Attempt is no longer active"));
         }
-        permitted(&state, &chat, &actor, url, now())
+        permitted(&state.chats, &state.web_grants, &chat, &actor, url, now())
     };
     fetch_evidence(&mut Http, &input, &FETCH_ACTIVE, authorize, evidence)
 }
@@ -608,10 +615,8 @@ pub fn http(
             })
             .collect::<String>();
         let grants=state.web_grants.iter().filter(|g|g.expires>now()).map(|g|format!("<li>{} · {} · {}s <form class='decision-form' method='post' action='/tools/browser/access'><input type='hidden' name='revoke' value='{}'><button>Revoke</button></form></li>",crate::escape(&g.origin.0),crate::escape(&g.chat),g.expires.saturating_sub(now()),crate::escape(&g.id))).collect::<String>();
-        Ok(crate::render(
-            &state,
+        Ok(crate::shell(
             "browser",
-            "none",
             &format!(
                 "<h2>Web access</h2><form method='post' action='/tools/browser/access'><label>DM<select name='chat'>{chats}</select></label><label>Origin<input name='origin' type='url' placeholder='https://example.com' required></label><label>Seconds<input name='seconds' type='number' value='900' min='1' max='3600' required></label><button class='primary'>Allow origin</button></form><ul>{grants}</ul><a href='/tools/browser'>Browser</a>"
             ),
