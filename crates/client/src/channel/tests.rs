@@ -59,6 +59,7 @@ fn channel() -> Channel {
         hive: None,
         refreshed: None,
         revisions: Value::Null,
+        reopened: false,
         ledger: Ledger::default(),
     }
 }
@@ -478,4 +479,81 @@ fn the_daily_brief_is_due_once_per_utc_day_after_its_hour_and_split_to_fit() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn a_restart_sends_one_open_summary_and_repeats_no_announced_request() {
+    let questions = |ages: &[u64]| {
+        json!([{"chat_id":"c-desk","title":"Decisions","pending_questions":ages.iter().enumerate()
+            .map(|(i, age)| json!({"question":{"id":format!("q-{i}")},"summary":"Pick\n1. A\n2. B","age":age}))
+            .collect::<Vec<_>>()}])
+    };
+    let open = questions(&[30, 7200, 3 * 86400]);
+    let (fake, mut channel) = (Fake::default(), channel());
+    assert!(!channel.forward(&fake, &on(), &[me()], &open));
+    assert_eq!(
+        fake.posts.borrow().len(),
+        4,
+        "a first start: the summary and each question"
+    );
+    assert!(
+        fake.posts.borrow()[0]
+            .1
+            .starts_with("Control · 3 decisions still open, the oldest for 3d.")
+    );
+    // A restart: the saved ledger comes back, the process state does not.
+    let ledger = serde_json::from_slice(&serde_json::to_vec(&channel.ledger).unwrap()).unwrap();
+    let (fake, mut channel) = (
+        Fake::default(),
+        Channel {
+            ledger,
+            ..self::channel()
+        },
+    );
+    assert!(!channel.forward(&fake, &on(), &[me()], &open));
+    assert!(!channel.forward(&fake, &on(), &[me()], &open));
+    let posts = fake
+        .posts
+        .borrow()
+        .iter()
+        .map(|(_, text, _)| text.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(posts, ["Control · 3 decisions still open, the oldest for 3d."]);
+    // Withdrawn or answered elsewhere: the earlier message is closed, nothing new is sent.
+    assert!(!channel.forward(&fake, &on(), &[me()], &questions(&[7200])));
+    assert_eq!(fake.posts.borrow().len(), 1);
+    assert_eq!(channel.ledger.notices.iter().filter(|n| n.settled).count(), 2);
+    // Nothing open after a restart: no summary.
+    let (fake, mut channel) = (Fake::default(), self::channel());
+    assert!(!channel.forward(&fake, &on(), &[me()], &json!([])));
+    assert!(fake.posts.borrow().is_empty());
+    assert_eq!(
+        still_open(&on(), &questions(&[5])).unwrap(),
+        "Control · 1 decision still open, the oldest for 5s."
+    );
+}
+
+#[test]
+fn the_bounded_ledger_drops_settled_notices_before_an_open_requests_notice() {
+    let notice = |n: usize, settled: bool| Notice {
+        person: "alice".into(),
+        conversation: "dm".into(),
+        message: format!("m{n}"),
+        chat: "c".into(),
+        kind: if settled { Kind::Notice } else { Kind::Question },
+        id: format!("r-{n}"),
+        loopback: false,
+        settled,
+        actions: false,
+    };
+    let mut ledger = Ledger::default();
+    ledger.record(notice(0, false));
+    (1..LIMIT + 5).for_each(|n| ledger.record(notice(n, true)));
+    assert_eq!(ledger.notices.len(), LIMIT);
+    assert_eq!(
+        ledger.notices[0],
+        notice(0, false),
+        "the open question keeps its notice"
+    );
+    assert_eq!(ledger.notices[1].message, "m6");
 }

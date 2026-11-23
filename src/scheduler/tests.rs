@@ -27,7 +27,7 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
             options: vec!["a".into(), "b".into()],
             recommended: None,
         },
-        answer: None,
+        status: crate::design::Status::Pending { asked_at: None },
         continuation: None,
     });
     assert_eq!(

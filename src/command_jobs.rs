@@ -130,7 +130,7 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
     if crate::delegation::pausing(run) {
         return Err(fail("Attempt is pausing for delegated work"));
     }
-    if run.question.as_ref().is_some_and(|q| q.answer.is_none()) {
+    if run.question.as_ref().is_some_and(|q| q.pending()) {
         return Err(fail("Attempt is pausing for an answer"));
     }
     run.attempts

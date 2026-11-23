@@ -137,7 +137,10 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
             options: vec!["A".into(), "B".into()],
             recommended: None,
         },
-        answer: Some("A".into()),
+        status: crate::design::Status::Answered {
+            answer: "A".into(),
+            asked_at: None,
+        },
         continuation: Some(next_id),
     });
     reconcile(&mut state, |_| panic!("Active continuation must not notify")).unwrap();
