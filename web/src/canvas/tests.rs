@@ -14,6 +14,7 @@ fn view_boxes_parse_strictly() {
     assert_eq!(Rect::parse("0 0 NaN 5"), None);
     // The canvas takes the drawing's proportions.
     assert_eq!(Rect::parse("-2 -2 964 272").unwrap().aspect(), "964.00 / 272.00");
+    assert_eq!(Rect::parse("-2 -2 964 272").unwrap().fit_height(), "340px", "no taller than the fitted drawing");
 }
 
 #[test]

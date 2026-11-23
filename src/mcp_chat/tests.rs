@@ -215,14 +215,14 @@ fn every_pending_kind_reaches_the_channel_notification_path() {
     state.chats[0].project = Some(serde_json::from_value(json!({"request":"req-9","path":"/srv/data","grant":null,"head":null,"pending":true})).unwrap());
     let groups = crate::chat::pending_requests(&state);
     let group = groups.as_array().unwrap().iter().find(|g| g["chat_id"] == chat.as_str()).unwrap();
-    let kinds = control::client::operator::pending(group).iter().map(|p| p.kind).collect::<Vec<_>>();
-    use control::client::operator::Kind;
+    let kinds = control_client::operator::pending(group).iter().map(|p| p.kind).collect::<Vec<_>>();
+    use control_client::operator::Kind;
     assert!(kinds.contains(&Kind::Question) && kinds.contains(&Kind::Folder), "{kinds:?}");
     // Saved settings that predate folder forwarding still forward it with ports.
-    let settings = control::client::channel::Settings { enabled: true, kinds: vec![Kind::Question, Kind::Bot, Kind::Port, Kind::Notice], ..Default::default() };
+    let settings = control_client::channel::Settings { enabled: true, kinds: vec![Kind::Question, Kind::Bot, Kind::Port, Kind::Notice], ..Default::default() };
     assert!(settings.forwards(&chat, Kind::Folder));
-    let folder = control::client::operator::pending(group).into_iter().find(|p| p.kind == Kind::Folder).unwrap();
-    assert!(control::client::operator::reply(&folder, "allow").is_err(), "folders are approved in Control, not by reply");
+    let folder = control_client::operator::pending(group).into_iter().find(|p| p.kind == Kind::Folder).unwrap();
+    assert!(control_client::operator::reply(&folder, "allow").is_err(), "folders are approved in Control, not by reply");
 }
 
 fn question(text: &str) -> String {
@@ -231,7 +231,7 @@ fn question(text: &str) -> String {
 
 #[test]
 fn design_ask_from_outside_a_run_raises_an_operator_question_on_the_decisions_desk() {
-    use control::client::operator::{self, Command, Kind};
+    use control_client::operator::{self, Command, Kind};
     let mut remote = Local::new();
     let before = crate::design::decision_revision(&remote.state);
     let asked = run(&mut remote, "control_design_ask", &json!({"question":"Ship the parser now?","options":["Ship","Wait a day"],"recommended":0})).unwrap();

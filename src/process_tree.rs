@@ -4,13 +4,23 @@
 //! baseline, roots at the bottom.
 use crate::State;
 
-const WIDTH: f64 = 196.0;
+const WIDTH: f64 = 160.0;
 const HEIGHT: f64 = 52.0;
-const H_GAP: f64 = 22.0;
+const H_GAP: f64 = 14.0;
 const V_GAP: f64 = 54.0;
-const TREE_GAP: f64 = 44.0;
+const TREE_GAP: f64 = 32.0;
 const MAX_TREES: usize = 8;
 const MAX_DEPTH: usize = 16;
+/// Inset of a box's text from its left edge.
+const PAD: f64 = 12.0;
+/// Room the title leaves at the right for the active dot.
+const LIVE_DOT: f64 = 18.0;
+/// Monospace characters of a label at `font` px (the CSS sizes of
+/// `.pt-title` and `.pt-detail`) that fit in `room` px: glyphs are about 0.6em
+/// wide, so the clip follows the box width rather than a fixed count.
+fn fits(room: f64, font: f64) -> usize {
+    (room / (font * 0.6)) as usize
+}
 
 /// Tidy layout of an ordered tree rooted at 0: Buchheim, Jünger and Leipert's
 /// linear-time form of Walker's algorithm, the n-ary generalisation of
@@ -375,12 +385,12 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
             };
             let full = format!("{} — {}", node.title, node.detail);
             let mut group = format!(
-                "<g class='pt-node {class}{}' transform='translate({x:.1} {y:.1})'><title>{}</title><rect width='{WIDTH}' height='{HEIGHT}' rx='3'/><text class='pt-title' x='12' y='21'>{}</text><text class='pt-detail' x='12' y='39'>{}</text>{}</g>",
+                "<g class='pt-node {class}{}' transform='translate({x:.1} {y:.1})'><title>{}</title><rect width='{WIDTH}' height='{HEIGHT}' rx='3'/><text class='pt-title' x='{PAD}' y='21'>{}</text><text class='pt-detail' x='{PAD}' y='39'>{}</text>{}</g>",
                 if node.matched { " pt-match" } else { "" },
                 crate::escape(&full),
-                crate::escape(&clip(&node.title, 24)),
-                crate::escape(&clip(&node.detail, 30)),
-                if node.active { format!("<circle class='pt-live' cx='{}' cy='12' r='3'/>", WIDTH - 12.0) } else { String::new() },
+                crate::escape(&clip(&node.title, fits(WIDTH - PAD - LIVE_DOT, 12.0))),
+                crate::escape(&clip(&node.detail, fits(WIDTH - 2.0 * PAD, 10.0))),
+                if node.active { format!("<circle class='pt-live' cx='{}' cy='12' r='3'/>", WIDTH - PAD) } else { String::new() },
             );
             if let Some(href) = &node.href {
                 group = format!("<a href='{}'>{group}</a>", crate::escape(href));

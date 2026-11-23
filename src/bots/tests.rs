@@ -2322,9 +2322,9 @@ fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
     let groups = view.as_array().unwrap();
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0]["chat_id"], parent.as_str());
-    let pending = control::client::operator::pending(&groups[0]);
-    assert_eq!((pending[0].kind, pending[0].id), (control::client::operator::Kind::Bot, id.as_str()));
-    let control::client::operator::Command::Send(command) = control::client::operator::reply(&pending[0], "allow").unwrap() else { panic!() };
+    let pending = control_client::operator::pending(&groups[0]);
+    assert_eq!((pending[0].kind, pending[0].id), (control_client::operator::Kind::Bot, id.as_str()));
+    let control_client::operator::Command::Send(command) = control_client::operator::reply(&pending[0], "allow").unwrap() else { panic!() };
     crate::chat::send(&mut state, &parent, &command, "discord:1").unwrap();
     assert!(defined(&state, &child));
     // The same reply again finds nothing pending and changes nothing.

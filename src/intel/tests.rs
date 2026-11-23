@@ -74,7 +74,7 @@ fn notices_show_as_pending_in_their_tree_for_a_day() {
     let requests = crate::chat::pending_requests(&state);
     let group = requests.as_array().unwrap().iter().find(|group| group["chat_id"] == root.as_str()).unwrap();
     assert_eq!(group["pending_notices"][0]["notice_id"], "n1");
-    assert_eq!(control::client::operator::pending(group).iter().filter(|p| p.kind == control::client::operator::Kind::Notice).count(), 1);
+    assert_eq!(control_client::operator::pending(group).iter().filter(|p| p.kind == control_client::operator::Kind::Notice).count(), 1);
     state.bots.notices[0].unix = now() - NOTICE_SECONDS - 1;
     assert!(pending_json_tree(&state, &root).is_empty() && crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
 }

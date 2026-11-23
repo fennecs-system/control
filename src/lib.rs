@@ -1,11 +1,2 @@
-pub mod config;
 pub mod build_info;
-pub mod diff;
-pub mod discord;
-pub mod identity;
-pub mod outbox;
 pub mod permissions;
-pub mod url_names;
-pub mod client;
-#[cfg(feature = "tui")]
-pub mod terminal;

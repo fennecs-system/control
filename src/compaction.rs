@@ -234,8 +234,12 @@ pub(crate) fn policy<'a>(
 }
 /// The local endpoint a chat's selected agent model runs on, if any.
 fn local_endpoint<'a>(state: &'a State, session: &crate::chat::Session) -> Option<&'a crate::model_calls::Endpoint> {
-    let model = session.model.as_ref().filter(|m| m.backend == crate::backend::Backend::Local)?;
-    crate::providers::endpoint(&state.runtime, &model.model)
+    // A chat without its own selection runs on the node default, which may be local.
+    let (backend, name) = match &session.model {
+        Some(model) => (model.backend, model.model.clone()),
+        None => (state.runtime.backend, state.runtime.configured_model()),
+    };
+    (backend == crate::backend::Backend::Local).then(|| crate::providers::endpoint(&state.runtime, &name)).flatten()
 }
 fn identity(
     state: &State,

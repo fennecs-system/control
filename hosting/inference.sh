@@ -228,11 +228,11 @@ printf '%s\n' "Waiting for the model to load on port $port…"
 for _ in $(seq 1 180); do
   if health "$port"; then
     printf '%s\n' "Serving $alias on http://127.0.0.1:$port/v1 ($backend)." \
-      'Add it once in Manage → Models & providers → + New text model:' \
-      "  Adapter: Local endpoint · Name: $alias · Model ID: $alias · Endpoint: http://127.0.0.1:$port/v1" \
+      'Add it once in Manage → Models & providers → + New model → Local endpoint:' \
+      "  Name: $alias · Model ID: $alias · Endpoint: http://127.0.0.1:$port/v1" \
       "  Revision: $revision" \
       "  Context tokens: $ctx · tick \"Serves tool calls\" if this model runs agent turns" \
-      "Then use it for agent turns with /model local:$alias, or as the compactor under History compaction."
+      "Then make it the default there, use /model local:$alias in a DM, or pick it as the Memory Tree summary model."
     exit 0
   fi
   sleep 2

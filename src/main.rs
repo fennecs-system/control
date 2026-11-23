@@ -34,9 +34,11 @@ mod delegation;
 mod delegated_results;
 mod history;
 mod history_view;
-use control::config;
-use control::{discord, identity, url_names};
-use control::discord::bridge as discord_bridge;
+use control_config as config;
+use control_identity as identity;
+use control_client::url_names;
+use control_discord as discord;
+use control_discord::bridge as discord_bridge;
 mod doctor;
 mod engine;
 mod federation;
@@ -652,7 +654,7 @@ fn run() -> std::io::Result<()> {
     }
     if args.get(1).is_some_and(|s| s == "tui") {
         #[cfg(feature = "tui")]
-        return control::terminal::run();
+        return control_tui::terminal::run();
         #[cfg(not(feature = "tui"))]
         return Err(std::io::Error::other("This server build excludes the terminal UI; use a Control build with the tui feature."));
     }

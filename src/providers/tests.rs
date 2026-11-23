@@ -88,19 +88,16 @@ fn sole_configured_model_is_selected_without_an_explicit_default() {
     assert!(migrate(serde_json::from_str(explicit_wrong).unwrap(), &[]).is_err());
 }
 #[test]
-fn provider_forms_have_bound_prefilled_defaults() {
+fn one_add_form_offers_every_hosted_backend_with_its_default_as_an_example() {
     let html = render(&crate::runtime::Runtime::default());
-    let forms = html.split("<details class='model-add'>").nth(1).unwrap();
-    let claude = forms
-        .split("name='provider' value='claude'")
-        .nth(1)
-        .unwrap();
-    assert!(claude.contains("value='sonnet'"));
-    assert!(forms.contains(&format!(
-        "value='{}'",
-        crate::backend::Backend::Codex.default_model()
-    )));
-    assert!(!forms.contains("type='radio'"));
+    let form = html.split("<details class='model-add'>").nth(1).unwrap().split("</form>").next().unwrap();
+    // One form, however many backends: each is an option, none needs a page edit.
+    assert_eq!(form.matches("name='action' value='add'").count(), 1);
+    for backend in crate::backend::Backend::hosted() {
+        assert!(form.contains(&format!("<option value='{}'>{}</option>", backend.id(), backend.label())), "{form}");
+        assert!(form.split("placeholder='").nth(1).unwrap().split('\'').next().unwrap().contains(&backend.default_model()));
+    }
+    assert!(!form.contains("type='radio'"));
 }
 #[test]
 fn init_options_are_explicit_and_reject_invalid_or_repeated_flags() {
@@ -309,7 +306,7 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
     save_with(&mut state, &form(&fields), |_| Ok(())).unwrap();
     assert_eq!(state.runtime.compaction.models[0].thinking, Thinking::Low);
     assert!(serde_json::to_string(&state.runtime.compaction.models[0]).unwrap().contains(r#""thinking":"low""#));
-    assert!(render_text(&state.runtime).contains("<option value='low' selected>low</option>"));
+    assert!(render(&state.runtime).contains("<option value='low' selected>low</option>"));
     *fields.last_mut().unwrap() = ("thinking", "maximal");
     assert!(save_with(&mut state, &form(&fields), |_| panic!("an unknown level must not persist")).is_err());
     // Unticking the box makes it text-only again, without a re-add.
@@ -380,24 +377,58 @@ fn duplicate_role_entries_merge_on_load_keeping_settings_and_references() {
     assert!(merge_duplicates(&mut models, &mut settings).is_empty());
 }
 #[test]
-fn each_text_model_is_shown_once_with_its_capabilities_and_an_edit_form() {
-    let mut runtime = crate::runtime::Runtime::default();
-    runtime.compaction.models.push(crate::model_calls::tests::endpoint());
+fn agent_models_group_integrations_and_local_and_summary_only_entries_sit_apart() {
+    let mut state = crate::State::default();
+    state.runtime.compaction.models.push(crate::model_calls::tests::endpoint());
     let agent = crate::model_calls::Endpoint { id: "qwen-agent".into(), model: "qwen-27b".into(), tools: true, ..crate::model_calls::tests::endpoint() };
-    runtime.compaction.models.push(agent);
-    let html = render(&runtime);
-    let (agents, text) = html.split_once("id='summary-models-heading'").unwrap();
-    // Agent models lists only selectable defaults; local entries are not repeated there.
-    assert!(!agents.contains("local-qwen") && !agents.contains("qwen-agent") && !agents.contains("Re-add"));
-    assert_eq!(html.matches("<h4>local-qwen</h4>").count(), 1);
-    let card = |id: &str| text.split(&format!("<h4>{id}</h4>")).nth(1).unwrap().split("</article>").next().unwrap().to_owned();
-    let text_only = card("local-qwen");
-    assert!(text_only.contains("summaries · text generation</span>"));
+    state.runtime.compaction.models.push(agent);
+    let html = render(&state.runtime);
+    let (agents, summaries) = html.split_once("aria-labelledby='summary-models-heading'").unwrap();
+    let (integrations, local) = agents.split_once("<h4 class='model-group'>Local</h4>").unwrap();
+    // Integrations: the hosted default, selectable from its row.
+    assert!(integrations.contains("<h4 class='model-group'>Integrations</h4>") && integrations.contains("name='provider' value='codex'"));
+    assert!(integrations.contains("aria-pressed='true'") && integrations.contains("class='model-default'>Default"));
+    // Local: the tool-serving endpoint, once, with the same one-click default
+    // in its row; the text-only endpoint is not an agent model.
+    let select = "name='action' value='select'><input type='hidden' name='provider' value='local'><input type='hidden' name='model' value='qwen-agent'><button class='model-choice' aria-pressed='false'>";
+    assert!(local.contains(select), "{local}");
+    assert!(!agents.contains("title='local-qwen'") && !summaries.contains("title='qwen-agent'"));
+    assert_eq!(html.matches("title='qwen-agent'").count(), 1);
+    // Summary-only entries have no default control; their settings are behind Edit, in one place.
+    let row = |html: &str, id: &str| html.split(&format!("title='{id}'")).nth(1).unwrap().split("</section>").next().unwrap().to_owned();
+    let text_only = row(summaries, "local-qwen");
+    assert!(text_only.contains("<dd>summaries · text generation</dd>") && !text_only.contains("value='select'"));
     assert!(text_only.contains("value='text-edit'") && text_only.contains("name='tools' type='checkbox'>"));
     assert!(text_only.contains("value='http://127.0.0.1:8081/v1'"));
-    let tools = card("qwen-agent");
-    assert!(tools.contains("summaries · text generation · agent turns"));
-    assert!(tools.contains("name='tools' type='checkbox' checked"));
+    let tools = row(local, "qwen-agent");
+    assert!(tools.contains("summaries · text generation · agent turns") && tools.contains("name='tools' type='checkbox' checked"));
+    assert_eq!(html.matches("name='url'").count(), 4, "one connection form per entry and per add form");
+    // Nothing but the list is open on load, and the old section name is gone.
+    assert!(!html.contains("<details open") && !html.contains("Text models"));
+
+    // One click makes the local model the node default, saved without becoming a hosted entry.
+    let pick = |provider: &str, model: &str| form(&[("action", "select"), ("provider", provider), ("model", model)]);
+    assert!(save_with(&mut state, &pick("local", "local-qwen"), |_| panic!("a text-only endpoint is not a default")).is_err());
+    assert!(save_with(&mut state, &pick("local", "missing"), |_| panic!("an unknown endpoint is not a default")).is_err());
+    let mut saved = Vec::new();
+    save_with(&mut state, &pick("local", "qwen-agent"), |state| { saved = serde_json::to_vec(&Settings { models: configured(&state.runtime), backend: state.runtime.backend, model: state.runtime.configured_model(), text_models: state.runtime.compaction.models.clone(), compaction: state.runtime.compaction.settings.clone() }).unwrap(); Ok(()) }).unwrap();
+    assert_eq!((state.runtime.backend, state.runtime.configured_model()), (crate::backend::Backend::Local, "qwen-agent".to_owned()));
+    assert!(configured(&state.runtime).iter().all(|m| m.backend != crate::backend::Backend::Local));
+    assert!(row(&render(&state.runtime), "qwen-agent").contains("class='model-default'>Default"));
+    // The saved settings load back: a local default is checked against its endpoint.
+    let settings = migrate(serde_json::from_slice(&saved).unwrap(), &[]).unwrap();
+    assert!(local_default(&settings.text_models, &Model::captured(settings.backend, settings.model.clone())));
+    // New DMs run on it, and compact on it by default.
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Inspect this fixture", "test").unwrap();
+    assert_eq!((state.runtime.runs[0].backend, state.runtime.runs[0].model.as_deref()), (crate::backend::Backend::Local, Some("qwen-agent")));
+    assert_eq!(crate::compaction::compactor_for(&state, &state.chats[0]).unwrap().id, "qwen-agent");
+    // The default cannot be removed or lose tool calls until another is chosen.
+    let remove = form(&[("action", "text-remove"), ("id", "qwen-agent")]);
+    assert_eq!(save_with(&mut state, &remove, |_| panic!("the default must stay")), Err(LOCAL_DEFAULT));
+    let hosted = configured(&state.runtime)[0].model.clone();
+    save_with(&mut state, &form(&[("action", "select"), ("provider", "codex"), ("model", &hosted)]), |_| Ok(())).unwrap();
+    save_with(&mut state, &remove, |_| Ok(())).unwrap();
 }
 #[test]
 fn local_endpoint_cards_carry_a_live_statistics_line_read_only_while_open() {
@@ -412,9 +443,9 @@ fn local_endpoint_cards_carry_a_live_statistics_line_read_only_while_open() {
     runtime.compaction.models.push(crate::model_calls::tests::endpoint());
     let html = render(&runtime);
     assert_eq!(html.matches("data-live-src='/providers/live' data-live-every='5'").count(), 1);
-    let card = html.split("<h4>local-qwen</h4>").nth(1).unwrap().split("</article>").next().unwrap();
+    let card = html.split("title='local-qwen'").nth(1).unwrap().split("</section>").next().unwrap();
     assert!(card.contains("data-live='local-qwen' data-live-fallback='Live statistics unavailable.'"));
-    let cli_card = html.split("<h4>codex-summary</h4>").nth(1).unwrap().split("</article>").next().unwrap();
+    let cli_card = html.split("title='codex-summary'").nth(1).unwrap().split("</section>").next().unwrap();
     assert!(!cli_card.contains("data-live="));
     // The endpoint answers only GET and only for its own path.
     let state = std::sync::Mutex::new(crate::State::default());

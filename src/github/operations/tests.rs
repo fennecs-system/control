@@ -1,5 +1,5 @@
 use super::*;
-use control::client::github::MergeMethod;
+use control_client::github::MergeMethod;
 use std::cell::RefCell;
 
 const HEAD: &str = "1234567890123456789012345678901234567890";

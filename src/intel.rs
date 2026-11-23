@@ -60,7 +60,7 @@ fn fail(message: impl ToString) -> io::Error {
 
 /// `YYYY-MM-DD` (UTC) for a unix time.
 pub fn date(unix: u64) -> String {
-    control::client::channel::utc_date(unix)
+    control_client::channel::utc_date(unix)
 }
 
 /// Every chat's top-level chat.

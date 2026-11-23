@@ -359,11 +359,11 @@ fn node_wide_requests_group_descendant_questions_under_their_top_level_chat() {
     let groups = view.as_array().unwrap();
     assert_eq!(groups.len(), 1, "one group per top-level chat, not per descendant");
     assert_eq!(groups[0]["chat_id"], root.as_str());
-    let pending = control::client::operator::pending(&groups[0]);
+    let pending = control_client::operator::pending(&groups[0]);
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].id, question);
     // Deciding from the group is the chat command a person types in that chat.
-    let control::client::operator::Command::Send(command) = control::client::operator::reply(&pending[0], "2").unwrap() else { panic!() };
+    let control_client::operator::Command::Send(command) = control_client::operator::reply(&pending[0], "2").unwrap() else { panic!() };
     chat::send(&mut state, &root, &command, "discord:1").unwrap();
     assert_eq!(state.runtime.runs[0].question.as_ref().unwrap().answer.as_deref(), Some(input().options[1].as_str()));
     // A duplicate reply is refused and changes nothing.

@@ -336,6 +336,9 @@ fn empty_selection_shows_only_a_hint_and_forms_live_in_a_selection() {
 
 #[test]
 fn operator_forms_edit_and_redirect_to_the_memory_tree() {
+    // The save below needs the node's state directory, which an explicit
+    // CONTROL_STATE_DIR does not create; do not rely on an earlier test making it.
+    std::fs::create_dir_all(crate::config::state_directory().unwrap()).unwrap();
     let (state, chat, dir) = published();
     let shared = Arc::new(Mutex::new(state));
     let mut out = Vec::new();

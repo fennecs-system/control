@@ -211,7 +211,7 @@ team that sent it. Add `"brief":true` (and optionally `"brief_hour":8`, UTC) to
 receive the node's daily intel brief once a day; it is also saved under the state
 directory as `intel/brief-DATE.md`. Edit `channels.json` directly for these.
 
-A channel adapter implements `Transport` in `src/client/channel.rs`: `post`
+A channel adapter implements `Transport` in `crates/client/src/channel.rs`: `post`
 (text with an idempotency key), and optionally `edit`, `post_request` and
 `settle`, with `capabilities` such as `max_text`. Briefs and notices use only
 `post`, so a report sink such as a Google Workspace adapter (append to a Doc,
