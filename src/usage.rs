@@ -2,7 +2,6 @@ use crate::{escape, identity::Actor, runtime::Runtime};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    io::Read,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -132,16 +131,10 @@ pub fn default_model() -> String {
 
 /// Keep numeric accounting and a bounded selection of command/activity fields.
 #[cfg(test)]
-pub fn capture(reader: impl Read) -> Option<Tokens> {
-    capture_with(reader, |_| {}).tokens
-}
-pub fn capture_with(reader: impl Read, mut update: impl FnMut(Activity)) -> control_ai::Usage {
-    control_ai::json_lines_usage(reader, control_ai::codex::Codex::default(), |event| {
-        if let control_ai::Event::Activity(activity) = event {
-            update(activity);
-        }
-    })
-    .1
+pub fn capture(reader: impl std::io::Read) -> Option<Tokens> {
+    control_ai::json_lines_usage(reader, control_ai::codex::Codex::default(), |_| {})
+        .1
+        .tokens
 }
 
 #[derive(Default)]

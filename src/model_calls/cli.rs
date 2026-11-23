@@ -53,7 +53,13 @@ pub(super) fn call(
         &serde_json::to_vec(&lease).map_err(io::Error::other)?,
     )?;
     let isolation = crate::engine::isolation();
+    let login = backend
+        .agent()
+        .login()
+        .map(|_| crate::logins::locate(backend))
+        .transpose()?;
     let spec = backend.agent().text_run(
+        &crate::agent_host::NODE,
         isolation,
         &crate::backend::TextCall {
             image: &image,
@@ -61,6 +67,7 @@ pub(super) fn call(
             workspace: &workspace,
             node: &node,
             model: &endpoint.model,
+            login: login.as_ref(),
         },
     )?;
     let child = isolation.spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))?;
@@ -184,11 +191,9 @@ fn run(
         let detail = result.as_ref().err().map(ToString::to_string).unwrap_or_default();
         let mut evidence = diagnostics;
         evidence.extend_from_slice(detail.as_bytes());
-        let message = crate::worker::worker_failure(&evidence);
-        return Err(io::Error::other(if message == crate::worker::UNKNOWN_FAILURE {
-            "CLI summary failed; check login/model availability".into()
-        } else {
-            message.replace("Codex", backend.agent().name())
+        return Err(io::Error::other(match control_agent::classify(&evidence) {
+            None => "CLI summary failed; check login/model availability".into(),
+            Some(cause) => cause.message(backend.agent().name()),
         }));
     }
     let result = result?;

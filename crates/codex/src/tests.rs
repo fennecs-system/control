@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn codex_launch_vectors_are_pinned() {
-    use crate::engine::golden::{fill, pin, pin_equivalent, run};
+    use control_isolation::golden::{fill, pin, pin_equivalent, run};
     let root = std::env::temp_dir().join(format!("control-codex-golden-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     let policy = root.join("worker-seccomp.json");

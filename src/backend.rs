@@ -1,9 +1,7 @@
-//! Closed backend selection, captured with each run and attempt.
+//! Closed backend selection, captured with each run and attempt. What each
+//! backend supplies is `control_agent::Agent`, implemented in its own crate.
+pub(crate) use control_agent::{Agent, TextCall};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{self, Read},
-    path::Path,
-};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,102 +15,19 @@ pub enum Backend {
     /// model ID. Text generation is available; agent turns are not yet.
     Local,
 }
-/// What an agent backend supplies to the host. Signatures name only `std`,
-/// `control_ai` and `control_isolation`, so an implementation can move to its own crate; what a
-/// backend needs from the host arrives as arguments.
-///
-/// The facts below are also the list of where backends are treated differently
-/// today. Each default is the shared behaviour and each override is a named
-/// difference to even out deliberately, not a place to add more.
-pub(crate) trait Agent: Sync {
-    /// The settings key and the `ID:` model prefix.
-    fn id(&self) -> &'static str;
-    fn label(&self) -> &'static str;
-    /// The short name on the status page and in text-call failures.
-    fn name(&self) -> &'static str;
-    fn default_model(&self) -> String;
-    /// Whether it can be the saved node default. Local endpoints are chosen
-    /// per chat or spawn from the endpoint registry.
-    fn default_capable(&self) -> bool {
-        true
-    }
-    /// The pinned image for the attempt's own offline tools.
-    fn image(&self) -> Option<String>;
-    /// What the operator does when the image is not pinned.
-    fn image_hint(&self) -> &'static str;
-    /// Credential metadata only; the error is the operator's next step.
-    fn credentials_ready(&self) -> Result<(), String>;
-    /// Offline isolation probe with a canary credential: no account, no model.
-    fn probe(&self, isolation: &dyn control_isolation::Isolation, image: &str) -> Result<(), String>;
-    /// A bounded text request without tools, or why this backend has no CLI.
-    fn text_run(
-        &self,
-        isolation: &dyn control_isolation::Isolation,
-        call: &TextCall<'_>,
-    ) -> io::Result<control_isolation::RunSpec>;
-    /// Decodes a text request's event stream; `max` bounds the reply in bytes.
-    fn text(
-        &self,
-        reader: &mut dyn Read,
-        max: usize,
-        emit: &mut dyn FnMut(control_ai::Event),
-    ) -> io::Result<control_ai::Output>;
-    /// Names it keeps in a workspace that are never published or shared.
-    fn private_names(&self) -> &'static [&'static str] {
-        &[]
-    }
-    /// Difference: the host offers its own shell tool because the CLI's is
-    /// disabled (Claude) or absent (local). Codex runs its own sandboxed shell.
-    fn host_shell(&self) -> bool {
-        false
-    }
-    /// Difference: a judge reads its source at `/review` beside a writable
-    /// scratch `/workspace` (Codex); others get `/workspace` read-only.
-    fn review_mount(&self) -> bool {
-        false
-    }
-    /// Difference: the main container mounts a mailbox directory beside the
-    /// workspace instead of the workspace itself (Claude).
-    fn mailbox(&self) -> Option<&'static str> {
-        None
-    }
-    /// Where the pre-run probe container's workspace is, beside the workspace.
-    fn probe_workspace(&self) -> &'static str {
-        "sandbox-probe/workspace"
-    }
-    /// Difference: it renders its own shorter prompt and takes no captured
-    /// turn context (Claude). Others get Control's shared framing.
-    fn own_prompt(&self) -> bool {
-        false
-    }
-    /// Whether the backend keeps its own session memory or controls between
-    /// turns. None does yet: every CLI runs ephemeral and each
-    /// turn starts from Control's captured context, so nothing reads this.
-    #[allow(dead_code)]
-    fn own_memory(&self) -> bool {
-        false
-    }
-}
-/// One bounded text request's container identity.
-pub(crate) struct TextCall<'a> {
-    pub image: &'a str,
-    pub name: &'a str,
-    pub workspace: &'a Path,
-    pub node: &'a str,
-    pub model: &'a str,
-}
 impl Backend {
     pub(crate) const ALL: [Self; 5] = [Self::Codex, Self::Claude, Self::Grok, Self::Antigravity, Self::Local];
     /// The backends that run a pinned CLI image and can be the node default.
     pub(crate) fn hosted() -> impl Iterator<Item = Self> {
         Self::ALL.into_iter().filter(|backend| backend.default_capable())
     }
+    /// The only dispatch from the persisted tag to a backend.
     pub(crate) fn agent(self) -> &'static dyn Agent {
         match self {
-            Self::Codex => &crate::codex::Codex,
-            Self::Claude => &crate::claude::Claude,
-            Self::Grok => &crate::grok::Grok,
-            Self::Antigravity => &crate::antigravity::Antigravity,
+            Self::Codex => &control_codex::Codex,
+            Self::Claude => &control_claude::Claude,
+            Self::Grok => &control_grok::Grok,
+            Self::Antigravity => &control_antigravity::Antigravity,
             Self::Local => &crate::local_agent::Local,
         }
     }
@@ -125,14 +40,30 @@ impl Backend {
     pub fn id(self) -> &'static str {
         self.agent().id()
     }
+    /// The backend's default model, unless its variable names a valid one.
     pub fn default_model(self) -> String {
-        self.agent().default_model()
+        let agent = self.agent();
+        agent
+            .model_variable()
+            .and_then(|name| std::env::var(name).ok())
+            .filter(|model| crate::usage::valid_model(model))
+            .unwrap_or_else(|| agent.default_model().to_owned())
     }
     pub fn default_capable(self) -> bool {
         self.agent().default_capable()
     }
+    /// The operator's pinned image, from its variable or configuration file.
     pub fn image(self) -> Option<String> {
-        self.agent().image()
+        let pin = self.agent().image();
+        pin.variable
+            .and_then(|name| std::env::var(name).ok())
+            .or_else(|| std::fs::read_to_string(crate::config::directory().ok()?.join(pin.file)).ok())
+            .map(|s| s.trim().to_owned())
+            .filter(|s| crate::runtime::pinned_image(s))
+    }
+    /// Difference: Control runs this backend's tool loop itself (local endpoints).
+    pub(crate) fn runs_control_loop(self) -> bool {
+        matches!(self.agent().runs(), control_agent::Runs::Control)
     }
 }
 /// Whether any backend keeps `name` private in a workspace.
@@ -143,3 +74,6 @@ pub(crate) fn private_name(name: &str) -> bool {
 }
 /// Refusal shared by selection and launch for endpoints without declared tool calls.
 pub const LOCAL_TEXT_ONLY: &str = "This local endpoint is declared text-only: use control_model_generate for inference, or edit the entry in Manage → Models and enable \"Serves tool calls\" for a tool-capable server (llama.cpp --jinja) to run agent turns. No run was started and no hosted model was substituted.";
+
+#[cfg(test)]
+mod tests;
