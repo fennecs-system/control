@@ -32,6 +32,60 @@ outbox (`src/outbox.rs`) and reads no other application state except which
 inbound DMs were accepted. Authorization and DM binding are rechecked at
 delivery.
 
+## Agent backends
+
+A backend is one way to run an agent turn: the Codex CLI, the Claude Code CLI,
+or a local endpoint whose tool loop Control runs itself. `Backend`
+(`src/backend.rs`) stays the closed tag persisted with each run and attempt.
+What a backend supplies is the `Agent` trait beside it: identity and default
+model, pinned image, credential readiness, the offline isolation probe, the
+bounded text call and its decoder, and the names it keeps private in a
+workspace. `Backend::agent()` is the only dispatch; `src/codex.rs`,
+`src/claude.rs` and `src/local_agent.rs` each implement it. `src/worker.rs`
+holds generic execution only.
+
+The trait's signatures name only `std` and `control_ai`, so each implementation
+can move to its own crate without a cycle: `control-codex`, `control-claude`,
+`control-local`, and later ones such as `control-antigravity`. A backend gets
+what it needs from the host as arguments and never names application state.
+This is one trait and plain crates, not a plugin runtime: backends are linked
+into the binary and adding one adds a variant.
+
+Still open before the crates can move:
+
+- Running a turn. `worker::execute` matches on the backend and each `execute`
+  takes `&mut Attempt` and the shared state handle for cancellation, tool
+  pumping, activity records and attempt control. Those need a narrow host
+  context first.
+- Prompt rendering (`turn_context.rs`) uses the root `identity::Workspace`.
+- The shared failure classifier and its wording (`worker::worker_failure`).
+- Checks that ask "is this the local endpoint kind" (endpoint registry,
+  compaction model, capacity, the local turn limit, the tool list's `local`
+  fact) compare the tag directly.
+
+### Differences in treatment
+
+Backends should differ by model, not by what the harness gives them. These are
+the places they differ today. Each is a named fact on `Agent` or listed here so
+it can be evened out on purpose; do not add to the list.
+
+| Difference | Codex | Claude | Local |
+| --- | --- | --- | --- |
+| Tool loop | its own CLI | its own CLI | Control's loop (`local_agent`), with its own step cap, thinking levels and in-turn compaction |
+| Shell (`host_shell`) | CLI's sandboxed shell inside the turn container | Control's shell tool in a separate offline container | Control's shell tool |
+| Turn context | captured context and policy prompt (`worker::render_prompt`) | its own shorter prompt (`claude::render_prompt`), no captured turn context | same as Codex |
+| Deferred tool list | search then call through MCP | same | tools callable directly by name (`local` fact) |
+| Judge source (`review_mount`) | `/review` read-only beside a writable scratch `/workspace` | `/workspace` | `/workspace` |
+| Main container mount (`mailbox`) | the workspace | a mailbox directory beside it | no agent container |
+| Isolation probe | canary-credential sandbox probe before every turn and text call | tool-isolation probe before every turn | none |
+| Login check | before the workspace is restored | inside the turn | no login |
+| Default turn limit | worker and bot limits | same | its own `local-turn-timeout-secs` (3600 s) |
+| Usage | reported at turn end only, so an accepted handoff waits up to 20 s for it | per model call | per model call |
+| Unfinished MCP call at exit | turn marked interrupted (`finish_codex_tools`) | not checked | not applicable |
+| Session memory (`own_memory`) | `--ephemeral` | `--no-session-persistence` | Control's transcript |
+| Wording | failure text, the default provider label on a new attempt and the Usage page assume Codex | failure text is Codex's with the name replaced | generic |
+| Compaction | configured summary model | same | the chat's own local model unless configured |
+
 ## Client and server
 
 The terminal UI and loopback client are library modules compiled once and used
@@ -80,6 +134,7 @@ rather than pretending to be a CLI harness.
 
 - Extract incrementally, with persistence and authorization regressions.
 - Avoid an umbrella plugin runtime, cyclic dependencies and a crate per file.
+  One crate per agent backend behind the `Agent` trait is the intended split.
 - Model attempts attach to resources; they do not own a resource's lifetime or
   get write access to another attempt's checkpoint.
 - Extract a shared executor only when real shared behavior supports it.

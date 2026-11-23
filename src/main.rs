@@ -19,6 +19,7 @@ mod channel_settings;
 mod chat;
 mod child;
 mod claude;
+mod codex;
 mod command_jobs;
 mod build_environment;
 mod collective;

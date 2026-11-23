@@ -215,7 +215,7 @@ fn start(
         command: input.command,
         read_only: attempt.review_only,
         build_environment: input.environment == "build",
-        review_source: attempt.review_only && attempt.backend == crate::backend::Backend::Codex,
+        review_source: attempt.review_only && attempt.backend.agent().review_mount(),
         profile,
         deadline_unix,
         container_id: None,
