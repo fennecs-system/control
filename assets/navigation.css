@@ -136,10 +136,17 @@
 .providers-page h4{font-size:14px;font-weight:500;margin:0;color:var(--text)}
 .provider-description{font-size:12px;color:var(--muted);margin:8px 0 18px;overflow-wrap:anywhere}
 .provider-section{margin-top:30px;padding-top:26px;border-top:1px solid var(--line)}
-.model-list{display:grid;gap:12px}
+.model-list{display:grid;gap:8px}
+.providers-page .model-group{margin:24px 0 10px;color:var(--muted);font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}
+.model-add>form>h4{margin-bottom:4px}
+.providers-page form>.summary-toggle{margin-top:14px}
+.model-static{cursor:default}
+.model-static:hover{background:transparent}
+.summary-models>.model-list{margin-top:14px}
+.model-edit-body>form.model-capacity button{margin-top:0}
 .model-row{position:relative;min-width:0;border:1px solid var(--line);background:var(--panel)}
 .model-row>form{margin:0}
-.model-choice{display:flex;align-items:center;gap:14px;width:100%;height:84px;padding:16px 100px 16px 18px;text-align:left;background:transparent;border:0;border-radius:0;color:var(--text);font:inherit;cursor:pointer}
+.model-choice{display:flex;align-items:center;gap:14px;width:100%;height:64px;padding:10px 100px 10px 18px;text-align:left;background:transparent;border:0;border-radius:0;color:var(--text);font:inherit;cursor:pointer}
 .model-choice:hover{background:#b5a0ff08}
 .model-choice[aria-pressed=true]{background:#b5a0ff0c;box-shadow:inset 3px 0 var(--purple)}
 .model-dot{width:15px;height:15px;border:1px solid var(--muted);border-radius:50%;flex-shrink:0}
@@ -148,7 +155,7 @@
 .model-id{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .model-provider{display:block;color:var(--muted);font-size:12px;margin-top:3px}
 .model-default{color:var(--purple);font-size:11px;margin-left:auto;flex-shrink:0;border:1px solid #b5a0ff40;padding:3px 8px;line-height:20px}
-.model-edit>summary{position:absolute;right:16px;top:22px;display:flex;align-items:center;justify-content:center;height:40px;padding:0 12px;border:1px solid var(--line);color:var(--purple);cursor:pointer;font-size:12px;list-style:none}
+.model-edit>summary{position:absolute;right:16px;top:14px;display:flex;align-items:center;justify-content:center;height:36px;padding:0 12px;border:1px solid var(--line);color:var(--purple);cursor:pointer;font-size:12px;list-style:none}
 .model-edit>summary::-webkit-details-marker{display:none}
 .model-edit>summary:hover,.model-edit[open]>summary{background:#b5a0ff12;border-color:#b5a0ff55}
 .model-edit-body{padding:20px;border-top:1px solid var(--line)}
