@@ -70,11 +70,11 @@ impl Access {
     pub fn gate(&self, stream: &mut TcpStream, method: &str, target: &str, header: &str) -> bool {
         if method == "GET" && target == "/health/build" {
             let body = serde_json::to_string(&control::build_info::current()).expect("Build metadata is serializable");
-            respond(stream, "200 OK", "application/json", &body, "");
+            let _ = control_http::respond(stream, "200 OK", "application/json", body.as_bytes(), "", control_http::Policy::Access);
             return true;
         }
         if method == "GET" && target == "/health" {
-            respond(stream, "200 OK", "text/plain", "Control is running.", "");
+            let _ = control_http::respond(stream, "200 OK", "text/plain", b"Control is running.", "", control_http::Policy::Access);
             return true;
         }
         if method == "GET"
@@ -88,10 +88,10 @@ impl Access {
                 })
             });
             if unlocked {
-                respond(stream,"303 See Other","text/plain","",&format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n",self.session));
+                let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n",self.session), control_http::Policy::Access);
             } else if self.authorized(header) {
                 // A used or stale link from a browser that is already signed in.
-                respond(stream, "303 See Other", "text/plain", "", "Location: /\r\n");
+                let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", "Location: /\r\n", control_http::Policy::Access);
             } else {
                 denied(stream, "This sign-in link was already used or has expired. Links work once.");
             }
@@ -106,10 +106,7 @@ impl Access {
 }
 fn denied(stream: &mut TcpStream, reason: &str) {
     let reason = if reason.is_empty() { String::new() } else { format!("<p>{reason}</p>") };
-    respond(stream,"401 Unauthorized","text/html; charset=utf-8",&format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control / operator access</title></head><body><h1>Operator access required</h1>{reason}<p>On this laptop, run <code>control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>"),"");
-}
-fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str, extra: &str) {
-    let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, control_http::Policy::Access);
+    let _ = control_http::respond(stream, "401 Unauthorized", "text/html; charset=utf-8", format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control / operator access</title></head><body><h1>Operator access required</h1>{reason}<p>On this laptop, run <code>control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>").as_bytes(), "", control_http::Policy::Access);
 }
 fn sign_in_link() -> io::Result<String> {
     crate::storage::initialize()?;

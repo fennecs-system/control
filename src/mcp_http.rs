@@ -18,10 +18,6 @@ fn protocol_version(header: &str) -> Option<&str> {
         .find(|(key, _)| key.eq_ignore_ascii_case("mcp-protocol-version"))
         .map(|(_, value)| value.trim())
 }
-fn respond(stream: &mut impl Write, status: &str, mime: &str, body: &str, extra: &str, policy: Policy) {
-    let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, policy);
-}
-
 pub(crate) fn handle(
     stream: &mut impl Write,
     shared: &Arc<Mutex<State>>,
@@ -39,10 +35,10 @@ pub(crate) fn handle(
         && let Some(request) = &request
         && let Some((reply, policy)) = unlocked(shared, version, request)
     {
-        match reply {
-            Ok(reply) => respond(stream, "200 OK", "application/json", &reply.to_string(), "", policy),
-            Err(message) => respond(stream, "400 Bad Request", "text/plain", message, "", policy),
-        }
+        let _ = match reply {
+            Ok(reply) => control_http::respond(stream, "200 OK", "application/json", reply.to_string().as_bytes(), "", policy),
+            Err(message) => control_http::respond(stream, "400 Bad Request", "text/plain", message.as_bytes(), "", policy),
+        };
         return true;
     }
     crate::state_response(stream, shared, |stream, state| locked(stream, state, method, version, request.as_ref()));
@@ -80,7 +76,9 @@ fn unlocked(shared: &Arc<Mutex<State>>, version: Option<&str>, request: &Value) 
 
 /// The operator MCP under the state lock, with its own HTTP checks.
 fn locked(stream: &mut Vec<u8>, state: &mut State, method: &str, version: Option<&str>, request: Option<&Value>) {
-    let mut respond = |status: &str, mime: &str, body: &str, extra: &str| respond(stream, status, mime, body, extra, Policy::Embedded);
+    let mut respond = |status: &str, mime: &str, body: &str, extra: &str| {
+        let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, Policy::Embedded);
+    };
     if method != "POST" {
         return respond("405 Method Not Allowed", "text/plain", "Use MCP POST requests.", "Allow: POST\r\n");
     }

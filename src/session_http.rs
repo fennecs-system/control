@@ -2,12 +2,6 @@ use crate::{chat, storage, State};
 use serde_json::{json, Value};
 use std::io::Write;
 
-fn respond(stream: &mut impl Write, status: &str, mime: &str, body: &str, extra: &str) {
-    respond_with_policy(stream, status, mime, body, extra, "'none'");
-}
-fn respond_chat(stream: &mut impl Write, html: &str) {
-    respond_chat_status(stream, "200 OK", html);
-}
 fn cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     header.lines().filter_map(|line|line.split_once(':'))
         .filter(|(key,_)|key.eq_ignore_ascii_case("cookie"))
@@ -29,30 +23,10 @@ fn chat_page(state: &State, lens: &str, id: &str, error: &str, draft: &str, head
     let page = session_page(&crate::render(state, "session", lens, id), header);
     if error.is_empty() { page } else { chat::rejected(&page, error, draft) }
 }
-fn respond_chat_status(stream: &mut impl Write, status: &str, html: &str) {
-    respond_chat_headers(stream,status,html,"");
-}
-fn respond_chat_headers(stream:&mut impl Write,status:&str,html:&str,extra:&str) {
+/// A chat page that loads the Rust/WASM client.
+fn respond_chat(stream: &mut impl Write, status: &str, html: &str, extra: &str) {
     let page = crate::web_assets::with_client(html);
-    respond_with_policy(
-        stream,
-        status,
-        "text/html; charset=utf-8",
-        &page,
-        extra,
-        "'self' 'wasm-unsafe-eval'",
-    );
-}
-fn respond_with_policy(
-    stream: &mut impl Write,
-    status: &str,
-    mime: &str,
-    body: &str,
-    extra: &str,
-    scripts: &str,
-) {
-    let policy = if scripts == "'none'" {control_http::Policy::Embedded} else {control_http::Policy::Chat};
-    let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, policy);
+    let _ = control_http::respond(stream, status, "text/html; charset=utf-8", page.as_bytes(), extra, control_http::Policy::Chat);
 }
 
 fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
@@ -72,8 +46,8 @@ fn send_message(
         name.eq_ignore_ascii_case("accept") && value.split(',').any(|mime|mime.trim()=="application/json")));
     if fields.get("message").is_some_and(|message|message.trim()=="/open") {
         match chat::detail(state,id) {
-            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /dm/{id}/project\r\n")),
-            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,"/open",header)),
+            Ok(_) => { let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{id}/project\r\n"), control_http::Policy::Embedded); }
+            Err(message) => respond_chat(stream, "400 Bad Request", &chat_page(state,lens,id,message,"/open",header), ""),
         }
         return;
     }
@@ -88,11 +62,11 @@ fn send_message(
             },
             Err(message) => ("400 Bad Request",json!({"error":message})),
         };
-        respond(stream,status,"application/json",&value.to_string(),"");
+        let _ = control_http::respond(stream, status, "application/json", value.to_string().as_bytes(), "", control_http::Policy::Embedded);
     } else {
         match result {
-            Ok(_) => respond(stream,"303 See Other","text/plain","",&format!("Location: /dm/{id}\r\n")),
-            Err(message) => respond_chat_status(stream,"400 Bad Request",&chat_page(state,lens,id,message,fields.get("message").map(String::as_str).unwrap_or(""),header)),
+            Ok(_) => { let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{id}\r\n"), control_http::Policy::Embedded); }
+            Err(message) => respond_chat(stream, "400 Bad Request", &chat_page(state,lens,id,message,fields.get("message").map(String::as_str).unwrap_or(""),header), ""),
         }
     }
 }
@@ -192,13 +166,7 @@ pub fn handle(
             .get("view")
             .is_some_and(|v| v == "evolution")
     {
-        respond(
-            stream,
-            "303 See Other",
-            "text/plain",
-            "",
-            "Location: /dms?improve=1\r\n",
-        );
+        let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", "Location: /dms?improve=1\r\n", control_http::Policy::Embedded);
         return true;
     }
     if path==crate::history_view::PATH && method=="GET" {
@@ -210,17 +178,17 @@ pub fn handle(
         return true;
     }
     if path=="/bots/history/turns" && method=="GET" {
-        match crate::history_view::turns(state,&crate::history_view::Filter::from(&crate::fields(query))) {
-            Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&html,""),
-            Err(message)=>respond(stream,"404 Not Found","text/plain",message,""),
-        }
+        let _ = match crate::history_view::turns(state,&crate::history_view::Filter::from(&crate::fields(query))) {
+            Ok(html)=>control_http::respond(stream, "200 OK", "text/html; charset=utf-8", html.as_bytes(), "", control_http::Policy::Embedded),
+            Err(message)=>control_http::respond(stream, "404 Not Found", "text/plain", message.as_bytes(), "", control_http::Policy::Embedded),
+        };
         return true;
     }
     if path=="/bots/graveyard" && method=="GET" {
         // The scroll loader's next page: rows only, no page shell.
         let query=crate::graveyard::Query::from(&crate::fields(query));
         let graves=crate::graveyard::dead(state,&query.search);
-        respond(stream,"200 OK","text/html; charset=utf-8",&crate::graveyard::rows(&graves,&query),"");
+        let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", crate::graveyard::rows(&graves,&query).as_bytes(), "", control_http::Policy::Embedded);
         return true;
     }
     if path == "/dms" && method == "GET" {
@@ -228,7 +196,7 @@ pub fn handle(
         if !query.contains_key("new") && !query.contains_key("discuss") && !query.contains_key("improve") {
             let recent=cookie(header,"control_recent_chat").filter(|id|chat::valid_id(id));
             if let Some(id)=recent.filter(|id|chat::detail(state,id).is_ok()) {
-                respond(stream,"303 See Other","text/plain","",&format!("Location: /dm/{id}\r\n"));
+                let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{id}\r\n"), control_http::Policy::Embedded);
                 return true;
             }
         }
@@ -238,7 +206,7 @@ pub fn handle(
             query.get("discuss").map(String::as_str),
             query.get("improve").is_some_and(|v| v == "1"),
         );
-        respond_chat(stream, &session_page(&crate::render(state, "session-list", lens, &html), header));
+        respond_chat(stream, "200 OK", &session_page(&crate::render(state, "session-list", lens, &html), header), "");
         return true;
     }
     if ["/dms", "/improve"].contains(&path) && method == "POST" {
@@ -257,16 +225,10 @@ pub fn handle(
             Ok(value)
         }, storage::save);
         match result {
-            Ok(value) => respond(
-                stream,
-                "303 See Other",
-                "text/plain",
-                "",
-                &format!("Location: /dm/{}\r\n{}", value["id"].as_str().unwrap(), crate::lens_ui::cookie(chosen)),
-            ),
+            Ok(value) => { let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{}\r\n{}", value["id"].as_str().unwrap(), crate::lens_ui::cookie(chosen)), control_http::Policy::Embedded); }
             Err(message) => {
                 let html = chat::rejected(&chat::landing_mode(state, lens, fields.get("design_context").map(String::as_str), false), message, text.map(String::as_str).unwrap_or(""));
-                respond_chat_status(stream, "400 Bad Request", &session_page(&crate::render(state, "session-list", lens, &html), header));
+                respond_chat(stream, "400 Bad Request", &session_page(&crate::render(state, "session-list", lens, &html), header), "");
             }
         }
         return true;
@@ -276,7 +238,7 @@ pub fn handle(
     };
     let (id, operation) = route.split_once('/').unwrap_or((route, ""));
     if !chat::valid_id(id) {
-        respond(stream, "404 Not Found", "text/plain", "Chat not found.", "");
+        let _ = control_http::respond(stream, "404 Not Found", "text/plain", b"Chat not found.", "", control_http::Policy::Embedded);
         return true;
     }
     if method == "POST" && operation == "lenses" {
@@ -286,14 +248,8 @@ pub fn handle(
             "control.chat.lenses",
             &json!({"id":id,"lenses":chat::form_lenses(&fields,"none")}),
         ) {
-            Ok(_) => respond(
-                stream,
-                "303 See Other",
-                "text/plain",
-                "",
-                &format!("Location: /dm/{id}\r\n"),
-            ),
-            Err(message) => respond_chat_status(stream, "400 Bad Request", &chat_page(state, lens, id, message, "", header)),
+            Ok(_) => { let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{id}\r\n"), control_http::Policy::Embedded); }
+            Err(message) => respond_chat(stream, "400 Bad Request", &chat_page(state, lens, id, message, "", header), ""),
         }
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
@@ -301,51 +257,39 @@ pub fn handle(
     } else if method == "GET" && operation == "conversations" {
         let allowed=state.chats.iter().find(|chat|chat.id==id).ok_or("Chat not found.")
             .and_then(|chat|crate::identity::authorize(&chat.actor,crate::identity::Action::Task).map(|_|()));
-        match allowed {
-            Ok(_) => respond(stream,"200 OK","text/html; charset=utf-8",&crate::navigation::conversations(state,id),""),
-            Err(message) => respond(stream,"404 Not Found","text/plain",message,""),
-        }
+        let _ = match allowed {
+            Ok(_) => control_http::respond(stream, "200 OK", "text/html; charset=utf-8", crate::navigation::conversations(state,id).as_bytes(), "", control_http::Policy::Embedded),
+            Err(message) => control_http::respond(stream, "404 Not Found", "text/plain", message.as_bytes(), "", control_http::Policy::Embedded),
+        };
     } else if method == "GET" && operation == "artifacts" {
-        match crate::artifacts::render(state, id, &crate::fields(query)) {
-            Ok(html) => respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                &crate::render(state, "artifact-page", lens, &html),
-                "",
-            ),
-            Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
-        }
+        let _ = match crate::artifacts::render(state, id, &crate::fields(query)) {
+            Ok(html) => control_http::respond(stream, "200 OK", "text/html; charset=utf-8", crate::render(state, "artifact-page", lens, &html).as_bytes(), "", control_http::Policy::Embedded),
+            Err(message) => control_http::respond(stream, "404 Not Found", "text/plain", message.as_bytes(), "", control_http::Policy::Embedded),
+        };
     } else if method == "GET" && operation == "memory" {
-        match crate::compaction::render(state,id,query) {
-            Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
-            Err(error)=>respond(stream,"404 Not Found","text/plain",error,""),
-        }
+        let _ = match crate::compaction::render(state,id,query) {
+            Ok(html)=>control_http::respond(stream, "200 OK", "text/html; charset=utf-8", crate::render(state,"artifact-page",lens,&html).as_bytes(), "", control_http::Policy::Embedded),
+            Err(error)=>control_http::respond(stream, "404 Not Found", "text/plain", error.as_bytes(), "", control_http::Policy::Embedded),
+        };
     } else if method == "GET" && operation == "context" {
-        match crate::turn_context::view(state,id,&crate::fields(query)) {
-            Ok(html)=>respond(stream,"200 OK","text/html; charset=utf-8",&crate::render(state,"artifact-page",lens,&html),""),
-            Err(error)=>respond(stream,"404 Not Found","text/plain",&error.to_string(),""),
-        }
+        let _ = match crate::turn_context::view(state,id,&crate::fields(query)) {
+            Ok(html)=>control_http::respond(stream, "200 OK", "text/html; charset=utf-8", crate::render(state,"artifact-page",lens,&html).as_bytes(), "", control_http::Policy::Embedded),
+            Err(error)=>control_http::respond(stream, "404 Not Found", "text/plain", error.to_string().as_bytes(), "", control_http::Policy::Embedded),
+        };
     } else if method == "GET" && matches!(operation, "transcript" | "requests") {
-        match if operation == "requests" { chat::requests(state,id) } else { chat::transcript(state, id) } {
-            Ok(html) => respond(stream, "200 OK", "text/html; charset=utf-8", &html, ""),
-            Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
-        }
+        let _ = match if operation == "requests" { chat::requests(state,id) } else { chat::transcript(state, id) } {
+            Ok(html) => control_http::respond(stream, "200 OK", "text/html; charset=utf-8", html.as_bytes(), "", control_http::Policy::Embedded),
+            Err(message) => control_http::respond(stream, "404 Not Found", "text/plain", message.as_bytes(), "", control_http::Policy::Embedded),
+        };
     } else if method == "GET" && operation.is_empty() {
         match chat::detail(state, id) {
-            Ok(_) => respond_chat_headers(stream,"200 OK",&chat_page(state,lens,id,"","",header),
+            Ok(_) => respond_chat(stream,"200 OK",&chat_page(state,lens,id,"","",header),
                 &format!("Set-Cookie: control_recent_chat={id}; Path=/; HttpOnly; SameSite=Strict\r\n")),
-            Err(_) if chat::discord_actor(id).is_some_and(|actor|crate::identity::authorize(&actor,crate::identity::Action::Task).is_ok()) => respond(stream,"202 Accepted","text/html; charset=utf-8","<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='2'><title>Control / DM</title></head><body><p>Waiting for the Discord message…</p></body></html>",""),
-            Err(message) => respond(stream, "404 Not Found", "text/plain", message, ""),
+            Err(_) if chat::discord_actor(id).is_some_and(|actor|crate::identity::authorize(&actor,crate::identity::Action::Task).is_ok()) => { let _ = control_http::respond(stream, "202 Accepted", "text/html; charset=utf-8", "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='2'><title>Control / DM</title></head><body><p>Waiting for the Discord message…</p></body></html>".as_bytes(), "", control_http::Policy::Embedded); }
+            Err(message) => { let _ = control_http::respond(stream, "404 Not Found", "text/plain", message.as_bytes(), "", control_http::Policy::Embedded); }
         }
     } else {
-        respond(
-            stream,
-            "405 Method Not Allowed",
-            "text/plain",
-            "Unsupported chat operation.",
-            "",
-        );
+        let _ = control_http::respond(stream, "405 Method Not Allowed", "text/plain", b"Unsupported chat operation.", "", control_http::Policy::Embedded);
     }
     true
 }

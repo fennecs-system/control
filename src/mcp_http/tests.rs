@@ -56,3 +56,13 @@ fn unlocked_tools_keep_their_own_checks() {
     let (_, status, _) = send(&shared, "GET", "", json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"control_github_open_pr"}}).to_string().as_bytes());
     assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
 }
+
+/// The whole response of a refused method, so a change to how the route
+/// responds cannot move a byte.
+#[test]
+fn refused_method_response_bytes_are_pinned() {
+    let shared = Arc::new(Mutex::new(State::default()));
+    let mut out = Vec::new();
+    assert!(handle(&mut out, &shared, "GET", "/mcp", "", b""));
+    assert_eq!(String::from_utf8(out).unwrap(), "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\nallow: POST\r\n\r\nUse MCP POST requests.");
+}

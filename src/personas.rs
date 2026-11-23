@@ -308,15 +308,12 @@ pub(crate) fn render(state: &State, id: &str, submitted: Option<&Definition>, no
     html.push_str("</div>");
     html
 }
-fn page(stream: &mut impl io::Write, status: &str, body: &str) {
-    let _ = control_http::respond(stream, status, "text/html; charset=utf-8", body.as_bytes(), "", control_http::Policy::Page);
-}
 pub(crate) fn handle(stream: &mut impl io::Write, state: &mut State, method: &str, path: &str, query: &HashMap<String, String>, lens: &str, body: &[u8]) -> bool {
     if path == "/personas" && method == "GET" {
         let id = if query.contains_key("new") { "" } else { query.get("id").map(String::as_str).unwrap_or("lead") };
         let saved = query.get("saved").and_then(|s| s.parse::<u64>().ok()).is_some_and(|v| state.personas.get(id).is_some_and(|d| d.revision == v));
         let content = render(state, id, None, saved.then_some(("✓ Persona saved. New spawns and messages capture this revision.", true)));
-        page(stream, "200 OK", &crate::render(state, "persona-page", lens, &content));
+        let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", crate::render(state, "persona-page", lens, &content).as_bytes(), "", control_http::Policy::Page);
         return true;
     }
     if path == "/personas/save" && method == "POST" {
@@ -329,7 +326,7 @@ pub(crate) fn handle(stream: &mut impl io::Write, state: &mut State, method: &st
             Err(error) => {
                 let submitted = draft(&fields).ok();
                 let html = render(state, fields.get("id").map(String::as_str).unwrap_or(""), submitted.as_ref(), Some((&error, false)));
-                page(stream, "409 Conflict", &crate::render(state, "persona-page", lens, &html));
+                let _ = control_http::respond(stream, "409 Conflict", "text/html; charset=utf-8", crate::render(state, "persona-page", lens, &html).as_bytes(), "", control_http::Policy::Page);
             }
         }
         return true;

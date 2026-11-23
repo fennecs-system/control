@@ -559,10 +559,6 @@ fn load_nodes(d: &Detail, directory: &std::path::Path) -> io::Result<Loaded> {
     Ok((Some(node), children))
 }
 
-fn respond(stream: &mut impl std::io::Write, status: &str, body: &str, extra: &str) {
-    let _ = control_http::respond(stream, status, "text/html; charset=utf-8", body.as_bytes(), extra, control_http::Policy::Embedded);
-}
-
 /// Memory Tree routes that need the shared state handle: lazy block detail
 /// (disk reads outside the lock), operator edits, and retained evidence.
 pub(crate) fn http(stream: &mut impl std::io::Write, state: &Arc<Mutex<State>>, method: &str, path: &str, query: &str, body: &[u8]) -> bool {
@@ -588,9 +584,9 @@ pub(crate) fn http(stream: &mut impl std::io::Write, state: &Arc<Mutex<State>>, 
             match detail {
                 Ok(detail) => {
                     let nodes = crate::config::state("summaries").map_err(io::Error::other).and_then(|dir| load_nodes(&detail, &dir));
-                    respond(stream, "200 OK", &detail_page(&detail, nodes), "");
+                    let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", detail_page(&detail, nodes).as_bytes(), "", control_http::Policy::Embedded);
                 }
-                Err(error) => respond(stream, "404 Not Found", &crate::error_page(error, &memory_url(chat)), ""),
+                Err(error) => { let _ = control_http::respond(stream, "404 Not Found", "text/html; charset=utf-8", crate::error_page(error, &memory_url(chat)).as_bytes(), "", control_http::Policy::Embedded); }
             }
             true
         }
@@ -600,9 +596,9 @@ pub(crate) fn http(stream: &mut impl std::io::Write, state: &Arc<Mutex<State>>, 
             match result {
                 Ok(location) => {
                     crate::worker::wake();
-                    respond(stream, "303 See Other", "", &format!("Location: {location}\r\n"));
+                    let _ = control_http::respond(stream, "303 See Other", "text/html; charset=utf-8", b"", &format!("Location: {location}\r\n"), control_http::Policy::Embedded);
                 }
-                Err(error) => respond(stream, "400 Bad Request", &crate::error_page(error, &memory_url(chat)), ""),
+                Err(error) => { let _ = control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(error, &memory_url(chat)).as_bytes(), "", control_http::Policy::Embedded); }
             }
             true
         }
