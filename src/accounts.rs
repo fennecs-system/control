@@ -32,10 +32,6 @@ pub trait Backend: Copy + Eq + fmt::Debug + Serialize + DeserializeOwned {
     /// Whether the backend signs in at all; local endpoints do not, so they
     /// have no named accounts.
     fn signs_in(self) -> bool;
-    /// Whether its CLI rewrites its own sign-in to refresh it (Codex). Two
-    /// attempts refreshing one sign-in at once can invalidate it, so such a
-    /// named account runs one attempt at a time unless its `cap` says more.
-    fn refreshes(self) -> bool;
 }
 
 /// The file an API-key account's directory holds, and who writes it there.
@@ -362,16 +358,6 @@ pub struct Account<B> {
     pub cap: Option<NonZeroU8>,
     pub enabled: bool,
     pub label: Option<Label>,
-}
-impl<B: Backend> Account<B> {
-    /// The cap admission applies: the operator's, else one at a time for a
-    /// named account whose CLI refreshes its own sign-in. A key is never
-    /// refreshed; the implicit account keeps today's behaviour.
-    pub fn effective_cap(&self) -> Option<NonZeroU8> {
-        let refreshed = self.id.backend.refreshes() && self.kind != AccountKind::ApiKey;
-        self.cap
-            .or_else(|| (refreshed && !self.id.name.is_implicit()).then_some(NonZeroU8::MIN))
-    }
 }
 
 /// The implicit `default` account: today's credential location, always enabled.
@@ -742,7 +728,7 @@ pub fn may_start<B: Backend>(
     if let Some(cooling) = status.cooling(account.id.backend, &account.id.name, now) {
         return Err(Hold::Cooling(cooling.until));
     }
-    match account.effective_cap() {
+    match account.cap {
         Some(cap) if running >= usize::from(cap.get()) => Err(Hold::Cap(cap)),
         _ => Ok(()),
     }

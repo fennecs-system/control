@@ -42,9 +42,6 @@ impl Backend for Test {
     fn signs_in(self) -> bool {
         true
     }
-    fn refreshes(self) -> bool {
-        self == Self::Codex
-    }
 }
 fn name(text: &str) -> AccountName {
     AccountName::try_from(text).unwrap()
@@ -265,12 +262,17 @@ fn a_named_accounts_login_is_in_its_own_directory() {
         directory(Test::Codex, &name("second")).as_path(),
         Path::new("accounts/codex/second")
     );
-    // A CLI that refreshes its own sign-in runs a named account one attempt at a time.
+    // No account is capped unless the operator sets one: a named account runs
+    // as many attempts as the implicit one always has.
     let store = Store::<Test>::parse(EXAMPLE.as_bytes()).unwrap();
-    let cap = |backend, account: &str| store.get(backend, &name(account)).unwrap().effective_cap();
-    assert_eq!(cap(Test::Codex, "second"), NonZeroU8::new(1));
-    assert_eq!(cap(Test::Codex, "work"), NonZeroU8::new(2), "an explicit cap wins");
-    assert_eq!(cap(Test::Codex, "default"), None, "the implicit account is unchanged");
+    let cap = |backend, account: &str| store.get(backend, &name(account)).unwrap().cap;
+    assert_eq!(cap(Test::Codex, "second"), None);
+    assert_eq!(
+        cap(Test::Codex, "work"),
+        NonZeroU8::new(2),
+        "the operator's cap applies"
+    );
+    assert_eq!(cap(Test::Codex, "default"), None);
 }
 
 #[test]
@@ -314,7 +316,17 @@ fn a_usage_limit_cools_an_account_and_admission_holds_it_without_failover() {
     let now = UnixSeconds(1_000);
     let status = Status::<Test>::default();
     assert_eq!(may_start(&second, &status, 0, now), Ok(()));
-    assert_eq!(may_start(&second, &status, 1, now), Err(Hold::Cap(NonZeroU8::MIN)));
+    assert_eq!(
+        may_start(&second, &status, 5, now),
+        Ok(()),
+        "uncapped unless the operator says so"
+    );
+    let work = store.get(Test::Codex, &name("work")).unwrap();
+    assert_eq!(may_start(&work, &status, 1, now), Ok(()));
+    assert_eq!(
+        may_start(&work, &status, 2, now),
+        Err(Hold::Cap(NonZeroU8::new(2).unwrap()))
+    );
     let cooled = status.cool(Test::Codex, &name("second"), now, None);
     assert_eq!(
         may_start(&second, &cooled, 0, UnixSeconds(9_999)),
@@ -426,12 +438,8 @@ fn an_api_key_account_keeps_its_key_file_and_runs_uncapped() {
             RelativePath::try_from("accounts/codex/key/auth.json").unwrap()
         )])
     );
-    // A key never refreshes, so it is not held to one attempt at a time.
-    assert_eq!(key.effective_cap(), None);
-    assert_eq!(
-        store.get(Test::Codex, &name("plan")).unwrap().effective_cap(),
-        NonZeroU8::new(1)
-    );
+    assert_eq!(key.cap, None);
+    assert_eq!(store.get(Test::Codex, &name("plan")).unwrap().cap, None);
     // The file keeps serde's spelling.
     assert!(
         String::from_utf8(store.encode())

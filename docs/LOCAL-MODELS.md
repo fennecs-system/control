@@ -112,11 +112,11 @@ Select one like any account: `/model claude+metered:sonnet`. What keeps a key
 from the model is in docs/THREAT-MODEL.md.
 
 **Caps and cooldowns.** An account at its `cap` holds its next turn in the queue
-with a notice; other accounts and conversations are not held. Codex rewrites its
-own sign-in when it refreshes it, and two attempts refreshing one sign-in at once
-can invalidate it, so a named Codex account runs one attempt at a time unless its
-`cap` says more (Control mounts the file read-only, so a refreshed token is not
-kept; sign in again if Codex reports the login expired). When a turn reports a
+with a notice; other accounts and conversations are not held. No account has a
+cap unless you set one (`control accounts add … --cap N`): a named account runs
+as many attempts at once as the default sign-in does. Control mounts a named
+Codex sign-in read-only, so a refreshed token is not kept; sign in again if Codex
+reports the login expired, and set a cap if concurrent refreshes ever collide. When a turn reports a
 usage limit, its account cools down: new turns on it wait, with a notice, until
 it is cleared on **Manage → Models & providers** (no retry time is read from the
 provider). Nothing moves to another account automatically; a `+*` pool picks an
