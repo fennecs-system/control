@@ -91,7 +91,7 @@ fn lines(records: &[Value]) -> String {
 fn credential(backend: Backend) -> PathBuf {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     let (directory, file) = match backend {
-        Backend::Codex => (crate::config::test_root().join("codex"), "auth.json"),
+        Backend::Codex => (crate::config::test_root().join(".codex"), "auth.json"),
         Backend::Claude => (crate::config::directory().unwrap().join("claude"), ".credentials.json"),
         Backend::Grok => (crate::config::directory().unwrap().join("grok"), "auth.json"),
         Backend::Antigravity => (
