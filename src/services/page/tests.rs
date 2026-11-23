@@ -42,12 +42,12 @@ fn cards_escape_commands_and_show_live_data_only_when_observed() {
     assert!(plain.contains("<dt>Size</dt><dd><strong>large</strong> <span class='muted'>· 8 GiB RAM · 2 CPUs · 512 processes</span></dd>") && !plain.contains("<table>"));
     assert!(plain.contains("<dt>Image</dt><dd><strong>Lite</strong>"), "the image is its own field, apart from the size");
     let live = Live {
-        stats: Some(crate::engine::Stats {
+        stats: Some(control_isolation::Stats {
             cpu: "3.5%".into(),
             memory: "512MiB / 2GiB".into(),
             pids: "14".into(),
         }),
-        processes: vec![crate::engine::Process {
+        processes: vec![control_isolation::Process {
             pid: "77".into(),
             user: "502".into(),
             command: "java -jar server.jar <nogui>".into(),

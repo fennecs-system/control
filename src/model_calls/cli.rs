@@ -52,10 +52,11 @@ pub(super) fn call(
         "owner.json",
         &serde_json::to_vec(&lease).map_err(io::Error::other)?,
     )?;
-    let spec = backend.agent().text_run(&crate::backend::TextCall { image: &image, name: &name, workspace: &workspace, node: &node, model: &endpoint.model })?;
-    let child = crate::engine::isolation().spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))?;
+    let isolation = crate::engine::isolation();
+    let spec = backend.agent().text_run(isolation, &crate::backend::TextCall { image: &image, name: &name, workspace: &workspace, node: &node, model: &endpoint.model })?;
+    let child = isolation.spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))?;
     let result = run(child, backend, endpoint, system, input, || {
-        crate::lifecycle::stop_resource(&name, &node, &image, &workspace).map_err(io::Error::other)
+        crate::lifecycle::stop_resource(isolation, &name, &node, &image, &workspace).map_err(io::Error::other)
     });
     // Preserve failed-call scratch for diagnosis; no raw transcript/credential is copied.
     if result.is_ok() {
@@ -105,7 +106,7 @@ pub(super) fn recover() -> io::Result<()> {
         if lease.workspace != path.join("workspace").canonicalize()? {
             return Err(io::Error::other("Text-call workspace identity changed"));
         }
-        crate::lifecycle::stop_resource(&lease.name, &lease.node, &lease.image, &lease.workspace)
+        crate::lifecycle::stop_resource(crate::engine::isolation(), &lease.name, &lease.node, &lease.image, &lease.workspace)
             .map_err(io::Error::other)?;
         std::fs::remove_file(path.join("owner.json"))?;
     }

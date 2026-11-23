@@ -1,7 +1,7 @@
 //! Fail-closed lifecycle operations. Docker names discover intent; verified IDs
 //! authorize termination. Never stop an arbitrary container from a label alone.
 use crate::{identity::Actor, runtime::Runtime, usage::Attempt, State};
-use serde::Deserialize;
+use control_isolation::{ContainerId, Isolation, Observed, Select, States, Target};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -53,9 +53,10 @@ pub fn current(run: &crate::runtime::Run, attempt: &Attempt) -> bool {
     control_core::scheduling::current_attempt(crate::scheduler::phase(run), run.attempts.last().map(crate::scheduler::stamp), crate::scheduler::stamp(attempt))
 }
 
-#[derive(Deserialize)]
+/// The ownership facts of one inspected container.
+#[cfg_attr(test, derive(Clone))]
 struct Container {
-    id: String,
+    id: ContainerId,
     name: String,
     node: Option<String>,
     attempt: Option<String>,
@@ -63,7 +64,22 @@ struct Container {
     source: String,
     running: bool,
 }
-const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"node":{{json (index .Config.Labels "dev.control.node")}},"attempt":{{json (index .Config.Labels "dev.control.attempt")}},"image":{{json .Config.Image}},"source":{{range .Mounts}}{{if eq .Destination "/workspace"}}{{json .Source}}{{end}}{{end}},"running":{{json .State.Running}}}"#;
+/// `None` when it has no `/workspace` mount, which no owned resource lacks.
+fn container(observed: Observed) -> Option<Container> {
+    Some(Container {
+        source: observed.mount("/workspace")?.source.clone(),
+        node: observed.label("dev.control.node").map(str::to_owned),
+        attempt: observed.label("dev.control.attempt").map(str::to_owned),
+        id: observed.id,
+        name: observed.name,
+        image: observed.image_ref,
+        running: observed.running,
+    })
+}
+/// The single container `name` inspects as; `None` if the engine reported another shape.
+fn inspected(isolation: &dyn Isolation, name: &str) -> std::io::Result<Option<Container>> {
+    Ok(<[Observed; 1]>::try_from(isolation.inspect(&[Target::Name(name)])?).ok().and_then(|[observed]| container(observed)))
+}
 
 fn expected(attempt: &Attempt, name: &str) -> Result<PathBuf, &'static str> {
     let path = expected_path(attempt, name)?;
@@ -108,9 +124,7 @@ fn verified_resource(
     source: &std::path::Path,
     name: &str,
 ) -> Result<(), &'static str> {
-    if container.id.len() != 64
-        || !container.id.bytes().all(|b| b.is_ascii_hexdigit())
-        || container.name != format!("/{name}")
+    if container.name != format!("/{name}")
         || container.node.as_deref() != node
         || container.node.is_none()
         || container.attempt.as_deref() != Some(name)
@@ -121,100 +135,77 @@ fn verified_resource(
     }
     Ok(())
 }
-fn names() -> Result<Vec<(String, String, String)>, &'static str> {
-    crate::engine::query(&[
-        "ps",
-        "--all",
-        "--format",
-        "{{.Names}}|{{.Label \"dev.control.node\"}}|{{.Label \"dev.control.purpose\"}}",
-    ])
-    .and_then(|s| {
-        s.lines()
-            .map(|line| {
-                let mut parts = line.splitn(3, '|');
-                (|| Some((parts.next()?.to_owned(), parts.next()?.to_owned(), parts.next().unwrap_or("").to_owned())))()
-                    .ok_or_else(|| std::io::Error::other("Invalid container listing"))
-            })
-            .collect()
-    })
-    .map_err(|_| "Container inspection unavailable; affected work remains fenced.")
+/// Every container's name with its node and purpose labels (empty when absent).
+fn names(isolation: &dyn Isolation) -> Result<Vec<(String, String, String)>, &'static str> {
+    let label = |labels: &std::collections::BTreeMap<String, String>, key: &str| labels.get(key).cloned().unwrap_or_default();
+    isolation
+        .list(States::All, &Select::Any)
+        .map(|listed| listed.into_iter().map(|c| (label(&c.labels, "dev.control.node"), label(&c.labels, "dev.control.purpose"), c.name)).map(|(node, purpose, name)| (name, node, purpose)).collect())
+        .map_err(|_| "Container inspection unavailable; affected work remains fenced.")
 }
-fn stop_named(attempt: &Attempt, name: &str) -> Result<(), &'static str> {
+fn stop_named(isolation: &dyn Isolation, attempt: &Attempt, name: &str) -> Result<(), &'static str> {
     if let Some(job)=attempt.command_jobs.iter().find(|job|job.name()==name) {
-        return crate::command_jobs::stop(job).map_err(|_|"Could not stop exact command job; work remains fenced.");
+        return crate::command_jobs::stop(isolation, job).map_err(|_|"Could not stop exact command job; work remains fenced.");
     }
-    stop_named_with(attempt, name, crate::engine::query)
+    stop_named_with(isolation, attempt, name)
 }
-fn stop_named_with(
-    attempt: &Attempt,
-    name: &str,
-    mut query: impl FnMut(&[&str]) -> std::io::Result<String>,
-) -> Result<(), &'static str> {
-    let text = match query(&["inspect", "--format", INSPECT, name]) {
-        Ok(text) => text,
+fn stop_named_with(isolation: &dyn Isolation, attempt: &Attempt, name: &str) -> Result<(), &'static str> {
+    let container = match inspected(isolation, name) {
+        Ok(container) => container,
         Err(_) => {
-            let remaining = query(&["ps", "--all", "--format", "{{.Names}}"])
+            let remaining = isolation
+                .list(States::All, &Select::Any)
                 .map_err(|_| "Could not inspect owned container; work remains fenced.")?;
-            return if remaining.lines().any(|n| n == name) {
+            return if remaining.iter().any(|c| c.name == name) {
                 Err("Owned container could not be inspected; work remains fenced.")
             } else {
                 Ok(())
             };
         }
     };
-    let container: Container =
-        serde_json::from_str(text.trim()).map_err(|_| "Invalid container inspection response.")?;
-    stop_verified(&container, attempt, name, &mut query)
+    let container = container.ok_or("Invalid container inspection response.")?;
+    verified(&container, attempt, name)?;
+    stop_container(isolation, &container)
 }
-fn stop_verified(
-    container: &Container,
-    attempt: &Attempt,
-    name: &str,
-    mut query: impl FnMut(&[&str]) -> std::io::Result<String>,
-) -> Result<(), &'static str> {
-    verified(container, attempt, name)?;
-    stop_container(container, &mut query)
-}
-fn stop_container(
-    container: &Container,
-    mut query: impl FnMut(&[&str]) -> std::io::Result<String>,
-) -> Result<(), &'static str> {
+fn stop_container(isolation: &dyn Isolation, container: &Container) -> Result<(), &'static str> {
     if container.running {
-        query(&["kill", &container.id])
+        isolation.kill(&container.id)
             .map_err(|_| "Could not stop the verified worker; work remains fenced.")?;
     }
     // Query by immutable ID. Empty output proves no running writer, including --rm.
-    let active = query(&["ps", "--quiet", "--filter", &format!("id={}", container.id)])
+    let active = isolation
+        .list(States::Running, &Select::Id(container.id.clone()))
         .map_err(|_| "Could not confirm worker exit; work remains fenced.")?;
-    if !active.trim().is_empty() {
+    if !active.is_empty() {
         return Err("Worker is still running; work remains fenced.");
     }
     // Best effort: --rm usually removed it already; an exited leftover is removed by verified ID.
-    let _ = query(&["rm", &container.id]);
+    let _ = isolation.remove(Target::Id(&container.id));
     Ok(())
 }
 
 pub fn stop_resource(
+    isolation: &dyn Isolation,
     name: &str,
     node: &str,
     image: &str,
     workspace: &std::path::Path,
 ) -> Result<(), &'static str> {
-    stop_resource_id(name, node, image, workspace, None)
+    stop_resource_id(isolation, name, node, image, workspace, None)
 }
 
 pub fn stop_resource_id(
+    isolation: &dyn Isolation,
     name: &str,
     node: &str,
     image: &str,
     workspace: &std::path::Path,
     expected_id: Option<&str>,
 ) -> Result<(), &'static str> {
-    let text = crate::engine::query(&["inspect", "--format", INSPECT, name]);
-    let text = match text {
-        Ok(s) => s,
+    let container = match inspected(isolation, name) {
+        Ok(container) => container,
         Err(_) => {
-            let listed = names()?;
+            let listed = names(isolation)?;
             return if listed.iter().any(|(n, _, _)| n == name) {
                 Err("Resource ownership unavailable; work remains fenced.")
             } else {
@@ -222,16 +213,15 @@ pub fn stop_resource_id(
             };
         }
     };
-    let container: Container =
-        serde_json::from_str(text.trim()).map_err(|_| "Invalid resource inspection.")?;
+    let container = container.ok_or("Invalid resource inspection.")?;
     verified_resource(&container, Some(node), Some(image), workspace, name)?;
-    if expected_id.is_some_and(|id| container.id != id) {
+    if expected_id.is_some_and(|id| container.id.as_str() != id) {
         return Err("Resource identity changed; replacement was not stopped.");
     }
-    stop_container(&container, crate::engine::query)
+    stop_container(isolation, &container)
 }
 
-pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
+pub fn stop_attempt(isolation: &dyn Isolation, attempt: &Attempt) -> Result<(), &'static str> {
     let _node = attempt
         .node_id
         .as_deref()
@@ -241,9 +231,9 @@ pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
         .as_deref()
         .ok_or("Missing persisted workspace identity.")?;
     let prefix = format!("control-{id}");
-    for (name, _, _) in names()? {
+    for (name, _, _) in names(isolation)? {
         if name == prefix || name == format!("{prefix}-tool") || name == format!("{prefix}-probe") || (attempt.project.is_some() && name == format!("{prefix}-preview")) || attempt.command_jobs.iter().any(|job|job.name()==name) {
-            stop_named(attempt, &name)?;
+            stop_named(isolation, attempt, &name)?;
         }
     }
     Ok(())
@@ -284,20 +274,21 @@ pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
 }
 /// Reconcile after restart outside the state lock. Active attempts belong to
 /// execution supervisors; any attempt of a finished run is eligible for cleanup.
-pub fn reconcile(owners: &[Owner], services: &[crate::services::Service]) -> Result<(), String> {
+pub fn reconcile(isolation: &dyn Isolation, owners: &[Owner], services: &[crate::services::Service]) -> Result<(), String> {
     let node = crate::config::node_id()?;
-    let mut listed = names()?;
+    let mut listed = names(isolation)?;
     if listed.iter().any(|(_,owner,purpose)|owner==&node&&purpose=="service") {
-        let verified = crate::services::verified_names(services,&node).map_err(|e|e.to_string())?;
+        let verified = crate::services::verified_names(isolation,services,&node).map_err(|e|e.to_string())?;
         listed.retain(|(name,owner,purpose)|!(owner==&node&&purpose=="service"&&verified.contains(name)));
     }
-    reconcile_with(owners, &node, listed, stop_named)
+    reconcile_with(owners, &node, listed, |attempt, name| stop_named(isolation, attempt, name), |name, attempt| crate::previews::verify(isolation, name, attempt))
 }
 fn reconcile_with(
     owners: &[Owner],
     node: &str,
     listed: Vec<(String, String, String)>,
     mut stop: impl FnMut(&Attempt, &str) -> Result<(), &'static str>,
+    preview: impl Fn(&str, &Attempt) -> std::io::Result<()>,
 ) -> Result<(), String> {
     // Every resource name embeds its generation. Index attempts by generation
     // once, so a container checks its own candidates rather than all history.
@@ -333,7 +324,7 @@ fn reconcile_with(
             continue;
         }
         match owner {
-            Some((_,attempt)) if purpose=="preview"=>crate::previews::verify(&name,attempt).map_err(|_|format!("Preview {name} does not match its persisted attempt; inspect it before resuming."))?,
+            Some((_,attempt)) if purpose=="preview"=>preview(&name,attempt).map_err(|_|format!("Preview {name} does not match its persisted attempt; inspect it before resuming."))?,
             Some((owner, attempt)) if !owner.active => stop(attempt, &name)
                 .map_err(|m| format!("{m} Container {name}: inspect it, then run `docker rm -f {name}` to resume dispatch."))?,
             Some(_) => {}

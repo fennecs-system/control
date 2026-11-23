@@ -21,7 +21,7 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
         "CONTROL_STATE_DIR must be an isolated temporary directory"
     );
     std::fs::create_dir_all(&state_dir).unwrap();
-    let profile = crate::worker_profile::Profile::inspect(&image).unwrap();
+    let profile = crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap();
     let (mut state, run, _, time) = super::super::super::tests::fixture();
     state.runtime.runs[0].attempts.last_mut().unwrap().started_unix = now();
     let node: NodeId = format!("latency-qa-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()).try_into().unwrap();
@@ -50,11 +50,11 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
         }
     }
     let mut cleanup = Cleanup(None, super::super::super::workspace::Workspace::of(&service).map(|w| w.name().to_owned()));
-    let id = Docker.create(&service).unwrap();
+    let id = create_container(crate::engine::isolation(), &service).unwrap();
     cleanup.0 = Some(id.clone());
     service.resource.phase = Phase::Starting(id.clone());
-    let observations = Docker.inventory(node.as_str()).unwrap();
-    Docker.start(&verify(&service, &observations[id.as_str()]).unwrap()).unwrap();
+    let observations = inventory(crate::engine::isolation(), node.as_str()).unwrap();
+    start_container(crate::engine::isolation(), &verify(&service, &observations[id.as_str()]).unwrap()).unwrap();
     service.resource.phase = Phase::Running(id.clone());
     state.services.push(service.clone());
     let shared = Arc::new(Mutex::new(state));

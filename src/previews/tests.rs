@@ -147,7 +147,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     impl Drop for Cleanup {
         fn drop(&mut self) {
             for preview in self.0.lock().unwrap().previews.clone() {
-                let _ = stop_resource(&preview);
+                let _ = stop_resource(crate::engine::isolation(), &preview);
             }
         }
     }
@@ -185,8 +185,8 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
         }
         if begin.elapsed() >= Duration::from_secs(20) {
             let name = result["id"].as_str().unwrap();
-            let logs = query(&["logs", "--tail", "40", name]).unwrap_or_default();
-            let guest = query(&[
+            let logs = crate::engine::query(&["logs", "--tail", "40", name]).unwrap_or_default();
+            let guest = crate::engine::query(&[
                 "exec",
                 name,
                 "bash",
@@ -235,6 +235,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
         locked.runtime.runs[0].status = "completed".into();
     }
     crate::lifecycle::reconcile(
+        crate::engine::isolation(),
         &crate::lifecycle::owners(&state.lock().unwrap().runtime.runs),
         &[],
     )
@@ -273,7 +274,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     let mut wrong_identity = state.lock().unwrap().previews[0].clone();
     wrong_identity.container_id = Some("0".repeat(64));
     assert!(
-        stop_resource(&wrong_identity).is_err(),
+        stop_resource(crate::engine::isolation(), &wrong_identity).is_err(),
         "A replacement identity must never be stopped"
     );
     stop(&state, &chat, id).unwrap();
@@ -299,13 +300,13 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
 
 #[test]
 fn preview_launch_vector_is_pinned() {
-    use crate::engine::golden::{fill, pin};
-    let mut arguments = run_arguments("control-ws-1-preview", "node-1", "sha256:img", 501, 20, "/golden/workspace", "cargo run");
+    use crate::engine::golden::{fill, pin_equivalent};
+    let mut arguments = control_isolation::Docker::detached_arguments(&container("control-ws-1-preview", "node-1", "sha256:img", control_isolation::User { uid: 501, gid: 20 }, "/golden/workspace", "cargo run")).unwrap();
     // The wrapper embeds the port forwarder's source; pin its frame, not the source.
     let wrapper = arguments.iter_mut().find(|word| word.starts_with("set -eu\nexec 2>&1\n")).unwrap();
     assert!(wrapper.contains(include_str!("../../tools/port-forward/main.rs")));
     *wrapper = wrapper.replace(include_str!("../../tools/port-forward/main.rs"), "{forwarder}");
-    pin(&arguments, &fill(GOLDEN, &[]));
+    pin_equivalent(&arguments, &fill(GOLDEN, &[]));
 }
 const GOLDEN: &[&str] = &[
     "run",

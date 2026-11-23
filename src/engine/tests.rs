@@ -1,49 +1,21 @@
+use control_isolation::{Docker, ExecSpec, Input, User};
 
-use super::*;
-
-#[test]
-fn storage_quota_follows_the_driver_and_backing_filesystem() {
-    assert!(quota_capable("overlay2 [[\"Backing Filesystem\",\"xfs\"],[\"Supports d_type\",\"true\"]]"));
-    assert!(!quota_capable("overlay2 [[\"Backing Filesystem\",\"extfs\"]]"));
-    assert!(!quota_capable("overlayfs [[\"driver-type\",\"io.containerd.snapshotter.v1\"]]"));
-    assert!(quota_capable("btrfs null\n"));
-    assert!(!quota_capable(""));
-}
-
-#[test]
-fn stats_and_processes_parse_engine_output_and_stay_bounded() {
-    let stats = parse_stats("abc\t1.25%\t200MiB / 2GiB\t12\nbad line\n");
-    assert_eq!(stats.len(), 1);
-    let sample = &stats["abc"];
-    assert_eq!(
-        (
-            sample.cpu.as_str(),
-            sample.memory.as_str(),
-            sample.pids.as_str()
-        ),
-        ("1.25%", "200MiB / 2GiB", "12")
-    );
-    let processes = parse_top(
-        "PID    USER   COMMAND\n1      502    control-service-runner 0 0 bash -lc 'sleep infinity'\n77     502    java -Xmx1G -jar server.jar nogui\n90 502 sleep\n",
-        2,
-    );
-    assert_eq!(processes.len(), 2);
-    assert_eq!(
-        (
-            processes[1].pid.as_str(),
-            processes[1].user.as_str(),
-            processes[1].command.as_str()
-        ),
-        ("77", "502", "java -Xmx1G -jar server.jar nogui")
-    );
-    assert_eq!(parse_top("PID USER COMMAND\n5 502\n", 5)[0].command, "");
+/// The exec form `engine::exec` and `engine::exec_input` produced, as an `ExecSpec`.
+fn exec(input: Input, workdir: Option<&str>, env: &[(&str, &str)]) -> Vec<String> {
+    Docker::exec_arguments(&ExecSpec {
+        container: "c1".into(),
+        user: Some(User { uid: 7, gid: 8 }),
+        workdir: workdir.map(str::to_owned),
+        env: env.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())).collect(),
+        input,
+        argv: vec!["tar".into(), "-x".into()],
+    })
 }
 
 #[test]
 fn only_input_exec_forwards_stdin() {
-    let arguments = |command: Command| command.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
-    let plain = arguments(exec("c1", "7:8", Some("/workspace"), &[("A", "b")], &["tar", "-x"]));
-    let input = arguments(exec_input("c1", "7:8", Some("/workspace"), &[("A", "b")], &["tar", "-x"]));
+    let plain = exec(Input::Closed, Some("/workspace"), &[("A", "b")]);
+    let input = exec(Input::Attached, Some("/workspace"), &[("A", "b")]);
     assert!(!plain.contains(&"--interactive".to_owned()));
     let expected = ["--user", "7:8", "--env", "A=b", "--workdir", "/workspace", "c1", "tar", "-x"];
     assert!(plain.ends_with(&expected.map(str::to_owned)));
@@ -53,9 +25,9 @@ fn only_input_exec_forwards_stdin() {
 
 #[test]
 fn exec_vectors_are_pinned() {
-    use super::golden::{args, fill, pin};
-    pin(&args(&exec("c1", "7:8", Some("/workspace"), &[("A", "b")], &["tar", "-x"])), &fill(EXEC, &[]));
-    pin(&args(&exec_input("c1", "7:8", None, &[], &["tar", "-x"])), &fill(EXEC_INPUT, &[]));
+    use super::golden::{fill, pin};
+    pin(&exec(Input::Closed, Some("/workspace"), &[("A", "b")]), &fill(EXEC, &[]));
+    pin(&exec(Input::Attached, None, &[]), &fill(EXEC_INPUT, &[]));
 }
 const EXEC: &[&str] = &[
     "exec",

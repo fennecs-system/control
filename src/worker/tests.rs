@@ -1966,7 +1966,7 @@ fn live_offline_probe_passes_on_consecutive_runs() {
     // other one while each probe recreated the same result name.
     let image = std::env::var("CONTROL_QA_IMAGE").expect("Set CONTROL_QA_IMAGE to a pinned image ID");
     for run in 0..6 {
-        offline_probe(&image).unwrap_or_else(|reason| panic!("probe {run}: {reason}"));
+        offline_probe(crate::engine::isolation(), &image).unwrap_or_else(|reason| panic!("probe {run}: {reason}"));
     }
 }
 

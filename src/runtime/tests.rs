@@ -52,58 +52,6 @@ fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
     }
 }
 #[test]
-fn engine_inspection_drains_pipes_and_rejects_partial_results() {
-    let output = engine_output(
-        Command::new("head").args(["-c", "131072", "/dev/zero"]),
-        std::time::Duration::from_secs(5),
-    )
-    .unwrap();
-    assert_eq!(output.len(), 131072);
-    assert!(
-        engine_output(
-            Command::new("head").args(["-c", "1048577", "/dev/zero"]),
-            std::time::Duration::from_secs(5),
-        )
-        .is_err()
-    );
-}
-#[test]
-fn engine_inspection_deadline_does_not_wait_for_process_exit() {
-    let started = std::time::Instant::now();
-    assert!(
-        engine_output(
-            Command::new("sleep").arg("5"),
-            std::time::Duration::from_millis(30),
-        )
-        .is_err()
-    );
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
-}
-#[test]
-fn engine_creation_diagnostics_are_opt_in_and_bounded() {
-    let missing = "/control-qa-missing-storage-probe";
-    let error = engine_output_diagnostic(
-        Command::new("ls").arg(missing),
-        std::time::Duration::from_secs(2),
-        true,
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains(missing));
-    let redacted = engine_output(
-        Command::new("ls").arg(missing),
-        std::time::Duration::from_secs(2),
-    )
-    .unwrap_err();
-    assert_eq!(redacted.to_string(), "Container engine request failed");
-    let error = engine_output_diagnostic(
-        Command::new("sh").args(["-c", "head -c 65536 /dev/zero >&2; exit 1"]),
-        std::time::Duration::from_secs(2),
-        true,
-    )
-    .unwrap_err();
-    assert!(error.to_string().len() <= 4096 + "Container engine request failed: ".len());
-}
-#[test]
 fn workers_require_content_addressed_images() {
     assert!(!pinned_image("control-worker:latest"));
     assert!(!pinned_image("control-worker@sha256:short"));

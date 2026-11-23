@@ -6,7 +6,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -106,76 +105,6 @@ pub(crate) fn pinned_image(s: &str) -> bool {
     digest.is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
-// Drain while the process runs: waiting first can deadlock on a full stdout pipe.
-// Ownership inspection must fail closed on oversized output, never use a prefix.
-pub(crate) fn engine_output(command: &mut Command, timeout: std::time::Duration) -> std::io::Result<String> {
-    engine_output_diagnostic(command, timeout, false)
-}
-pub(crate) fn engine_output_diagnostic(command: &mut Command, timeout: std::time::Duration, diagnostic: bool) -> std::io::Result<String> {
-    use std::{
-        io::Read,
-        process::Stdio,
-        sync::mpsc,
-        time::{Duration, Instant},
-    };
-    const OUTPUT_LIMIT: u64 = 1024 * 1024;
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(if diagnostic { Stdio::piped() } else { Stdio::null() })
-        .spawn()?;
-    let errors = child.stderr.take().map(|stderr| {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let result = stderr.take(4097).read_to_end(&mut bytes).map(|_| bytes);
-            let _ = sender.send(result);
-        });
-        receiver
-    });
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| std::io::Error::other("No engine response"))?;
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let result = stdout
-            .take(OUTPUT_LIMIT + 1)
-            .read_to_end(&mut output)
-            .map(|_| output);
-        let _ = sender.send(result);
-    });
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            if !status.success() {
-                if let Some(errors) = errors {
-                    let bytes = errors.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                        .map_err(|_|std::io::Error::other("Container engine diagnostic timed out"))??;
-                    let message = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
-                    return Err(std::io::Error::other(format!("Container engine request failed: {}", message.trim())));
-                }
-                return Err(std::io::Error::other("Container engine request failed"));
-            }
-            let output = receiver
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| std::io::Error::other("Container engine response timed out"))??;
-            if output.len() as u64 > OUTPUT_LIMIT {
-                return Err(std::io::Error::other(
-                    "Container engine response exceeded its limit",
-                ));
-            }
-            return String::from_utf8(output).map_err(std::io::Error::other);
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::other("Container engine response timed out"));
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
 fn field(f: &HashMap<String, String>, name: &str) -> String {
     f.get(name).map(|s| s.trim().to_owned()).unwrap_or_default()
 }

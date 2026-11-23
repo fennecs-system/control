@@ -33,7 +33,7 @@ pub(super) fn serve(
     ready: &dyn Fn(),
     session: impl Fn(Incoming, Arc<Transport>) + Clone + Send + 'static,
 ) -> io::Result<()> {
-    let mut child = binding.spawn(RelayMode::Multiplex, service_port, expires)?;
+    let mut child = binding.spawn(crate::engine::isolation(), RelayMode::Multiplex, service_port, expires)?;
     let output = handshake(&mut child, b"CONTROL_RELAY_V3_READY\n", Duration::from_secs(3), alive)?;
     let Some(input) = child.stdin.take() else {
         let _ = child.kill();
@@ -78,7 +78,7 @@ pub(super) fn serve(
 }
 fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> io::Result<()> {
     let service = live_service(shared, port, cancel)?;
-    let binding = crate::services::port_binding(&service, &port.container)?;
+    let binding = crate::services::port_binding(crate::engine::isolation(), &service, &port.container)?;
     live_service(shared, port, cancel)?;
     let (owner, route, stop) = (shared.clone(), port.clone(), cancel.clone());
     serve(

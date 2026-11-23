@@ -2,8 +2,7 @@
 //! from the captured chat owner, never from agent-supplied paths or volume names.
 use super::{Service, Storage, fail};
 use control_core::resources::Owner;
-use serde::Deserialize;
-use serde_json::Value;
+use control_isolation::{Isolation, MountKind, ObservedMount, ObservedVolume};
 use std::{collections::HashMap, io};
 
 pub(super) struct Workspace<'a> {
@@ -39,18 +38,11 @@ impl<'a> Workspace<'a> {
             ("dev.control.chat", self.owner.chat.as_str()),
         ]
     }
-    pub(super) fn ensure(&self) -> io::Result<()> {
-        let mut args = vec!["volume", "create", "--driver", "local"];
-        let labels = self.labels().map(|(key, value)| format!("{key}={value}"));
-        for label in &labels {
-            args.extend(["--label", label]);
-        }
-        args.push(self.name());
+    pub(super) fn ensure(&self, isolation: &dyn Isolation) -> io::Result<()> {
         // Creating an existing name is idempotent; Docker does not change its
         // labels/options. Inspect it before mounting, including after retries.
-        crate::engine::query(&args)?;
-        let text = crate::engine::query(&["volume", "inspect", self.name()])?;
-        let volumes: Vec<Inspection> = serde_json::from_str(&text).map_err(fail)?;
+        isolation.volume_create(self.name(), &self.labels())?;
+        let volumes = isolation.volume_inspect(self.name())?;
         if volumes.len() != 1 || !self.matches(&volumes[0]) {
             return Err(fail(
                 "Service workspace does not match its durable chat ownership and local storage policy",
@@ -58,41 +50,24 @@ impl<'a> Workspace<'a> {
         }
         Ok(())
     }
-    fn matches(&self, volume: &Inspection) -> bool {
+    fn matches(&self, volume: &ObservedVolume) -> bool {
         volume.name == self.name
             && volume.driver == "local"
             && volume.scope == "local"
-            && volume.options.as_ref().is_none_or(HashMap::is_empty)
-            && self.labels().iter().all(|(key, value)| {
-                volume
-                    .labels
-                    .as_ref()
-                    .and_then(|labels| labels.get(*key))
-                    .is_some_and(|observed| observed == value)
-            })
+            && volume.options.is_empty()
+            && self.labels().iter().all(|(key, value)| volume.labels.get(*key).is_some_and(|observed| observed == value))
     }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct Inspection {
-    name: String,
-    driver: String,
-    scope: String,
-    labels: Option<HashMap<String, String>>,
-    options: Option<HashMap<String, String>>,
 }
 
 pub(super) fn valid_mounts(
     service: &Service,
-    mounts: &[Value],
+    mounts: &[ObservedMount],
     tmpfs: &HashMap<String, String>,
 ) -> bool {
     let workspace = Workspace::of(service);
     let mut found = false;
     for mount in mounts {
-        if mount["Type"] == "tmpfs"
-            && tmpfs.contains_key(mount["Destination"].as_str().unwrap_or(""))
+        if mount.kind == MountKind::Tmpfs && tmpfs.contains_key(&mount.destination)
         {
             continue;
         }
@@ -100,11 +75,11 @@ pub(super) fn valid_mounts(
             return false;
         };
         if found
-            || mount["Type"] != "volume"
-            || mount["Name"] != workspace.name()
-            || mount["Driver"] != "local"
-            || mount["Destination"] != "/workspace"
-            || mount["RW"] != true
+            || mount.kind != MountKind::Volume
+            || mount.name.as_deref() != Some(workspace.name())
+            || mount.driver.as_deref() != Some("local")
+            || mount.destination != "/workspace"
+            || !mount.writable
         {
             return false;
         }
@@ -119,19 +94,18 @@ mod tests;
 /// Removes this node's service workspace volumes for chats not in `keep`, or
 /// only `chat`'s when given. Ownership comes from the volume's Control labels;
 /// the engine refuses a volume still mounted by any container.
-pub(super) fn remove_unused(node: &str, keep: &std::collections::HashSet<String>, chat: Option<&str>) -> (usize, Vec<String>) {
-    let node_label = format!("label=dev.control.node={node}");
-    let listed = match crate::engine::query(&["volume", "ls", "--filter", "label=dev.control.purpose=service-workspace", "--filter", &node_label, "--format", "{{.Name}}\t{{.Label \"dev.control.chat\"}}"]) {
-        Ok(text) => text,
+pub(super) fn remove_unused(isolation: &dyn Isolation, node: &str, keep: &std::collections::HashSet<String>, chat: Option<&str>) -> (usize, Vec<String>) {
+    let listed = match isolation.volumes(&[("dev.control.purpose", "service-workspace"), ("dev.control.node", node)]) {
+        Ok(listed) => listed,
         Err(error) => return (0, vec![format!("Could not list service workspaces: {error}")]),
     };
     let (mut removed, mut failures) = (0, Vec::new());
-    for line in listed.lines() {
-        let Some((name, owner)) = line.split_once('\t') else { continue };
+    for volume in &listed {
+        let (name, owner) = (volume.name.as_str(), volume.labels.get("dev.control.chat").map_or("", String::as_str));
         if !name.starts_with("control-service-workspace-") || keep.contains(owner) || chat.is_some_and(|chat| chat != owner) {
             continue;
         }
-        match crate::engine::query(&["volume", "rm", name]) {
+        match isolation.volume_remove(name) {
             Ok(_) => removed += 1,
             Err(error) => failures.push(format!("{name}: {error}")),
         }

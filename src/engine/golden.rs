@@ -3,15 +3,12 @@
 //! a flag that changes, appears or disappears fails a test. Golden text uses
 //! `{name}` placeholders for values a test cannot fix (paths, ids, uids).
 //!
-//! A site built from a [`control_isolation::RunSpec`] gets the backend's one
-//! order and spelling of options, while the sites used to differ in both, so
-//! most converted sites compare with [`pin_equivalent`] against the vector
+//! Every site now builds a [`control_isolation::RunSpec`] or `ExecSpec` and gets
+//! the backend's one order and spelling of options, while the sites used to
+//! differ in both, so most compare with [`pin_equivalent`] against the vector
 //! they produced before; those whose bytes did not change keep [`pin`].
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) fn args(command: &std::process::Command) -> Vec<String> {
-    command.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
-}
 /// The engine arguments the Docker backend runs `spec` with.
 pub(crate) fn run(spec: &control_isolation::RunSpec) -> Vec<String> {
     control_isolation::Docker::run_arguments(spec).unwrap()
@@ -32,7 +29,8 @@ pub(crate) fn pin(actual: &[String], golden: &[String]) {
 /// or container and the same program arguments, byte for byte; the same
 /// options, whatever their order or `--flag=value` / `--flag value` spelling.
 /// Repeated options compare as sets except `--env`, whose order decides
-/// duplicates. Tmpfs option lists compare as sets. Unknown flags fail.
+/// duplicates. Tmpfs option lists compare as sets. Unknown flags fail, and
+/// `--restart=no`, the engine default, equals its absence.
 #[track_caller]
 pub(crate) fn pin_equivalent(actual: &[String], golden: &[String]) {
     assert_eq!(parse(actual), parse(golden), "engine arguments changed:\n{}", literal(actual));
@@ -74,6 +72,10 @@ fn parse(words: &[String]) -> Parsed {
         };
         if SWITCHES.contains(&name) {
             switches.insert(name.to_owned(), inline.as_deref() != Some("false"));
+            continue;
+        }
+        // Docker's default restart policy, stated by `create` and implied elsewhere.
+        if flag == "--restart=no" {
             continue;
         }
         assert!(LISTS.contains(&name) || SCALARS.contains(&name), "unknown engine flag {flag}");

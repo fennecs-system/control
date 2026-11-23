@@ -41,7 +41,7 @@ pub(crate) struct Finished {
 pub(crate) fn run(isolation: &dyn Isolation, spec: Spec) -> io::Result<Finished> {
     let run = spec.run.clone();
     run_with(|streams| isolation.spawn(&run, streams), spec, || {
-        let _ = isolation.remove(&run.name);
+        let _ = isolation.remove(control_isolation::Target::Name(&run.name));
     })
 }
 /// The runner behind [`run`], with the start and the deadline's removal

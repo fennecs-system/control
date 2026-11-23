@@ -18,7 +18,7 @@ use std::{
     fs,
     io::{self, BufRead, Read, Write},
     path::PathBuf,
-    process::{Child, Stdio},
+    process::Child,
     sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}},
     time::Duration,
 };
@@ -337,11 +337,15 @@ fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mute
             Some((service.binding_snapshot(), watch.seen))
         });
         let Some((service, seen)) = target else { break };
-        let streamed = crate::services::exec_target(&service).and_then(|(container, user)| {
-            let mut command = crate::engine::cli();
-            command.args(["exec", "--user", &user, &container, "control-service-runner", "tail", id, &seen.to_string()])
-                .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-            let mut child = command.spawn()?;
+        let isolation = crate::engine::isolation();
+        let streamed = crate::services::exec_target(isolation, &service).and_then(|(container, user)| {
+            let tail = control_isolation::ExecSpec {
+                container,
+                user: Some(user),
+                argv: ["control-service-runner", "tail", id, &seen.to_string()].map(str::to_owned).to_vec(),
+                ..Default::default()
+            };
+            let mut child = isolation.exec(&tail, control_isolation::Streams::new(control_isolation::Stream::Null, control_isolation::Stream::Piped, control_isolation::Stream::Null))?;
             let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Missing watch output"))?;
             *slot.lock().map_err(|_| io::Error::other("Follower unavailable"))? = Some(child);
             // A cancel that raced the spawn found no child to kill.

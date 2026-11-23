@@ -75,7 +75,7 @@ pub fn stop(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt) -> Re
             .ok_or("Attempt generation changed while stopping")?;
         identity.command_jobs = live.command_jobs.iter().map(crate::command_jobs::Job::identity).collect();
     }
-    crate::lifecycle::stop_attempt(&identity)
+    crate::lifecycle::stop_attempt(crate::engine::isolation(), &identity)
 }
 
 #[cfg(test)]

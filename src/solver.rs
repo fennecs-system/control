@@ -7,7 +7,7 @@
 //! [`Solver`] entry in [`SOLVERS`]: its formats, command line and output parser
 //! (reuse an existing parser for a format it shares). See docs/SOLVERS.md and
 //! the adjacent tests for fixture outputs.
-use control_isolation::{Exec, Limits, Logs, Network, RunSpec, Size, Tmpfs, User};
+use control_isolation::{Exec, Isolation, Limits, Logs, Network, RunSpec, Size, Tmpfs, User};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{
@@ -243,18 +243,18 @@ fn pinned_image() -> io::Result<String> {
     image()?.ok_or_else(|| fail(format!("No pinned solver image. Run `{REBUILD}` to build it and record solver-image-id in the node configuration directory.")))
 }
 /// The image's `dev.control.solvers` label: solver ID to package and version.
-fn label(image: &str) -> io::Result<String> {
-    let text = crate::engine::query(&["image", "inspect", image, "--format", "{{json (index .Config.Labels \"dev.control.solvers\")}}"])
+fn label(isolation: &dyn Isolation, image: &str) -> io::Result<String> {
+    let mut labels = isolation
+        .image_labels(&image.into())
         .map_err(|_| fail(format!("The pinned solver image is not loaded in the container engine; run `{REBUILD}`")))?;
-    // The template prints the label as a JSON string (null when absent).
-    Ok(serde_json::from_str::<Option<String>>(text.trim()).ok().flatten().unwrap_or_default())
+    Ok(labels.remove("dev.control.solvers").unwrap_or_default())
 }
 fn registry(label: &str) -> io::Result<Map<String, Value>> {
     serde_json::from_str(label.trim()).map_err(|_| fail(format!("The solver image lacks its solver registry label; rebuild it with `{REBUILD}`")))
 }
 /// Registered solvers the image provides; an error names any it lacks.
-pub(crate) fn installed(image: &str) -> io::Result<String> {
-    check_installed(&label(image)?)
+pub(crate) fn installed(isolation: &dyn Isolation, image: &str) -> io::Result<String> {
+    check_installed(&label(isolation, image)?)
 }
 pub fn check_installed(label: &str) -> io::Result<String> {
     let solvers = registry(label)?;
@@ -287,8 +287,9 @@ pub fn call(args: &Value) -> io::Result<Value> {
     let request = validate(input)?;
     let _slot = Slot::acquire()?;
     let image = pinned_image()?;
-    let provenance = provenance(&label(&image)?, &image, request.solver.id)?;
-    let raw = run(&image, &request)?;
+    let isolation = crate::engine::isolation();
+    let provenance = provenance(&label(isolation, &image)?, &image, request.solver.id)?;
+    let raw = run(isolation, &image, &request)?;
     Ok(shape(&request, &raw, provenance))
 }
 
@@ -324,7 +325,7 @@ fn container(image: &str, name: &str, request: &Request) -> RunSpec {
         entrypoint: Some("/bin/bash".into()),
         user: Some(User { uid: 65534, gid: 65534 }),
         workdir: Some("/tmp".into()),
-        limits: Limits { pids: Some(128), memory: Some(memory), memory_swap: Some(memory), cpus: Some(CPUS) },
+        limits: Limits { pids: Some(128), memory: Some(memory), memory_swap: Some(memory), cpus: Some(u64::from(CPUS)) },
         network: Network::None,
         logs: Logs::None,
         input: control_isolation::Input::Attached,
@@ -337,10 +338,10 @@ fn container(image: &str, name: &str, request: &Request) -> RunSpec {
     .args(command)
 }
 
-fn run(image: &str, request: &Request) -> io::Result<Raw> {
+fn run(isolation: &dyn Isolation, image: &str, request: &Request) -> io::Result<Raw> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
     let name = format!("control-solve-{stamp}-{}", SEQUENCE.fetch_add(1, Ordering::Relaxed));
-    let finished = crate::engine::ephemeral::run(crate::engine::isolation(), crate::engine::ephemeral::Spec {
+    let finished = crate::engine::ephemeral::run(isolation, crate::engine::ephemeral::Spec {
         run: container(image, &name, request),
         input: request.model.clone().into_bytes(),
         deadline: Duration::from_secs(request.time_limit_seconds) + GRACE,

@@ -31,19 +31,13 @@ pub(crate) fn image() -> io::Result<Option<String>> {
         .transpose()
 }
 
-pub(crate) fn check(image: &str, workspace: &Path) -> io::Result<()> {
+pub(crate) fn check(isolation: &dyn control_isolation::Isolation, image: &str, workspace: &Path) -> io::Result<()> {
     if !crate::runtime::pinned_image(image) {
         return Err(io::Error::other(
             "Build environment must be pinned by digest",
         ));
     }
-    let metadata = crate::engine::query(&[
-        "image",
-        "inspect",
-        image,
-        "--format",
-        "{{index .Config.Labels \"dev.control.build-locks\"}}",
-    ])?;
+    let metadata = isolation.image_labels(&image.into())?.remove("dev.control.build-locks").unwrap_or_default();
     let locks = parse(&metadata)?;
     matches(&locks, |path| {
         match crate::artifacts::safe_read(workspace, path, 2 * 1024 * 1024) {

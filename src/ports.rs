@@ -488,7 +488,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             let policy = control::permissions::read().auto_approval;
             let Some(id) = value["port_id"].as_str().filter(|_| value["status"] == "pending") else { return Ok(value) };
             return Ok(auto_approve(shared, id, &policy, crate::storage::save,
-                |service, container| crate::services::port_binding(service, container).map(|_| ()),
+                |service, container| crate::services::port_binding(crate::engine::isolation(), service, container).map(|_| ()),
                 |endpoint, loopback| endpoint.pin(loopback)).unwrap_or(value));
         }
         other => other,
@@ -762,8 +762,8 @@ pub(crate) fn http_with_save(
                     return Err(fail("Port belongs to another node"));
                 }
                 // The image must speak this host's relay version, for any lifetime.
-                crate::services::relay_capable(&service)?;
-                crate::services::port_binding(&service, &request.container)?;
+                crate::services::relay_capable(crate::engine::isolation(), &service)?;
+                crate::services::port_binding(crate::engine::isolation(), &service, &request.container)?;
                 let allow_loopback = fields.get("loopback").is_some_and(|v| v == "yes");
                 let pinned = match peer {
                     Some(peer) => Some(peer),
@@ -1211,9 +1211,10 @@ fn connect_relay(
     cancel: &AtomicBool,
 ) -> io::Result<(Relay, ChildStdout)> {
     let service = live_service(shared, port, cancel)?;
-    let binding = crate::services::port_binding(&service, &port.container)?;
+    let binding = crate::services::port_binding(crate::engine::isolation(), &service, &port.container)?;
     live_service(shared, port, cancel)?;
     let mut child = Relay::new(binding.spawn(
+        crate::engine::isolation(),
         RelayMode::Connect,
         port.service_port,
         port.approval.as_ref().unwrap().expires,
@@ -1228,7 +1229,7 @@ fn connect_relay(
 }
 fn ingress(shared: Arc<Mutex<State>>, mut port: Port, cancel: Arc<AtomicBool>) -> io::Result<()> {
     let service = live_service(&shared, &port, &cancel)?;
-    crate::services::port_binding(&service, &port.container)?;
+    crate::services::port_binding(crate::engine::isolation(), &service, &port.container)?;
     let listener = TcpListener::bind(("127.0.0.1", port.approval.as_ref().unwrap().host_port))?;
     listener.set_nonblocking(true)?;
     let assigned = listener.local_addr()?.port();

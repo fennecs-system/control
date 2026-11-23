@@ -56,17 +56,11 @@ impl Profile {
         }
     }
 
-    pub fn inspect(image: &str) -> io::Result<Self> {
+    pub fn inspect(isolation: &dyn control_isolation::Isolation, image: &str) -> io::Result<Self> {
         if !crate::runtime::pinned_image(image) {
             return Err(io::Error::other("Worker image must be pinned by digest"));
         }
-        let marker = crate::engine::query(&[
-            "image",
-            "inspect",
-            "--format",
-            "{{index .Config.Labels \"dev.control.worker-profile\"}}",
-            image,
-        ])?;
+        let marker = isolation.image_labels(&image.into())?.remove("dev.control.worker-profile").unwrap_or_default();
         Self::from_marker(marker.trim())
     }
 

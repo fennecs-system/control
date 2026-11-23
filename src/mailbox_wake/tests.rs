@@ -51,7 +51,7 @@ fn container_mount_rename_reaches_host_watcher() {
         "-c",
         "printf test > /mailbox/request.tmp && mv /mailbox/request.tmp /mailbox/request",
     ]);
-    crate::runtime::engine_output(&mut command, Duration::from_secs(30)).unwrap();
+    control_isolation::bounded_output(&mut command, Duration::from_secs(30), false).unwrap();
     let started = std::time::Instant::now();
     wake.wait(Duration::from_secs(3));
     assert!(

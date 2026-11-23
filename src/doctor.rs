@@ -56,7 +56,8 @@ pub fn run() -> io::Result<()> {
         crate::web_assets::ready(),
         "use a release binary built with the Rust/WASM assets",
     );
-    let engine = crate::engine::ready();
+    let isolation = crate::engine::isolation();
+    let engine = isolation.ready();
     check(
         "Linux container engine",
         engine,
@@ -64,7 +65,7 @@ pub fn run() -> io::Result<()> {
     );
     match crate::build_environment::image() {
         Ok(Some(image)) if engine => {
-            let readiness = crate::config::source_root().and_then(|source| crate::build_environment::check(&image, &source));
+            let readiness = crate::config::source_root().and_then(|source| crate::build_environment::check(isolation, &image, &source));
             match readiness {
                 Ok(()) => check("declared build environment", true, ""),
                 Err(error) => check("declared build environment", false, &error.to_string()),
@@ -74,7 +75,7 @@ pub fn run() -> io::Result<()> {
         Err(error) => check("declared build environment", false, &error.to_string()),
     }
     match crate::solver::image() {
-        Ok(Some(image)) if engine => match crate::solver::installed(&image) {
+        Ok(Some(image)) if engine => match crate::solver::installed(isolation, &image) {
             Ok(solvers) => check(&format!("solver image ({solvers})"), true, ""),
             Err(error) => check("solver image", false, &error.to_string()),
         },
@@ -97,11 +98,11 @@ pub fn run() -> io::Result<()> {
             agent.image_hint(),
         );
         if let (true, Some(image)) = (engine, &image) {
-            let installed = crate::engine::query(&["image", "inspect", image, "--format", "{{.Id}}"]).is_ok();
+            let installed = isolation.image_labels(&image.as_str().into()).is_ok();
             check(&format!("{name}: image installed"), installed, "load the Nix-built image into the engine");
             if installed {
                 // Offline isolation probe with an empty canary credential: no account is mounted and no model is called.
-                let probe = agent.probe(image);
+                let probe = agent.probe(isolation, image);
                 match probe {
                     Ok(()) => check(&format!("{name}: offline sandbox probe"), true, ""),
                     Err(reason) => check(&format!("{name}: offline sandbox probe"), false, &reason),

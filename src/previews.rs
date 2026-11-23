@@ -1,13 +1,13 @@
 //! Credential-free preview services with loopback-only ingress and no egress.
 //! Each preview has a separate browser hostname; Control cookies are host-only.
 use crate::{usage::Attempt, State};
+use control_isolation::{Access, Exec, ExecSpec, Isolation, Limits, Logs, MountKind, Network, Observed, Pid1, RunSpec, Size, Stream, Streams, Target, Tmpfs, User};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     io::{self, Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
     path::Path,
-    process::Stdio,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     sync::{Arc, Mutex},
     time::Duration,
@@ -50,10 +50,7 @@ fn name(attempt: &Attempt) -> io::Result<String> {
             .ok_or_else(|| fail("Missing workspace identity"))?
     ))
 }
-fn query(args: &[&str]) -> io::Result<String> {
-    crate::engine::query(args)
-}
-fn launch(preview: &Preview, command: &str, workspace: &Path) -> io::Result<String> {
+fn launch(isolation: &dyn Isolation, preview: &Preview, command: &str, workspace: &Path) -> io::Result<String> {
     if unsafe { libc::getuid() } == 0 {
         return Err(fail("Run Control as a non-root operator to start previews"));
     }
@@ -72,73 +69,41 @@ fn launch(preview: &Preview, command: &str, workspace: &Path) -> io::Result<Stri
         .as_deref()
         .ok_or_else(|| fail("Missing pinned image"))?;
     let result = (|| {
-        let (uid, gid) = (unsafe { libc::getuid() }, unsafe { libc::getgid() });
-        let arguments = run_arguments(&preview.id, node, image, uid, gid, source, command);
-        let id = query(&arguments.iter().map(String::as_str).collect::<Vec<_>>())?;
-        let id = id.trim().to_owned();
-        if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(fail("Invalid preview container ID"));
-        }
-        verify(&preview.id, &preview.attempt)?;
-        Ok(id)
+        let owner = User { uid: unsafe { libc::getuid() }, gid: unsafe { libc::getgid() } };
+        let id = isolation.run_detached(&container(&preview.id, node, image, owner, source, command))?;
+        verify(isolation, &preview.id, &preview.attempt)?;
+        Ok(id.as_str().to_owned())
     })();
     if result.is_err() {
-        let _ = stop_resource(preview);
+        let _ = stop_resource(isolation, preview);
     }
     result
 }
 /// The detached preview container serving `command` from a read-only workspace.
-fn run_arguments(name: &str, node: &str, image: &str, uid: u32, gid: u32, source: &str, command: &str) -> Vec<String> {
+fn container(name: &str, node: &str, image: &str, owner: User, source: &str, command: &str) -> RunSpec {
     let wrapper=format!("set -eu\nexec 2>&1\ncat > /tmp/control-port-forward.rs <<'CONTROL_FORWARD_SOURCE'\n{}\nCONTROL_FORWARD_SOURCE\nrustc --edition=2024 /tmp/control-port-forward.rs -o /tmp/control-port-forward\nexec bash -c \"$1\"",include_str!("../tools/port-forward/main.rs"));
-    [
-        "run",
-        "--detach",
-        "--pull=never",
-        "--init",
-        "--name",
-        name,
-        "--label",
-        &format!("dev.control.node={node}"),
-        "--label",
-        &format!("dev.control.attempt={name}"),
-        "--label",
-        "dev.control.purpose=preview",
-        "--network",
-        "none",
-        "--user",
-        &format!("{uid}:{gid}"),
-        "--read-only",
-        "--cap-drop=ALL",
-        "--security-opt=no-new-privileges",
-        "--pids-limit=128",
-        "--memory=1g",
-        "--cpus=2",
-        "--log-driver=local",
-        "--log-opt=max-size=1m",
-        "--log-opt=max-file=2",
-        "--tmpfs",
-        "/tmp:rw,exec,nosuid,nodev,size=512m",
-        "--tmpfs",
-        &format!("/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m"),
-        "--env",
-        "HOME=/home/agent",
-        "--env",
-        "CARGO_TARGET_DIR=/tmp/target",
-        "--mount",
-        &format!("type=bind,src={source},dst=/workspace,readonly"),
-        "--workdir",
-        "/workspace",
-        image,
-        "bash",
-        "-c",
-        &wrapper,
-        "control-preview",
-        command,
-    ]
-    .map(str::to_owned)
-    .to_vec()
+    RunSpec {
+        name: name.into(),
+        image: image.into(),
+        argv: ["bash", "-c", &wrapper, "control-preview", command].map(str::to_owned).to_vec(),
+        user: Some(owner),
+        workdir: Some("/workspace".into()),
+        limits: Limits { pids: Some(128), memory: Some(Size::Gib(1)), cpus: Some(2), ..Limits::default() },
+        network: Network::None,
+        logs: Logs::Local { max_size: Size::Mib(1), max_files: 2 },
+        pid1: Pid1::Init,
+        ..RunSpec::default()
+    }
+    .label("dev.control.node", node)
+    .label("dev.control.attempt", name)
+    .label("dev.control.purpose", "preview")
+    .tmpfs(Tmpfs { exec: Exec::Allow, nodev: true, ..Tmpfs::new("/tmp", Size::Mib(512)) })
+    .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).owned(owner))
+    .env("HOME", "/home/agent")
+    .env("CARGO_TARGET_DIR", "/tmp/target")
+    .bind(source, "/workspace", Access::ReadOnly)
 }
-pub fn verify(name: &str, attempt: &Attempt) -> io::Result<()> {
+pub fn verify(isolation: &dyn Isolation, name: &str, attempt: &Attempt) -> io::Result<()> {
     if attempt.project.is_none() || self::name(attempt)? != name {
         return Err(fail("Preview has no approved project attempt"));
     }
@@ -146,32 +111,20 @@ pub fn verify(name: &str, attempt: &Attempt) -> io::Result<()> {
     let workspace = crate::runtime::workspace(id)
         .map_err(fail)?
         .canonicalize()?;
-    let text = query(&[
-        "inspect",
-        "--format",
-        r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"attempt":{{json (index .Config.Labels "dev.control.attempt")}},"root_readonly":{{json .HostConfig.ReadonlyRootfs}},"network":{{json .HostConfig.NetworkMode}},"ports":{{json .NetworkSettings.Ports}},"mounts":{{json .Mounts}}}"#,
-        name,
-    ])?;
-    let value: Value =
-        serde_json::from_str(text.trim()).map_err(|_| fail("Invalid preview inspection"))?;
-    let mounts = value["mounts"]
-        .as_array()
-        .ok_or_else(|| fail("Missing preview mounts"))?;
-    let mounted = mounts.iter().any(|m| {
-        m["Destination"] == "/workspace"
-            && m["Source"].as_str() == workspace.to_str()
-            && m["RW"] == false
+    let [observed] = <[Observed; 1]>::try_from(isolation.inspect(&[Target::Name(name)])?).map_err(|_| fail("Invalid preview inspection"))?;
+    let mounted = observed.mounts.iter().any(|m| {
+        m.destination == "/workspace"
+            && Some(m.source.as_str()) == workspace.to_str()
+            && !m.writable
     });
-    let no_extra_binds = mounts.iter().filter(|m| m["Type"] == "bind").count() == 1;
-    let offline = value["network"] == "none"
-        && value["ports"]
-            .as_object()
-            .is_some_and(|ports| ports.values().all(Value::is_null));
-    if value["name"] != format!("/{name}")
-        || value["image"].as_str() != attempt.image.as_deref()
-        || value["node"].as_str() != attempt.node_id.as_deref()
-        || value["attempt"] != name
-        || value["root_readonly"] != true
+    let no_extra_binds = observed.mounts.iter().filter(|m| m.kind == MountKind::Bind).count() == 1;
+    let offline = observed.network == "none"
+        && observed.ports.as_ref().is_some_and(|ports| ports.values().all(|published| !published));
+    if observed.name != format!("/{name}")
+        || Some(observed.image_ref.as_str()) != attempt.image.as_deref()
+        || observed.label("dev.control.node") != attempt.node_id.as_deref()
+        || observed.label("dev.control.attempt") != Some(name)
+        || !observed.read_only_root
     {
         return Err(fail(
             "Preview ownership does not match its approved attempt",
@@ -189,7 +142,7 @@ pub fn verify(name: &str, attempt: &Attempt) -> io::Result<()> {
     }
     Ok(())
 }
-pub fn stop_resource(preview: &Preview) -> io::Result<()> {
+pub fn stop_resource(isolation: &dyn Isolation, preview: &Preview) -> io::Result<()> {
     let workspace = crate::runtime::workspace(
         preview
             .attempt
@@ -200,6 +153,7 @@ pub fn stop_resource(preview: &Preview) -> io::Result<()> {
     .map_err(fail)?
     .canonicalize()?;
     crate::lifecycle::stop_resource_id(
+        isolation,
         &preview.id,
         preview
             .attempt
@@ -302,7 +256,7 @@ pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Resu
     let workspace = crate::runtime::workspace(preview.attempt.workspace_id.as_deref().unwrap())
         .map_err(fail)?
         .canonicalize()?;
-    let result = launch(&preview, &input.command, &workspace);
+    let result = launch(crate::engine::isolation(), &preview, &input.command, &workspace);
     preview.container_id = result.as_ref().ok().cloned();
     let mut state = match shared.lock() {
         Ok(state) => state,
@@ -376,7 +330,7 @@ fn checkpoint_launch(
 fn fence_launch(shared: &Arc<Mutex<State>>, preview: &Preview) {
     preview.stopped.store(true, Ordering::Relaxed);
     // Only a verified stop frees the resource slot. Failed cleanup retains intent.
-    let status = if preview.container_id.is_some() && stop_resource(preview).is_ok() {
+    let status = if preview.container_id.is_some() && stop_resource(crate::engine::isolation(), preview).is_ok() {
         "stopped"
     } else {
         "failed"
@@ -424,18 +378,13 @@ fn forward(mut stream: TcpStream, preview: &Preview) -> io::Result<()> {
         .container_id
         .as_deref()
         .ok_or_else(|| fail("Preview container is not captured"))?;
-    let mut child = crate::engine::scrubbed()
-        .args([
-            "exec",
-            "--interactive",
-            id,
-            "/tmp/control-port-forward",
-            &preview.port.to_string(),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+    let forwarder = ExecSpec {
+        container: id.into(),
+        input: control_isolation::Input::Attached,
+        argv: vec!["/tmp/control-port-forward".into(), preview.port.to_string()],
+        ..ExecSpec::default()
+    };
+    let mut child = crate::engine::isolation().exec(&forwarder, Streams::new(Stream::Piped, Stream::Piped, Stream::Null))?;
     let mut input = child
         .stdin
         .take()
@@ -543,9 +492,10 @@ pub fn restore(shared: Arc<Mutex<State>>) {
             break;
         }
         let result = (|| {
-            verify(&preview.id, &preview.attempt)?;
-            let id = query(&["inspect", "--format", "{{.Id}}", &preview.id])?;
-            if Some(id.trim()) != preview.container_id.as_deref() {
+            let isolation = crate::engine::isolation();
+            verify(isolation, &preview.id, &preview.attempt)?;
+            let observed = isolation.inspect(&[Target::Name(&preview.id)])?;
+            if observed.first().map(|o| o.id.as_str()) != preview.container_id.as_deref() {
                 return Err(fail("Preview container identity changed"));
             }
             let url = reqwest::Url::parse(preview.url.as_deref().unwrap_or(""))
@@ -582,7 +532,7 @@ pub fn stop(shared: &Arc<Mutex<State>>, chat: &str, id: &str) -> io::Result<()> 
         .find(|p| p.chat == chat && p.id == id)
         .cloned()
         .ok_or_else(|| fail("Preview not found in this chat"))?;
-    stop_resource(&preview)?;
+    stop_resource(crate::engine::isolation(), &preview)?;
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let record = state
         .previews
