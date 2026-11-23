@@ -1,6 +1,7 @@
 //! Concrete host-brokered tools. Models never supply Docker options or credentials.
 use base64::Engine;
 use scraper::{Html, Selector};
+use control_isolation::{Exec, Input, Limits, Network, RunSpec, Size, Tmpfs, User};
 use serde_json::{json, Value};
 use std::{
     io::{self, Read},
@@ -242,19 +243,22 @@ fn search(query: &str, limit: usize) -> io::Result<Value> {
         "Web search unavailable: DuckDuckGo and Bing could not provide results. Try again later.",
     ))
 }
-fn playground_arguments(name: &str, image: &str, optimized: bool) -> Vec<String> {
-    let mut args = [
-        "run", "--rm", "--pull=never", "--name", name, "--label", "dev.control.tool=playground",
-        "--network=none", "--user=65532:65532", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-        "--memory=768m", "--cpus=1", "--pids-limit=64", "--tmpfs", "/tmp:rw,nosuid,exec,mode=1777,size=96m",
-        "--env", "HOME=/tmp", "--workdir=/tmp", "--entrypoint=/bin/control-playground", "-i", image,
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    if optimized {
-        args.push("--bench".into());
+fn playground_container(name: &str, image: &str, optimized: bool) -> RunSpec {
+    RunSpec {
+        name: name.into(),
+        image: image.into(),
+        entrypoint: Some("/bin/control-playground".into()),
+        user: Some(User { uid: 65532, gid: 65532 }),
+        workdir: Some("/tmp".into()),
+        limits: Limits { pids: Some(64), memory: Some(Size::Mib(768)), cpus: Some(1), ..Limits::default() },
+        network: Network::None,
+        input: Input::Attached,
+        ..RunSpec::default()
     }
-    args
+    .label("dev.control.tool", "playground")
+    .tmpfs(Tmpfs { exec: Exec::Allow, mode: Some(0o1777), ..Tmpfs::new("/tmp", Size::Mib(96)) })
+    .env("HOME", "/tmp")
+    .args(optimized.then_some("--bench"))
 }
 fn playground(code: &str) -> io::Result<Value> {
     playground_mode(code,false)
@@ -273,10 +277,8 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
         .unwrap_or_default()
         .as_nanos();
     let name = format!("control-playground-{stamp}");
-    let args = playground_arguments(&name, &image, optimized);
-    let finished = crate::engine::ephemeral::run(crate::engine::ephemeral::Spec {
-        name: &name,
-        args,
+    let finished = crate::engine::ephemeral::run(crate::engine::isolation(), crate::engine::ephemeral::Spec {
+        run: playground_container(&name, &image, optimized),
         input: code.as_bytes().to_vec(),
         deadline: Duration::from_secs(20),
         stdout_bytes: 65536,

@@ -38,9 +38,9 @@ fn live_rust_playground_success_errors_and_timeout() {
 
 #[test]
 fn playground_launch_vectors_are_pinned() {
-    use crate::engine::golden::{fill, pin};
-    pin(&playground_arguments("control-playground-1", "sha256:img", false), &fill(GOLDEN, &[]));
-    pin(&playground_arguments("control-playground-1", "sha256:img", true), &fill(GOLDEN_BENCH, &[]));
+    use crate::engine::golden::{fill, pin_equivalent, run};
+    pin_equivalent(&run(&playground_container("control-playground-1", "sha256:img", false)), &fill(GOLDEN, &[]));
+    pin_equivalent(&run(&playground_container("control-playground-1", "sha256:img", true)), &fill(GOLDEN_BENCH, &[]));
 }
 const GOLDEN: &[&str] = &[
     "run",

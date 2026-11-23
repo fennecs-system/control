@@ -92,10 +92,11 @@ fn requests_are_validated_before_any_container_runs() {
 fn container_arguments_are_isolated_and_bounded() {
     let request = request("highs", 5, false);
     let arguments = arguments("sha256:abc", "control-solve-1", &request);
-    for expected in ["--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--user=65534:65534",
+    for expected in ["--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
         "--memory=1024m", "--memory-swap=1024m", "--cpus=2", "--pids-limit=128", "--pull=never", "--rm", "--log-driver=none"] {
         assert!(arguments.iter().any(|arg| arg == expected), "missing {expected}");
     }
+    assert!(arguments.windows(2).any(|pair| pair == ["--user", "65534:65534"]));
     assert!(!arguments.iter().any(|arg| arg.starts_with("--mount") || arg.starts_with("--volume") || arg == "-v" || arg.starts_with("--privileged")));
     let image = arguments.iter().position(|arg| arg == "sha256:abc").unwrap();
     assert_eq!(&arguments[image + 1..image + 5], ["-c", STAGE, "/tmp/model.lp", "/tmp/solution.txt"]);
@@ -106,6 +107,9 @@ fn container_arguments_are_isolated_and_bounded() {
     let minizinc = arguments_for("cp-sat");
     assert!(minizinc.windows(2).any(|pair| pair == ["--solver", "cp-sat"]));
     assert!(minizinc.windows(2).any(|pair| pair == ["--solver-time-limit", "5000"]));
+}
+fn arguments(image: &str, name: &str, request: &Request) -> Vec<String> {
+    crate::engine::golden::run(&container(image, name, request))
 }
 fn arguments_for(solver: &str) -> Vec<String> {
     arguments("sha256:abc", "control-solve-1", &request(solver, 5, false))
@@ -311,8 +315,8 @@ fn live_solvers_run_tiny_models_in_their_containers() {
 
 #[test]
 fn solver_launch_vector_is_pinned() {
-    use crate::engine::golden::{fill, pin};
-    pin(&arguments("sha256:img", "control-solve-1", &request("highs", 5, false)), &fill(GOLDEN, &[("stage", STAGE)]));
+    use crate::engine::golden::{fill, pin_equivalent};
+    pin_equivalent(&arguments("sha256:img", "control-solve-1", &request("highs", 5, false)), &fill(GOLDEN, &[("stage", STAGE)]));
 }
 const GOLDEN: &[&str] = &[
     "run",

@@ -1,24 +1,19 @@
 //! One bounded, throwaway tool container (the Rust playground, the solvers):
 //! input on stdin, the head of its standard output, optionally the tail of
 //! its diagnostics, and a wall-clock deadline after which the named container
-//! is force-removed. The caller owns the `run` arguments (image, isolation
-//! flags, `--rm` and `--name`) and the meaning of the output.
-//!
-//! The engine CLI is [`super::scrubbed`]: these containers run model-authored
-//! code, so the engine client keeps only its connection settings and never
-//! carries the host's environment (provider keys, tokens) into the call.
+//! is force-removed. The caller owns the container's specification and the
+//! meaning of the output.
+use control_isolation::{Isolation, RunSpec, Stream, Streams};
 use std::{
     io::{self, Read, Write},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Child, ExitStatus},
     time::{Duration, Instant},
 };
 
 /// What to run and how much of it to keep.
-pub(crate) struct Spec<'a> {
-    /// The container name given to `run --name`, removed at the deadline.
-    pub(crate) name: &'a str,
-    /// The engine `run` arguments, including `--name` and the image.
-    pub(crate) args: Vec<String>,
+pub(crate) struct Spec {
+    /// The container; its name is the one removed at the deadline.
+    pub(crate) run: RunSpec,
     /// Written to stdin, which is then closed.
     pub(crate) input: Vec<u8>,
     pub(crate) deadline: Duration,
@@ -42,24 +37,19 @@ pub(crate) struct Finished {
     pub(crate) elapsed: Duration,
 }
 
-/// Runs `spec` with the scrubbed engine CLI.
-pub(crate) fn run(spec: Spec<'_>) -> io::Result<Finished> {
-    let mut command = super::scrubbed();
-    command.args(&spec.args);
-    let name = spec.name.to_owned();
-    run_with(command, spec, move || {
-        let _ = super::scrubbed().args(["rm", "--force", &name]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+/// Runs `spec` through `isolation`.
+pub(crate) fn run(isolation: &dyn Isolation, spec: Spec) -> io::Result<Finished> {
+    let run = spec.run.clone();
+    run_with(|streams| isolation.spawn(&run, streams), spec, || {
+        let _ = isolation.remove(&run.name);
     })
 }
-/// The runner behind [`run`], with the program and the deadline's removal
+/// The runner behind [`run`], with the start and the deadline's removal
 /// supplied so tests can drive it without an engine.
-fn run_with(mut command: Command, spec: Spec<'_>, remove: impl FnOnce()) -> io::Result<Finished> {
+fn run_with(spawn: impl FnOnce(Streams) -> io::Result<Child>, spec: Spec, remove: impl FnOnce()) -> io::Result<Finished> {
     let start = Instant::now();
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(if spec.stderr_bytes.is_some() { Stdio::piped() } else { Stdio::null() })
-        .spawn()
+    let stderr = if spec.stderr_bytes.is_some() { Stream::Piped } else { Stream::Null };
+    let mut child = spawn(Streams::new(Stream::Piped, Stream::Piped, stderr))
         .map_err(|_| io::Error::other(spec.unavailable))?;
     let stdout = child.stdout.take().unwrap();
     let out = std::thread::spawn(move || head(stdout, spec.stdout_bytes));

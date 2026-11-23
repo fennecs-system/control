@@ -7,6 +7,7 @@
 //! [`Solver`] entry in [`SOLVERS`]: its formats, command line and output parser
 //! (reuse an existing parser for a format it shares). See docs/SOLVERS.md and
 //! the adjacent tests for fixture outputs.
+use control_isolation::{Exec, Limits, Logs, Network, RunSpec, Size, Tmpfs, User};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{
@@ -307,36 +308,40 @@ impl Drop for Slot {
     }
 }
 
-fn arguments(image: &str, name: &str, request: &Request) -> Vec<String> {
+fn container(image: &str, name: &str, request: &Request) -> RunSpec {
     let model = format!("/tmp/model.{}", request.format);
-    let memory = format!("{}m", request.memory_mb);
+    let memory = Size::Mib(request.memory_mb);
     let scratch = (request.memory_mb / 2).min(512);
-    let mut arguments: Vec<String> = [
-        "run", "--rm", "--interactive", "--pull=never", "--name", name, "--label", "dev.control.tool=solver",
-        "--network=none", "--user=65534:65534", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-        &format!("--memory={memory}"), &format!("--memory-swap={memory}"), &format!("--cpus={CPUS}"), "--pids-limit=128",
-        "--tmpfs", &format!("/tmp:rw,nosuid,nodev,noexec,size={scratch}m"),
-        "--env", "HOME=/tmp", "--workdir=/tmp", "--log-driver=none", "--entrypoint=/bin/bash",
-        image, "-c", STAGE, &model, request.solver.result_file.unwrap_or(""),
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    arguments.extend((request.solver.command)(&Invocation {
+    let command = (request.solver.command)(&Invocation {
         model: &model,
         time_limit_seconds: request.time_limit_seconds,
         memory_mb: request.memory_mb,
         threads: CPUS,
-    }));
-    arguments
+    });
+    RunSpec {
+        name: name.into(),
+        image: image.into(),
+        entrypoint: Some("/bin/bash".into()),
+        user: Some(User { uid: 65534, gid: 65534 }),
+        workdir: Some("/tmp".into()),
+        limits: Limits { pids: Some(128), memory: Some(memory), memory_swap: Some(memory), cpus: Some(CPUS) },
+        network: Network::None,
+        logs: Logs::None,
+        input: control_isolation::Input::Attached,
+        ..RunSpec::default()
+    }
+    .label("dev.control.tool", "solver")
+    .tmpfs(Tmpfs { nodev: true, exec: Exec::Deny, ..Tmpfs::new("/tmp", Size::Mib(scratch)) })
+    .env("HOME", "/tmp")
+    .args(["-c", STAGE, &model, request.solver.result_file.unwrap_or("")])
+    .args(command)
 }
 
 fn run(image: &str, request: &Request) -> io::Result<Raw> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
     let name = format!("control-solve-{stamp}-{}", SEQUENCE.fetch_add(1, Ordering::Relaxed));
-    let finished = crate::engine::ephemeral::run(crate::engine::ephemeral::Spec {
-        name: &name,
-        args: arguments(image, &name, request),
+    let finished = crate::engine::ephemeral::run(crate::engine::isolation(), crate::engine::ephemeral::Spec {
+        run: container(image, &name, request),
         input: request.model.clone().into_bytes(),
         deadline: Duration::from_secs(request.time_limit_seconds) + GRACE,
         stdout_bytes: STDOUT_BYTES,
