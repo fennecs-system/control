@@ -338,7 +338,10 @@ fn a_local_model_chat_compacts_on_its_own_endpoint_by_default_and_its_turn_fits(
     let window = selector(&state).window(&conversation, 32);
     assert!(window.items.iter().any(|item| matches!(item, Item::Summary(..))));
     assert!(window.render(&conversation).iter().map(String::len).sum::<usize>() <= 6000);
-    assert_eq!(status(&state, &job.chat)["policy"], "local chat model default");
+    assert_eq!(
+        status(&state.runtime, &state.chats, &job.chat)["policy"],
+        "local chat model default"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -561,7 +564,7 @@ fn memory_command_reports_why_and_opts_a_dm_in_or_out() {
     assert!(line.starts_with("Memory Tree off for this DM (opted out)"), "{line}");
     assert_eq!(state.runtime.compaction.settings.opted_out, std::slice::from_ref(&chat));
     assert!(compactor_for(&state, &state.chats[0]).is_none() && prepare(&state).is_none());
-    assert_eq!(status(&state, &chat)["policy"], "opted out");
+    assert_eq!(status(&state.runtime, &state.chats, &chat)["policy"], "opted out");
     // Off again changes nothing and saves nothing.
     run(&mut state, "off").unwrap();
     assert_eq!(saved.get(), 1);
@@ -582,7 +585,7 @@ fn memory_command_reports_why_and_opts_a_dm_in_or_out() {
     })
     .unwrap();
     state.runtime.compaction.views.insert(chat.clone(), view);
-    assert!(summary(&state, &state.chats[0]).contains("2 entries verbatim, 30 folded into summaries"));
+    assert!(summary(&state.runtime, &state.chats[0]).contains("2 entries verbatim, 30 folded into summaries"));
     std::fs::remove_dir_all(dir).unwrap();
     // Unknown models and stray arguments are refused without saving.
     let before = state.runtime.compaction.settings.clone();
@@ -630,7 +633,7 @@ fn memory_and_compact_are_answered_in_the_dm_and_kept_out_of_history() {
         Err(command::USAGE)
     );
     assert!(
-        status(&state, &chat)["summary"]
+        status(&state.runtime, &state.chats, &chat)["summary"]
             .as_str()
             .unwrap()
             .starts_with("Memory Tree on")

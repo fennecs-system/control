@@ -7,9 +7,9 @@ pub(crate) const USAGE: &str = "Use /memory, /memory on [MODEL] or /memory off."
 
 /// One or two lines: on/off, which compactor and why, entries verbatim vs
 /// folded, and where to inspect the tree.
-pub(crate) fn summary(state: &State, session: &crate::chat::Session) -> String {
-    let memory = &state.runtime.compaction;
-    let (model, reason) = super::policy(state, session);
+pub(crate) fn summary(runtime: &crate::runtime::Runtime, session: &crate::chat::Session) -> String {
+    let memory = &runtime.compaction;
+    let (model, reason) = super::policy(runtime, session);
     let url = super::memory_url(&session.id);
     let total = session.messages.len();
     let Some(model) = model else {
@@ -50,7 +50,7 @@ pub(crate) fn command_with(
     crate::identity::authorize(&session.actor, Action::Task)?;
     let mut words = option.split_whitespace();
     let (on, named) = match (words.next(), words.next(), words.next()) {
-        (None, ..) => return Ok(summary(state, session)),
+        (None, ..) => return Ok(summary(&state.runtime, session)),
         (Some("on"), named, None) => (true, named),
         (Some("off"), None, None) => (false, None),
         _ => return Err(USAGE),
@@ -71,7 +71,7 @@ pub(crate) fn command_with(
                 );
             }
             None => {
-                let wanted = super::local_endpoint(state, session)
+                let wanted = super::local_endpoint(&state.runtime, session)
                     .map(|m| m.id.clone())
                     .or_else(|| settings.model.clone().filter(|id| configured(id)))
                     .ok_or("No Memory Tree model is configured. Use /memory on MODEL with a configured text model.")?;
@@ -97,5 +97,5 @@ pub(crate) fn command_with(
         crate::providers::save_compaction(&mut state.runtime, settings, save)?;
     }
     let session = state.chats.iter().find(|c| c.id == chat).ok_or("Chat not found.")?;
-    Ok(summary(state, session))
+    Ok(summary(&state.runtime, session))
 }

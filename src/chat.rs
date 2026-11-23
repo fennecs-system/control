@@ -1069,13 +1069,13 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     .map(|mut value: Value| {
         value["pending_ports"]=json!(crate::ports::pending_json(state,id));
         value["pending_bots"]=crate::bots::pending_json(state,id);
-        value["pending_knowledge"]=json!(crate::knowledge_tools::pending_json(state,id));
+        value["pending_knowledge"]=json!(crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id));
         value["bot_revision"]=json!(crate::bots::decision_revision(state));
         value["port_revision"]=json!(crate::ports::decision_revision(&state.ports));
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
         value["bot"]=crate::bots::status(state,id).map_or(Value::Null,Value::from);
-        value["compaction"]=crate::compaction::status(state,id);
+        value["compaction"]=crate::compaction::status(&state.runtime,&state.chats,id);
         if let Some(messages)=value["messages"].as_array_mut() {
             for message in messages {
                 if let Some(run)=message["run_id"].as_str() {
@@ -1167,7 +1167,7 @@ pub fn pending_requests(state: &State) -> Value {
         .chain(crate::bots::pending_chats(state))
         .chain(crate::ports::pending_chats(&state.ports))
         .chain(crate::intel::pending_chats(state))
-        .chain(crate::knowledge_tools::pending_chats(state))
+        .chain(crate::knowledge_tools::pending_chats(&state.collective.proposals))
         .chain(folders);
     let mut roots = Vec::new();
     for chat in chats {
@@ -1180,7 +1180,7 @@ pub fn pending_requests(state: &State) -> Value {
     json!(roots.into_iter().filter_map(|id| {
         let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
         authorize(&session.actor, Action::Task).ok()?;
-        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id),"pending_folders":pending_folders(state,id,&session.actor),"pending_knowledge":crate::knowledge_tools::pending_json(state,id)});
+        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id),"pending_folders":pending_folders(state,id,&session.actor),"pending_knowledge":crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id)});
         ["pending_questions","pending_bots","pending_ports","pending_notices","pending_folders","pending_knowledge"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
     }).collect::<Vec<_>>())
 }
@@ -1342,7 +1342,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                     }
                     .to_owned()
                 } else {
-                    crate::projects::panel(state, id)
+                    crate::projects::panel(&state.chats, id)
                 }
             )
         } else {
@@ -1487,7 +1487,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             .as_ref()
             .is_some_and(|p| !p.pending && p.grant.is_some())
     {
-        html.push_str(&crate::projects::panel(state, id));
+        html.push_str(&crate::projects::panel(&state.chats, id));
     }
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)
@@ -1507,7 +1507,7 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
                 && c.project.as_ref().is_some_and(|p| p.pending || p.grant.is_none())
         })
         .collect::<Vec<_>>();
-    let knowledge = crate::knowledge_tools::pending_json(state, id);
+    let knowledge = crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id);
     let count = questions.len()
         + folders.len()
         + crate::ports::pending_for_chat(state, id).len()
@@ -1520,7 +1520,7 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
         html.push_str("<p class='message-status'>No pending requests</p>");
     }
     for folder in folders {
-        html.push_str(&crate::projects::panel(state, &folder.id));
+        html.push_str(&crate::projects::panel(&state.chats, &folder.id));
     }
     for run in questions {
         let question = run.question.as_ref().unwrap();
