@@ -855,3 +855,47 @@ fn chat_bridge_envelopes_are_pinned() {
         (json!(false), 2)
     );
 }
+
+/// The bridge validates a model with the selection grammar itself, so every
+/// form reaches the server and nothing else does.
+#[test]
+fn named_accounts_and_pools_pass_the_bridge_and_reach_the_parser() {
+    let mut remote = Local::new();
+    remote.state.runtime.accounts =
+        crate::accounts::Store::parse(br#"{"accounts":[{"backend":"codex","name":"second","kind":"subscription"}]}"#)
+            .unwrap();
+    let text = run(&mut remote, "chat_create", &json!({"model":"codex+second:gpt-6.1-sol"})).unwrap();
+    assert!(text.contains("Future turns use codex+second:gpt-6.1-sol"), "{text}");
+    let id = created(&text);
+    let pooled = run(
+        &mut remote,
+        "chat_model",
+        &json!({"id":id,"model":"codex+*:gpt-6.1-sol"}),
+    )
+    .unwrap();
+    assert!(pooled.contains("Future turns use codex+*:gpt-6.1-sol"), "{pooled}");
+    // An unknown account is the server's refusal, listing the accounts there are.
+    let missing = run(
+        &mut remote,
+        "chat_model",
+        &json!({"id":id,"model":"codex+nope:gpt-6.1-sol"}),
+    )
+    .unwrap_err();
+    assert!(
+        missing.to_string().contains("Accounts of codex: default, second."),
+        "{missing}"
+    );
+    // The grammar's own refusals stop at the bridge, before the server.
+    remote.calls.clear();
+    for model in [
+        "codex+a+b:m",
+        "codex: m",
+        "x\n/open /etc",
+        "codex:m@a@b",
+        "codex+Second:m",
+    ] {
+        let refused = run(&mut remote, "chat_model", &json!({"id":id,"model":model})).unwrap_err();
+        assert!(refused.to_string().starts_with("model: "), "{model}: {refused}");
+    }
+    assert!(remote.calls.is_empty(), "{:?}", remote.calls);
+}

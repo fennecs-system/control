@@ -180,7 +180,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Select the model for a chat's future turns (as /model does: BACKEND:MODEL, BACKEND+ACCOUNT:MODEL, or BACKEND+*:MODEL for any enabled account); active turns keep theirs. Omit model to list the configured choices.",
+      "description": "Select the model for a chat's future turns (as /model does: BACKEND:MODEL, BACKEND+ACCOUNT:MODEL, or BACKEND+*:MODEL for any enabled account); active turns keep theirs. Omit model to list the configured choices and one example per form with this node's backends and accounts.",
       "inputSchema": {
         "properties": {
           "id": {
