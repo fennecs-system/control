@@ -290,8 +290,8 @@ pub fn worker(
     let run = state
         .runtime
         .runs
-        .iter()
-        .find(|run| run.id == run_id && run.status == RunStatus::Running)
+        .get(run_id)
+        .filter(|run| run.status == RunStatus::Running)
         .ok_or("Run is not active")?;
     identity::authorize(&run.actor, run.action)?;
     if crate::delegation::is_judge(run) && canonical(name) == "control.knowledge.propose" {
@@ -307,7 +307,7 @@ pub fn worker(
     let source = Source {
         actor: run.actor.clone(),
         chat: run.chat_id.clone().ok_or("Run has no chat")?,
-        run: Some(run.id.clone()),
+        run: Some(run.id().as_str().to_owned()),
         attempt: Some(
             run.attempts
                 .last()

@@ -365,7 +365,7 @@ fn only_completed_same_chat_improvements_can_be_published() {
         ..Default::default()
     });
     let input = Input {
-        run_id: run.id.clone(),
+        run_id: run.id().as_str().to_owned(),
         title: "Fixture".into(),
         body: String::new(),
     };

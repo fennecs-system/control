@@ -124,8 +124,8 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
     let run = state
         .runtime
         .runs
-        .iter_mut()
-        .find(|r| r.id == run && r.status == RunStatus::Running)
+        .get_mut(run)
+        .filter(|r| r.status == RunStatus::Running)
         .ok_or_else(|| fail("Run is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
     if crate::delegation::pausing(run) {
@@ -200,7 +200,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, i
         crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image)?
     };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let owner_deadline = state.runtime.runs.iter().find(|r| r.id == run).and_then(|r| {
+    let owner_deadline = state.runtime.runs.get(run).and_then(|r| {
         r.attempts.last().and_then(|a| {
             crate::attempt_control::deadline(&state, r, a).map(|limit| a.started_unix.saturating_add(limit))
         })
@@ -539,8 +539,7 @@ fn live<'a>(state: &'a mut State, run: &str, job: &Job) -> Option<&'a mut Job> {
     state
         .runtime
         .runs
-        .iter_mut()
-        .find(|r| r.id == run)?
+        .get_mut(run)?
         .attempts
         .iter_mut()
         .find(|a| a.workspace_id.as_deref() == Some(&job.generation))?
@@ -740,8 +739,7 @@ fn quiesce_until(shared: &Arc<Mutex<State>>, run: &str, generation: &str, deadli
         let attempt = state
             .runtime
             .runs
-            .iter_mut()
-            .find(|r| r.id == run)
+            .get_mut(run)
             .and_then(|r| {
                 r.attempts
                     .iter_mut()

@@ -12,7 +12,7 @@ fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() 
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "original task", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Completed;
-    let origin = state.runtime.runs[0].id.clone();
+    let origin = state.runtime.runs[0].id().as_str().to_owned();
     let decide = |state: &mut State| {
         crate::approvals::resume(
             state,
@@ -43,7 +43,7 @@ fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() 
     }))
     .unwrap();
     let mut restored: State = serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
-    assert_eq!(restored.runtime.runs.last().unwrap().id, id);
+    assert_eq!(restored.runtime.runs.last().unwrap().id(), id);
     assert_eq!(
         restored.chats[0].messages.last().unwrap().run_id.as_deref(),
         Some(id.as_str())
@@ -246,7 +246,7 @@ fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
         let run = state.runtime.runs.last_mut().unwrap();
         run.status = RunStatus::named(status);
         let mut a = crate::usage::Attempt::new();
-        a.workspace_id = Some(format!("{}-attempt-1", run.id));
+        a.workspace_id = Some(format!("{}-attempt-1", run.id()));
         a.activity.push(crate::usage::Activity {
             id: "project-prepare".into(),
             kind: "workspace".into(),

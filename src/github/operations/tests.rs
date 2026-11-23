@@ -167,7 +167,7 @@ fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
         workspace_id: Some("generation".into()),
         ..Default::default()
     });
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let caller = Caller::Attempt {
         run: &id,
         generation: "generation",

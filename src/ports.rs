@@ -346,8 +346,8 @@ fn admit(
     let run = state
         .runtime
         .runs
-        .iter()
-        .find(|r| r.id == run_id && r.status == RunStatus::Running)
+        .get(run_id)
+        .filter(|r| r.status == RunStatus::Running)
         .ok_or_else(|| io::Error::other("Run is not active"))?;
     identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     if crate::delegation::is_judge(run)
@@ -475,9 +475,8 @@ fn admit(
             .iter()
             .position(|p| {
                 p.status == Status::Stopped
-                    && !state.runtime.runs.iter().any(|r| {
-                        r.id == p.origin_run
-                            && r.status == RunStatus::Running
+                    && !state.runtime.runs.get(&p.origin_run).is_some_and(|r| {
+                        r.status == RunStatus::Running
                             && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(&p.origin_attempt)
                     })
             })
@@ -541,10 +540,9 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let r = state
         .runtime
         .runs
-        .iter()
-        .find(|r| {
-            r.id == run
-                && r.status == RunStatus::Running
+        .get(run)
+        .filter(|r| {
+            r.status == RunStatus::Running
                 && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(generation)
         })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;
@@ -678,9 +676,8 @@ fn review(authority: PortAuthority<'_>, id: &str) -> io::Result<(Port, Service, 
     Ok((p.clone(), service(authority, p, now())?.binding_snapshot(), peer))
 }
 /// The chat whose agent asked: the requesting run's chat, else the owner.
-fn requester<'a>(runs: &'a [crate::runtime::Run], port: &'a Port) -> &'a str {
-    runs.iter()
-        .find(|run| run.id == port.origin_run)
+fn requester<'a>(runs: &'a crate::runtime::Runs, port: &'a Port) -> &'a str {
+    runs.get(&port.origin_run)
         .and_then(|run| run.chat_id.as_deref())
         .unwrap_or(&port.chat)
 }
@@ -962,7 +959,7 @@ pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> 
         .iter()
         .filter(|run| run.chat_id.as_deref() == Some(id) && run.actor == chat.actor)
     {
-        runs.insert(run.id.as_str());
+        runs.insert(run.id().as_str());
         if let Ok((_, children)) = crate::delegated_results::scope(state, run) {
             runs.extend(children);
         }
@@ -971,8 +968,7 @@ pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> 
         state
             .runtime
             .runs
-            .iter()
-            .find(|run| run.id == port.origin_run)
+            .get(&port.origin_run)
             .and_then(|run| run.chat_id.as_deref())
     };
     let lineage = crate::chat::Lineage::of(&state.chats);

@@ -42,12 +42,12 @@ fn fixture() -> (State, String, String) {
     crate::chat::send(&mut state, &chat, "fixture", "test").unwrap();
     let run = &mut state.runtime.runs[0];
     run.status = RunStatus::Running;
-    let generation = format!("{}-attempt-1", run.id);
+    let generation = format!("{}-attempt-1", run.id());
     run.attempts.push(Attempt {
         workspace_id: Some(generation.clone()),
         ..Default::default()
     });
-    let id = run.id.clone();
+    let id = run.id().as_str().to_owned();
     (state, id, generation)
 }
 #[test]

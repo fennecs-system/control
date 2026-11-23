@@ -750,21 +750,14 @@ fn design_ask_in_a_named_chat_never_pauses_a_turn() {
         .iter()
         .find(|r| crate::design::asked(r))
         .unwrap()
-        .id
-        .clone();
+        .id()
+        .to_string();
     remote
         .state
         .runtime
         .action("/retry-run", &[("id".to_owned(), run_id.clone())].into());
     assert_eq!(
-        remote
-            .state
-            .runtime
-            .runs
-            .iter()
-            .find(|r| r.id == run_id)
-            .unwrap()
-            .status,
+        remote.state.runtime.runs.get(&run_id).unwrap().status,
         RunStatus::Cancelled
     );
 }
@@ -940,8 +933,7 @@ fn a_held_turn_says_why_in_chat_read_and_chats_list() {
         "{listed}"
     );
     // One notice for the chat and account, however many turns it holds.
-    let mut second = remote.state.runtime.runs[0].clone();
-    second.id = "run-held-second".into();
+    let second = remote.state.runtime.runs[0].clone().with_id("run-held-second");
     remote.state.runtime.runs.push(second);
     let notices = crate::providers::accounts::held_notices(&remote.state.runtime);
     assert_eq!(notices.len(), 2, "{notices:?}");
@@ -950,8 +942,7 @@ fn a_held_turn_says_why_in_chat_read_and_chats_list() {
     remote.state.runtime.runs[0].emitted = Some(RunStatus::Queued);
     remote.state.runtime.runs[1].emitted = Some(RunStatus::Queued);
     assert!(crate::providers::accounts::held_notices(&remote.state.runtime).is_empty());
-    let mut third = remote.state.runtime.runs[0].clone();
-    third.id = "run-held-third".into();
+    let mut third = remote.state.runtime.runs[0].clone().with_id("run-held-third");
     third.emitted = None;
     remote.state.runtime.runs.push(third);
     assert_eq!(

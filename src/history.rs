@@ -403,7 +403,7 @@ struct Text<'a> {
 /// Fills journal-backed run text back in after loading. Only in-memory text
 /// changes, never the saved form, so archived runs stay archived.
 pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
         let run = run.unchanged_mut();
         if let Some(at) = run
             .objective
@@ -469,7 +469,7 @@ pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived>
     let empty = Attempt::default();
     let last = run.attempts.last().filter(|a| a.journal.is_none()).unwrap_or(&empty);
     let line = serde_json::to_vec(&Finished {
-        run: &run.id,
+        run: run.id(),
         attempt: index,
         activity: &last.activity,
         objective: &run.objective,
@@ -522,7 +522,7 @@ pub(crate) fn recover(state: &crate::State) -> io::Result<()> {
     for chat in &state.chats {
         referenced.entry(path(Some(&chat.id))?).or_insert((Some(&chat.id), 0));
     }
-    for run in &state.runtime.runs {
+    for run in state.runtime.runs.iter() {
         let positions = run
             .attempts
             .iter()
@@ -599,7 +599,7 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
             }
         };
         let delivery = Delivery {
-            run: run.id.clone(),
+            run: run.id().as_str().to_owned(),
             source: run.source.clone(),
             chat: run.chat_id.clone(),
             actor: run.actor.clone(),
@@ -619,7 +619,7 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
         let run = &state.runtime.runs[index];
         if let Some(report) = notice {
             let delivery = Delivery {
-                run: run.id.clone(),
+                run: run.id().as_str().to_owned(),
                 source: run.source.clone(),
                 chat: run.chat_id.clone(),
                 actor: run.actor.clone(),

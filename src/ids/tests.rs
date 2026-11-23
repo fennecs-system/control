@@ -20,7 +20,7 @@ fn first_chats_and_runs_of_separate_states_differ() {
             state
                 .runtime
                 .enqueue("objective".into(), crate::runtime::RunKind::Task, "test");
-            [chat, state.runtime.runs[0].id.clone()]
+            [chat, state.runtime.runs[0].id().as_str().to_owned()]
         })
         .collect();
     let unique: std::collections::HashSet<_> = ids.iter().collect();

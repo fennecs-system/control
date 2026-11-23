@@ -80,7 +80,7 @@ pub fn definition() -> Value {
 }
 
 fn root(run: &runtime::Run) -> &str {
-    run.persona.as_ref().map_or(run.id.as_str(), |p| p.root.as_str())
+    run.persona.as_ref().map_or(run.id().as_str(), |p| p.root.as_str())
 }
 fn next(run: &runtime::Run) -> Option<&str> {
     if run.status != RunStatus::Continued {
@@ -129,36 +129,31 @@ pub(crate) fn scope<'a>(
         .max(state.runtime.execution.max_agents_per_root.saturating_mul(4))
         .min(262144);
     let mut family = HashSet::new();
-    let actual = state
-        .runtime
-        .runs
-        .iter()
-        .find(|r| r.id == caller.id)
-        .ok_or("Run is not active.")?;
-    family.insert(actual.id.as_str());
+    let actual = state.runtime.runs.get(caller.id()).ok_or("Run is not active.")?;
+    family.insert(actual.id().as_str());
     // Later user turns in the same conversation may inspect its recorded spawn
     // receipts. Merely sharing a root/actor or guessing another chat is insufficient.
-    for previous in state.runtime.runs.iter().take_while(|r| r.id != actual.id) {
+    for previous in state.runtime.runs.iter().take_while(|r| r.id() != actual.id()) {
         if !previous.spawns.is_empty()
             && previous.chat_id == actual.chat_id
             && previous.actor == actual.actor
             && !(actual.action == identity::Action::Task && previous.action == identity::Action::Improve)
         {
-            family.insert(previous.id.as_str());
+            family.insert(previous.id().as_str());
         }
     }
     loop {
         let before = family.len();
-        for run in &state.runtime.runs {
+        for run in state.runtime.runs.iter() {
             if next(run).is_some_and(|id| family.contains(id)) {
                 let target = state
                     .runtime
                     .runs
                     .iter()
-                    .find(|r| Some(r.id.as_str()) == next(run))
+                    .find(|r| Some(r.id().as_str()) == next(run))
                     .unwrap();
                 if parent_continuation(run, target) && same_scope(caller, run) {
-                    family.insert(run.id.as_str());
+                    family.insert(run.id().as_str());
                 }
             }
         }
@@ -179,12 +174,7 @@ pub(crate) fn scope<'a>(
         if visited.len() > graph_limit {
             return Err("Delegation lineage exceeds the inspection limit.");
         }
-        let from = state
-            .runtime
-            .runs
-            .iter()
-            .find(|r| r.id == id)
-            .ok_or("Delegation lineage is unavailable.")?;
+        let from = state.runtime.runs.get(id).ok_or("Delegation lineage is unavailable.")?;
         for child in crate::spawning::children(state, from)? {
             if !same_scope(from, child) {
                 return Err("Spawned child scope mismatch.");
@@ -194,8 +184,8 @@ pub(crate) fn scope<'a>(
             if delegation::is_judge(child) {
                 continue;
             }
-            descendants.insert(child.id.as_str());
-            queue.push_back(child.id.as_str());
+            descendants.insert(child.id().as_str());
+            queue.push_back(child.id().as_str());
         }
         if let Some((delegated, child)) = from
             .delegation
@@ -211,12 +201,11 @@ pub(crate) fn scope<'a>(
             let child = state
                 .runtime
                 .runs
-                .iter()
-                .find(|r| r.id == child)
+                .get(child)
                 .ok_or("Delegation lineage is unavailable.")?;
             if !same_scope(from, child)
                 || !child.persona.as_ref().is_some_and(|p| {
-                    p.parent.as_deref() == Some(from.id.as_str())
+                    p.parent.as_deref() == Some(from.id().as_str())
                         && p.root == root(from)
                         && p.role == delegated.input.role
                         && p.depth <= delegation::MAX_DEPTH
@@ -225,8 +214,8 @@ pub(crate) fn scope<'a>(
             {
                 return Err("Delegated child provenance mismatch.");
             }
-            descendants.insert(child.id.as_str());
-            queue.push_back(child.id.as_str());
+            descendants.insert(child.id().as_str());
+            queue.push_back(child.id().as_str());
         }
         if descendants.contains(id)
             && let Some(to) = next(from)
@@ -234,14 +223,13 @@ pub(crate) fn scope<'a>(
             let to = state
                 .runtime
                 .runs
-                .iter()
-                .find(|r| r.id == to)
+                .get(to)
                 .ok_or("Delegated continuation is unavailable.")?;
             if !continuation(from, to) || !same_scope(from, to) {
                 return Err("Delegated continuation provenance mismatch.");
             }
-            descendants.insert(to.id.as_str());
-            queue.push_back(to.id.as_str());
+            descendants.insert(to.id().as_str());
+            queue.push_back(to.id().as_str());
         }
     }
     Ok((family, descendants))
@@ -260,8 +248,8 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
     let caller = state
         .runtime
         .runs
-        .iter()
-        .find(|r| r.id == run_id && r.status == RunStatus::Running)
+        .get(run_id)
+        .filter(|r| r.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     identity::authorize(&caller.actor, caller.action)?;
     if !state
@@ -275,23 +263,22 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
     if !descendants.contains(input.child.as_str()) {
         return Err("Result is not from this parent's delegated descendants.");
     }
-    let mut child = state.runtime.runs.iter().find(|r| r.id == input.child).unwrap();
+    let mut child = state.runtime.runs.get(&input.child).unwrap();
     let mut seen = HashSet::new();
     while let Some(id) = next(child) {
-        if !seen.insert(child.id.as_str()) || !descendants.contains(id) {
+        if !seen.insert(child.id().as_str()) || !descendants.contains(id) {
             return Err("Invalid delegated continuation chain.");
         }
         child = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == id)
+            .get(id)
             .ok_or("Delegated continuation is unavailable.")?;
     }
     if matches!(input.section, Section::Status) {
         return Ok(Plan {
             child: input.child.clone(),
-            run: child.id.clone(),
+            run: child.id().as_str().to_owned(),
             target: child.target.clone(),
             status: child.status.clone(),
             artifact: None,
@@ -315,7 +302,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
         .last()
         .filter(|a| a.status == crate::usage::AttemptStatus::Completed)
         .ok_or("Completed child attempt is unavailable.")?;
-    let generation = format!("{}-attempt-{}", child.id, child.attempts.len());
+    let generation = format!("{}-attempt-{}", child.id(), child.attempts.len());
     let artifact = attempt
         .artifact
         .as_ref()
@@ -333,19 +320,19 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
                 .runtime
                 .runs
                 .iter()
-                .filter(|r| family.contains(r.id.as_str()) || descendants.contains(r.id.as_str()))
+                .filter(|r| family.contains(r.id().as_str()) || descendants.contains(r.id().as_str()))
                 .any(|r| {
                     r.attempts.iter().enumerate().any(|(i, a)| {
                         a.artifact.as_ref() == Some(*id)
                             && a.workspace_id.as_ref() == Some(*id)
-                            && **id == format!("{}-attempt-{}", r.id, i + 1)
+                            && **id == format!("{}-attempt-{}", r.id(), i + 1)
                     })
                 })
         })
         .cloned();
     Ok(Plan {
         child: input.child.clone(),
-        run: child.id.clone(),
+        run: child.id().as_str().to_owned(),
         target: child.target.clone(),
         status: child.status.clone(),
         artifact,

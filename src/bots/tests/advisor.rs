@@ -7,7 +7,7 @@ use crate::runtime::RunStatus;
 /// Appends one executed member turn with `status`.
 pub(super) fn turn(state: &mut State, chat: &str, status: &str) -> usize {
     let mut run = state.runtime.runs[0].clone();
-    run.id = format!("turn-{}", state.runtime.runs.len());
+    run = run.with_id(format!("turn-{}", state.runtime.runs.len()));
     run.chat_id = Some(chat.into());
     run.status = RunStatus::named(status);
     run.persona = None;
@@ -27,7 +27,7 @@ pub(super) fn opt_in(state: &mut State, root: &str, on: bool) {
 /// A completed read-only judge child of `root`, before it runs as a bot.
 fn judge(state: &mut State, root: &str) -> String {
     let chat = spawned(state, root, "Advisor");
-    let lead = state.runtime.runs[0].id.clone();
+    let lead = state.runtime.runs[0].id().as_str().to_owned();
     state.runtime.runs.last_mut().unwrap().persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
         root: lead,
@@ -252,9 +252,8 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
 
     // The advisor's note is retained evidence (a run without an attempt)...
     let cursor = state.chats.iter().find(|chat| chat.id == root).unwrap().messages.len() as u64 + 1;
-    let mut note = state.runtime.runs[0].clone();
-    (note.id, note.chat_id, note.status, note.kind, note.attempts) = (
-        "note-1".into(),
+    let mut note = state.runtime.runs[0].clone().with_id("note-1");
+    (note.chat_id, note.status, note.kind, note.attempts) = (
         Some(root.clone()),
         RunStatus::Completed,
         RunKind::AgentMessage,
@@ -301,8 +300,8 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
         }]
     ));
     assert!(woken[0].objective.contains("an observer's note"));
-    let id = woken[0].id.clone();
-    let woken = state.runtime.runs.iter_mut().find(|run| run.id == id).unwrap();
+    let id = woken[0].id().as_str().to_owned();
+    let woken = state.runtime.runs.get_mut(&id).unwrap();
     woken.status = RunStatus::Completed;
     woken.attempts = vec![crate::usage::Attempt::default()];
     reconcile_at(&mut state, 80_000, ok).unwrap();
@@ -510,7 +509,7 @@ fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     let judge = spawned(&mut state, &lead, "Advisor");
     let persona = crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
-        root: state.runtime.runs[0].id.clone(),
+        root: state.runtime.runs[0].id().as_str().to_owned(),
         depth: 1,
         parent: None,
         bundle: None,
@@ -1293,13 +1292,9 @@ fn a_member_idle_with_a_working_claim_while_peers_work_is_one_fact_per_idle_spel
         .iter()
         .rfind(|run| run.chat_id.as_deref() == Some(idler.as_str()))
         .unwrap()
-        .clone();
-    (message.id, message.status, message.kind, message.attempts) = (
-        "peer-message-1".into(),
-        RunStatus::Completed,
-        RunKind::AgentMessage,
-        Vec::new(),
-    );
+        .clone()
+        .with_id("peer-message-1");
+    (message.status, message.kind, message.attempts) = (RunStatus::Completed, RunKind::AgentMessage, Vec::new());
     state.runtime.runs.push(message);
     work(&mut state, 1);
     reconcile_at(&mut state, 3, ok).unwrap();

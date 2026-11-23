@@ -41,8 +41,8 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
     let origin = state
         .runtime
         .runs
-        .iter()
-        .find(|run| run.id == port.origin_run && run.actor == port.actor)?;
+        .get(&port.origin_run)
+        .filter(|run| run.actor == port.actor)?;
     // A turn cut off before its handoff (time limit, step cap, provider
     // failure) left a host checkpoint; its request still belongs to the chat.
     let cut_off = crate::attempt_control::cut_off(origin);
@@ -57,15 +57,15 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
     let root = origin
         .persona
         .as_ref()
-        .map_or(origin.id.as_str(), |persona| persona.root.as_str());
+        .map_or(origin.id().as_str(), |persona| persona.root.as_str());
     let root = state
         .runtime
         .runs
-        .iter()
-        .find(|run| run.id == root && run.actor == origin.actor && run.action == origin.action)?;
+        .get(root)
+        .filter(|run| run.actor == origin.actor && run.action == origin.action)?;
     // Any agent in the root's conversation tree acts for it, however deep and
     // whichever of the root chat's turns spawned it.
-    let related = origin.id == root.id
+    let related = origin.id() == root.id()
         || origin
             .chat_id
             .as_deref()
@@ -99,8 +99,8 @@ fn obsolete(state: &State, port: &Port, time: u64) -> bool {
     let origin = state
         .runtime
         .runs
-        .iter()
-        .find(|run| run.id == port.origin_run && run.actor == port.actor);
+        .get(&port.origin_run)
+        .filter(|run| run.actor == port.actor);
     origin.is_some_and(|origin| crate::chat::cancelled_after(state, origin))
         || crate::chat::cancelled_after(state, root)
 }
@@ -146,7 +146,7 @@ fn advance_with_wake(
             for port in state
                 .ports
                 .iter()
-                .filter(|port| target(state, port).is_some_and(|candidate| candidate.id == root.id))
+                .filter(|port| target(state, port).is_some_and(|candidate| candidate.id() == root.id()))
             {
                 pending |= port.status == Status::Pending;
                 denied |= port
@@ -162,7 +162,7 @@ fn advance_with_wake(
     let Some(chat_id) = root.chat_id.clone() else {
         return Ok(());
     };
-    let root_id = root.id.clone();
+    let root_id = root.id().as_str().to_owned();
     let actor = root.actor.clone();
     let indices = state
         .ports
@@ -170,14 +170,14 @@ fn advance_with_wake(
         .enumerate()
         .filter(|(_, port)| {
             port.decision.as_ref().is_some_and(|decision| !decision.acknowledged)
-                && target(state, port).is_some_and(|run| run.id == root_id)
+                && target(state, port).is_some_and(|run| run.id() == root_id)
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let pending = state
         .ports
         .iter()
-        .any(|port| port.status == Status::Pending && target(state, port).is_some_and(|run| run.id == root_id));
+        .any(|port| port.status == Status::Pending && target(state, port).is_some_and(|run| run.id() == root_id));
     if pending
         && indices
             .iter()
@@ -198,7 +198,12 @@ fn advance_with_wake(
         .map(|index| state.ports[*index].origin_run.clone())
         .collect::<Vec<_>>();
     let mut grants = Vec::new();
-    for origin in state.runtime.runs.iter().filter(|run| origins.contains(&run.id)) {
+    for origin in state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| origins.iter().any(|origin| run.id() == origin))
+    {
         for grant in crate::services::grants(crate::services::ServiceAuthority::of(state), origin) {
             if !grants.contains(&grant) {
                 grants.push(grant);

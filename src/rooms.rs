@@ -263,8 +263,8 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == run && r.status == RunStatus::Running)
+            .get(run)
+            .filter(|r| r.status == RunStatus::Running)
             .ok_or("Run is not active.")?;
         crate::identity::authorize(&run.actor, run.action)?;
         let chat_index = state
@@ -342,7 +342,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                         value
                     }
                     "control_room_watch" | "control_room_notifications" | "control_room_ack" => {
-                        let run = run.id.clone();
+                        let run = run.id().as_str().to_owned();
                         return notifications::call(state, &run, name, &req["params"]["arguments"])
                             .map(|value| control_mcp::text(&value.to_string()))
                             .map_err(Into::into);
@@ -369,10 +369,10 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                             .filter(|s| s.len() <= 100 && s.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
                             .ok_or("Invalid request nonce.")?;
                         let (key, text, chat, run) = (
-                            format!("{}:{nonce}", run.id),
+                            format!("{}:{nonce}", run.id()),
                             text.to_owned(),
                             chat.id.clone(),
-                            run.id.clone(),
+                            run.id().as_str().to_owned(),
                         );
                         if !linked {
                             state.chats[chat_index].room = Some(room.clone());
@@ -417,7 +417,7 @@ pub fn checkpoint(
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Value {
     let post_count = state.collective.posts.len();
-    let Some(run_index) = state.runtime.runs.iter().position(|run| run.id == run_id) else {
+    let Some(run_index) = state.runtime.runs.position(run_id) else {
         return worker_rpc(state, run_id, envelope);
     };
     let chat = state.runtime.runs[run_index].chat_id.as_deref();

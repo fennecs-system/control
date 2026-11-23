@@ -19,7 +19,7 @@ use std::collections::HashMap;
 /// A chat's entries, with every answering run indexed once.
 pub(crate) struct Conversation<'a> {
     session: &'a Session,
-    runs: HashMap<&'a str, Option<&'a Run>>,
+    runs: HashMap<&'a str, &'a Run>,
     task_view: bool,
 }
 
@@ -121,13 +121,13 @@ impl<'a> Entry<'a> {
             use control_context::agent_policy::PromptRole;
             if let Some(run) = self.run.filter(|run| run.kind.prompt_role() == PromptRole::Wake) {
                 return if run.status.is_resumable() {
-                    format!("Failure from {}:\n{}\n", run.id, self.response().1)
+                    format!("Failure from {}:\n{}\n", run.id(), self.response().1)
                 } else if run.status == RunStatus::Completed {
                     run.attempts
                         .last()
                         .and_then(|a| a.task_progress())
                         .filter(|progress| !progress.trim().is_empty())
-                        .map(|progress| format!("Task progress from {}:\n{progress}\n", run.id))
+                        .map(|progress| format!("Task progress from {}:\n{progress}\n", run.id()))
                         .unwrap_or_default()
                 } else {
                     String::new()
@@ -186,30 +186,15 @@ impl<'a> Conversation<'a> {
         Carry { instructions, previous }
     }
     pub fn of(state: &'a State, session: &'a Session) -> Self {
-        let mut wanted: HashMap<&str, Option<&Run>> = session
+        let runs = session
             .messages
             .iter()
             .filter_map(|m| m.run_id.as_deref())
-            .map(|id| (id, None))
+            .filter_map(|id| state.runtime.runs.get(id).map(|run| (id, run)))
             .collect();
-        let mut remaining = wanted.len();
-        for run in &state.runtime.runs {
-            if remaining == 0 {
-                break;
-            }
-            // First match keeps the transcript's long-standing lookup semantics.
-            if let Some(slot) = wanted.get_mut(run.id.as_str()).filter(|slot| slot.is_none()) {
-                *slot = Some(run);
-                remaining -= 1;
-            }
-        }
-        if remaining > 0 {
-            wanted.retain(|_, run| run.is_some());
-            wanted.shrink_to_fit();
-        }
         Self {
             session,
-            runs: wanted,
+            runs,
             task_view: false,
         }
     }
@@ -226,17 +211,14 @@ impl<'a> Conversation<'a> {
         let message = self.session.messages.get(index)?;
         Some(Entry {
             message,
-            run: message
-                .run_id
-                .as_deref()
-                .and_then(|id| self.runs.get(id).copied().flatten()),
+            run: message.run_id.as_deref().and_then(|id| self.runs.get(id).copied()),
             task_view: self.task_view,
         })
     }
     /// Where the message answered by `run` sits.
     /// The run answering one of this chat's messages.
     pub fn run(&self, id: &str) -> Option<&'a Run> {
-        self.runs.get(id).copied().flatten()
+        self.runs.get(id).copied()
     }
     pub fn position(&self, run: &str) -> Option<usize> {
         self.session

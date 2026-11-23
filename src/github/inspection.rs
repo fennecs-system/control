@@ -90,8 +90,8 @@ pub(super) fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
             let run = state
                 .runtime
                 .runs
-                .iter()
-                .find(|r| r.id == run && r.status == RunStatus::Running)
+                .get(run)
+                .filter(|r| r.status == RunStatus::Running)
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;
             if run.action != Action::Improve
                 || crate::delegation::is_judge(run)

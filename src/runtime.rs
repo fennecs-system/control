@@ -9,11 +9,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-fn hot_runs<S: serde::Serializer>(runs: &[Run], serializer: S) -> Result<S::Ok, S::Error> {
+fn hot_runs<S: serde::Serializer>(runs: &Runs, serializer: S) -> Result<S::Ok, S::Error> {
     if crate::history::is_persisting() {
         serializer.collect_seq(runs.iter().filter(|run| !run.archived()))
     } else {
-        serializer.collect_seq(runs)
+        serializer.collect_seq(runs.iter())
     }
 }
 #[derive(Default, Serialize, Deserialize)]
@@ -43,12 +43,13 @@ pub struct Runtime {
     /// Every run, in creation order. Saves leave out runs kept in archive
     /// blocks (`storage::archive`); they are loaded back at startup.
     #[serde(serialize_with = "hot_runs")]
-    pub runs: Vec<Run>,
+    pub runs: Runs,
     pub notice: String,
     // Why dispatch is paused, shown on queued chat messages; rebuilt by the next reconcile.
     #[serde(skip)]
     pub paused: Option<String>,
 }
+pub(crate) use crate::application::runs::Runs;
 use crate::application::runs::Submission;
 pub use crate::application::runs::{Run, RunStatus};
 
@@ -64,18 +65,18 @@ impl RunStatusCheckpoint {
             .runs
             .iter()
             .filter(|r| matches(r))
-            .map(|r| r.id.as_str())
+            .map(|r| r.id().as_str())
             .collect::<std::collections::HashSet<_>>();
         loop {
             let before = selected.len();
-            for run in &runtime.runs {
+            for run in runtime.runs.iter() {
                 if run
                     .persona
                     .as_ref()
                     .and_then(|p| p.parent.as_deref())
                     .is_some_and(|parent| selected.contains(parent))
                 {
-                    selected.insert(run.id.as_str());
+                    selected.insert(run.id().as_str());
                 }
             }
             if before == selected.len() {
@@ -86,10 +87,10 @@ impl RunStatusCheckpoint {
             runs: runtime
                 .runs
                 .iter()
-                .filter(|run| run.status.is_active() && selected.contains(run.id.as_str()))
+                .filter(|run| run.status.is_active() && selected.contains(run.id().as_str()))
                 .map(|run| {
                     (
-                        run.id.clone(),
+                        run.id().as_str().to_owned(),
                         run.status.clone(),
                         run.result.to_string(),
                         run.question.clone(),
@@ -101,7 +102,7 @@ impl RunStatusCheckpoint {
     }
     pub(crate) fn restore(self, runtime: &mut Runtime) {
         for (id, status, result, question) in self.runs {
-            if let Some(run) = runtime.runs.iter_mut().find(|run| run.id == id) {
+            if let Some(run) = runtime.runs.get_mut(&id) {
                 run.status = status;
                 *run.result = result;
                 run.question = question;
@@ -231,8 +232,8 @@ impl Runtime {
                 .saturating_add(1);
             if let Some(run) = self
                 .runs
-                .iter_mut()
-                .find(|r| r.id == id && r.status.is_resumable() && !crate::design::asked(r))
+                .get_mut(&id)
+                .filter(|r| r.status.is_resumable() && !crate::design::asked(r))
             {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
@@ -326,7 +327,7 @@ fn run_record(run: &Run) -> String {
         escape(run.kind.as_str()),
         escape(&run.source),
         escape(&run.objective),
-        escape(&run.id),
+        escape(run.id()),
         escape(run.target.backend.label()),
         run.target
             .shown_model()
@@ -360,10 +361,10 @@ fn run_record(run: &Run) -> String {
         html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(chat)));
     }
     if run.status.is_proceeding() {
-        html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));
+        html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(run.id())));
     }
     if run.status.is_resumable() {
-        html.push_str(&format!("<form class='decision-form' method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&run.id)));
+        html.push_str(&format!("<form class='decision-form' method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(run.id())));
     }
     html.push_str("</article>");
     html

@@ -11,10 +11,14 @@ fn cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
         .filter_map(|cookie| cookie.trim().split_once('='))
         .find_map(|(key, value)| (key == name).then_some(value))
 }
+/// Whether the browser remembers the DMs picker as open.
+fn picker_open(header: &str) -> bool {
+    cookie(header, "control_conversations") == Some("open")
+}
 /// Render the remembered conversations panel state so it never flashes after load.
-fn session_page(page: &str, header: &str) -> String {
+fn session_page(page: &str, picker_open: bool) -> String {
     let page = page.replace("<body>", "<body class='session-view'>");
-    if cookie(header, "control_conversations") == Some("open") {
+    if picker_open {
         page.replacen(
             "<details class='conversation-toggle'>",
             "<details class='conversation-toggle' open>",
@@ -26,7 +30,7 @@ fn session_page(page: &str, header: &str) -> String {
 }
 /// A chat page; a rejected submission shows its escaped error and keeps the draft.
 fn chat_page(state: &State, lens: &str, id: &str, error: &str, draft: &str, header: &str) -> String {
-    let page = session_page(&crate::render(state, "session", lens, id), header);
+    let page = session_page(&crate::render(state, "session", lens, id), picker_open(header));
     if error.is_empty() {
         page
     } else {
@@ -65,7 +69,7 @@ fn send_message(
         })
     });
     if fields.get("message").is_some_and(|message| message.trim() == "/open") {
-        match chat::detail(state, id) {
+        match chat::viewable(&state.chats, id) {
             Ok(_) => {
                 let _ = control_http::respond(
                     stream,
@@ -247,6 +251,107 @@ impl control_mcp::Tools for Operator<'_> {
         }
     }
 }
+
+/// The chat pages that only read state: `GET /dm/{id}`, its transcript and
+/// its DM picker. The server copies their view under the state lock and
+/// renders it after the lock is released (`crate::Read`).
+pub(crate) enum ChatPage {
+    Page { id: String, picker_open: bool },
+    Transcript(String),
+    Conversations(String),
+}
+impl ChatPage {
+    pub(crate) fn of(method: &str, path: &str, header: &str) -> Option<Self> {
+        let route = path.strip_prefix("/dm/").filter(|_| method == "GET")?;
+        let (id, operation) = route.split_once('/').unwrap_or((route, ""));
+        let id = Some(id).filter(|id| chat::valid_id(id))?.to_owned();
+        match operation {
+            "" => Some(Self::Page {
+                id,
+                picker_open: picker_open(header),
+            }),
+            "transcript" => Some(Self::Transcript(id)),
+            "conversations" => Some(Self::Conversations(id)),
+            _ => None,
+        }
+    }
+}
+pub(crate) enum ChatView {
+    Page {
+        id: String,
+        picker_open: bool,
+        page: Result<chat::Page, Absent>,
+    },
+    Transcript(Result<chat::Transcript, &'static str>),
+    Conversations(Result<crate::navigation::Picker, &'static str>),
+}
+/// Why a DM page is not shown.
+pub(crate) enum Absent {
+    /// A Discord DM whose first message has not arrived yet.
+    Waiting,
+    Refused(&'static str),
+}
+pub(crate) const CHAT_PAGES: crate::Read<ChatPage, ChatView> = crate::Read {
+    view: |state, page| match page {
+        ChatPage::Page { id, picker_open } => ChatView::Page {
+            page: chat::Page::of(&state.chats, &state.scores, &state.lens_library, &id).map_err(|message| {
+                if chat::discord_actor(&id)
+                    .is_some_and(|actor| crate::identity::authorize(&actor, crate::identity::Action::Task).is_ok())
+                {
+                    Absent::Waiting
+                } else {
+                    Absent::Refused(message)
+                }
+            }),
+            id,
+            picker_open,
+        },
+        ChatPage::Transcript(id) => ChatView::Transcript(chat::transcript(state, &id)),
+        ChatPage::Conversations(id) => ChatView::Conversations(
+            chat::viewable(&state.chats, &id).map(|_| crate::navigation::Picker::of(&state.chats, &id)),
+        ),
+    },
+    render: |view| {
+        let embedded = |status, mime, body: String| crate::Reply {
+            status,
+            mime,
+            body,
+            extra: String::new(),
+            policy: control_http::Policy::Embedded,
+        };
+        let html = |result: Result<String, &'static str>| match result {
+            Ok(html) => embedded("200 OK", "text/html; charset=utf-8", html),
+            Err(message) => embedded("404 Not Found", "text/plain", message.to_owned()),
+        };
+        match view {
+            ChatView::Page {
+                id,
+                picker_open,
+                page: Ok(page),
+            } => crate::Reply {
+                status: "200 OK",
+                mime: "text/html; charset=utf-8",
+                body: crate::web_assets::with_client(&session_page(
+                    &crate::shell("session", &page.render()),
+                    picker_open,
+                )),
+                extra: format!("Set-Cookie: control_recent_chat={id}; Path=/; HttpOnly; SameSite=Strict\r\n"),
+                policy: control_http::Policy::Chat,
+            },
+            ChatView::Page {
+                page: Err(Absent::Waiting),
+                ..
+            } => embedded("202 Accepted", "text/html; charset=utf-8", "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='2'><title>Control / DM</title></head><body><p>Waiting for the Discord message…</p></body></html>".to_owned()),
+            ChatView::Page {
+                page: Err(Absent::Refused(message)),
+                ..
+            } => embedded("404 Not Found", "text/plain", message.to_owned()),
+            ChatView::Transcript(transcript) => html(transcript.map(|transcript| transcript.render())),
+            ChatView::Conversations(picker) => html(picker.map(|picker| picker.render())),
+        }
+    },
+};
+
 /// The operator MCP: `/mcp` over HTTP and the chat bridge's in-process calls.
 pub fn rpc(state: &mut State, request: &Value) -> Value {
     control_mcp::serve(&OPERATOR, request, &mut Operator(state))
@@ -327,7 +432,7 @@ pub fn handle(
         let query = crate::fields(query);
         if !query.contains_key("new") && !query.contains_key("discuss") && !query.contains_key("improve") {
             let recent = cookie(header, "control_recent_chat").filter(|id| chat::valid_id(id));
-            if let Some(id) = recent.filter(|id| chat::detail(state, id).is_ok()) {
+            if let Some(id) = recent.filter(|id| chat::viewable(&state.chats, id).is_ok()) {
                 let _ = control_http::respond(
                     stream,
                     "303 See Other",
@@ -348,7 +453,7 @@ pub fn handle(
         respond_chat(
             stream,
             "200 OK",
-            &session_page(&crate::shell("session-list", &html), header),
+            &session_page(&crate::shell("session-list", &html), picker_open(header)),
             "",
         );
         return true;
@@ -398,7 +503,7 @@ pub fn handle(
                 respond_chat(
                     stream,
                     "400 Bad Request",
-                    &session_page(&crate::shell("session-list", &html), header),
+                    &session_page(&crate::shell("session-list", &html), picker_open(header)),
                     "",
                 );
             }
@@ -408,6 +513,12 @@ pub fn handle(
     let Some(route) = path.strip_prefix("/dm/") else {
         return false;
     };
+    // The server serves these before taking the lock (`crate::read_response`);
+    // a caller already holding the state, such as a test, gets the same bytes.
+    if let Some(page) = ChatPage::of(method, path, header) {
+        let _ = CHAT_PAGES.reply(state, page).write(stream);
+        return true;
+    }
     let (id, operation) = route.split_once('/').unwrap_or((route, ""));
     if !chat::valid_id(id) {
         let _ = control_http::respond(
@@ -447,31 +558,6 @@ pub fn handle(
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
         send_message(stream, state, id, lens, header, &fields, storage::save);
-    } else if method == "GET" && operation == "conversations" {
-        let allowed = state
-            .chats
-            .iter()
-            .find(|chat| chat.id == id)
-            .ok_or("Chat not found.")
-            .and_then(|chat| crate::identity::authorize(&chat.actor, crate::identity::Action::Task).map(|_| ()));
-        let _ = match allowed {
-            Ok(_) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                crate::navigation::conversations(state, id).as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(message) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                message.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
     } else if method == "GET" && operation == "artifacts" {
         let _ = match crate::artifacts::render(state, id, &crate::fields(query)) {
             Ok(html) => control_http::respond(
@@ -529,12 +615,8 @@ pub fn handle(
                 control_http::Policy::Embedded,
             ),
         };
-    } else if method == "GET" && matches!(operation, "transcript" | "requests") {
-        let _ = match if operation == "requests" {
-            chat::requests(state, id)
-        } else {
-            chat::transcript(state, id)
-        } {
+    } else if method == "GET" && operation == "requests" {
+        let _ = match chat::requests(state, id) {
             Ok(html) => control_http::respond(
                 stream,
                 "200 OK",
@@ -552,31 +634,6 @@ pub fn handle(
                 control_http::Policy::Embedded,
             ),
         };
-    } else if method == "GET" && operation.is_empty() {
-        match chat::detail(state, id) {
-            Ok(_) => respond_chat(
-                stream,
-                "200 OK",
-                &chat_page(state, lens, id, "", "", header),
-                &format!("Set-Cookie: control_recent_chat={id}; Path=/; HttpOnly; SameSite=Strict\r\n"),
-            ),
-            Err(_)
-                if chat::discord_actor(id)
-                    .is_some_and(|actor| crate::identity::authorize(&actor, crate::identity::Action::Task).is_ok()) =>
-            {
-                let _ = control_http::respond(stream, "202 Accepted", "text/html; charset=utf-8", "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='2'><title>Control / DM</title></head><body><p>Waiting for the Discord message…</p></body></html>".as_bytes(), "", control_http::Policy::Embedded);
-            }
-            Err(message) => {
-                let _ = control_http::respond(
-                    stream,
-                    "404 Not Found",
-                    "text/plain",
-                    message.as_bytes(),
-                    "",
-                    control_http::Policy::Embedded,
-                );
-            }
-        }
     } else {
         let _ = control_http::respond(
             stream,

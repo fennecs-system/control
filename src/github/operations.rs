@@ -77,8 +77,7 @@ fn authorize_write(state: &State, caller: Caller<'_>) -> io::Result<()> {
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == run)
+            .get(run)
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;
         if run
             .attempts

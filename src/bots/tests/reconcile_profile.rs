@@ -16,7 +16,7 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
     for turn in 0..runs {
         for (index, chat) in helpers.iter().enumerate() {
             let mut run = template.clone();
-            run.id = format!("bench-{index}-{turn}");
+            run = run.with_id(format!("bench-{index}-{turn}"));
             run.chat_id = Some(chat.clone());
             run.status = if (index + turn) % 20 == 0 {
                 RunStatus::Failed
@@ -30,7 +30,7 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
     // Latest turns complete so claims stay live rather than abandoned.
     for chat in &helpers {
         let mut run = template.clone();
-        run.id = format!("bench-latest-{chat}");
+        run = run.with_id(format!("bench-latest-{chat}"));
         run.chat_id = Some(chat.clone());
         state.runtime.runs.push(run);
     }

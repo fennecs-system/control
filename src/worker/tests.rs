@@ -228,7 +228,7 @@ fn unfinished_codex_tool_prevents_success_without_publishing_or_retrying() {
     state.chats[0].workspace = Some("previous-output".into());
     crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let attempt = state.runtime.runs[0].attempts[0].clone();
     let generation = attempt.workspace_id.clone().unwrap();
     record_activity_for(
@@ -282,7 +282,7 @@ fn codex_completion_distinguishes_finished_tools_and_host_handoffs() {
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
         checkpoint_next(&mut state, |_| Ok(())).unwrap();
-        let id = state.runtime.runs[0].id.clone();
+        let id = state.runtime.runs[0].id().as_str().to_owned();
         let mut attempt = state.runtime.runs[0].attempts[0].clone();
         let generation = attempt.workspace_id.clone().unwrap();
         let event = crate::usage::Activity {
@@ -331,7 +331,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     {
         let attempt = &mut state.runtime.runs[0].attempts[0];
@@ -385,7 +385,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
         )
         .contains("1 attempt(s) · 12000 input (11000 cached) · 300 output tokens so far")
     );
-    let transcript = crate::chat::transcript(&state, &chat).unwrap();
+    let transcript = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(transcript.contains(">↑ 12,000 in (11,000 cached)</span> · <span title='300 output tokens so far; the attempt is still running'>↓ 300 out…</span>"), "{transcript}");
 
     // Finished: the attempt's own record replaces the live one.
@@ -404,7 +404,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     let monitor = crate::usage::render(&state);
     assert!(!monitor.contains("Running now"));
     assert!(monitor.contains("running (totals so far): 0"));
-    let transcript = crate::chat::transcript(&state, &chat).unwrap();
+    let transcript = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(
         transcript.contains("<span title='300 output tokens'>↓ 300 out</span>"),
         "{transcript}"
@@ -417,7 +417,7 @@ fn stale_codex_exit_cannot_interrupt_another_attempt() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let attempt = state.runtime.runs[0].attempts[0].clone();
     let generation = attempt.workspace_id.clone().unwrap();
     record_activity_for(
@@ -453,7 +453,7 @@ fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() 
             crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
             state.runtime.runs[0].target.backend = backend;
             checkpoint_next(&mut state, |_| Ok(())).unwrap();
-            let id = state.runtime.runs[0].id.clone();
+            let id = state.runtime.runs[0].id().as_str().to_owned();
             let mut mailbox = Mailbox::default();
             mailbox
                 .stage(
@@ -551,7 +551,7 @@ fn consumed_steering_does_not_drop_requested_continuation() {
             0,
         )
         .unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let mut attempt = state.runtime.runs[0].attempts[0].clone();
     attempt.artifact = Some("checkpoint".into());
     commit(
@@ -582,7 +582,7 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
     state.chats[0].room = Some("general".into());
     crate::chat::send(&mut state, &chat, "Build a small tool and keep improving it", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let first = state.runtime.runs[0].id.clone();
+    let first = state.runtime.runs[0].id().as_str().to_owned();
     // Simulate an already running pre-continuity provider process.
     state.runtime.runs[0].attempts[0].context_trace = None;
     state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
@@ -638,7 +638,7 @@ fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures()
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Read history", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     let shared = Arc::new(Mutex::new(state));
     let result = project_operation(
@@ -719,7 +719,7 @@ fn result_rollback_preserves_attempt_history_and_live_diagnostics() {
     };
     state.runtime.runs[0].attempts.push(historical.clone());
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     record_activity(
         &mut state,
         &id,
@@ -796,7 +796,7 @@ fn working_state_and_processed_receipts_publish_with_the_matching_workspace_only
         }
         state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed::default()));
         let run = &mut state.runtime.runs[0];
-        let id = run.id.clone();
+        let id = run.id().as_str().to_owned();
         let mut attempt = run.attempts[0].clone();
         attempt.artifact = Some("matching-workspace".into());
         let mut mailbox = Mailbox::default();
@@ -931,7 +931,7 @@ fn consumed_steering_does_not_launch_twice_and_racing_input_stays_queued() {
         .unwrap();
     state.runtime.runs[0].attempts[0].turn_mailbox = Some(Box::new(mailbox)).into();
     crate::chat::send(&mut state, &chat, "/steer Add a useful test too", "test").unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let mut attempt = state.runtime.runs[0].attempts[0].clone();
     attempt.artifact = Some("checkpoint".into());
     let before = serde_json::to_value(&state).unwrap();
@@ -1036,7 +1036,7 @@ fn overlapping_commits_rollback_only_their_own_conversation() {
     let mut attempts: Vec<_> = state.runtime.runs.iter().map(|r| r.attempts[0].clone()).collect();
     attempts[0].artifact = Some("output-a".into());
     attempts[1].artifact = Some("output-b".into());
-    let ids: Vec<_> = state.runtime.runs.iter().map(|r| r.id.clone()).collect();
+    let ids: Vec<_> = state.runtime.runs.iter().map(|r| r.id().as_str().to_owned()).collect();
     commit(
         &mut state,
         &ids[1],
@@ -1084,7 +1084,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     fn execute(_: &dyn control_isolation::Isolation, state: Arc<Mutex<State>>, task: Task) {
         {
             let mut s = state.lock().unwrap();
-            s.runtime.runs.iter_mut().find(|r| r.id == task.0).unwrap().result = "entered".into();
+            s.runtime.runs.get_mut(&task.0).unwrap().result = "entered".into();
             storage::save(&s).unwrap();
         }
         let marker = crate::config::state(&format!("release-{}", task.0)).unwrap();
@@ -1127,7 +1127,12 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         crate::chat::send(&mut initial, chat, "Work", "test").unwrap();
     }
     storage::save(&initial).unwrap();
-    let ids: Vec<_> = initial.runtime.runs.iter().map(|r| r.id.clone()).collect();
+    let ids: Vec<_> = initial
+        .runtime
+        .runs
+        .iter()
+        .map(|r| r.id().as_str().to_owned())
+        .collect();
     let state = Arc::new(Mutex::new(initial));
     let threads = start_with(state.clone(), crate::engine::isolation(), execute);
     let wait = |expected: &[(usize, &str, Option<&str>)]| {
@@ -1405,7 +1410,7 @@ fn live_shutdown(parallel: bool) {
         .runtime
         .runs
         .iter()
-        .find(|r| Some(&r.id) == chat.messages[0].run_id.as_ref())
+        .find(|r| chat.messages[0].run_id.as_deref() == Some(r.id().as_str()))
         .unwrap();
     assert_eq!(run.status, RunStatus::Interrupted);
     let attempt = run.attempts.last().unwrap();
@@ -1416,7 +1421,7 @@ fn live_shutdown(parallel: bool) {
         .runtime
         .runs
         .iter()
-        .find(|r| Some(&r.id) == chat.messages[1].run_id.as_ref())
+        .find(|r| chat.messages[1].run_id.as_deref() == Some(r.id().as_str()))
         .unwrap();
     assert_eq!(next.status, RunStatus::Queued);
     assert!(next.attempts.is_empty());
@@ -1498,7 +1503,7 @@ fn shutdown_fences_success_preserves_diagnostics_queue_and_checkpoint() {
     state.chats[0].workspace = Some("previous-output".into());
     crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let mut attempt = state.runtime.runs[0].attempts[0].clone();
     attempt.artifact = Some("uncommitted-output".into());
     let event = crate::usage::Activity {
@@ -1549,7 +1554,7 @@ fn failed_result_checkpoint_restores_state_and_can_be_retried_or_cancelled() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let mut attempt = state.runtime.runs[0].attempts[0].clone();
     attempt.artifact = Some("new-output".into());
     let before = serde_json::to_vec(&state).unwrap();
@@ -1683,7 +1688,7 @@ fn child_uses_frozen_task_checkpoint_and_unique_writable_attempt() {
             .workspace_id
             .as_deref()
             .unwrap()
-            .starts_with(&state.runtime.runs[0].id)
+            .starts_with(state.runtime.runs[0].id().as_str())
     );
     assert_eq!(state.runtime.runs[0].chat_id.as_deref(), Some(child.as_str()));
     assert_eq!(state.runtime.runs[0].action, Action::Task);
@@ -1723,7 +1728,7 @@ fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
     );
     state.runtime.runs[1].status = RunStatus::Failed;
     crate::chat::send(&mut state, &chat, "Third", "test").unwrap();
-    let retry = state.runtime.runs[1].id.clone();
+    let retry = state.runtime.runs[1].id().as_str().to_owned();
     state
         .runtime
         .action("/retry-run", &std::collections::HashMap::from([("id".into(), retry)]));
@@ -1752,7 +1757,7 @@ fn activity_updates_keep_attempt_identity_and_bounded_history() {
     crate::chat::send(&mut state, &chat, "Check build", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let old_generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let event = |id: usize, status: &str| crate::usage::Activity {
         id: id.to_string(),
         kind: "command_execution".into(),
@@ -1890,7 +1895,7 @@ fn judge_dispatch_captures_readonly_policy_and_cannot_publish_a_development_head
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Review this source", "test").unwrap();
-    let root = state.runtime.runs[0].id.clone();
+    let root = state.runtime.runs[0].id().as_str().to_owned();
     state.runtime.runs[0].persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
         root: root.clone(),
@@ -2113,7 +2118,7 @@ fn a_cut_off_turn_leaves_a_host_checkpoint_the_next_turn_resumes_from() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build the tool", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     // Tool activity lives on the running attempt, not the worker's copy.
     state.runtime.runs[0].attempts[0].activity = (0..10)
@@ -2188,7 +2193,7 @@ fn a_cut_off_turn_leaves_a_host_checkpoint_the_next_turn_resumes_from() {
     );
     assert!(input.contains("cargo build step 9"), "{input}");
     // A published handoff clears it.
-    let next_id = state.runtime.runs[next].id.clone();
+    let next_id = state.runtime.runs[next].id().as_str().to_owned();
     let mut attempt = state.runtime.runs[next].attempts[0].clone();
     attempt.artifact = Some("checkpoint".into());
     state.runtime.runs[next].attempts[0]
@@ -2231,7 +2236,7 @@ fn a_local_turn_stopped_at_its_step_cap_leaves_a_host_checkpoint() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Download the server", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     state.runtime.runs[0].attempts[0].activity = vec![crate::usage::Activity {
         id: "local-1-0".into(),
         kind: "mcp_tool_call".into(),

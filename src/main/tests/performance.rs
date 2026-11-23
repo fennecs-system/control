@@ -16,7 +16,7 @@ fn fixture(messages: usize, unrelated: usize) -> State {
     let template = state.runtime.runs.pop().unwrap();
     for index in 0..messages + unrelated {
         let mut run = template.clone();
-        run.id = format!("run-{index}");
+        run = run.with_id(format!("run-{index}"));
         run.chat_id = Some(
             if index < messages {
                 "benchmark-chat"
@@ -63,13 +63,13 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             state.chats[0].messages.push(chat::Message {
                 speaker: Default::default(),
                 text: format!("Question {index}: <&> λ"),
-                run_id: Some(run.id.clone()),
+                run_id: Some(run.id().as_str().to_owned()),
                 reply: String::new(),
             });
         }
         state.runtime.runs.push(run);
     }
-    state.runtime.runs.rotate_right(unrelated);
+    state.runtime.runs.rebuild(|runs| runs.rotate_right(unrelated));
     state
 }
 fn fingerprint(text: &str) -> String {
@@ -99,7 +99,7 @@ fn transcript_fixtures_keep_activity_collapsed_without_a_folder_picker() {
         ),
     ] {
         let state = fixture(messages, unrelated);
-        let html = chat::transcript(&state, "benchmark-chat").unwrap();
+        let html = chat::transcript(&state, "benchmark-chat").unwrap().render();
         assert!(!html.contains("project-picker"));
         assert!(!html.contains("' open><summary>"));
         // Snapshots include the intentional closed activity defaults and keep
@@ -112,12 +112,12 @@ fn transcript_fixtures_keep_activity_collapsed_without_a_folder_picker() {
 fn hot_paths() {
     for (messages, unrelated) in [(10, 0), (100, 1000), (500, 5000)] {
         let state = fixture(messages, unrelated);
-        let html = chat::transcript(&state, "benchmark-chat").unwrap();
+        let html = chat::transcript(&state, "benchmark-chat").unwrap().render();
         let mut samples = Vec::new();
         for _ in 0..9 {
             let start = Instant::now();
             for _ in 0..10 {
-                black_box(chat::transcript(black_box(&state), "benchmark-chat").unwrap());
+                black_box(chat::transcript(black_box(&state), "benchmark-chat").unwrap().render());
             }
             samples.push(start.elapsed().as_nanos() / 10);
         }
@@ -172,11 +172,12 @@ fn history_reads() {
 #[ignore = "explicit release-mode identity snapshot timing; no credentials or container calls"]
 fn ownership_snapshots() {
     let mut state = fixture(500, 0);
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
+        let id = run.id().as_str().to_owned();
         let run = &mut **run;
         run.attempts[0].command_jobs.push(crate::command_jobs::Job {
-            id: run.id.clone(),
-            generation: format!("{}-attempt-1", run.id),
+            generation: format!("{id}-attempt-1"),
+            id,
             image: format!("sha256:{}", "a".repeat(64)),
             node: "synthetic-node".into(),
             command: "command ".repeat(500),
@@ -329,7 +330,7 @@ fn chat_lists() {
         let workloads: [(&str, &View); 3] = [
             ("chats_list", &|s| chat::list(s).to_string().len()),
             ("web_conversation_tree", &move |s| {
-                crate::navigation::conversations(s, active).len()
+                crate::navigation::Picker::of(&s.chats, active).render().len()
             }),
             ("chat_read_heading", &move |s| {
                 chat::detail(s, active).unwrap()["title"].to_string().len()
@@ -369,7 +370,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
         chat.activity_order = index as u64 + 2;
         state.chats.push(chat);
         let mut turn = run.clone();
-        turn.id = format!("run-{index}");
+        turn = turn.with_id(format!("run-{index}"));
         turn.chat_id = Some(id(index));
         turn.status = [
             RunStatus::Completed,
@@ -398,7 +399,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
         chat.parent_chat = Some(root.clone());
         state.chats.push(chat);
         let mut turn = run.clone();
-        turn.id = format!("run-live-bot-{index}");
+        turn = turn.with_id(format!("run-live-bot-{index}"));
         turn.chat_id = Some(format!("c-live-bot-{index}"));
         turn.status = RunStatus::Completed;
         state.runtime.runs.push(turn);
@@ -409,7 +410,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
     agent.parent_chat = Some(root);
     state.chats.push(agent);
     let mut live = run.clone();
-    live.id = "run-live".into();
+    live = live.with_id("run-live");
     live.chat_id = Some("c-live-agent".into());
     live.status = RunStatus::Running;
     state.runtime.runs.push(live);
@@ -484,7 +485,10 @@ pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
     }
     for index in 0..turns {
         let mut turn = run.clone();
-        turn.id = format!("{:x}-{index}", 0x1790_0000_0000_0000_u64 + index as u64 * 1_000_000_000);
+        turn = turn.with_id(format!(
+            "{:x}-{index}",
+            0x1790_0000_0000_0000_u64 + index as u64 * 1_000_000_000
+        ));
         turn.chat_id = Some(id(index % dms));
         turn.kind = [RunKind::Chat, RunKind::BotWake, RunKind::PortDecision][index % 3];
         turn.status = if index % 20 == 0 {

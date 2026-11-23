@@ -52,8 +52,10 @@ pub(crate) fn fixture() -> State {
             Action::Improve,
         )
         .unwrap();
+    s.runtime
+        .runs
+        .rebuild(|runs| runs[0] = runs[0].clone().with_id("parent"));
     let parent = &mut s.runtime.runs[0];
-    parent.id = "parent".into();
     parent.status = RunStatus::Continued;
     parent.chat_id = Some(parent_chat);
     parent.attempts.push(Attempt {
@@ -79,7 +81,7 @@ pub(crate) fn fixture() -> State {
         continuation: Some("resumed".into()),
     });
     let mut child = parent.clone();
-    child.id = "child".into();
+    child = child.with_id("child");
     child.kind = RunKind::Delegated;
     child.status = RunStatus::Completed;
     child.delegation = None;
@@ -100,7 +102,7 @@ pub(crate) fn fixture() -> State {
     }];
     child.result = "All requested changes implemented and verified".into();
     let mut resumed = parent.clone();
-    resumed.id = "resumed".into();
+    resumed = resumed.with_id("resumed");
     resumed.status = RunStatus::Running;
     resumed.delegation = None;
     resumed.attempts.clear();
@@ -234,7 +236,7 @@ fn actor_root_actual_delegation_and_artifact_identity_are_required() {
 fn sibling_and_unrelated_same_actor_chats_do_not_gain_access() {
     let mut s = fixture();
     let mut sibling = s.runtime.runs[1].clone();
-    sibling.id = "sibling".into();
+    sibling = sibling.with_id("sibling");
     sibling.status = RunStatus::Running;
     sibling.persona.as_mut().unwrap().role = Role::Judge;
     let sibling_chat = crate::chat::create(&mut s);
@@ -243,7 +245,7 @@ fn sibling_and_unrelated_same_actor_chats_do_not_gain_access() {
     assert!(prepare(&s, "sibling", json!({"child":"child","section":"files"})).is_err());
     assert!(prepare(&s, "resumed", json!({"child":"sibling","section":"summary"})).is_err());
     let mut unrelated = s.runtime.runs[2].clone();
-    unrelated.id = "unrelated".into();
+    unrelated = unrelated.with_id("unrelated");
     unrelated.persona = None;
     s.runtime.runs.push(unrelated);
     assert!(prepare(&s, "unrelated", json!({"child":"child","section":"files"})).is_err());
@@ -329,13 +331,13 @@ fn child_continuations_are_followed_but_forged_cross_chat_chains_are_denied() {
     let mut s = fixture();
     store.publish("child-continuation-attempt-1", &[("final.rs", b"final child text")]);
     let mut next = s.runtime.runs[1].clone();
-    next.id = "child-continuation".into();
+    next = next.with_id("child-continuation");
     next.attempts[0].workspace_id = Some("child-continuation-attempt-1".into());
     next.attempts[0].artifact = Some("child-continuation-attempt-1".into());
     s.runtime.runs[1].status = RunStatus::Continued;
     let mut d = s.runtime.runs[0].delegation.clone().unwrap();
     d.child = None;
-    d.continuation = Some(next.id.clone());
+    d.continuation = Some(next.id().as_str().to_owned());
     s.runtime.runs[1].delegation = Some(d);
     s.runtime.runs.push(next);
     let value = store

@@ -434,7 +434,7 @@ fn an_account_at_its_cap_holds_its_next_turn_and_says_why() {
         .hold(&state.runtime.runs[1])
         .unwrap();
     assert_eq!(held, crate::accounts::Hold::Cap(std::num::NonZeroU8::MIN));
-    let page = crate::chat::transcript(&state, &chats[1]).unwrap();
+    let page = crate::chat::transcript(&state, &chats[1]).unwrap().render();
     assert!(
         page.contains("Held: codex account second is running its limit of 1 at once."),
         "{page}"

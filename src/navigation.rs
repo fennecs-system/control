@@ -63,12 +63,6 @@ pub fn secondary(view: &str) -> String {
         .collect();
     format!("<aside class='section-navigation'><h2>Manage</h2><nav aria-label='Manage'>{links}</nav></aside>")
 }
-pub fn conversation_button(state: &crate::State, active: &str) -> String {
-    format!(
-        "<details class='conversation-toggle'><summary aria-label='DMs' title='DMs'>☰ <span>DMs</span></summary>{}</details>",
-        conversations(state, active)
-    )
-}
 pub fn heading(view: &str) -> String {
     if let Some((_, label)) = MANAGE.iter().find(|(id, _)| *id == view) {
         return format!("Manage<span class='slash' aria-hidden='true'>/</span>{label}");
@@ -93,80 +87,129 @@ pub fn bots_toolbar(history: bool, search: &str, controls: &str) -> String {
     )
 }
 /// The DM picker: the newest ten threads and the active one's thread. All DMs
-/// are on Bots / History (`crate::history_view`).
-pub fn conversations(state: &crate::State, active: &str) -> String {
-    use std::collections::{HashMap, HashSet};
-    let entries = crate::conversations::ordered(state);
-    let callsigns = crate::callsigns::all(&state.chats);
-    let roots = entries
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| entry.depth == 0)
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    let range = crate::pagination::window(roots.len(), None, None);
-    let start = roots.get(range.start).copied().unwrap_or(entries.len());
-    let end = roots.get(range.end).copied().unwrap_or(entries.len());
-    let mut selected = entries[start..end].iter().collect::<Vec<_>>();
-    let parents: HashMap<_, _> = entries
-        .iter()
-        .map(|entry| (entry.session.id.as_str(), entry.parent))
-        .collect();
-    let mut expanded = HashSet::from([active]);
-    let mut ancestor = parents.get(active).copied().flatten();
-    while let Some(id) = ancestor {
-        if !expanded.insert(id) {
-            break;
-        }
-        ancestor = parents.get(id).copied().flatten();
-    }
-    if let Some(index) = entries.iter().position(|entry| entry.session.id == active) {
-        let root = (0..=index).rev().find(|index| entries[*index].depth == 0).unwrap();
-        if root < start || root >= end {
-            // Keep the active thread reachable without letting it reorder the
-            // newest history or exceeding the ten-root picker budget.
-            if let Some(last) = selected.iter().rposition(|entry| entry.depth == 0) {
-                selected.truncate(last);
+/// are on Bots / History (`crate::history_view`). Built from the chat list
+/// under the state lock; rendering reads only this.
+pub struct Picker {
+    /// Each row's id, then its title.
+    texts: crate::texts::Texts,
+    rows: Vec<Row>,
+    /// No DM is open: "+ New DM" is the current page.
+    new: bool,
+    /// More threads than the picker shows: link to History.
+    more: bool,
+}
+struct Row {
+    depth: usize,
+    /// The open DM or one of its ancestors; read only for rows with children.
+    open: bool,
+    current: bool,
+}
+impl Picker {
+    pub fn of(chats: &[crate::chat::Session], active: &str) -> Self {
+        use std::collections::{HashMap, HashSet};
+        let entries = crate::conversations::ordered(chats);
+        let callsigns = crate::callsigns::all(chats);
+        let roots = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.depth == 0)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let range = crate::pagination::window(roots.len(), None, None);
+        let start = roots.get(range.start).copied().unwrap_or(entries.len());
+        let end = roots.get(range.end).copied().unwrap_or(entries.len());
+        let mut selected = entries[start..end].iter().collect::<Vec<_>>();
+        let parents: HashMap<_, _> = entries
+            .iter()
+            .map(|entry| (entry.session.id.as_str(), entry.parent))
+            .collect();
+        let mut expanded = HashSet::from([active]);
+        let mut ancestor = parents.get(active).copied().flatten();
+        while let Some(id) = ancestor {
+            if !expanded.insert(id) {
+                break;
             }
-            let root_end = roots.iter().copied().find(|next| *next > root).unwrap_or(entries.len());
-            selected.extend(entries[root..root_end].iter());
+            ancestor = parents.get(id).copied().flatten();
+        }
+        if let Some(index) = entries.iter().position(|entry| entry.session.id == active) {
+            let root = (0..=index).rev().find(|index| entries[*index].depth == 0).unwrap();
+            if root < start || root >= end {
+                // Keep the active thread reachable without letting it reorder the
+                // newest history or exceeding the ten-root picker budget.
+                if let Some(last) = selected.iter().rposition(|entry| entry.depth == 0) {
+                    selected.truncate(last);
+                }
+                let root_end = roots.iter().copied().find(|next| *next > root).unwrap_or(entries.len());
+                selected.extend(entries[root..root_end].iter());
+            }
+        }
+        let mut texts = crate::texts::Texts::with_capacity(2 * selected.len(), 96 * selected.len());
+        let rows = selected
+            .iter()
+            .enumerate()
+            .map(|(position, entry)| {
+                let id = entry.session.id.as_str();
+                texts.push(id);
+                texts.push(&crate::callsigns::label(entry.session, callsigns[entry.position]));
+                Row {
+                    depth: entry.depth,
+                    open: selected.get(position + 1).is_some_and(|next| next.depth > entry.depth)
+                        && expanded.contains(id),
+                    current: id == active,
+                }
+            })
+            .collect();
+        Self {
+            texts,
+            rows,
+            new: active.is_empty(),
+            more: roots.len() > crate::pagination::SIZE,
         }
     }
-    let current = if active.is_empty() { " aria-current='page'" } else { "" };
-    let mut links = format!("<a href='/dms?new=1'{current}>+ New DM</a>");
-    let mut branches = Vec::new();
-    for (position, entry) in selected.iter().enumerate() {
-        while branches.last().is_some_and(|depth| *depth >= entry.depth) {
+    pub fn render(&self) -> String {
+        let current = if self.new { " aria-current='page'" } else { "" };
+        let mut links = format!("<a href='/dms?new=1'{current}>+ New DM</a>");
+        let mut branches = Vec::new();
+        for (position, row) in self.rows.iter().enumerate() {
+            let (id, title) = (self.texts.get(2 * position), self.texts.get(2 * position + 1));
+            while branches.last().is_some_and(|depth| *depth >= row.depth) {
+                links.push_str("</div></details>");
+                branches.pop();
+            }
+            // Keep very deep threads readable without narrowing their row backgrounds.
+            let depth = row.depth.min(8);
+            let title = crate::escape(title);
+            let current = if row.current { " aria-current='page'" } else { "" };
+            let link = format!(
+                "<a class='conversation-link' href='/dm/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span></a>",
+                id
+            );
+            if self.rows.get(position + 1).is_some_and(|next| next.depth > row.depth) {
+                links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",id,if row.open {" open"}else{""}));
+                branches.push(row.depth);
+            } else {
+                links.push_str(&link);
+            }
+        }
+        for _ in branches {
             links.push_str("</div></details>");
-            branches.pop();
         }
-        let chat = entry.session;
-        // Keep very deep threads readable without narrowing their row backgrounds.
-        let depth = entry.depth.min(8);
-        let title = crate::escape(&crate::callsigns::label(chat, callsigns[entry.position]));
-        let current = if chat.id == active { " aria-current='page'" } else { "" };
-        let link = format!(
-            "<a class='conversation-link' href='/dm/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span></a>",
-            chat.id
-        );
-        if selected.get(position + 1).is_some_and(|next| next.depth > entry.depth) {
-            links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",chat.id,if expanded.contains(chat.id.as_str()) {" open"}else{""}));
-            branches.push(entry.depth);
+        let controls = if self.more {
+            "<a class='conversation-history-link' href='/bots/history'>All DMs ↗</a>"
         } else {
-            links.push_str(&link);
-        }
+            ""
+        };
+        format!(
+            "<aside class='section-navigation conversation-navigation'><h2>DMs</h2><nav aria-label='DMs'>{links}</nav>{controls}</aside>"
+        )
     }
-    for _ in branches {
-        links.push_str("</div></details>");
+    /// The picker behind the DMs toggle at the top of a chat page.
+    pub fn button(&self) -> String {
+        format!(
+            "<details class='conversation-toggle'><summary aria-label='DMs' title='DMs'>☰ <span>DMs</span></summary>{}</details>",
+            self.render()
+        )
     }
-    let controls = if roots.len() > crate::pagination::SIZE {
-        "<a class='conversation-history-link' href='/bots/history'>All DMs ↗</a>"
-    } else {
-        ""
-    };
-    format!(
-        "<aside class='section-navigation conversation-navigation'><h2>DMs</h2><nav aria-label='DMs'>{links}</nav>{controls}</aside>"
-    )
 }
 #[cfg(test)]
 mod tests;

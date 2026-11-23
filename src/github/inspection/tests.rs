@@ -123,7 +123,7 @@ fn ordinary_stale_judge_and_changed_owner_attempts_cannot_inspect() {
         workspace_id: Some("current-generation".into()),
         ..Default::default()
     });
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let caller = Caller::Attempt {
         run: &run,
         generation: "current-generation",

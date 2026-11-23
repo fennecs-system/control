@@ -319,7 +319,7 @@ fn lane_priority_never_reorders_turns_within_a_chat() {
     tied.execution.max_parallel_runs = 3;
     enqueue(&mut tied, "bob", true);
     enqueue(&mut tied, "bob", false);
-    for run in &mut tied.runs {
+    for run in tied.runs.iter_mut() {
         run.queue_order = 7;
     }
     assert_eq!(

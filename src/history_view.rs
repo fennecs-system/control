@@ -682,7 +682,7 @@ fn dm_turns(state: &State, dm: &str, filter: &Filter) -> String {
     if let Some(before) = filter.before.as_deref() {
         // An unknown cursor starts at the newest turn.
         let mut skipped = runs.clone();
-        if skipped.any(|run| run.id == before) {
+        if skipped.any(|run| run.id() == before) {
             runs = skipped;
         }
     }
@@ -698,7 +698,7 @@ fn dm_turns(state: &State, dm: &str, filter: &Filter) -> String {
     if let (Some(last), Some(_)) = (page.last(), runs.next()) {
         links.push_str(&format!(
             "<a href='{}'>Older turns →</a>",
-            escape(&filter.href(&[("dm", dm), ("before", &last.id)]))
+            escape(&filter.href(&[("dm", dm), ("before", last.id())]))
         ));
     }
     if !links.is_empty() {
@@ -753,22 +753,22 @@ fn turn_row(run: &Run) -> String {
             links.push(format!(
                 "<a href='/dm/{}/context?run={}&amp;attempt={}' title='What the model was given'>input</a>",
                 escape(chat),
-                escape(&run.id),
+                escape(run.id()),
                 index + 1
             ));
         }
         links.push(format!("<a href='/dm/{}' title='Open DM'>DM ↗</a>", escape(chat)));
     }
     if run.status.is_active() && run.status != RunStatus::Cancelling {
-        links.push(format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>", escape(&run.id)));
+        links.push(format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>", escape(run.id())));
     }
     if run.status.is_resumable() {
-        links.push(format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button>Retry</button></form>", escape(&run.id)));
+        links.push(format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button>Retry</button></form>", escape(run.id())));
     }
     format!(
         "<li class='history-turn' data-status='{}' data-run='{}'><span class='turn-when'>{when}</span><span class='turn-kind'>{}</span><span class='turn-status'>{}</span><span class='turn-what' title='{}'>{}</span><span class='turn-model'>{}</span><span class='turn-tokens' title='{}'>{tokens}</span><span class='turn-time'>{duration}</span><span class='turn-links'>{}</span></li>",
         status_group(run),
-        escape(&run.id),
+        escape(run.id()),
         kind_label(run.kind),
         escape(status_label(run)),
         escape(&clip(&run.objective, 300)),

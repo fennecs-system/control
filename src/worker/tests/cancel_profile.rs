@@ -132,7 +132,7 @@ fn live_cancel_all_profile() {
                 let s = state.lock().unwrap();
                 std::hint::black_box((
                     crate::chat::transcript(&s, &root).ok(),
-                    crate::navigation::conversations(&s, &root),
+                    crate::navigation::Picker::of(&s.chats, &root).render(),
                 ));
                 renders.fetch_add(1, Ordering::Relaxed);
             }

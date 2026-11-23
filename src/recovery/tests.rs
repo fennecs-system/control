@@ -96,7 +96,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Recover my work", "test").unwrap();
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     state.runtime.runs[0].attempts[0].recovery = Some(Candidate {
         generation: "old".into(),

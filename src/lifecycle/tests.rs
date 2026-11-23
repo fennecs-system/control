@@ -53,7 +53,7 @@ fn live_owned_resource_stop_and_mismatch_preserves_unrelated_writer() {
 fn cancel_authority_queue_and_completion_generation() {
     let mut rt = Runtime::default();
     rt.enqueue("task".into(), RunKind::Task, "test");
-    let id = rt.runs[0].id.clone();
+    let id = rt.runs[0].id().as_str().to_owned();
     assert!(request_cancel(&mut rt, &id, &Actor::Unknown).is_err());
     request_cancel(&mut rt, &id, &Actor::LocalOperator).unwrap();
     assert_eq!(rt.runs[0].status, RunStatus::Cancelled);

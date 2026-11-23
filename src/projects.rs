@@ -485,7 +485,7 @@ pub fn dismiss(state: &mut State, id: &str, request: &str) -> Result<Option<crat
         .runtime
         .runs
         .iter()
-        .find(|run| pending.origin.as_deref() == Some(run.id.as_str()))
+        .find(|run| pending.origin.as_deref() == Some(run.id().as_str()))
         .map(|run| (*run.objective).clone())
         .unwrap_or_default();
     let outcome = crate::approvals::resume(

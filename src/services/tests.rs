@@ -26,7 +26,7 @@ pub(super) fn fixture() -> (State, String, String, u64) {
         image: Some(format!("sha256:{}", "a".repeat(64))),
         ..Default::default()
     });
-    let run = run.id.clone();
+    let run = run.id().as_str().to_owned();
     let time = now();
     (s, run, chat, time)
 }
@@ -1467,8 +1467,8 @@ fn process_tree_services_link_to_their_own_card() {
 fn member(s: &mut State, parent: &str, run: &str) -> (String, crate::runtime::Run) {
     let chat = crate::chat::create(s);
     s.chats.last_mut().unwrap().parent_chat = Some(parent.to_owned());
-    let mut member = s.runtime.runs.iter().find(|r| r.id == run).unwrap().clone();
-    member.id = format!("run-{chat}");
+    let mut member = s.runtime.runs.get(run).unwrap().clone();
+    member = member.with_id(format!("run-{chat}"));
     member.chat_id = Some(chat.clone());
     member.resource_grants.clear();
     (chat, member)

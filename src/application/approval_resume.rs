@@ -24,7 +24,7 @@ pub(crate) enum Outcome {
 }
 
 pub(crate) struct Edit<'a> {
-    pub runs: &'a mut Vec<Run>,
+    pub runs: &'a mut crate::application::runs::Runs,
     pub notice: &'a mut String,
     pub chats: &'a mut [Session],
 }
@@ -35,7 +35,7 @@ pub(crate) struct Edit<'a> {
 /// Keep exclusive ownership through acknowledgement; this is not an async plan.
 #[inline]
 pub(crate) fn record(edit: Edit<'_>, chat: &str, run: Option<Run>, text: String) -> Outcome {
-    let run_id = run.as_ref().map(|run| run.id.clone());
+    let run_id = run.as_ref().map(|run| run.id().as_str().to_owned());
     if let Some(run) = run {
         edit.runs.push(run);
         *edit.notice = "Run queued.".into();
@@ -70,7 +70,7 @@ pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str], cancelled_throu
     if runs.iter().filter(in_chat).any(|run| run.status.is_active()) {
         return Eligibility::Wait;
     }
-    let requested = runs.iter().rposition(|run| origins.contains(&run.id.as_str()));
+    let requested = runs.iter().rposition(|run| origins.contains(&run.id().as_str()));
     let counts = |run: &&Run| !run.absorbed_by().is_some_and(|active| origins.contains(&active));
     let latest = runs.iter().rposition(|run| in_chat(&run) && counts(&run));
     let steered = requested.is_some_and(|at| {

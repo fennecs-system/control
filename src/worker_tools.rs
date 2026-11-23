@@ -179,8 +179,8 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
     let Some(run) = state
         .runtime
         .runs
-        .iter()
-        .find(|r| r.id == run_id && r.status == RunStatus::Running)
+        .get(run_id)
+        .filter(|r| r.status == RunStatus::Running)
     else {
         return error("Run is not active");
     };

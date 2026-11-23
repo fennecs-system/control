@@ -204,3 +204,16 @@ fn every_document_declares_its_dark_scheme_before_styles_load() {
         }
     }
 }
+#[test]
+fn escaping_in_one_pass_matches_the_chained_replacements() {
+    let chained = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#39;")
+    };
+    for text in ["", "plain", "&<>\"'", "a&amp;b <λ> 'x' \"y\" 🦊&", "&&&;;<<", "end'"] {
+        assert_eq!(escape(text), chained(text), "{text}");
+    }
+}

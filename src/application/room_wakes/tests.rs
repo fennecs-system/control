@@ -10,7 +10,7 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
         actor: Actor::LocalOperator,
         action: Action::Task,
     }
-    .into_run("origin".into(), 1, Default::default());
+    .into_run("origin", 1, Default::default());
     origin.chat_id = Some("chat".into());
     origin.status = RunStatus::Completed;
     origin.attempts.push(crate::usage::Attempt {

@@ -123,8 +123,8 @@ struct Rendered {
 type Prober = fn(&Service, &str, &str, Duration) -> io::Result<ProbeOutput>;
 
 /// The chat a run belongs to, when that chat declared an observation.
-fn declared(runs: &[crate::runtime::Run], observations: &Observations, run: &str) -> Option<(String, Declaration)> {
-    let chat = runs.iter().rev().find(|r| r.id == run)?.chat_id.clone()?;
+fn declared(runs: &crate::runtime::Runs, observations: &Observations, run: &str) -> Option<(String, Declaration)> {
+    let chat = runs.get(run)?.chat_id.clone()?;
     let declaration = observations.declared.get(&chat)?.clone();
     Some((chat, declaration))
 }
@@ -330,22 +330,22 @@ fn render(
     }
 }
 /// The attempt a run is executing, as `run/generation`.
-fn attempt_key(runs: &[crate::runtime::Run], run: &str) -> Option<String> {
-    let found = runs.iter().rev().find(|r| r.id == run)?;
+fn attempt_key(runs: &crate::runtime::Runs, run: &str) -> Option<String> {
+    let found = runs.get(run)?;
     Some(format!(
         "{run}/{}",
         found.attempts.last()?.workspace_id.as_deref().unwrap_or("")
     ))
 }
 /// Drops per-attempt entries of runs no longer running once the map is large.
-fn prune<T>(state_runs: &[crate::runtime::Run], map: &mut BTreeMap<String, T>) {
+fn prune<T>(state_runs: &crate::runtime::Runs, map: &mut BTreeMap<String, T>) {
     if map.len() < ATTEMPTS_KEPT {
         return;
     }
     map.retain(|key, _| {
         state_runs
             .iter()
-            .any(|run| run.status == RunStatus::Running && key.split_once('/').is_some_and(|(id, _)| id == run.id))
+            .any(|run| run.status == RunStatus::Running && key.split_once('/').is_some_and(|(id, _)| run.id() == id))
     });
 }
 /// The current observation for `run`'s chat, refreshing a stale command and
@@ -441,8 +441,8 @@ fn result_within(shared: &Arc<Mutex<State>>, run: &str, wait: Duration, probe: P
         .ok()?
         .runtime
         .runs
-        .iter()
-        .any(|r| r.id == run && r.status == RunStatus::Running)
+        .get(run)
+        .is_some_and(|r| r.status == RunStatus::Running)
     {
         return None;
     }
@@ -574,7 +574,7 @@ pub(crate) fn polling_note(shared: &Arc<Mutex<State>>, run: &str, name: &str, ar
     let (service, command) = (arguments["service_id"].as_str()?, arguments["command"].as_str()?);
     let mut state = shared.lock().ok()?;
     let state = &mut *state;
-    let found = state.runtime.runs.iter().rev().find(|r| r.id == run)?;
+    let found = state.runtime.runs.get(run)?;
     if crate::delegation::is_judge(found) {
         return None;
     }
@@ -631,10 +631,9 @@ fn set_with(
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|r| {
-                r.id == attempt.run
-                    && r.status == RunStatus::Running
+            .get(attempt.run)
+            .filter(|r| {
+                r.status == RunStatus::Running
                     && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
             })
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;

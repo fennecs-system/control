@@ -109,7 +109,7 @@ pub(crate) fn plan<'a>(
         .runs
         .iter()
         .enumerate()
-        .map(|(i, run)| (run.id.as_str(), i))
+        .map(|(i, run)| (run.id().as_str(), i))
         .collect();
     let busy: HashSet<_> = view
         .runs

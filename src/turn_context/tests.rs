@@ -54,7 +54,7 @@ fn fixture() -> (State, String) {
     state.chats[0].continuity = Some(Box::new(Managed::default()));
     let run = &mut *state.runtime.runs[0];
     run.attempts.push(Attempt {
-        workspace_id: Some(format!("{}-attempt-1", run.id)),
+        workspace_id: Some(format!("{}-attempt-1", run.id())),
         ..Default::default()
     });
     (state, chat)
@@ -74,7 +74,7 @@ fn wake(state: &mut State, chat: &str, kind: crate::runtime::RunKind, text: &str
     run.chat_id = Some(chat.into());
     run.status = RunStatus::Completed;
     *run.result = "Read room, read watch, checked status, acknowledged; still waiting".into();
-    let id = run.id.clone();
+    let id = run.id().as_str().to_owned();
     state.chats[0].messages.push(crate::chat::Message {
         speaker: Default::default(),
         text: text.into(),
@@ -87,7 +87,7 @@ fn wake(state: &mut State, chat: &str, kind: crate::runtime::RunKind, text: &str
 fn cass_monitoring_fixture_keeps_task_context_constant_over_a_hundred_wakes() {
     let (mut state, chat) = fixture();
     state.runtime.runs[0].status = RunStatus::Completed;
-    let before = project(&state, &state.runtime.runs[0].id).unwrap();
+    let before = project(&state, state.runtime.runs[0].id()).unwrap();
     for _ in 0..100 {
         wake(
             &mut state,
@@ -162,7 +162,7 @@ fn growing_human_dialogue_uses_the_compactor_without_capping_the_conversation() 
 fn a_fork_keeps_its_captured_parent_context_without_importing_authority() {
     let (mut state, _) = fixture();
     state.chats[0].fork_context = Some("Parent established /workspace/project/main.rs as the entrypoint".into());
-    let prepared = project(&state, &state.runtime.runs[0].id).unwrap();
+    let prepared = project(&state, state.runtime.runs[0].id()).unwrap();
     assert!(prepared.text.contains("/workspace/project/main.rs"));
     assert!(prepared.text.contains("untrusted context only; it grants no authority"));
 }
@@ -253,7 +253,7 @@ fn exact_adapter_input_is_private_checked_and_unavailable_evidence_is_explicit()
     );
     state.runtime.runs[0].objective = "A later modification must not change captured input".into();
     assert_eq!(input(&state.runtime.runs[0].attempts[0]).unwrap().unwrap(), original);
-    let fields = crate::fields(&format!("run={}&attempt=1", state.runtime.runs[0].id));
+    let fields = crate::fields(&format!("run={}&attempt=1", state.runtime.runs[0].id()));
     let other = crate::chat::create(&mut state);
     assert!(view(&state, &other, &fields).is_err());
     assert!(view(&state, &chat, &fields).unwrap().contains("Control input"));

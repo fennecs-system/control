@@ -59,7 +59,7 @@ fn bot_peer() -> (State, String, String) {
 fn only_urgent_messages_wake_and_only_where_they_could_before() {
     // A descendant that is not a bot: retained unless urgent.
     let (mut state, lead, child, _) = family();
-    let lead_run = state.runtime.runs[0].id.clone();
+    let lead_run = state.runtime.runs[0].id().as_str().to_owned();
     let quiet = send(&mut state, &lead_run, "attempt-a", "quiet", &child, STATUS, false);
     assert_eq!(
         (
@@ -154,7 +154,7 @@ fn a_sleeping_bot_gets_retained_messages_within_the_digest_bound() {
 fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
     let (mut state, lead, child, _) = family();
     state.runtime.execution.peer_digest_seconds = 30;
-    let lead_run = state.runtime.runs[0].id.clone();
+    let lead_run = state.runtime.runs[0].id().as_str().to_owned();
     for (nonce, text) in [("one", STATUS), ("two", "Second update: furnace is lit")] {
         send(&mut state, &lead_run, "attempt-a", nonce, &child, text, false);
     }
@@ -205,7 +205,7 @@ fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
     // Any other turn of the recipient takes the messages instead.
     let (mut state, _, child, _) = family();
     state.runtime.execution.peer_digest_seconds = 30;
-    let lead_run = state.runtime.runs[0].id.clone();
+    let lead_run = state.runtime.runs[0].id().as_str().to_owned();
     send(&mut state, &lead_run, "attempt-a", "one", &child, STATUS, false);
     crate::chat::send(&mut state, &child, "Operator steering", "test").unwrap();
     assert_eq!(queued(&state), 1, "operator input always queues its own turn");
@@ -272,11 +272,11 @@ fn digests_are_bounded_and_count_what_they_omit() {
 #[test]
 fn a_message_delivered_into_a_running_turn_does_not_also_start_one() {
     let (mut state, _, child, _) = family();
-    let lead_run = state.runtime.runs[0].id.clone();
+    let lead_run = state.runtime.runs[0].id().as_str().to_owned();
     let index = crate::chat::latest_task(&state, &child, &state.chats[0].actor).unwrap();
     state.runtime.runs[index].status = RunStatus::Queued;
     let admitted = crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let child_run = state.runtime.runs[admitted].id.clone();
+    let child_run = state.runtime.runs[admitted].id().as_str().to_owned();
     send(
         &mut state,
         &lead_run,
@@ -299,13 +299,7 @@ fn a_message_delivered_into_a_running_turn_does_not_also_start_one() {
     let settled = state.runtime.runs.last().unwrap();
     assert_eq!((settled.status.as_str(), settled.attempts.len()), ("completed", 0));
     // After the turn ends, an undelivered urgent message still starts one.
-    state
-        .runtime
-        .runs
-        .iter_mut()
-        .find(|run| run.id == child_run)
-        .unwrap()
-        .status = RunStatus::Completed;
+    state.runtime.runs.get_mut(&child_run).unwrap().status = RunStatus::Completed;
     send(
         &mut state,
         &lead_run,

@@ -19,7 +19,7 @@ pub(crate) struct Wake {
 }
 
 pub(crate) struct Edit<'a> {
-    pub runs: &'a mut Vec<Run>,
+    pub runs: &'a mut crate::application::runs::Runs,
     pub notice: &'a mut String,
     pub chats: &'a mut [Session],
     pub wake: &'a mut Option<Wake>,
@@ -81,9 +81,8 @@ pub(crate) fn queue(
         root: origin
             .persona
             .as_ref()
-            .map(|persona| &persona.root)
-            .unwrap_or(&origin.id)
-            .clone(),
+            .map_or(origin.id().as_str(), |persona| persona.root.as_str())
+            .to_owned(),
         depth: 0,
         parent: None,
         bundle: None,
@@ -145,7 +144,7 @@ impl Change {
                     revision: chat.revision,
                 });
                 *state.wake = None;
-                *state.delivered = Some(delivery.run.id.clone());
+                *state.delivered = Some(delivery.run.id().as_str().to_owned());
                 state.runs.push(delivery.run);
                 chat.messages.push(delivery.message);
                 chat.revision = chat.revision.saturating_add(1);

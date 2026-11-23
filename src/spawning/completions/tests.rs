@@ -17,7 +17,7 @@ fn spawned(n: usize) -> State {
 fn parent_chat_remains_available_and_completion_uses_current_workspace() {
     let mut state = spawned(1);
     let parent_chat = state.chats[0].id.clone();
-    let child = state.runtime.runs[1].id.clone();
+    let child = state.runtime.runs[1].id().as_str().to_owned();
     state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[1].status = RunStatus::Running;
     chat::send(&mut state, &parent_chat, "How is the bot doing?", "test").unwrap();
@@ -46,6 +46,7 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
     assert!(
         chat::transcript(&state, &parent_chat)
             .unwrap()
+            .render()
             .contains("Control update")
     );
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
@@ -56,7 +57,7 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
 fn completions_are_coalesced_and_do_not_keep_enqueuing_while_a_callback_waits() {
     let mut state = spawned(3);
     state.runtime.runs[0].status = RunStatus::Completed;
-    for child in &mut state.runtime.runs[1..3] {
+    for child in state.runtime.runs.iter_mut().take(3).skip(1) {
         child.status = RunStatus::Completed;
         child.result = "verified".into();
     }
@@ -127,7 +128,7 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
     next.chat_id = child.chat_id.clone();
     next.persona = child.persona.clone();
     next.status = RunStatus::Running;
-    let next_id = next.id.clone();
+    let next_id = next.id().as_str().to_owned();
     state.runtime.runs[1].status = RunStatus::Continued;
     state.runtime.runs[1].question = Some(crate::design::Question {
         id: "fixture-question".into(),
@@ -153,5 +154,5 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 4);
     assert!(state.runtime.runs[3].objective.contains("failed"));
-    assert!(state.runtime.runs[3].objective.contains(&child.id));
+    assert!(state.runtime.runs[3].objective.contains(child.id().as_str()));
 }

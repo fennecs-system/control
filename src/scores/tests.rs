@@ -113,7 +113,8 @@ fn milestones_count_completed_turns_and_done_claims_across_the_team() {
         run("r2", &member, "completed"),
         run("r3", &member, "failed"),
         run("r4", &outsider, "completed"),
-    ];
+    ]
+    .into();
     state.collective.claims = vec![
         claim(&member, "done"),
         claim(&root, "working"),
@@ -208,15 +209,15 @@ fn the_operator_reads_every_probe_in_the_team_and_the_chat_view_shows_the_latest
     assert_eq!(names, ["build", "<items>"]);
     assert_eq!(read_root["probes"][0]["samples"][0]["values"]["blocks_placed"], 75.0);
     assert!(read(&state, "c-missing").is_err());
-    let line = line(&state.scores, &root);
+    let line = line(&summaries(&state.scores, &root));
     assert!(line.contains("build: beds 2, blocks_placed 75 (1 samples)"), "{line}");
-    let failing = super::line(&state.scores, &member);
+    let failing = super::line(&summaries(&state.scores, &member));
     assert!(
         failing.contains("&lt;items&gt;: no sample yet")
             && failing.contains("status 1 &lt;b&gt;")
             && !failing.contains("<b>")
     );
-    assert_eq!(super::line(&state.scores, "c-none"), "");
+    assert_eq!(super::line(&summaries(&state.scores, "c-none")), "");
     // Probes of deleted chats are retired.
     state.chats.retain(|chat| chat.id != outsider);
     assert!(retire(&mut state.scores, &state.chats) && state.scores.len() == 2);

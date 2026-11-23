@@ -91,8 +91,8 @@ pub(crate) fn retain(
         let found = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == run && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(generation))
+            .get(run)
+            .filter(|r| r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(generation))
             .ok_or_else(|| io::Error::other("Attempt is not current"))?;
         let chat = found
             .chat_id

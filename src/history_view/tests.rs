@@ -123,7 +123,7 @@ fn an_opened_dm_lists_its_turns_newest_first_with_links() {
         })),
         ..Default::default()
     });
-    let spawn = spawn.id.clone();
+    let spawn = spawn.id().as_str().to_owned();
     let html = turns(&state, &filter(&format!("dm={id}"))).unwrap();
     assert_eq!(turn_rows(&html), 4);
     let at = |label: &str| {
@@ -255,7 +255,7 @@ fn pages_and_fragments_are_bounded_and_cursors_stable() {
     // A DM's turns arrive a bounded page at a time.
     let fragment = turns(&state, &filter(&format!("dm={busy}"))).unwrap();
     assert_eq!(turn_rows(&fragment), TURNS);
-    let cursor = state.runtime.runs[130 - TURNS].id.clone();
+    let cursor = state.runtime.runs[130 - TURNS].id().as_str().to_owned();
     assert!(
         fragment.contains(&format!(
             "href='/bots/history?dm={busy}&amp;before={cursor}'>Older turns →</a>"
@@ -265,7 +265,7 @@ fn pages_and_fragments_are_bounded_and_cursors_stable() {
     let older = turns(&state, &filter(&format!("dm={busy}&before={cursor}"))).unwrap();
     assert_eq!(turn_rows(&older), TURNS);
     assert!(older.contains("← Newest turns"));
-    let cursor = state.runtime.runs[130 - 2 * TURNS].id.clone();
+    let cursor = state.runtime.runs[130 - 2 * TURNS].id().as_str().to_owned();
     let oldest = turns(&state, &filter(&format!("dm={busy}&before={cursor}"))).unwrap();
     assert_eq!(turn_rows(&oldest), 30);
     assert!(!oldest.contains("Older turns"));

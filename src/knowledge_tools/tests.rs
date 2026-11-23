@@ -19,7 +19,7 @@ fn fixture() -> (State, String) {
         }],
         ..Default::default()
     });
-    let id = run.id.clone();
+    let id = run.id().as_str().to_owned();
     state.documents.push(crate::knowledge::Document {
         id: "selected".into(),
         title: "Selected.md".into(),
@@ -42,7 +42,7 @@ fn input() -> Value {
 #[test]
 fn captured_documents_are_immutable_and_unselected_notes_are_not_readable() {
     let (state, id) = fixture();
-    let run = state.runtime.runs.iter().find(|run| run.id == id).unwrap();
+    let run = state.runtime.runs.get(&id).unwrap();
     assert!(
         read(
             &state.documents,

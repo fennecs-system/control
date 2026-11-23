@@ -412,9 +412,9 @@ pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
         "note":"Values are the workload's own untrusted claims; Control does not interpret them."}),
     )
 }
-/// One line for the chat view: the latest values of this chat's probes.
-pub fn line(probes: &[Probe], chat: &str) -> String {
-    let parts = probes
+/// The latest values of this chat's probes, one plain-text summary each.
+pub fn summaries(probes: &[Probe], chat: &str) -> Vec<String> {
+    probes
         .iter()
         .filter(|probe| probe.chat == chat)
         .map(|probe| {
@@ -437,7 +437,10 @@ pub fn line(probes: &[Probe], chat: &str) -> String {
             };
             format!("{}: {latest} ({} samples){error}", probe.name, probe.samples.len())
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+/// One line for the chat view from [`summaries`].
+pub fn line(parts: &[String]) -> String {
     if parts.is_empty() {
         return String::new();
     }
@@ -555,10 +558,9 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|run| {
-                run.id == attempt.run
-                    && run.status == RunStatus::Running
+            .get(attempt.run)
+            .filter(|run| {
+                run.status == RunStatus::Running
                     && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
             })
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;

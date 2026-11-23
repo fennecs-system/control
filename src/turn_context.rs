@@ -217,8 +217,8 @@ pub(crate) fn callback_notice(state: &mut State, id: &str, conversation_hint: bo
     let Some(index) = state
         .runtime
         .runs
-        .iter()
-        .position(|r| r.id == id && r.status == RunStatus::Running)
+        .position(id)
+        .filter(|&index| state.runtime.runs[index].status == RunStatus::Running)
     else {
         return false;
     };
@@ -319,21 +319,21 @@ impl PlannedContext {
             .find(|c| Some(&c.id) == run.chat_id.as_ref())
             .ok_or_else(|| io::Error::other("Chat not found"))?;
         Ok(Self {
-            run: run.id.clone(),
+            run: run.id().as_str().to_owned(),
             chat: run.chat_id.clone(),
             revision: chat.revision,
-            generation: format!("{}-attempt-{}", run.id, run.attempts.len() + 1),
-            prepared: project(state, &run.id)?,
+            generation: format!("{}-attempt-{}", run.id(), run.attempts.len() + 1),
+            prepared: project(state, run.id())?,
             wake: tools::wake_page(state, run).map(|page| page.delivery),
         })
     }
     pub fn current(&self, state: &State) -> bool {
         crate::scheduler::next_in(state).is_some_and(|i| {
             let run = &state.runtime.runs[i];
-            run.id == self.run
+            run.id() == self.run
                 && run.chat_id == self.chat
                 && managed(state, run)
-                && self.generation == format!("{}-attempt-{}", run.id, run.attempts.len() + 1)
+                && self.generation == format!("{}-attempt-{}", run.id(), run.attempts.len() + 1)
                 && state
                     .chats
                     .iter()
@@ -385,7 +385,7 @@ pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
         .as_deref()
         .filter(|id| crate::chat::valid_id(id))
         .ok_or_else(|| io::Error::other("Missing attempt identity"))?;
-    let objective = crate::chat::prompt(state, &run.id).unwrap_or_else(|| run.objective.to_string());
+    let objective = crate::chat::prompt(state, run.id()).unwrap_or_else(|| run.objective.to_string());
     let text = match run.target.backend.agent().own_prompt(&objective, attempt.review_only) {
         Some(own) => own,
         None => {
@@ -401,7 +401,7 @@ pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
     };
     let framing = text.len().saturating_sub(objective.len());
     let prepared = if managed(state, run) {
-        project(state, &run.id)?
+        project(state, run.id())?
     } else {
         PreparedContext {
             version: VERSION,
@@ -481,8 +481,7 @@ fn project_with(
     let run = state
         .runtime
         .runs
-        .iter()
-        .find(|r| r.id == id)
+        .get(id)
         .ok_or_else(|| io::Error::other("Run not found"))?;
     let session = state
         .chats
@@ -603,7 +602,7 @@ fn project_with(
             source.actor == run.actor && source.action == run.action && source.status == RunStatus::Completed
         })
     {
-        history.push((format!("Last published agent report from {} before a missing handoff (unverified claims; inspect the restored workspace and services before acting):\n{}\n",source.id,source.result),Some(source.id.clone())));
+        history.push((format!("Last published agent report from {} before a missing handoff (unverified claims; inspect the restored workspace and services before acting):\n{}\n",source.id(),source.result),Some(source.id().as_str().to_owned())));
     }
     let mut sections = Vec::new();
     sections.push(Section {
@@ -734,9 +733,8 @@ pub(crate) fn view(
     let run = fields
         .get("run")
         .and_then(|id| {
-            state.runtime.runs.iter().find(|r| {
-                &r.id == id
-                    && r.actor == viewer.actor
+            state.runtime.runs.get(id).filter(|r| {
+                r.actor == viewer.actor
                     && r.chat_id
                         .as_deref()
                         .is_some_and(|id| crate::chat::Lineage::of(&state.chats).within(id, chat))

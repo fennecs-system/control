@@ -455,7 +455,7 @@ fn repeated_folder_requests_keep_message_provenance_and_replace_panel_approval()
     assert_eq!(project.path, second_path.display().to_string());
     assert!(project.error.is_none());
     assert_eq!(message_index(&state.chats[0]), Some(2));
-    let rendered = crate::chat::transcript(&state, &id).unwrap();
+    let rendered = crate::chat::transcript(&state, &id).unwrap().render();
     assert!(rendered.contains(&format!("/open</span> {}", second_path.display())));
     assert!(!rendered.contains("Trust folder and open"));
     let panel = crate::chat::requests(&state, &id).unwrap();
@@ -612,7 +612,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     assert_eq!(fs::read_to_string(first.join("code.txt")).unwrap(), "first");
     assert!(!first.join(".git").exists());
     let state = shared.lock().unwrap();
-    let transcript = crate::chat::transcript(&state, &id).unwrap();
+    let transcript = crate::chat::transcript(&state, &id).unwrap().render();
     assert!(transcript.contains("Opened /workspace/api"));
     assert!(!transcript.contains("Trust folder and open"));
     let saved: State = crate::config::read_state_in(&state_dir, isize::MAX as usize)
@@ -750,6 +750,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
         assert!(
             crate::chat::transcript(&state, &id)
                 .unwrap()
+                .render()
                 .contains("Importing folder…")
         );
         assert_eq!(crate::chat::detail(&state, &id).unwrap()["project_importing"], true);
@@ -970,6 +971,7 @@ fn background_import_errors_appear_beside_the_request_for_retry() {
         assert!(
             crate::chat::transcript(&state, &id)
                 .unwrap()
+                .render()
                 .contains("Folder request · see Requests")
         );
     }
@@ -1197,7 +1199,7 @@ fn dismissal_reaches_the_requesting_agent_like_a_port_decision() {
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Review the shared library", "test").unwrap();
-    let origin = state.runtime.runs[0].id.clone();
+    let origin = state.runtime.runs[0].id().as_str().to_owned();
     let run = Some(origin.as_str());
     request(&mut state, &id, "/node/library", Requester::Agent { run }).unwrap();
     // A busy chat only notes it; the agent reads it on its next turn.
@@ -1215,7 +1217,7 @@ fn dismissal_reaches_the_requesting_agent_like_a_port_decision() {
     };
     let continuation = state.runtime.runs.last().unwrap();
     assert_eq!(
-        (continuation.id.as_str(), continuation.kind),
+        (continuation.id().as_str(), continuation.kind),
         (resumed.as_str(), crate::runtime::RunKind::FolderDecision)
     );
     assert!(
@@ -1295,7 +1297,7 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
         let state = shared.lock().unwrap();
         assert!(state.chats[0].project.is_none());
         assert_eq!(state.chats[0].messages[0].reply, DISMISSED);
-        let transcript = crate::chat::transcript(&state, &id).unwrap();
+        let transcript = crate::chat::transcript(&state, &id).unwrap().render();
         assert!(
             transcript.contains(DISMISSED) && !transcript.contains("replaced by a later request"),
             "{transcript}"

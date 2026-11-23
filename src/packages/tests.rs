@@ -81,14 +81,14 @@ fn running(state: &mut State, packages: Vec<control_context::PackageInput>) -> S
     let run = &mut **state.runtime.runs.last_mut().unwrap();
     run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
-        workspace_id: Some(format!("{}-attempt", run.id)),
+        workspace_id: Some(format!("{}-attempt", run.id())),
         ..Default::default()
     });
     *run.context = Some(control_context::Resolved {
         packages,
         ..Default::default()
     });
-    run.id.clone()
+    run.id().as_str().to_owned()
 }
 
 #[test]

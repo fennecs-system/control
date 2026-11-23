@@ -7,7 +7,7 @@ fn requested() -> (State, String, String) {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Run the server", "test").unwrap();
     state.runtime.runs[0].target.model = Some("captured-model".into());
-    let origin = state.runtime.runs[0].id.clone();
+    let origin = state.runtime.runs[0].id().as_str().to_owned();
     (state, chat, origin)
 }
 fn decide(state: &mut State, chat: &str, origin: &str) -> Outcome {
@@ -42,7 +42,7 @@ fn decisions_wait_for_the_turn_then_resume_with_its_context() {
     let run = state.runtime.runs.last().unwrap();
     assert_eq!(
         (
-            run.id.as_str(),
+            run.id().as_str(),
             run.kind,
             run.chat_id.as_deref(),
             run.target.model.as_deref()
@@ -72,7 +72,7 @@ fn decisions_wait_for_the_turn_then_resume_with_its_context() {
         !message.is_notice(Some(run)),
         "it renders with its run, not as a bare notice"
     );
-    let html = crate::chat::transcript(&state, &chat).unwrap();
+    let html = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(
         html.contains("<p class='message-status' aria-label='Control update'>Port decisions\nrelay: approved</p>"),
         "{html}"
@@ -84,7 +84,7 @@ fn human_turns_after_the_request_get_a_note_and_design_answers_do_not_count() {
     let (mut state, chat, origin) = requested();
     state.runtime.runs[0].status = RunStatus::Completed;
     let mut answer = state.runtime.runs[0].clone();
-    answer.id = "answer".into();
+    answer = answer.with_id("answer");
     answer.kind = RunKind::DesignAnswer;
     state.runtime.runs.push(answer);
     assert!(
@@ -133,7 +133,7 @@ fn noted() -> (State, String, String) {
     let (mut state, chat, origin) = requested();
     state.runtime.runs[0].status = RunStatus::Completed;
     let mut wake = state.runtime.runs[0].clone();
-    wake.id = "wake".into();
+    wake = wake.with_id("wake");
     wake.kind = RunKind::BotWake;
     wake.status = RunStatus::Failed;
     state.runtime.runs.push(wake);
@@ -149,7 +149,7 @@ fn a_noted_decision_is_a_control_notice_in_every_view() {
     assert_eq!((note.run_id.as_deref(), note.speaker), (None, MessageSpeaker::Control));
     assert_eq!(serde_json::to_value(note).unwrap()["speaker"], "control");
 
-    let html = crate::chat::transcript(&state, &chat).unwrap();
+    let html = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(html.contains("<p class='message-status preserve' aria-label='Control notice'>Control · Port decisions: relay: approved</p>"), "{html}");
     assert!(
         !html.contains("<p class='preserve'>Port decisions"),
@@ -245,6 +245,6 @@ fn notes_stored_before_speakers_are_recognised_by_their_heading() {
     state.chats[0]
         .messages
         .push(message("Bot decisions\nhelper (c-1): denied", None));
-    let html = crate::chat::transcript(&state, &chat).unwrap();
+    let html = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(html.contains("aria-label='Control notice'>Control · Bot decisions: helper (c-1): denied</p>"));
 }

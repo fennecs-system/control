@@ -1,7 +1,6 @@
 //! Authorized, borrowed conversation forest. Linear cycle repair and subtree
 //! ordering keeps saved orphan/cyclic links visible without recursion.
 use crate::{
-    State,
     chat::{Session, valid_id},
     identity::{self, Action},
 };
@@ -9,15 +8,14 @@ use std::collections::HashMap;
 
 pub struct Entry<'a> {
     pub session: &'a Session,
-    /// Index of `session` in `state.chats`, e.g. into `callsigns::all`.
+    /// Index of `session` in the chat list, e.g. into `callsigns::all`.
     pub position: usize,
     pub parent: Option<&'a str>,
     pub depth: usize,
 }
-pub fn ordered(state: &State) -> Vec<Entry<'_>> {
+pub fn ordered(chats: &[Session]) -> Vec<Entry<'_>> {
     let mut authorize = identity::authorizer();
-    let (positions, visible): (Vec<_>, Vec<_>) = state
-        .chats
+    let (positions, visible): (Vec<_>, Vec<_>) = chats
         .iter()
         .enumerate()
         .filter(|(_, chat)| valid_id(&chat.id) && authorize(&chat.actor, Action::Task).is_ok())

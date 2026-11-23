@@ -79,7 +79,7 @@ pub(crate) fn candidates(state: &State) -> Vec<usize> {
             && !run.status.is_resumable()
     };
     // Runs that stay hot keep the runs they point at hot too.
-    let mut referenced = HashSet::new();
+    let mut referenced: HashSet<&str> = HashSet::new();
     for (_, run) in runs
         .iter()
         .enumerate()
@@ -88,18 +88,20 @@ pub(crate) fn candidates(state: &State) -> Vec<usize> {
         referenced.extend(
             run.persona
                 .iter()
-                .flat_map(|p| std::iter::once(&p.root).chain(&p.parent)),
+                .flat_map(|p| std::iter::once(&p.root).chain(&p.parent))
+                .map(String::as_str),
         );
         referenced.extend(
             run.delegation
                 .iter()
-                .flat_map(|d| d.child.iter().chain(&d.continuation)),
+                .flat_map(|d| d.child.iter().chain(&d.continuation))
+                .map(String::as_str),
         );
-        referenced.extend(run.spawns.iter().flat_map(|batch| &batch.children));
+        referenced.extend(run.spawns.iter().flat_map(|batch| &batch.children).map(String::as_str));
     }
     runs.iter()
         .enumerate()
-        .filter(|(index, run)| movable(*index, run) && !referenced.contains(&run.id))
+        .filter(|(index, run)| movable(*index, run) && !referenced.contains(run.id().as_str()))
         .map(|(index, _)| index)
         .collect()
 }
@@ -202,7 +204,7 @@ fn merge(directory: &Path, state: &State, archive: &mut Archive, pending: &mut P
             .runs
             .iter()
             .filter(|run| run.archived())
-            .map(|run| run.id.as_str())
+            .map(|run| run.id().as_str())
             .collect();
         // A run archived twice keeps only its newer (right-most) copy.
         let mut lines: Vec<Option<String>> = Vec::new();
@@ -251,7 +253,12 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
     if archive.is_empty() {
         return Ok(());
     }
-    let hot: HashSet<String> = state.runtime.runs.iter().map(|run| run.id.clone()).collect();
+    let hot: HashSet<String> = state
+        .runtime
+        .runs
+        .iter()
+        .map(|run| run.id().as_str().to_owned())
+        .collect();
     // A run un-archived and later archived again is in an older block too,
     // until a merge drops that copy: the newest block's copy wins.
     let mut archived: Vec<Run> = Vec::new();
@@ -259,13 +266,13 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
     for span in &archive.blocks {
         for line in fs::read_to_string(span.file(directory))?.lines() {
             let record: Record = serde_json::from_str(line).map_err(io::Error::other)?;
-            if !hot.contains(&record.id) {
+            if !hot.contains(record.id().as_str()) {
                 let saved = serde_json::value::RawValue::from_string(line.to_owned()).map_err(io::Error::other)?;
                 let run = Run::restored(record, saved, true);
-                match at.get(&run.id) {
+                match at.get(run.id().as_str()) {
                     Some(&index) => archived[index] = run,
                     None => {
-                        at.insert(run.id.clone(), archived.len());
+                        at.insert(run.id().as_str().to_owned(), archived.len());
                         archived.push(run);
                     }
                 }
@@ -273,9 +280,9 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
         }
     }
     // Re-archived runs sit at later archive positions than their creation.
-    archived.sort_by(|a, b| creation(&a.id).cmp(&creation(&b.id)));
+    archived.sort_by(|a, b| creation(a.id()).cmp(&creation(b.id())));
     let hot = std::mem::take(&mut state.runtime.runs);
-    state.runtime.runs = merge_by_creation(archived, hot);
+    state.runtime.runs = merge_by_creation(archived, hot.into_vec()).into();
     Ok(())
 }
 
@@ -289,7 +296,7 @@ fn merge_by_creation(archived: Vec<Run>, hot: Vec<Run>) -> Vec<Run> {
     let (mut archived, mut hot) = (archived.into_iter().peekable(), hot.into_iter().peekable());
     loop {
         let take_archived = match (archived.peek(), hot.peek()) {
-            (Some(a), Some(h)) => creation(&a.id) <= creation(&h.id),
+            (Some(a), Some(h)) => creation(a.id()) <= creation(h.id()),
             (Some(_), None) => true,
             (None, Some(_)) => false,
             (None, None) => return merged,

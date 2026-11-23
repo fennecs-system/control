@@ -4,7 +4,6 @@
 //! a hint when a command fails to reach a host one of its requests names.
 //! Text only; it grants and changes nothing.
 use super::*;
-use crate::runtime::Run;
 
 impl Port {
     /// How a process in the service reaches this route once approved.
@@ -45,12 +44,12 @@ impl Port {
 }
 
 /// The chat requested `port` or owns its service, as the same actor.
-fn related(runs: &[Run], port: &Port, chat: &str, actor: &Actor) -> bool {
+fn related(runs: &crate::runtime::Runs, port: &Port, chat: &str, actor: &Actor) -> bool {
     &port.actor == actor
         && (port.chat == chat
             || runs
-                .iter()
-                .any(|run| run.id == port.origin_run && run.chat_id.as_deref() == Some(chat)))
+                .get(&port.origin_run)
+                .is_some_and(|run| run.chat_id.as_deref() == Some(chat)))
 }
 
 /// Resolves a `port:<id>` wait for `chat`. `Ok` when the request is still
@@ -63,7 +62,7 @@ fn related(runs: &[Run], port: &Port, chat: &str, actor: &Actor) -> bool {
 pub(crate) struct Requests<'a> {
     ports: &'a [Port],
     chats: &'a [crate::chat::Session],
-    runs: &'a [Run],
+    runs: &'a crate::runtime::Runs,
 }
 impl<'a> Requests<'a> {
     pub(crate) fn of(state: &'a State) -> Self {
@@ -126,12 +125,18 @@ const UNREACHABLE: [&str; 10] = [
 /// to reach a host named by one of the chat's pending or approved egress
 /// requests: wait for the decision, or use the approved relay. Only hosts of
 /// the run's own requests match; nothing is hard-coded.
-pub(crate) fn egress_hint(runs: &[Run], ports: &[Port], run_id: &str, command: &str, output: &str) -> Option<String> {
+pub(crate) fn egress_hint(
+    runs: &crate::runtime::Runs,
+    ports: &[Port],
+    run_id: &str,
+    command: &str,
+    output: &str,
+) -> Option<String> {
     let lower = output.to_ascii_lowercase();
     if !UNREACHABLE.iter().any(|signature| lower.contains(signature)) {
         return None;
     }
-    let run = runs.iter().find(|run| run.id == run_id)?;
+    let run = runs.get(run_id)?;
     let chat = run.chat_id.as_deref()?;
     let command = command.to_ascii_lowercase();
     let port = ports

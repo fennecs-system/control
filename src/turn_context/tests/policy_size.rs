@@ -48,7 +48,7 @@ fn turn(
     run.persona = persona;
     run.status = RunStatus::Completed;
     *run.result = "Claimed the next milestone; routine running; waiting on its events.".into();
-    let id = run.id.clone();
+    let id = run.id().as_str().to_owned();
     let session = state.chats.iter_mut().find(|c| c.id == chat).unwrap();
     session.messages.push(crate::chat::Message {
         speaker: Default::default(),
@@ -72,7 +72,7 @@ fn team() -> Team {
     let seed = state.runtime.runs[0].clone();
     assert!(seed.context.is_some(), "the lead captures its lens context");
     state.runtime.runs[0].status = RunStatus::Completed;
-    let root = seed.id.clone();
+    let root = seed.id().as_str().to_owned();
     let member_chat = chat_with(&mut state, Some(&lead_chat), &["swarm", "advisor"]);
     let worker = Persona {
         role: Role::Worker,
@@ -178,7 +178,7 @@ fn sizes(team: &Team) -> [(&'static str, usize, usize); 3] {
     };
     let (lead_policy, lead_total) = managed(&team.lead);
     let (member_policy, member_total) = managed(&team.member);
-    let run = team.state.runtime.runs.iter().find(|r| r.id == team.advisor).unwrap();
+    let run = team.state.runtime.runs.get(&team.advisor).unwrap();
     let session = team
         .state
         .chats
@@ -200,7 +200,7 @@ fn sizes(team: &Team) -> [(&'static str, usize, usize); 3] {
 /// Control's workspace shell; and the prompt's deferred index.
 fn tool_bytes(team: &Team, id: &str, shell: bool) -> (usize, usize, usize) {
     use crate::worker_tools::deferred;
-    let run = team.state.runtime.runs.iter().find(|r| r.id == id).unwrap();
+    let run = team.state.runtime.runs.get(id).unwrap();
     let facts = deferred::Facts {
         shell,
         ..deferred::Facts::of(&team.state, run, crate::turn_context::managed(&team.state, run))
@@ -271,8 +271,7 @@ fn consecutive_member_wakes(team: &mut Team) -> [(String, PreparedContext); 2] {
         .state
         .runtime
         .runs
-        .iter()
-        .find(|r| r.id == team.member)
+        .get(&team.member)
         .unwrap()
         .chat_id
         .clone()
@@ -297,14 +296,7 @@ fn consecutive_member_wakes(team: &mut Team) -> [(String, PreparedContext); 2] {
         "Milestone 12: routine running, waiting for its target event.",
     );
     let first = project(&team.state, &team.member).unwrap();
-    let seed = team
-        .state
-        .runtime
-        .runs
-        .iter()
-        .find(|r| r.id == team.member)
-        .unwrap()
-        .clone();
+    let seed = team.state.runtime.runs.get(&team.member).unwrap().clone();
     let worker = seed.persona.clone();
     let next = turn(
         &mut team.state,
@@ -431,14 +423,7 @@ fn dump_prompt_sections() {
     std::fs::create_dir_all(&dir).unwrap();
     let mut team = team();
     let write = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
-    let member = team
-        .state
-        .runtime
-        .runs
-        .iter()
-        .find(|r| r.id == team.member)
-        .unwrap()
-        .clone();
+    let member = team.state.runtime.runs.get(&team.member).unwrap().clone();
     let session = team
         .state
         .chats

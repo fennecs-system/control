@@ -473,7 +473,7 @@ fn evict(state: &mut State, room: &str) -> Result<(), &'static str> {
 /// failed turn is retried, so neither wakes dependents.
 fn lost_owners(state: &State) -> HashSet<&str> {
     let mut latest: std::collections::HashMap<&str, &RunStatus> = std::collections::HashMap::new();
-    for run in &state.runtime.runs {
+    for run in state.runtime.runs.iter() {
         if let Some(chat) = run.chat_id.as_deref() {
             latest.insert(chat, &run.status);
         }

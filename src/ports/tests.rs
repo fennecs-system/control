@@ -27,12 +27,8 @@ fn requests_from_spawned_descendants_surface_in_the_top_level_chat() {
         state.chats.last_mut().unwrap().parent_chat = Some(parent.clone());
         parent = child;
     }
-    let mut wake = state.runtime.runs[0].clone();
-    (wake.id, wake.chat_id, wake.kind) = (
-        "bot-wake".into(),
-        Some(parent.clone()),
-        crate::runtime::RunKind::BotWake,
-    );
+    let mut wake = state.runtime.runs[0].clone().with_id("bot-wake");
+    (wake.chat_id, wake.kind) = (Some(parent.clone()), crate::runtime::RunKind::BotWake);
     state.runtime.runs.push(wake);
     let mut port = state.ports[0].clone();
     (port.id, port.chat, port.origin_run) = (
@@ -67,7 +63,7 @@ pub(crate) fn fixture() -> (State, String, String) {
         workspace_id: Some("attempt-a".into()),
         ..Default::default()
     });
-    let run_id = run.id.clone();
+    let run_id = run.id().as_str().to_owned();
     let resource = Resource {
         id: ResourceId::try_from("svc-a".to_owned()).unwrap(),
         owner: Owner {
@@ -294,7 +290,7 @@ fn service_commands_start_collapsed_during_and_after_their_run() {
     for service in ["svc-a", "svc-b"] {
         crate::services::enqueue_test_command(&mut state, &run, service, service, "echo probe", 60).unwrap();
     }
-    let live = crate::chat::transcript(&state, &chat).unwrap();
+    let live = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(live.contains("Commands · 2</summary>"));
     assert_eq!(
         live.matches("class='command-activity' data-transcript-key='service-command-")
@@ -307,7 +303,7 @@ fn service_commands_start_collapsed_during_and_after_their_run() {
         "Live commands start collapsed and remain available to expand"
     );
     state.runtime.runs[0].status = RunStatus::Completed;
-    let done = crate::chat::transcript(&state, &chat).unwrap();
+    let done = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(!done.contains("-commands' open"));
     assert!(!done.contains("' open><summary><span>"));
 }
@@ -318,7 +314,7 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     let grants = crate::services::grants(crate::services::ServiceAuthority::of(&state), &state.runtime.runs[0]);
     let child_chat = crate::chat::create(&mut state);
     let mut child = state.runtime.runs[0].clone();
-    child.id = "child-run".into();
+    child = child.with_id("child-run");
     child.chat_id = Some(child_chat);
     state.runtime.runs.push(child);
     assert!(!crate::services::direct(
@@ -384,7 +380,7 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
         &state.runtime.runs[1]
     ));
     assert!(result["port_id"].is_string());
-    assert_eq!(state.runtime.runs[0].id, parent);
+    assert_eq!(state.runtime.runs[0].id(), parent);
 }
 #[test]
 fn pending_requests_are_idempotent_owned_and_rollback_on_save_failure() {
@@ -798,7 +794,7 @@ fn delegated_peer_routes_capture_exact_authority_across_owner_chats() {
     assert_ne!(route.chat, state.ports[0].chat);
     assert!(authorized(PortAuthority::of(&state), &route, time).is_ok());
     // The captured route survives model-turn history removal and restart.
-    state.runtime.runs.clear();
+    state.runtime.runs = Default::default();
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert!(authorized(PortAuthority::of(&restored), &route, time).is_ok());
     state.ports.last_mut().unwrap().peer_grant = None;

@@ -21,7 +21,7 @@ fn fixture(chats: usize) -> (State, String, String, usize) {
         chat.messages.clear();
         chat.parent_chat = (index == chats - 1).then(|| lead.clone());
         let mut task = run.clone();
-        task.id = format!("benchmark-run-{index}");
+        task = task.with_id(format!("benchmark-run-{index}"));
         task.chat_id = Some(chat.id.clone());
         task.status = RunStatus::Completed;
         task.attempts.clear();
@@ -29,7 +29,7 @@ fn fixture(chats: usize) -> (State, String, String, usize) {
         state.runtime.runs.push(task);
     }
     let target = state.chats.last().unwrap().id.clone();
-    let sender = state.runtime.runs[0].id.clone();
+    let sender = state.runtime.runs[0].id().as_str().to_owned();
     let runs = state.runtime.runs.len();
     (state, sender, target, runs)
 }

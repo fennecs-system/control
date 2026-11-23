@@ -227,7 +227,7 @@ fn a_lead_messaging_its_running_persistent_bot_member_queues_no_turns() {
     crate::bots::command(&mut state, &child, "on").unwrap();
     let index = crate::chat::latest_task(&state, &child, &state.chats[0].actor).unwrap();
     state.runtime.runs[index].status = RunStatus::Running;
-    let lead_run = state.runtime.runs[0].id.clone();
+    let lead_run = state.runtime.runs[0].id().as_str().to_owned();
     let before = state.runtime.runs.len();
     for nonce in ["one", "two", "three"] {
         let sent = handle(
@@ -283,7 +283,7 @@ fn a_lead_messaging_its_running_persistent_bot_member_queues_no_turns() {
     );
     // A member that is not a persistent bot still gets its requested turn.
     let (mut state, _, child, _) = family();
-    let lead_run = state.runtime.runs[0].id.clone();
+    let lead_run = state.runtime.runs[0].id().as_str().to_owned();
     handle(
         &mut state,
         &AttemptRef {

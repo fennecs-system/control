@@ -55,8 +55,7 @@ fn fixture(finished: usize) -> (State, String) {
     );
     let template = state.runtime.runs[0].clone();
     for index in 0..finished {
-        let mut run = template.clone();
-        run.id = format!("finished-{index}");
+        let mut run = template.clone().with_id(format!("finished-{index}"));
         run.status = RunStatus::Completed;
         state.runtime.runs.push(run);
     }
@@ -78,7 +77,7 @@ fn held_turns_read_the_same_in_every_view() {
         .map(|message| message["held"].as_str().unwrap_or(""))
         .collect::<Vec<_>>();
     assert_eq!(held, ["", CAPPED, "", PROBING]);
-    let transcript = crate::chat::transcript(&state, &chat).unwrap();
+    let transcript = crate::chat::transcript(&state, &chat).unwrap().render();
     assert_eq!(
         transcript
             .matches(&format!("<p class='message-status'>{}</p>", crate::escape(CAPPED)))

@@ -117,12 +117,9 @@ impl Host for Attempted<'_> {
     }
     fn requested(&self) -> bool {
         self.bridge.is_some_and(|(state, run)| {
-            state.lock().is_ok_and(|s| {
-                s.runtime
-                    .runs
-                    .iter()
-                    .any(|r| r.id == run && crate::attempt_control::requested(r))
-            })
+            state
+                .lock()
+                .is_ok_and(|s| s.runtime.runs.get(run).is_some_and(crate::attempt_control::requested))
         })
     }
 }

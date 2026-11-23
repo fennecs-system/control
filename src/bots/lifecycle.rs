@@ -931,7 +931,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         // Commands come from recent runs; the newest-first walk stops looking
         // once every one is resolved.
         if unresolved > 0
-            && let Some(slot) = by_run.get_mut(run.id.as_str()).filter(|slot| **slot == usize::MAX)
+            && let Some(slot) = by_run.get_mut(run.id().as_str()).filter(|slot| **slot == usize::MAX)
         {
             *slot = position;
             unresolved -= 1;
@@ -1118,7 +1118,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             scan.tokens = 0;
             scan.recount = true;
         }
-        for run in &state.runtime.runs {
+        for run in state.runtime.runs.iter() {
             let Some(&position) = run.chat_id.as_deref().and_then(|chat| member.get(chat)) else {
                 continue;
             };

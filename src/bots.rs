@@ -1352,7 +1352,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
                     .as_ref()
                     .is_some_and(|mailbox| mailbox.accepted().is_none())
         }))
-    .then(|| latest.id.clone());
+    .then(|| latest.id().as_str().to_owned());
     let note = recovery
         .as_ref()
         .map(|_| recovery_note(state, chat, latest))
@@ -1413,7 +1413,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         run.status = RunStatus::Completed;
         *run.result = "Patrol skipped: no team activity since the last patrol.".into();
     }
-    let id = run.id.clone();
+    let id = run.id().as_str().to_owned();
     let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
     session.messages.push(crate::chat::Message {
         speaker: Default::default(),
@@ -1471,25 +1471,18 @@ fn needs_recovery(state: &State, index: usize) -> bool {
             .is_none_or(|mailbox| mailbox.accepted().is_some())
         || continuity.working.as_ref().is_some_and(|working| {
             matches!(working.disposition, control_context::turn_mailbox::Disposition::Done)
-                && state
-                    .runtime
-                    .runs
-                    .iter()
-                    .position(|previous| previous.id == working.run)
-                    .is_none_or(|previous| {
-                        state
-                            .runtime
-                            .runs
-                            .get(previous.saturating_add(1)..=index)
-                            .is_none_or(|newer| {
-                                !newer.iter().any(|input| {
-                                    input.chat_id == run.chat_id
-                                        && input.actor == run.actor
-                                        && input.kind.prompt_role()
-                                            == control_context::agent_policy::PromptRole::Instruction
-                                })
+                && state.runtime.runs.position(&working.run).is_none_or(|previous| {
+                    state.runtime.runs[..]
+                        .get(previous.saturating_add(1)..=index)
+                        .is_none_or(|newer| {
+                            !newer.iter().any(|input| {
+                                input.chat_id == run.chat_id
+                                    && input.actor == run.actor
+                                    && input.kind.prompt_role()
+                                        == control_context::agent_policy::PromptRole::Instruction
                             })
-                    })
+                        })
+                })
         })
         || run.question.as_ref().is_some_and(|question| question.pending())
         || crate::delegation::pausing(run)
@@ -1677,8 +1670,9 @@ fn reconcile_with_wake_at(
             if state.bots.continuations.get(&chat.id) == Some(&working.revision) {
                 return None;
             }
-            let run = state.runtime.runs.iter().position(|run| {
-                run.id == working.run && run.status == RunStatus::Completed && run.chat_id.as_deref() == Some(&chat.id)
+            let run = state.runtime.runs.position(&working.run).filter(|&index| {
+                state.runtime.runs[index].status == RunStatus::Completed
+                    && state.runtime.runs[index].chat_id.as_deref() == Some(&chat.id)
             })?;
             let head = if state.runtime.runs[run].action == identity::Action::Improve {
                 &chat.improve_workspace
@@ -1702,7 +1696,7 @@ fn reconcile_with_wake_at(
                     && r.kind.prompt_role() == control_context::agent_policy::PromptRole::Instruction
                     && (r.status != RunStatus::Completed
                         || conversation
-                            .position(&r.id)
+                            .position(r.id())
                             .is_none_or(|position| position >= processed))
             });
             (head.as_deref() == Some(&working.checkpoint)).then(|| (chat.id.clone(), working.clone(), !later_input))
@@ -1771,7 +1765,7 @@ fn reconcile_with_wake_at(
             .runs
             .iter()
             .enumerate()
-            .map(|(i, run)| (run.id.as_str(), i))
+            .map(|(i, run)| (run.id().as_str(), i))
             .collect::<std::collections::HashMap<_, _>>();
         let tagged = state
             .runtime
@@ -1806,29 +1800,24 @@ fn reconcile_with_wake_at(
     // Offer runnable continuation before completing the old turn so it folds
     // with already pending events into one budgeted successor.
     for (chat, working, resume) in &publications {
-        let grants_applied = state
-            .runtime
-            .runs
-            .iter()
-            .find(|run| run.id == working.run)
-            .is_some_and(|published| {
-                crate::chat::latest_task(state, chat, &published.actor).is_none_or(|latest| {
-                    state.runtime.runs[latest].resource_grants.iter().all(|grant| {
-                        state
-                            .services
-                            .iter()
-                            .filter(|service| grant.matches(service))
-                            .all(|service| {
-                                crate::services::accessible(
-                                    crate::chat::Lineage::of(&state.chats),
-                                    service,
-                                    &service.resource.owner.node,
-                                    published,
-                                )
-                            })
-                    })
+        let grants_applied = state.runtime.runs.get(&working.run).is_some_and(|published| {
+            crate::chat::latest_task(state, chat, &published.actor).is_none_or(|latest| {
+                state.runtime.runs[latest].resource_grants.iter().all(|grant| {
+                    state
+                        .services
+                        .iter()
+                        .filter(|service| grant.matches(service))
+                        .all(|service| {
+                            crate::services::accessible(
+                                crate::chat::Lineage::of(&state.chats),
+                                service,
+                                &service.resource.owner.node,
+                                published,
+                            )
+                        })
                 })
-            });
+            })
+        });
         for range in &working.processed {
             let topic = match range {
                 control_context::turn_mailbox::Range::Room { room: name, .. } => Some(room(name)),
@@ -2248,10 +2237,9 @@ fn handle_with(
     let run = state
         .runtime
         .runs
-        .iter()
-        .find(|run| {
-            run.id == attempt.run
-                && run.status == RunStatus::Running
+        .get(attempt.run)
+        .filter(|run| {
+            run.status == RunStatus::Running
                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;
@@ -2263,7 +2251,7 @@ fn handle_with(
         .chat_id
         .clone()
         .ok_or_else(|| io::Error::other("A chat is required"))?;
-    let (origin, actor) = (run.id.clone(), run.actor.clone());
+    let (origin, actor) = (run.id().as_str().to_owned(), run.actor.clone());
     match call {
         BotCall::Pause => {
             if !defined(state, &requester) {

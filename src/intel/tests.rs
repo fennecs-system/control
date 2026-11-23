@@ -178,9 +178,15 @@ fn member(state: &mut State, root: &str, ago: u64) -> String {
         .unwrap()
         .parent_chat = Some(root.to_owned());
     crate::chat::send(state, &chat, "Work", "test").unwrap();
+    let renamed = state
+        .runtime
+        .runs
+        .pop()
+        .unwrap()
+        .with_id(format!("{:x}-t", u128::from(now() - ago - 40) * 1_000_000_000));
+    state.runtime.runs.push(renamed);
     let run = state.runtime.runs.last_mut().unwrap();
     run.status = RunStatus::Completed;
-    run.id = format!("{:x}-t", u128::from(now() - ago - 40) * 1_000_000_000);
     run.attempts = vec![crate::usage::Attempt {
         started_unix: now() - ago,
         elapsed_ms: 90_000,

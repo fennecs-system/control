@@ -47,12 +47,13 @@ fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering(
         }
         let detail = crate::chat::detail(&state, &parent).unwrap();
         assert_eq!(detail["agent_activity"][0]["activity"]["output"], "first <progress>\n");
-        let html = crate::chat::transcript(&state, &parent).unwrap();
+        let html = crate::chat::transcript(&state, &parent).unwrap().render();
         assert!(html.contains("first &lt;progress&gt;"));
         assert!(html.contains("printf &#39;&lt;progress&gt;&#39;") || html.contains("printf '&lt;progress&gt;'"));
         assert!(
             !crate::chat::transcript(&state, &unrelated)
                 .unwrap()
+                .render()
                 .contains("progress")
         );
         assert!(
@@ -558,7 +559,7 @@ fn agent_status_omits_node_capacity_and_other_chats_executions() {
     }
     // An earlier turn of the same chat counts as the caller's own.
     let mut earlier = state.runtime.runs[0].clone();
-    earlier.id = "earlier-run".into();
+    earlier = earlier.with_id("earlier-run");
     state.runtime.runs.push(earlier);
     state.services[0].executions[4].run = "earlier-run".into();
     let generation = state.services[0].resource.generation.get();

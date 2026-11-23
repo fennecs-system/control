@@ -10,7 +10,7 @@ fn auto() -> AutoApproval {
     }
 }
 fn ask_with(state: &mut State, nonce: &str, chat: &str, policy: &AutoApproval) -> io::Result<Value> {
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let attempt = AttemptRef {
         run: &run,
         generation: "attempt-a",
@@ -102,7 +102,7 @@ fn bots_over_the_limits_strict_mode_or_strict_principals_wait_for_the_operator()
 #[test]
 fn a_failed_save_rolls_back_an_automatic_approval() {
     let (mut state, _, child) = requester();
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let attempt = AttemptRef {
         run: &run,
         generation: "attempt-a",

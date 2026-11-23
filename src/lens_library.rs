@@ -216,12 +216,26 @@ pub(crate) fn save_with(
     }
     Ok(draft)
 }
-pub fn choices(library: &control_context::Library, selected: &[String], form: &str) -> String {
+/// The current genes' ids and names, alternating, for a picker rendered
+/// later by [`choices`].
+pub fn names(library: &control_context::Library) -> crate::texts::Texts {
+    let genes = library.current();
+    let bytes = genes.iter().map(|lens| lens.id.len() + lens.name.len()).sum();
+    genes.iter().fold(
+        crate::texts::Texts::with_capacity(2 * genes.len(), bytes),
+        |mut texts, lens| {
+            texts.push(&lens.id);
+            texts.push(&lens.name);
+            texts
+        },
+    )
+}
+pub fn choices(genes: &crate::texts::Texts, selected: &[String], form: &str) -> String {
     let mut html = format!(
         "<input type='hidden' name='composition' value='1' form='{form}'><div class='chat-tags'><details class='lens-selector'><summary>+ Genes</summary></details><div class='tag-options'>"
     );
-    for lens in library.current() {
-        html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(&lens.id),escape(&lens.id),if selected.contains(&lens.id){" checked"}else{""},escape(&lens.name)));
+    for (id, name) in (0..genes.len() / 2).map(|gene| (genes.get(2 * gene), genes.get(2 * gene + 1))) {
+        html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(id),escape(id),if selected.iter().any(|lens| lens == id){" checked"}else{""},escape(name)));
     }
     html.push_str("</div><a class='lens-library-shortcut' href='/dna' aria-label='Open DNA library'>↗</a></div>");
     html
