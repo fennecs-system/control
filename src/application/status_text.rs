@@ -46,3 +46,5 @@ macro_rules! status_enum {
 }
 pub(crate) use status_enum;
 
+#[cfg(test)]
+mod tests;

@@ -2,7 +2,7 @@
 //! `control_bot::Supervisor` decides; this adapter feeds it room messages, turn
 //! completions and time, and interprets its turn requests as ordinary queued
 //! turns. Supervisor state, requested turns and queued runs share one checkpoint.
-mod lifecycle;
+pub(crate) mod lifecycle;
 mod pathology;
 mod tools;
 use crate::runtime::RunKind;
