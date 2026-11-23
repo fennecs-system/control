@@ -96,7 +96,11 @@ fn public_https_is_approved_and_recorded_with_the_policy_as_decider() {
             .iter()
             .any(|notice| notice.id == format!("policy-{id}"))
     );
-    assert!(overview(&state).concat().contains("auto · public-web"));
+    assert!(
+        overview(&state.ports, &state.auto_decisions)
+            .concat()
+            .contains("auto · public-web")
+    );
     drop(state);
     // The tool result carried the decision: no decision turn is queued.
     let mut state = shared.lock().unwrap();

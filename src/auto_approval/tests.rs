@@ -343,7 +343,7 @@ fn decisions_are_recorded_with_the_policy_as_decider_and_rate_limited_notices() 
         (last.decider.as_str(), last.rule.as_str(), last.kind.as_str()),
         ("policy", "public-web", "port")
     );
-    assert_eq!(rule(&state, "port-0").as_deref(), Some("public-web"));
+    assert_eq!(rule(&state.auto_decisions, "port-0").as_deref(), Some("public-web"));
     assert_eq!(
         state.bots.notices.len(),
         crate::intel::POLICY_NOTICES_PER_HOUR,

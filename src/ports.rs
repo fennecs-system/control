@@ -786,19 +786,18 @@ fn auto_approve(
     Some(value)
 }
 /// Open ports, one line each, for the Permissions page.
-pub(crate) fn overview(state: &State) -> Vec<String> {
-    state
-        .ports
+pub(crate) fn overview(ports: &[Port], decisions: &[crate::auto_approval::Record]) -> Vec<String> {
+    ports
         .iter()
         .filter(|p| p.status != Status::Stopped)
         .map(|p| {
-            let auto = crate::auto_approval::rule(state, p.id.as_str())
+            let auto = crate::auto_approval::rule(decisions, p.id.as_str())
                 .map(|rule| format!(" <span class='tag'>auto · {}</span>", crate::escape(&rule)))
                 .unwrap_or_default();
             format!(
                 "<p>{} · {} · {:?}{auto}</p>",
                 crate::escape(&p.name.0),
-                route(&state.ports, p),
+                route(ports, p),
                 p.status
             )
         })
@@ -892,7 +891,7 @@ pub(crate) fn http_with_save(
             let detail=route(&state.ports,p);
             let action=if p.status==Status::Pending{format!("<label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label><p class='muted'>Access ends when this service stops. You can revoke it at any time.</p>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",if p.target.is_some(){"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
             let address=p.approval.as_ref().filter(|a|a.host_port!=0).map(|a|format!(" · 127.0.0.1:{}",a.host_port)).unwrap_or_default();
-            let auto=crate::auto_approval::rule(&state,p.id.as_str()).map(|rule|format!("<span class='tag'>auto · {}</span>",crate::escape(&rule))).unwrap_or_default();
+            let auto=crate::auto_approval::rule(&state.auto_decisions,p.id.as_str()).map(|rule|format!("<span class='tag'>auto · {}</span>",crate::escape(&rule))).unwrap_or_default();
             format!("<article>{auto}<h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form class='decision-form' method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
         }).collect::<String>();
         Ok(crate::shell(
