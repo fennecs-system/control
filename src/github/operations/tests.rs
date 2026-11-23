@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use control_context::github::MergeMethod;
 use std::cell::RefCell;
 
@@ -161,7 +162,7 @@ fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "/improve Inspect a change", "test").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     state.runtime.runs[0].attempts.push(Attempt {
         workspace_id: Some("generation".into()),
         ..Default::default()

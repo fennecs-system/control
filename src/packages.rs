@@ -2,6 +2,7 @@
 //! store under node state keeps one bare repository per package plus an
 //! immutable tree per admitted version. Lenses opt runs in; attempts get a
 //! private copy. Control never runs package code or setup on the host.
+use crate::runtime::RunStatus;
 use crate::{
     State,
     identity::Actor,
@@ -840,7 +841,7 @@ pub struct Tools;
 fn captured(runs: &[crate::runtime::Run], packages: &[Manifest], run: &str) -> io::Result<Vec<Manifest>> {
     let run = runs
         .iter()
-        .find(|r| r.id == run && r.status == "running")
+        .find(|r| r.id == run && r.status == RunStatus::Running)
         .ok_or_else(|| io::Error::other("Run is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     Ok(run

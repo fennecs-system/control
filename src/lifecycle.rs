@@ -1,5 +1,6 @@
 //! Fail-closed lifecycle operations. Docker names discover intent; verified IDs
 //! authorize termination. Never stop an arbitrary container from a label alone.
+use crate::runtime::RunStatus;
 use crate::{State, identity::Actor, runtime::Runtime, usage::Attempt};
 use control_isolation::{ContainerId, Isolation, Observed, Select, States, Target};
 use std::{
@@ -13,10 +14,10 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
         return Err("Cannot cancel another actor's run.");
     }
     crate::identity::authorize(actor, run.action)?;
-    match run.status.as_str() {
-        "queued" | "waiting" => {
-            let was_waiting = run.status == "waiting";
-            run.status = "cancelled".into();
+    match run.status {
+        RunStatus::Queued | RunStatus::Waiting => {
+            let was_waiting = run.status == RunStatus::Waiting;
+            run.status = RunStatus::Cancelled;
             run.result = if was_waiting {
                 "Cancelled while waiting. The previous published workspace is unchanged."
             } else {
@@ -24,22 +25,24 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
             }
             .into();
         }
-        "running" => {
-            run.status = "cancelling".into();
+        RunStatus::Running => {
+            run.status = RunStatus::Cancelling;
             run.result = "Stopping the owned worker…".into();
         }
-        "cancelling" | "cancelled" => {}
-        _ => return Err("Run is already finished."),
+        RunStatus::Cancelling | RunStatus::Cancelled => {}
+        RunStatus::Completed
+        | RunStatus::Blocked
+        | RunStatus::Failed
+        | RunStatus::Interrupted
+        | RunStatus::Continued
+        | RunStatus::Unrecognised(_) => return Err("Run is already finished."),
     }
     // Cancelling a paused supervisor also cancels its bounded descendants;
     // independent human-created chats are not part of this lineage.
     let children: Vec<_> = runtime
         .runs
         .iter()
-        .filter(|r| {
-            r.persona.as_ref().is_some_and(|p| p.parent.as_deref() == Some(id))
-                && matches!(r.status.as_str(), "queued" | "waiting" | "running" | "cancelling")
-        })
+        .filter(|r| r.persona.as_ref().is_some_and(|p| p.parent.as_deref() == Some(id)) && r.status.is_active())
         .map(|r| r.id.clone())
         .collect();
     for child in children {
@@ -52,7 +55,10 @@ pub fn cancelled(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
     crate::shutdown::requested()
         || bridge.is_some_and(|(state, id)| {
             state.lock().map_or(true, |s| {
-                !s.runtime.runs.iter().any(|r| r.id == id && r.status == "running")
+                !s.runtime
+                    .runs
+                    .iter()
+                    .any(|r| r.id == id && r.status == RunStatus::Running)
             })
         })
 }
@@ -310,7 +316,7 @@ pub fn owners(runs: &[crate::runtime::Run]) -> Vec<Owner> {
     runs.iter()
         .filter(|r| !r.attempts.is_empty())
         .map(|r| Owner {
-            active: ["running", "cancelling"].contains(&r.status.as_str()),
+            active: r.status.occupies_slot(),
             attempts: r
                 .attempts
                 .iter()

@@ -4,6 +4,7 @@
 //! never stop a tool, end a turn or change authority. Typed host records
 //! decide; the model's prose is never parsed.
 use crate::State;
+use crate::runtime::RunStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -154,7 +155,7 @@ pub(crate) fn steered(state: &State, chat: &str) -> usize {
         .collect::<HashSet<_>>();
     for run in &state.runtime.runs {
         if let Some(member) = run.chat_id.as_deref().filter(|member| members.contains(member))
-            && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
+            && run.status.is_active()
         {
             active.insert(member);
         }
@@ -169,7 +170,7 @@ pub(crate) fn notes(state: &mut State, run_id: &str, tool: &str, now: u64) -> Ve
         .runtime
         .runs
         .iter()
-        .position(|run| run.id == run_id && run.status == "running")
+        .position(|run| run.id == run_id && run.status == RunStatus::Running)
     else {
         return Vec::new();
     };

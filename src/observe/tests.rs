@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const GENERATION: &str = "attempt-a";
@@ -9,7 +10,7 @@ fn fixture() -> (Arc<Mutex<State>>, String, String) {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Play the game", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some(GENERATION.into()),
         ..Default::default()
@@ -391,7 +392,7 @@ fn tool_results_carry_the_whole_observation_only_when_it_changed_for_this_attemp
             .starts_with("[Observation unchanged")
     );
     // An ended run gets nothing.
-    shared.lock().unwrap().runtime.runs[0].status = "completed".into();
+    shared.lock().unwrap().runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(for_result_with(&shared, &run, ticking), None);
     // The last-shown hashes are memory only.
     let saved = serde_json::to_string(&*shared.lock().unwrap()).unwrap();

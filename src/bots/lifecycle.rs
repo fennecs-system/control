@@ -16,6 +16,7 @@ use super::{Message, Reason};
 use crate::State;
 use crate::rooms::claims::graph::{Fast, Fx, Waits};
 use crate::rooms::claims::{self, Claim, Status};
+use crate::runtime::RunStatus;
 use control_bot::{Source, Topic};
 use control_effect::machine::Machine;
 use serde::{Deserialize, Serialize};
@@ -923,10 +924,10 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         }
         // Retained peer evidence (a completed run without an attempt) is not
         // a turn of its own: a member messaged every minute is still idle.
-        if !(run.attempts.is_empty() && run.status == "completed") {
+        if !(run.attempts.is_empty() && run.status == RunStatus::Completed) {
             since[position].get_or_insert(scans[team_at[position]].settled);
         }
-        busy[position] |= matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling");
+        busy[position] |= run.status.is_active();
         // Commands come from recent runs; the newest-first walk stops looking
         // once every one is resolved.
         if unresolved > 0
@@ -936,31 +937,33 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             unresolved -= 1;
         }
         let scan = &mut scans[team_at[position]];
-        match run.status.as_str() {
-            "queued" | "running" | "waiting" | "cancelling" => scan.active = true,
+        match &run.status {
+            status if status.is_active() => scan.active = true,
             // A continued turn's outcome belongs to its continuation.
-            status
-                if !run.attempts.is_empty()
-                    && crate::application::runs::status::finished(status)
-                    && !crate::application::runs::status::superseded(status) =>
-            {
+            status if !run.attempts.is_empty() && status.is_finished() && *status != RunStatus::Continued => {
                 if !echo(run) {
                     scan.settled += 1;
                 }
                 timed[position].get_or_insert(
-                    status == "failed"
+                    *status == RunStatus::Failed
                         && run.attempts.last().is_some_and(|attempt| {
                             attempt.termination == Some(crate::attempt_control::Termination::TimedOut)
                         }),
                 );
                 let (count, open) = &mut streak[position];
                 match status {
-                    "failed" | "blocked" if *open => {
+                    RunStatus::Failed | RunStatus::Blocked if *open => {
                         *count += 1;
                         latest[position].get_or_insert((index, run.result.as_str()));
                     }
-                    "interrupted" | "cancelled" | "failed" | "blocked" => {}
-                    _ => *open = false,
+                    RunStatus::Interrupted | RunStatus::Cancelled | RunStatus::Failed | RunStatus::Blocked => {}
+                    RunStatus::Completed
+                    | RunStatus::Queued
+                    | RunStatus::Running
+                    | RunStatus::Cancelling
+                    | RunStatus::Waiting
+                    | RunStatus::Continued
+                    | RunStatus::Unrecognised(_) => *open = false,
                 }
             }
             _ => {}

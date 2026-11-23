@@ -1,6 +1,7 @@
 //! Inline waits and signal-driven dispatch. Completion is simulated with
 //! unsaved updates; nothing here writes node state or calls an engine.
 use super::*;
+use crate::runtime::RunStatus;
 use std::sync::mpsc;
 
 struct Fixture {
@@ -174,7 +175,7 @@ fn shutdown_run_cancellation_and_the_turn_deadline_end_a_wait() {
     let value = std::thread::scope(|scope| {
         let waiter = scope.spawn(|| f.wait(admitted.clone(), Duration::from_secs(20), &CancelToken::new()));
         std::thread::sleep(Duration::from_millis(50));
-        f.shared.lock().unwrap().runtime.runs[0].status = "cancelling".into();
+        f.shared.lock().unwrap().runtime.runs[0].status = RunStatus::Cancelling;
         waiter.join().unwrap()
     });
     assert!(started.elapsed() < RECHECK * 3, "{:?}", started.elapsed());
@@ -182,7 +183,7 @@ fn shutdown_run_cancellation_and_the_turn_deadline_end_a_wait() {
         (value["execution_id"].clone(), value["status"].as_str()),
         (admitted["execution_id"].clone(), Some("requested"))
     );
-    f.shared.lock().unwrap().runtime.runs[0].status = "running".into();
+    f.shared.lock().unwrap().runtime.runs[0].status = RunStatus::Running;
 
     // A wait never outlasts the attempt's deadline (less a reply margin).
     {

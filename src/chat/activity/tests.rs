@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 #[test]
 fn child_chat_messages_are_collapsed_scoped_and_refresh_ancestors() {
     let mut state = State::default();
@@ -8,7 +9,7 @@ fn child_chat_messages_are_collapsed_scoped_and_refresh_ancestors() {
     crate::chat::send(&mut state, &child, "Check inventory", "test").unwrap();
     let run = &mut state.runtime.runs[0];
     let run_id = run.id.clone();
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("generation".into()),
         ..Default::default()

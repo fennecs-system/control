@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 #[test]
 fn approval_removes_only_the_implicit_deadline_and_context_reports_it() {
     let (mut state, id, generation) = fixture();
@@ -287,7 +288,7 @@ fn fixture() -> (State, String, String) {
     state.chats[0].continuity = Some(Box::new(Managed::default()));
     crate::chat::send(&mut state, &chat, "Keep building toward the goal", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let id = run.id.clone();
     let generation = format!("{id}-attempt-1");
     let mut mailbox = Mailbox::default();
@@ -418,7 +419,7 @@ fn callbacks_arrive_in_the_active_attempt_and_reads_never_acknowledge_them() {
             .unwrap()
             .contains("Preserve the public API")
     );
-    assert_eq!(state.runtime.runs[0].status, "running");
+    assert_eq!(state.runtime.runs[0].status, RunStatus::Running);
     assert!(state.chats[0].continuity.as_ref().unwrap().working.is_none());
     assert_eq!(
         state.runtime.runs.len(),

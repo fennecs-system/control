@@ -1,6 +1,7 @@
 use super::*;
 use crate::attempt_control::Termination;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::usage::Attempt;
 
 /// A chat with one finished run; `bot` marks the run as a bot turn.
@@ -22,7 +23,7 @@ pub(crate) fn grave(
         .enqueue(format!("turn for {title}"), RunKind::Chat, "test");
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(chat.clone());
-    run.status = status.into();
+    run.status = RunStatus::named(status);
     run.attempts.push(Attempt {
         started_unix: stopped,
         elapsed_ms: 0,

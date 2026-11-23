@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 mod profiling;
 
 fn requested() -> (State, String, String) {
@@ -34,7 +35,7 @@ fn decisions_wait_for_the_turn_then_resume_with_its_context() {
         Outcome::Wait,
         "the requesting turn is still running"
     );
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let Outcome::Resumed(id) = decide(&mut state, &chat, &origin) else {
         panic!("resumes")
     };
@@ -81,7 +82,7 @@ fn decisions_wait_for_the_turn_then_resume_with_its_context() {
 #[test]
 fn human_turns_after_the_request_get_a_note_and_design_answers_do_not_count() {
     let (mut state, chat, origin) = requested();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let mut answer = state.runtime.runs[0].clone();
     answer.id = "answer".into();
     answer.kind = RunKind::DesignAnswer;
@@ -90,9 +91,9 @@ fn human_turns_after_the_request_get_a_note_and_design_answers_do_not_count() {
         matches!(decide(&mut state, &chat, &origin), Outcome::Resumed(_)),
         "an answered design question continues the same turn"
     );
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     crate::chat::send(&mut state, &chat, "Stop the playtest", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     let runs = state.runtime.runs.len();
     assert_eq!(decide(&mut state, &chat, &origin), Outcome::Noted);
     assert_eq!(state.runtime.runs.len(), runs);
@@ -105,7 +106,7 @@ fn human_turns_after_the_request_get_a_note_and_design_answers_do_not_count() {
 #[test]
 fn a_requester_without_authority_gets_a_note_not_a_retry() {
     let (mut state, chat, origin) = requested();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[0].actor = crate::identity::Actor::Discord {
         user_id: "1".parse().unwrap(),
         channel_id: "2".parse().unwrap(),
@@ -119,7 +120,7 @@ fn a_requester_without_authority_gets_a_note_not_a_retry() {
 #[test]
 fn a_full_scheduler_defers_the_resume() {
     let (mut state, chat, origin) = requested();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     while crate::scheduler::admit(&state.runtime).is_ok() {
         state.runtime.enqueue("Queued".into(), RunKind::Task, "test");
     }
@@ -130,11 +131,11 @@ fn a_full_scheduler_defers_the_resume() {
 /// automatic turn failed, so no continuation starts.
 fn noted() -> (State, String, String) {
     let (mut state, chat, origin) = requested();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let mut wake = state.runtime.runs[0].clone();
     wake.id = "wake".into();
     wake.kind = RunKind::BotWake;
-    wake.status = "failed".into();
+    wake.status = RunStatus::Failed;
     state.runtime.runs.push(wake);
     assert_eq!(decide(&mut state, &chat, &origin), Outcome::Noted);
     (state, chat, origin)
@@ -198,7 +199,7 @@ fn a_decision_note_is_not_a_human_turn() {
     let (mut state, chat, origin) = noted();
     // A later automatic turn completes; the note did not steer the task, so the
     // next decision for the same request resumes it.
-    state.runtime.runs[1].status = "completed".into();
+    state.runtime.runs[1].status = RunStatus::Completed;
     assert!(matches!(decide(&mut state, &chat, &origin), Outcome::Resumed(_)));
     let conversation = crate::conversation::Conversation::of(&state, &state.chats[0]);
     let current = conversation.len() - 1;
@@ -240,7 +241,7 @@ fn notes_stored_before_speakers_are_recognised_by_their_heading() {
     }
     assert!(!message("Please review the port decisions\nthanks", None).is_notice(None));
     let (mut state, chat, _) = requested();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.chats[0]
         .messages
         .push(message("Bot decisions\nhelper (c-1): denied", None));

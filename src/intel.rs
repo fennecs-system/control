@@ -19,6 +19,7 @@
 //!
 //! Channels deliver both through the generic `Transport`: see
 //! `client::channel` and docs/setup.md (messaging channels).
+use crate::runtime::RunStatus;
 use crate::{
     State,
     tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost},
@@ -292,14 +293,20 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         let team = &mut teams[index];
         let member = activity.entry(chat).or_default();
         member.judge |= crate::delegation::is_judge(run);
-        match run.status.as_str() {
-            "running" | "waiting" | "cancelling" => member.now = Some("running"),
-            "queued" => {
+        match run.status {
+            RunStatus::Running | RunStatus::Waiting | RunStatus::Cancelling => member.now = Some("running"),
+            RunStatus::Queued => {
                 member.now.get_or_insert("queued");
             }
-            _ => {}
+            RunStatus::Completed
+            | RunStatus::Blocked
+            | RunStatus::Failed
+            | RunStatus::Interrupted
+            | RunStatus::Cancelled
+            | RunStatus::Continued
+            | RunStatus::Unrecognised(_) => {}
         }
-        if matches!(run.status.as_str(), "queued" | "running" | "waiting") {
+        if run.status.is_proceeding() {
             team.active += 1;
         }
         member.last = member
@@ -713,7 +720,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, name: &str, args: &Va
         .iter()
         .find(|run| {
             run.id == attempt.run
-                && run.status == "running"
+                && run.status == RunStatus::Running
                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;

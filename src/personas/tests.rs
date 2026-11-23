@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use crate::{
     backend::Backend,
     delegation::{self, Role},
@@ -23,7 +24,7 @@ fn active() -> (State, String, String) {
         .unwrap();
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(chat.clone());
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.target.backend = Backend::Codex;
     run.target.model = Some("captured-model".into());
     run.attempts.push(Attempt {

@@ -19,6 +19,7 @@ pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<ProbeOutput> {
     commands::probe(crate::engine::isolation(), service, command, owner, timeout)
 }
+use crate::runtime::RunStatus;
 use crate::{
     State,
     chat::Lineage,
@@ -392,7 +393,7 @@ fn caller<'a>(
 ) -> io::Result<(&'a crate::runtime::Run, &'a str)> {
     let run = runs
         .iter()
-        .find(|r| r.id == run && r.status == "running")
+        .find(|r| r.id == run && r.status == RunStatus::Running)
         .ok_or_else(|| fail("Run is not active"))?;
     identity::authorize(&run.actor, run.action).map_err(fail)?;
     if crate::delegation::is_judge(run)
@@ -688,7 +689,7 @@ fn admit_profile(
                     matches!(service.resource.phase, Phase::Stopped(_))
                         && !s.runtime.runs.iter().any(|run| {
                             run.id == service.origin.run.as_str()
-                                && run.status == "running"
+                                && run.status == RunStatus::Running
                                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref())
                                     == Some(service.origin.attempt.as_str())
                         })

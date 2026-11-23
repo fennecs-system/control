@@ -7,6 +7,7 @@ use super::{
     conversations::{Message, Session},
     runs::{Run, Submission},
 };
+use crate::runtime::RunStatus;
 use crate::{
     bots::Bots,
     identity::Actor,
@@ -192,7 +193,7 @@ impl Pending {
 }
 /// Whether a run only records a retained message: it never executes.
 pub(crate) fn record(run: &Run) -> bool {
-    run.kind == RunKind::AgentMessage && run.status == "completed" && run.attempts.is_empty()
+    run.kind == RunKind::AgentMessage && run.status == RunStatus::Completed && run.attempts.is_empty()
 }
 /// A digest receipt its recipient has not taken yet: no later turn of that
 /// chat exists and no published handoff processed it.
@@ -254,7 +255,7 @@ pub(crate) fn active<'a>(runs: &'a [Run], attempt: &AttemptRef<'_>) -> Result<&'
     runs.iter()
         .find(|run| {
             run.id == attempt.run
-                && run.status == "running"
+                && run.status == RunStatus::Running
                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or("Attempt is not active")
@@ -413,10 +414,8 @@ pub(crate) fn plan(
     // A live persistent bot's failed or interrupted turn (e.g. a provider
     // error) is not stopped work: the message is retained for the wake its
     // supervisor already owns and never starts a run itself.
-    let open = matches!(
-        from.status.as_str(),
-        "queued" | "running" | "waiting" | "continued" | "completed"
-    ) || (matches!(from.status.as_str(), "interrupted" | "failed") && state.bots.persists(&call.chat_id));
+    let open = from.status.is_unstopped()
+        || (matches!(from.status, RunStatus::Interrupted | RunStatus::Failed) && state.bots.persists(&call.chat_id));
     if !descendant && ((from.action != run.action && !advisor && !asked) || !open) {
         return Err("Peer messages cannot restart stopped work or change its action scope");
     }
@@ -483,7 +482,7 @@ pub(crate) fn plan(
                 state
                     .runs
                     .iter()
-                    .any(|run| run.id == sent.origin && run.status == "running")
+                    .any(|run| run.id == sent.origin && run.status == RunStatus::Running)
                     || heads.get(sent.chat.as_str()) == Some(&sent.key.as_str())
                     || awaiting(state.runs, state.chats, sent)
             })
@@ -542,8 +541,8 @@ pub(crate) fn plan(
     let bot = state.bots.persists(&call.chat_id);
     let retained_only = !descendant || bot || !call.urgent;
     if retained_only {
-        queued.status = "completed".into();
-        queued.emitted = Some("completed".into());
+        queued.status = RunStatus::Completed;
+        queued.emitted = Some(RunStatus::Completed);
     }
     for grant in grants {
         if !queued.resource_grants.contains(&grant) {

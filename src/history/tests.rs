@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 #[test]
 fn missing_activity_is_reported_in_chat_views_and_prompt_without_changing_state() {
@@ -6,7 +7,7 @@ fn missing_activity_is_reported_in_chat_views_and_prompt_without_changing_state(
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build it", "test").unwrap();
     let chat = own(&mut state, &chat, "missing-activity");
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[0].attempts.push(Attempt {
         journal: Some(42),
         ..Default::default()
@@ -116,14 +117,14 @@ fn delivery_warns_about_missing_activity_without_blocking_other_reports() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Missing", "test").unwrap();
     let chat = own(&mut state, &chat, "read-delivery");
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     *state.runtime.runs[0].result = "Finished task".into();
     state.runtime.runs[0].attempts.push(Attempt {
         journal: Some(42),
         ..Default::default()
     });
     crate::chat::send(&mut state, &chat, "Healthy", "test").unwrap();
-    state.runtime.runs[1].status = "completed".into();
+    state.runtime.runs[1].status = RunStatus::Completed;
     *state.runtime.runs[1].result = "Healthy report".into();
     emit(&mut state, |_| Ok(())).unwrap();
     let deliveries = control_delivery::read(&outbox_path().unwrap(), control_delivery::Cursor::default())
@@ -143,7 +144,7 @@ fn delivery_warns_about_missing_activity_without_blocking_other_reports() {
             .runtime
             .runs
             .iter()
-            .all(|run| run.emitted.as_deref() == Some("completed"))
+            .all(|run| run.emitted == Some(RunStatus::Completed))
     );
 }
 
@@ -188,7 +189,7 @@ fn space_focus_and_edge_summaries_survive_handoff_journal_reload() {
     for index in 0..64 {
         crate::chat::send(&mut state, &chat, &format!("event {index}"), "test").unwrap();
         let run = state.runtime.runs.last_mut().unwrap();
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         if index % 2 == 1 {
             run.kind = crate::runtime::RunKind::BotWake;
         }
@@ -280,7 +281,7 @@ fn finished_handoffs_spill_with_activity_and_failed_saves_restore_the_inline_val
         turn_mailbox: Some(Box::new(mailbox.clone())).into(),
         ..Default::default()
     });
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     let inline = persisting(|| serde_json::to_vec(&state)).unwrap();
     let archived = archive_run(&mut state.runtime.runs[0]).unwrap();
     let compact = persisting(|| serde_json::to_vec(&state)).unwrap();
@@ -309,7 +310,7 @@ fn finished_attempts_move_to_journals_and_read_back_unchanged() {
     let mut attempt = Attempt::new();
     attempt.activity = vec![event("a"), event("b")];
     run.attempts.push(attempt);
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     archive_run(&mut state.runtime.runs[0]).unwrap();
     let attempt = &state.runtime.runs[0].attempts[0];
     assert!(attempt.activity.is_empty() && attempt.journal.is_some());
@@ -343,7 +344,7 @@ fn finished_run_text_saves_as_a_position_and_edits_save_in_full() {
     crate::chat::send(&mut state, &chat, "Write the long report", "test").unwrap();
     own(&mut state, &chat, "text");
     *state.runtime.runs[0].result = "A long finished answer. ".repeat(200);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     archive_run(&mut state.runtime.runs[0]).unwrap();
     let saved = persisting(|| serde_json::to_string(&state).unwrap());
     let runs = persisting(|| serde_json::to_string(&state.runtime.runs).unwrap());
@@ -390,12 +391,12 @@ fn deliveries_are_emitted_once_per_status_and_retried_after_a_failed_save() {
     };
     emit(&mut state, |_| Ok(())).unwrap();
     assert!(events().is_empty(), "queued runs are not deliverable");
-    state.runtime.runs[0].status = "waiting".into();
+    state.runtime.runs[0].status = RunStatus::Waiting;
     emit(&mut state, |_| Err(io::Error::other("disk"))).unwrap_err();
     assert_eq!(state.runtime.runs[0].emitted, None, "a failed save re-emits next pass");
     emit(&mut state, |_| Ok(())).unwrap();
     emit(&mut state, |_| Ok(())).unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     *state.runtime.runs[0].result = "Finished.\n\nReview workspace: x".into();
     emit(&mut state, |_| Ok(())).unwrap();
     let statuses: Vec<_> = events().iter().map(|e| (e.status.clone(), e.report.clone())).collect();
@@ -420,7 +421,7 @@ fn finishing_a_run_is_one_transaction_with_its_save() {
     let mut attempt = Attempt::new();
     attempt.activity = vec![event("x")];
     state.runtime.runs[0].attempts.push(attempt);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let before = serde_json::to_value(&state.runtime.runs[0]).unwrap();
     let len = || with(Some(&chat), |j| Ok(j.len())).unwrap();
     let start = path(Some(&chat)).unwrap().exists().then(len).unwrap_or(0);

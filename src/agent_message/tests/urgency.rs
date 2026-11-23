@@ -2,6 +2,7 @@
 //! recipient's next wake as an unread digest, and an unattended recipient gets
 //! that digest within the node's bound instead of being starved.
 use super::*;
+use crate::runtime::RunStatus;
 
 const STATUS: &str = "Verified 090 deposited 5 oak logs in the shared chest";
 
@@ -26,7 +27,12 @@ fn send(state: &mut State, run: &str, generation: &str, nonce: &str, chat: &str,
     .unwrap()
 }
 fn queued(state: &State) -> usize {
-    state.runtime.runs.iter().filter(|run| run.status == "queued").count()
+    state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| run.status == RunStatus::Queued)
+        .count()
 }
 fn wakes<'a>(state: &'a State, chat: &str) -> Vec<&'a crate::runtime::Run> {
     state
@@ -40,7 +46,7 @@ fn wakes<'a>(state: &'a State, chat: &str) -> Vec<&'a crate::runtime::Run> {
 fn bot_peer() -> (State, String, String) {
     let (mut state, lead, alice, _) = family();
     let cass = spawned(&mut state, &lead);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let alice_run = activate(&mut state, &alice);
     for chat in &mut state.chats {
         chat.room = Some("general".into());
@@ -93,7 +99,7 @@ fn only_urgent_messages_wake_and_only_where_they_could_before() {
     // A sibling that is not a bot is never woken by a peer, urgent or not.
     let (mut state, lead, alice, _) = family();
     let cass = spawned(&mut state, &lead);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let alice_run = activate(&mut state, &alice);
     for (nonce, urgent) in [("a", false), ("b", true)] {
         let sent = send(&mut state, &alice_run, "peer-attempt", nonce, &cass, STATUS, urgent);
@@ -203,7 +209,7 @@ fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
     send(&mut state, &lead_run, "attempt-a", "one", &child, STATUS, false);
     crate::chat::send(&mut state, &child, "Operator steering", "test").unwrap();
     assert_eq!(queued(&state), 1, "operator input always queues its own turn");
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     crate::bots::reconcile_at_ms(&mut state, now() + 3_600_000).unwrap();
     assert_eq!(queued(&state), 0, "the operator's turn already carried the message");
     assert!(
@@ -268,7 +274,7 @@ fn a_message_delivered_into_a_running_turn_does_not_also_start_one() {
     let (mut state, _, child, _) = family();
     let lead_run = state.runtime.runs[0].id.clone();
     let index = crate::chat::latest_task(&state, &child, &state.chats[0].actor).unwrap();
-    state.runtime.runs[index].status = "queued".into();
+    state.runtime.runs[index].status = RunStatus::Queued;
     let admitted = crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let child_run = state.runtime.runs[admitted].id.clone();
     send(
@@ -299,7 +305,7 @@ fn a_message_delivered_into_a_running_turn_does_not_also_start_one() {
         .iter_mut()
         .find(|run| run.id == child_run)
         .unwrap()
-        .status = "completed".into();
+        .status = RunStatus::Completed;
     send(
         &mut state,
         &lead_run,

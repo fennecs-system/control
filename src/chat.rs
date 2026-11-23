@@ -1,4 +1,5 @@
 use crate::conversation::Compactor as _;
+use crate::runtime::RunStatus;
 use crate::{
     State, discord, escape,
     identity::{self, Action, Actor},
@@ -713,7 +714,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
                 .runs
                 .iter()
                 .filter(|run| run.chat_id.as_ref().is_some_and(|chat| chats.contains(chat)))
-                .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting"))
+                .filter(|run| run.status.is_proceeding())
                 .filter(|run| actor == crate::identity::Actor::LocalOperator || run.actor == actor)
                 .map(|run| run.id.clone())
                 .collect::<Vec<_>>();
@@ -735,9 +736,9 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             .runs
             .iter()
             .filter(|run| run.chat_id.as_deref() == Some(id))
-            .filter(|run| ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str()))
+            .filter(|run| run.status.is_active())
             .filter(|run| target.is_empty() || run.id == target)
-            .min_by_key(|run| (run.status == "queued", run.queue_order))
+            .min_by_key(|run| (run.status == RunStatus::Queued, run.queue_order))
             .ok_or("No matching pending run in this chat.")?;
         let run_id = run.id.clone();
         crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &actor)?;
@@ -746,7 +747,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             .runtime
             .runs
             .iter()
-            .any(|run| run.id == run_id && run.status == "cancelling");
+            .any(|run| run.id == run_id && run.status == RunStatus::Cancelling);
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
         session.messages.push(Message {
             speaker: Default::default(),
@@ -1051,17 +1052,22 @@ pub fn omitted_history(state: &State, run: &str) -> usize {
         })
         .unwrap_or(0)
 }
-pub(crate) fn response_from_run<'a>(message: &'a Message, run: Option<&'a crate::runtime::Run>) -> (&'a str, &'a str) {
+/// A message without a run shows as completed.
+const COMPLETED: &RunStatus = &RunStatus::Completed;
+pub(crate) fn response_from_run<'a>(
+    message: &'a Message,
+    run: Option<&'a crate::runtime::Run>,
+) -> (&'a RunStatus, &'a str) {
     run.map(|r| {
         (
-            r.status.as_str(),
+            &r.status,
             r.result
                 .split_once("\n\nReview workspace: ")
                 .map(|(reply, _)| reply)
                 .unwrap_or(&r.result),
         )
     })
-    .unwrap_or(("completed", &message.reply))
+    .unwrap_or((COMPLETED, &message.reply))
 }
 pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
@@ -1072,7 +1078,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         json!({"id":session.id,"title":crate::callsigns::name_or_id(&state.chats,&session.id),"previews":state.previews.iter().filter(|p|p.chat==id && p.status!="stopped").map(|p|json!({"id":p.id,"url":p.url,"status":p.status})).collect::<Vec<_>>(),"project":session.project,"project_importing":crate::projects::importing(&session.id).is_some(),"project_worktree":session.project.as_ref().and_then(|p|p.head.as_deref()).and_then(|id|crate::runtime::workspace(id).ok()),"parent_chat":session.parent_chat,"mode":if session.improve_mode {"improve"} else {"chat"},"room":session.room,"lens":session.lens,"lenses":selected_lenses(session),"persona":session.persona,"design_context":session.design_context,"revision":session.revision,"messages": session.messages.iter().map(|m| {
         let run = m.run_id.as_deref().and_then(|id|runs.run(id));
         let (status, reply) = response_from_run(m,run);
-        let mut message = json!({"text":m.text,"reply":reply,"status":status,"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))});
+        let mut message = json!({"text":m.text,"reply":reply,"status":status.as_str(),"run_id":m.run_id,"kind":run.map(|r| &r.kind),"persona":run.and_then(|r|r.persona.as_ref()),"delegation":run.and_then(|r|r.delegation.as_ref()),"question":run.and_then(|r|r.question.as_ref()),"attempts":run.map(|r| crate::history::hydrated(r.chat_id.as_deref(),&r.attempts))});
         if run.is_some_and(|r| r.source.as_str() == "advisor-note") { message["advisor_note"] = json!(true); }
         if m.is_notice(run) { message["notice"] = json!(true); }
         message
@@ -1113,19 +1119,27 @@ pub fn list(state: &State) -> Value {
 /// (running, waiting, cancelling, queued), else its latest message's run
 /// status, else `idle`. One pass over the runs, whatever the chat count.
 fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
-    let rank = |status: &str| {
-        ["queued", "cancelling", "waiting", "running"]
-            .iter()
-            .position(|s| *s == status)
+    let rank = |status: &RunStatus| match status {
+        RunStatus::Queued => Some(0),
+        RunStatus::Cancelling => Some(1),
+        RunStatus::Waiting => Some(2),
+        RunStatus::Running => Some(3),
+        RunStatus::Completed
+        | RunStatus::Blocked
+        | RunStatus::Failed
+        | RunStatus::Interrupted
+        | RunStatus::Cancelled
+        | RunStatus::Continued
+        | RunStatus::Unrecognised(_) => None,
     };
-    let mut active: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut active: std::collections::HashMap<&str, &RunStatus> = std::collections::HashMap::new();
     let mut by_run = std::collections::HashMap::new();
     for run in &state.runtime.runs {
-        by_run.insert(run.id.as_str(), run.status.as_str());
+        by_run.insert(run.id.as_str(), &run.status);
         if let (Some(chat), Some(r)) = (run.chat_id.as_deref(), rank(&run.status)) {
-            let current = active.entry(chat).or_insert(run.status.as_str());
+            let current = active.entry(chat).or_insert(&run.status);
             if rank(current) < Some(r) {
-                *current = run.status.as_str();
+                *current = &run.status;
             }
         }
     }
@@ -1141,6 +1155,7 @@ fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
                     .find_map(|m| m.run_id.as_deref())
                     .and_then(|run| by_run.get(run).copied())
             })
+            .map(RunStatus::as_str)
             .unwrap_or("idle")
     }
 }
@@ -1168,7 +1183,9 @@ pub fn pending_requests(state: &State) -> Value {
         .runtime
         .runs
         .iter()
-        .filter(|run| run.status == "waiting" && run.question.as_ref().is_some_and(crate::design::Question::pending))
+        .filter(|run| {
+            run.status == RunStatus::Waiting && run.question.as_ref().is_some_and(crate::design::Question::pending)
+        })
         .filter_map(|run| run.chat_id.as_deref());
     let folders = state
         .chats
@@ -1274,18 +1291,18 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         let run = message.run_id.as_deref().and_then(|id| runs.run(id));
         let (run_status, run_reply) = response_from_run(message, run);
         let status = match run_status {
-            "queued" if run.is_some_and(|r| r.kind == RunKind::Steering) => "Queued · next turn",
-            "queued" if state.runtime.paused.is_some() => "Queued · dispatch paused",
-            "queued" => "Queued",
-            "running" => "Working…",
-            "waiting" if run.is_some_and(|r| r.delegation.is_some()) => "Delegated work",
-            "waiting" => "Your decision",
-            "cancelling" => "Stopping…",
-            "cancelled" => "Cancelled",
-            "blocked" => "Blocked",
-            "failed" => "Failed",
-            "interrupted" => "Interrupted",
-            _ => "",
+            RunStatus::Queued if run.is_some_and(|r| r.kind == RunKind::Steering) => "Queued · next turn",
+            RunStatus::Queued if state.runtime.paused.is_some() => "Queued · dispatch paused",
+            RunStatus::Queued => "Queued",
+            RunStatus::Running => "Working…",
+            RunStatus::Waiting if run.is_some_and(|r| r.delegation.is_some()) => "Delegated work",
+            RunStatus::Waiting => "Your decision",
+            RunStatus::Cancelling => "Stopping…",
+            RunStatus::Cancelled => "Cancelled",
+            RunStatus::Blocked => "Blocked",
+            RunStatus::Failed => "Failed",
+            RunStatus::Interrupted => "Interrupted",
+            RunStatus::Completed | RunStatus::Continued | RunStatus::Unrecognised(_) => "",
         };
         let status = if status.is_empty() {
             String::new()
@@ -1293,11 +1310,17 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             format!("<span class='message-status' role='status'>{status}</span>")
         };
         // Why a queued turn waits: dispatch is paused, or its account is at its cap or cooling down.
-        let held = run.filter(|_| run_status == "queued").and_then(|run| {
+        let held = run.filter(|_| *run_status == RunStatus::Queued).and_then(|run| {
             crate::providers::accounts::hold(&state.runtime, run)
                 .map(|hold| crate::providers::accounts::held(&hold, run))
         });
-        let status = match state.runtime.paused.clone().filter(|_| run_status == "queued").or(held) {
+        let status = match state
+            .runtime
+            .paused
+            .clone()
+            .filter(|_| *run_status == RunStatus::Queued)
+            .or(held)
+        {
             Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(&reason)),
             None => status,
         };
@@ -1331,7 +1354,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             .map(|child| format!("<a href='/dm/{child}' target='_top'>Agent conversation ↗</a>"))
             .unwrap_or_else(|| escape(reply));
         let question = run
-            .filter(|r| ["running", "waiting", "continued"].contains(&r.status.as_str()))
+            .filter(|r| matches!(r.status, RunStatus::Running | RunStatus::Waiting | RunStatus::Continued))
             .and_then(|r| {
                 r.question.as_ref().filter(|q| {
                     r.attempts
@@ -1341,7 +1364,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             });
         let body = question
             .map(|q| {
-                if run_status == "waiting" {
+                if *run_status == RunStatus::Waiting {
                     "<p class='message-status'>Decision requested · see Requests</p>".to_owned()
                 } else {
                     crate::design::render(q, id, false)
@@ -1759,7 +1782,9 @@ impl Checkpoint {
                 .runs
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.status == "running" && r.chat_id.as_deref().is_some_and(|id| targets.contains(id)))
+                .filter(|(_, r)| {
+                    r.status == RunStatus::Running && r.chat_id.as_deref().is_some_and(|id| targets.contains(id))
+                })
                 .filter_map(|(i, r)| {
                     r.attempts
                         .last()?

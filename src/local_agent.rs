@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) type Failure = (&'static str, String);
+pub(crate) type Failure = (control_agent::Status, String);
 
 /// Conservative token estimate for planning (about 3 UTF-8 bytes per token).
 /// Real tokenizers usually do better; the server still enforces its own limit.
@@ -314,7 +314,7 @@ pub(crate) fn run(
     policy: &Policy,
 ) -> Result<Outcome, Failure> {
     let started = Instant::now();
-    let failed = |m: String| ("failed", m);
+    let failed = |m: String| (control_agent::Status::Failed, m);
     let definitions = host
         .tools()
         .map_err(|e| failed(format!("Could not list worker tools: {e}")))?;
@@ -337,7 +337,7 @@ pub(crate) fn run(
     // Admission: the mandatory input must fit before any model call.
     if tool_tokens.saturating_add(tokens(size(&messages))) > budget {
         return Err((
-            "blocked",
+            control_agent::Status::Blocked,
             format!(
                 "Turn input does not fit the local model: about {} tokens of instructions and history plus {tool_tokens} of tool schemas exceed {budget} available ({} context − {} output). Increase the declared context or reduce history; nothing was sent.",
                 tokens(size(&messages)),
@@ -535,7 +535,7 @@ pub(crate) fn run(
             *repairs += 1;
             if *repairs > policy.max_repairs {
                 return Err((
-                    "failed",
+                    control_agent::Status::Failed,
                     format!(
                         "Local model produced {} malformed steps in a row; last problem: {note} The published checkpoint is unchanged.",
                         *repairs
@@ -767,11 +767,11 @@ impl Host for Live<'_> {
     }
     fn poll(&mut self) -> Poll {
         if crate::design::requested(self.bridge()) {
-            return Poll::Stop(("waiting", "Waiting for a design decision.".into()));
+            return Poll::Stop((control_agent::Status::Waiting, "Waiting for a design decision.".into()));
         }
         if crate::lifecycle::cancelled(self.bridge()) {
             return Poll::Stop((
-                "cancelled",
+                control_agent::Status::Cancelled,
                 "Cancelled. The previous published workspace is unchanged.".into(),
             ));
         }
@@ -782,7 +782,10 @@ impl Host for Live<'_> {
             crate::attempt_control::Decision::TimedOut(seconds) => {
                 self.timed_out = true;
                 self.attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
-                Poll::Stop(("failed", crate::worker::timeout_message(Duration::from_secs(seconds))))
+                Poll::Stop((
+                    control_agent::Status::Failed,
+                    crate::worker::timeout_message(Duration::from_secs(seconds)),
+                ))
             }
         }
     }
@@ -890,19 +893,22 @@ pub(crate) fn execute(
     workspace: &Path,
     prompt: &str,
 ) -> Result<String, Failure> {
-    let (shared, run) = bridge.ok_or(("blocked", "Local agent turns need a live Control node.".to_owned()))?;
+    let (shared, run) = bridge.ok_or((
+        control_agent::Status::Blocked,
+        "Local agent turns need a live Control node.".to_owned(),
+    ))?;
     let (endpoint, compactor, managed, resumed) = {
         let state = shared
             .lock()
-            .map_err(|_| ("failed", "Control state unavailable".to_owned()))?;
+            .map_err(|_| (control_agent::Status::Failed, "Control state unavailable".to_owned()))?;
         let model = crate::providers::Model::captured(crate::backend::Backend::Local, attempt.model.clone());
         if !crate::providers::agent_capable(&state.runtime, &model) {
-            return Err(("blocked", crate::backend::LOCAL_TEXT_ONLY.into()));
+            return Err((control_agent::Status::Blocked, crate::backend::LOCAL_TEXT_ONLY.into()));
         }
         let endpoint = crate::providers::endpoint(&state.runtime, &attempt.model)
             .cloned()
             .ok_or((
-                "blocked",
+                control_agent::Status::Blocked,
                 "The selected local endpoint is no longer configured; no fallback was used.".to_owned(),
             ))?;
         let current = state.runtime.runs.iter().find(|r| r.id == run);
@@ -927,7 +933,7 @@ pub(crate) fn execute(
     let generation = attempt
         .workspace_id
         .clone()
-        .ok_or(("failed", "Missing attempt identity".to_owned()))?;
+        .ok_or((control_agent::Status::Failed, "Missing attempt identity".to_owned()))?;
     let admitted = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1026,7 +1032,7 @@ pub(crate) fn execute(
     // The loop has ended: stop attempt-owned tool containers, as the CLI adapters
     // do when their harness exits. Persistent services are separate resources.
     crate::attempt_control::stop(crate::engine::isolation(), Some((shared, run)), attempt)
-        .map_err(|m| ("interrupted", m.to_owned()))?;
+        .map_err(|m| (control_agent::Status::Interrupted, m.to_owned()))?;
     result.map(|outcome| outcome.text)
 }
 fn run_loop(

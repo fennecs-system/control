@@ -128,11 +128,7 @@ pub(crate) fn now() -> UnixSeconds {
 pub(crate) fn load(runs: &[crate::runtime::Run], backend: Backend) -> impl Fn(&AccountName) -> usize + '_ {
     move |name| {
         runs.iter()
-            .filter(|run| {
-                crate::application::runs::status::active(&run.status)
-                    && run.target.backend == backend
-                    && run.target.account == *name
-            })
+            .filter(|run| run.status.is_active() && run.target.backend == backend && run.target.account == *name)
             .count()
     }
 }

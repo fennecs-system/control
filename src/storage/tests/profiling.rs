@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 #[test]
 #[ignore = "release startup checkpoint timing fixture; use fresh scratch config/state directories, no models"]
@@ -52,7 +53,7 @@ fn swarm_step(state: &mut State, step: usize, chats: &[usize], active: &mut Vec<
         16..=17 => {
             state.runtime.enqueue(filler(300), RunKind::Task, "benchmark");
             let index = state.runtime.runs.len() - 1;
-            state.runtime.runs[index].status = "running".into();
+            state.runtime.runs[index].status = RunStatus::Running;
             state.runtime.runs[index]
                 .attempts
                 .push(crate::usage::Attempt::default());
@@ -60,7 +61,7 @@ fn swarm_step(state: &mut State, step: usize, chats: &[usize], active: &mut Vec<
         }
         18..=19 if active.len() > 6 => {
             let run = &mut state.runtime.runs[active.remove(0)];
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
             *run.result = filler(800);
         }
         _ => {

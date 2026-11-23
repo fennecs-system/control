@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 #[test]
 #[ignore = "requires the pinned Nix worker image and local Linux engine; offline, no credentials or model calls"]
 fn live_owned_resource_stop_and_mismatch_preserves_unrelated_writer() {
@@ -55,14 +56,14 @@ fn cancel_authority_queue_and_completion_generation() {
     let id = rt.runs[0].id.clone();
     assert!(request_cancel(&mut rt, &id, &Actor::Unknown).is_err());
     request_cancel(&mut rt, &id, &Actor::LocalOperator).unwrap();
-    assert_eq!(rt.runs[0].status, "cancelled");
+    assert_eq!(rt.runs[0].status, RunStatus::Cancelled);
     let mut a = Attempt::new();
     a.workspace_id = Some("one".into());
-    rt.runs[0].status = "running".into();
+    rt.runs[0].status = RunStatus::Running;
     rt.runs[0].attempts.push(a.clone());
     assert!(current(&rt.runs[0], &a));
     request_cancel(&mut rt, &id, &Actor::LocalOperator).unwrap();
-    assert_eq!(rt.runs[0].status, "cancelling");
+    assert_eq!(rt.runs[0].status, RunStatus::Cancelling);
     a.workspace_id = Some("stale".into());
     assert!(!current(&rt.runs[0], &a));
 }
@@ -82,7 +83,7 @@ fn reconcile_owns_earlier_attempts_skips_checks_and_names_the_blocker() {
         });
         rt.runs[0].attempts.push(a);
     }
-    rt.runs[0].status = "failed".into();
+    rt.runs[0].status = RunStatus::Failed;
     let owners = owners(&rt.runs);
     assert!(owners[0].attempts.iter().all(|a| a.activity.is_empty()));
     let row = |name: &str, purpose: &str| (name.to_owned(), "node".to_owned(), purpose.to_owned());

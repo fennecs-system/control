@@ -5,6 +5,7 @@
 //! local shells that write their result file where the container would.
 use super::*;
 use crate::backend::Backend;
+use crate::runtime::RunStatus;
 use control_isolation::{
     Access, Network, RunSpec, Source,
     scripted::{Answer, Call, Scripted},
@@ -127,7 +128,7 @@ fn credential_on(backend: Backend, account: &crate::accounts::AccountName) -> Pa
 
 /// One finished attempt, committed like the worker commits it.
 struct Finished {
-    outcome: Result<String, (&'static str, String)>,
+    outcome: Result<String, (control_agent::Status, String)>,
     attempt: crate::usage::Attempt,
     /// The attempt as the host saw it before the commit archived its activity.
     live: crate::usage::Attempt,
@@ -311,7 +312,7 @@ fn assert_finished(finished: &Finished, tokens: (u64, u64, u64)) {
     );
     assert_eq!(finished.attempt.accounting, crate::usage::Accounting::Reported);
     let run = &finished.state.runtime.runs[0];
-    assert_eq!(run.status, "completed", "{}", run.result);
+    assert_eq!(run.status, RunStatus::Completed, "{}", run.result);
     let artifact = finished.attempt.artifact.clone().expect("the workspace was published");
     assert_eq!(finished.state.chats[0].workspace.as_deref(), Some(artifact.as_str()));
 }
@@ -524,11 +525,11 @@ fn a_usage_limit_reported_only_on_stdout_names_the_failure() {
     assert_eq!(
         finished.outcome,
         Err((
-            "failed",
+            control_agent::Status::Failed,
             "The signed-in Codex account reached a usage or rate limit.".into()
         ))
     );
-    assert_eq!(finished.state.runtime.runs[0].status, "failed");
+    assert_eq!(finished.state.runtime.runs[0].status, RunStatus::Failed);
     assert_eq!(finished.state.chats[0].workspace, None, "nothing was published");
 }
 
@@ -548,7 +549,7 @@ fn a_stream_ending_inside_a_tool_call_interrupts_the_attempt() {
     });
     finished.turn();
     assert!(
-        matches!(&finished.outcome, Err(("interrupted", message)) if message.contains("unfinished MCP tool call")),
+        matches!(&finished.outcome, Err((control_agent::Status::Interrupted, message)) if message.contains("unfinished MCP tool call")),
         "{:?}",
         finished.outcome
     );
@@ -560,7 +561,7 @@ fn a_stream_ending_inside_a_tool_call_interrupts_the_attempt() {
         finished.activity(),
         [("mcp_tool_call", "control_service_exec", "interrupted")]
     );
-    assert_eq!(finished.state.runtime.runs[0].status, "interrupted");
+    assert_eq!(finished.state.runtime.runs[0].status, RunStatus::Interrupted);
     assert_eq!(finished.state.chats[0].workspace, None, "nothing was published");
 }
 
@@ -678,7 +679,7 @@ fn an_unready_engine_blocks_before_any_container_or_workspace() {
         None,
     );
     assert!(
-        matches!(&outcome, Err(("blocked", message)) if message.contains("container engine unavailable")),
+        matches!(&outcome, Err((control_agent::Status::Blocked, message)) if message.contains("container engine unavailable")),
         "{outcome:?}"
     );
     assert_eq!(engine.calls(), [Call::Ready]);
@@ -752,7 +753,7 @@ fn a_usage_limit_cools_its_account_and_a_pool_picks_another() {
     let mut finished = attempt_on(Backend::Codex, "second", |_| replay(&stream, 1));
     let name = crate::accounts::AccountName::try_from("second").unwrap();
     let runtime = &mut finished.state.runtime;
-    assert_eq!(runtime.runs[0].status, "failed");
+    assert_eq!(runtime.runs[0].status, RunStatus::Failed);
     let now = crate::providers::accounts::now();
     assert!(runtime.account_status.cooling(Backend::Codex, &name, now).is_some());
     assert!(
@@ -769,7 +770,7 @@ fn a_usage_limit_cools_its_account_and_a_pool_picks_another() {
     );
     // New work on the cooling account is held; a pool takes the other account.
     let mut next = runtime.runs[0].clone();
-    next.status = "queued".into();
+    next.status = RunStatus::Queued;
     assert_eq!(
         crate::providers::accounts::hold(runtime, &next),
         Some(crate::accounts::Hold::Cooling(None))

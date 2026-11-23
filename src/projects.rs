@@ -1185,9 +1185,12 @@ fn accept(shared: &Arc<Mutex<State>>, id: &str, request: &str) -> io::Result<Opt
         .clone()
         .filter(|p| p.request == request && p.needs_approval())
         .ok_or_else(|| io::Error::other("Project request changed; review the current request"))?;
-    if state.runtime.runs.iter().any(|r| {
-        r.chat_id.as_deref() == Some(id) && ["queued", "running", "waiting", "cancelling"].contains(&r.status.as_str())
-    }) {
+    if state
+        .runtime
+        .runs
+        .iter()
+        .any(|r| r.chat_id.as_deref() == Some(id) && r.status.is_active())
+    {
         return Err(io::Error::other(
             "Cancel or finish pending work before granting project access",
         ));
@@ -1236,9 +1239,12 @@ fn import_in(
             "Control stopped during approval; folder access was not granted",
         ));
     }
-    if state.runtime.runs.iter().any(|r| {
-        r.chat_id.as_deref() == Some(id) && ["queued", "running", "waiting", "cancelling"].contains(&r.status.as_str())
-    }) {
+    if state
+        .runtime
+        .runs
+        .iter()
+        .any(|r| r.chat_id.as_deref() == Some(id) && r.status.is_active())
+    {
         return Err(io::Error::other("Chat changed during approval; request access again"));
     }
     let chat = state

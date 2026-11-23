@@ -1,15 +1,10 @@
 //! Compatibility oracle and synthetic timing; never reads personal node state.
 use super::*;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use std::{collections::HashSet, hint::black_box, time::Instant};
 fn reference_admit(runtime: &Runtime) -> Result<(), &'static str> {
-    if runtime
-        .runs
-        .iter()
-        .filter(|r| matches!(r.status.as_str(), "queued" | "running" | "cancelling" | "waiting"))
-        .count()
-        >= MAX_PENDING
-    {
+    if runtime.runs.iter().filter(|r| r.status.is_active()).count() >= MAX_PENDING {
         Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.")
     } else {
         Ok(())
@@ -17,11 +12,7 @@ fn reference_admit(runtime: &Runtime) -> Result<(), &'static str> {
 }
 
 fn reference_next(runtime: &Runtime) -> Option<usize> {
-    let active = runtime
-        .runs
-        .iter()
-        .filter(|r| matches!(r.status.as_str(), "running" | "cancelling"))
-        .count();
+    let active = runtime.runs.iter().filter(|r| r.status.occupies_slot()).count();
     if runtime.paused.is_some() || active >= runtime.execution.max_parallel_runs.min(MAX_PARALLEL) {
         return None;
     }
@@ -29,8 +20,8 @@ fn reference_next(runtime: &Runtime) -> Option<usize> {
         .runs
         .iter()
         .filter(|r| {
-            matches!(r.status.as_str(), "running" | "cancelling")
-                || (r.status == "waiting"
+            r.status.occupies_slot()
+                || (r.status == RunStatus::Waiting
                     && (r.delegation.is_some() || r.question.as_ref().is_some_and(|q| q.pending())))
         })
         .filter_map(|r| r.chat_id.as_deref())
@@ -39,7 +30,7 @@ fn reference_next(runtime: &Runtime) -> Option<usize> {
         .runs
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.status == "queued")
+        .filter(|(_, r)| r.status == RunStatus::Queued)
         .filter(|(_, r)| r.chat_id.as_deref().is_none_or(|chat| !blocked.contains(chat)))
         .min_by_key(|(index, r)| (r.queue_order, *index))
         .map(|(index, _)| index)
@@ -76,7 +67,7 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
         for index in 0..draw() % 65 {
             let mut run = template.clone();
             run.id = format!("fixture-{index}");
-            run.status = states[(draw() % states.len() as u64) as usize].into();
+            run.status = serde_json::from_value(states[(draw() % states.len() as u64) as usize].into()).unwrap();
             run.chat_id = (draw() % 4 != 0).then(|| format!("chat-{}", draw() % 4));
             run.queue_order = draw() % 8;
             if draw() % 3 == 0 {
@@ -155,7 +146,11 @@ fn scheduling_profile() {
             run.id = format!("r-{index}");
             run.chat_id = Some(format!("chat-{}", index % 8));
             run.queue_order = index as u64;
-            run.status = if index >= 5000 { "queued" } else { "completed" }.into();
+            run.status = if index >= 5000 {
+                RunStatus::Queued
+            } else {
+                RunStatus::Completed
+            };
             runtime.runs.push(run);
         }
         if workload == "paused" {
@@ -163,7 +158,7 @@ fn scheduling_profile() {
         }
         if workload == "slots-full" {
             for run in &mut runtime.runs[..2] {
-                run.status = "running".into();
+                run.status = RunStatus::Running;
             }
         }
         if workload == "admission-full" {
@@ -173,11 +168,11 @@ fn scheduling_profile() {
             runtime.runs.drain(..5000);
         }
         if workload == "occupied" {
-            runtime.runs[0].status = "running".into();
+            runtime.runs[0].status = RunStatus::Running;
         }
         if workload == "waiting" {
             for run in &mut runtime.runs[..8] {
-                run.status = "waiting".into();
+                run.status = RunStatus::Waiting;
                 run.question = Some(crate::design::Question {
                     id: "q".into(),
                     nonce: "n".into(),
@@ -193,7 +188,7 @@ fn scheduling_profile() {
             }
         }
         if workload == "admission-open" {
-            runtime.runs.last_mut().unwrap().status = "completed".into();
+            runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
         }
         let admission = workload.starts_with("admission-");
         let measure = |reference| {

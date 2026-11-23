@@ -1,6 +1,7 @@
 //! Watch operations for a calling attempt: authority, ownership, the runner's
 //! `watch-put`/`watch-rm`, and reads from the local spool.
 use super::{MAX_WATCHES, Watch, WatchCall};
+use crate::runtime::RunStatus;
 use crate::{State, identity, tool_registry::AttemptRef, watch_frame::Event};
 use serde_json::{Value, json};
 use std::{
@@ -144,7 +145,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             .iter()
             .find(|run| {
                 run.id == attempt.run
-                    && run.status == "running"
+                    && run.status == RunStatus::Running
                     && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
             })
             .ok_or_else(|| fail("Attempt is not active"))?;

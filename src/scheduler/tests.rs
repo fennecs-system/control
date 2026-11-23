@@ -1,6 +1,7 @@
 use super::*;
 use crate::identity::{Action, Actor};
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 
 #[test]
 fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
@@ -11,13 +12,13 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
         runtime.runs.last_mut().unwrap().chat_id = Some(chat.into());
     }
     assert_eq!(next(&runtime), Some(0));
-    runtime.runs[0].status = "running".into();
+    runtime.runs[0].status = RunStatus::Running;
     assert_eq!(next(&runtime), Some(2));
-    runtime.runs[2].status = "cancelling".into();
+    runtime.runs[2].status = RunStatus::Cancelling;
     assert!(next(&runtime).is_none());
-    runtime.runs[0].status = "completed".into();
+    runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(next(&runtime), Some(1));
-    runtime.runs[0].status = "waiting".into();
+    runtime.runs[0].status = RunStatus::Waiting;
     runtime.runs[0].question = Some(crate::design::Question {
         id: "q".into(),
         nonce: "n".into(),
@@ -206,11 +207,11 @@ fn admission_is_bounded_and_dispatch_is_serial_fifo() {
     );
     assert_eq!(runtime.runs.len(), MAX_PENDING);
     assert_eq!(next(&runtime), Some(0));
-    runtime.runs[0].status = "running".into();
+    runtime.runs[0].status = RunStatus::Running;
     assert_eq!(next(&runtime), None);
-    runtime.runs[0].status = "cancelling".into();
+    runtime.runs[0].status = RunStatus::Cancelling;
     assert_eq!(next(&runtime), None);
-    runtime.runs[0].status = "completed".into();
+    runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(next(&runtime), Some(1));
     assert!(admit(&runtime).is_ok());
 }
@@ -244,13 +245,13 @@ fn background_agents_leave_a_slot_for_conversations_and_queue_behind_them() {
         Some(3),
         "a conversation turn starts before older queued agents"
     );
-    runtime.runs[3].status = "running".into();
+    runtime.runs[3].status = RunStatus::Running;
     assert_eq!(next(&runtime), Some(0));
-    runtime.runs[0].status = "running".into();
+    runtime.runs[0].status = RunStatus::Running;
     assert_eq!(next(&runtime), Some(1));
-    runtime.runs[1].status = "running".into();
+    runtime.runs[1].status = RunStatus::Running;
     assert_eq!(next(&runtime), None);
-    runtime.runs[3].status = "completed".into();
+    runtime.runs[3].status = RunStatus::Completed;
     assert_eq!(next(&runtime), None, "agents use at most all but one slot");
     enqueue(&mut runtime, "main", false);
     runtime.runs[4].persona = persona(None);
@@ -259,15 +260,15 @@ fn background_agents_leave_a_slot_for_conversations_and_queue_behind_them() {
         Some(4),
         "root-chat continuations use the conversation lane"
     );
-    runtime.runs[4].status = "running".into();
-    runtime.runs[0].status = "completed".into();
+    runtime.runs[4].status = RunStatus::Running;
+    runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(
         next(&runtime),
         Some(2),
         "agents may fill all but one slot while a conversation runs"
     );
-    runtime.runs[2].status = "running".into();
-    runtime.runs[4].status = "completed".into();
+    runtime.runs[2].status = RunStatus::Running;
+    runtime.runs[4].status = RunStatus::Completed;
     assert_eq!(next(&runtime), None);
     runtime.paused = Some(Default::default());
     assert_eq!(next(&runtime), None);
@@ -281,7 +282,7 @@ fn background_agents_leave_a_slot_for_conversations_and_queue_behind_them() {
         Some(1),
         "a single slot still goes to the conversation first"
     );
-    serial.runs[1].status = "completed".into();
+    serial.runs[1].status = RunStatus::Completed;
     assert_eq!(next(&serial), Some(0), "a single slot can still run background agents");
 }
 #[test]
@@ -310,15 +311,15 @@ fn lane_priority_never_reorders_turns_within_a_chat() {
         Some(2),
         "only each chat's oldest queued turn is a candidate"
     );
-    runtime.runs[2].status = "running".into();
+    runtime.runs[2].status = RunStatus::Running;
     assert_eq!(
         next(&runtime),
         Some(0),
         "a queued agent turn runs before a later message in its chat"
     );
-    runtime.runs[0].status = "running".into();
+    runtime.runs[0].status = RunStatus::Running;
     assert_eq!(next(&runtime), None);
-    runtime.runs[0].status = "completed".into();
+    runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(next(&runtime), Some(1));
 
     let mut tied = Runtime::default();
@@ -343,7 +344,7 @@ fn automatic_bot_turns_of_root_chats_leave_a_slot_for_people() {
         runtime.runs.last_mut().unwrap().chat_id = Some(chat.into());
     }
     assert_eq!(next(&runtime), Some(0));
-    runtime.runs[0].status = "running".into();
+    runtime.runs[0].status = RunStatus::Running;
     assert_eq!(next(&runtime), None, "a second bot may not take the last slot");
     runtime.enqueue("Hello".into(), RunKind::Chat, "web");
     runtime.runs.last_mut().unwrap().chat_id = Some("main".into());

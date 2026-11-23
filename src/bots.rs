@@ -6,6 +6,7 @@ mod lifecycle;
 mod pathology;
 mod tools;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::{State, identity, tool_registry::AttemptRef};
 use control::permissions::{AutoApproval, Mode};
 use control_bot::{BotId, Budget, ChatId, Definition, Event, Restart, Source, Status, Topic, TurnId};
@@ -432,7 +433,7 @@ fn peer_events(state: &State) -> Vec<(&str, u64, Message)> {
         .runtime
         .runs
         .iter()
-        .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
+        .filter(|run| run.status.is_active())
         .filter_map(|run| run.chat_id.as_deref())
         .collect::<std::collections::HashSet<_>>();
     // Active/queued workers already consume conversation evidence. Waiting for
@@ -568,13 +569,12 @@ pub(crate) fn stop_all(state: &mut State, chats: &[String]) -> usize {
     stopped
 }
 fn cancel_queued_turns(state: &mut State, chat: &str) {
-    for run in state
-        .runtime
-        .runs
-        .iter_mut()
-        .filter(|run| run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some() && run.status == "queued")
+    for run in
+        state.runtime.runs.iter_mut().filter(|run| {
+            run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some() && run.status == RunStatus::Queued
+        })
     {
-        run.status = "cancelled".into();
+        run.status = RunStatus::Cancelled;
         run.result = "Bot stopped before dispatch; retained conversation evidence is unchanged.".into();
     }
 }
@@ -625,26 +625,23 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
             .runs
             .iter()
             .rev()
-            .find(|run| {
-                run.chat_id.as_deref() == Some(chat)
-                    && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
-            })
-            .map(|run| run.status.as_str())
+            .find(|run| run.chat_id.as_deref() == Some(chat) && run.status.is_active())
+            .map(|run| &run.status)
     } else {
         None
     };
     let state = match status {
         _ if status != Status::Stopping && state.bots.supervisor.paused(&id) => match activity {
-            Some("running") => "paused · current turn running",
-            Some("cancelling") => "paused · current turn stopping",
+            Some(RunStatus::Running) => "paused · current turn running",
+            Some(RunStatus::Cancelling) => "paused · current turn stopping",
             _ => "paused",
         },
         Status::Ready => "sleeping",
         Status::WaitingTurn => match activity {
-            Some("running") => "working",
-            Some("cancelling") => "stopping current turn",
-            Some("queued") => "queued",
-            Some("waiting") => "waiting for decision",
+            Some(RunStatus::Running) => "working",
+            Some(RunStatus::Cancelling) => "stopping current turn",
+            Some(RunStatus::Queued) => "queued",
+            Some(RunStatus::Waiting) => "waiting for decision",
             _ => "waiting for turn result",
         },
         Status::Paused => "paused",
@@ -806,7 +803,7 @@ fn start(
         return advise(state, chat, minutes, now);
     }
     let bootstrap = fresh
-        && matches!(origin.status.as_str(), "running" | "completed")
+        && matches!(origin.status, RunStatus::Running | RunStatus::Completed)
         && origin.attempts.last().is_some_and(|attempt| {
             !attempt.review_only && attempt.workspace_id.as_deref().is_some_and(crate::chat::valid_id)
         });
@@ -1249,7 +1246,7 @@ fn timed_out(run: &crate::runtime::Run) -> bool {
     stopped_by(run, crate::attempt_control::Termination::TimedOut)
 }
 fn stopped_by(run: &crate::runtime::Run, cause: crate::attempt_control::Termination) -> bool {
-    run.status == "failed"
+    run.status == RunStatus::Failed
         && run
             .attempts
             .last()
@@ -1313,7 +1310,10 @@ fn active_since(state: &State, antibody: &str, since: u64) -> bool {
         .iter()
         .rev()
         .filter(|run| run.chat_id.as_deref().is_none_or(|chat| !tree.contains(chat)))
-        .any(|run| matches!(run.status.as_str(), "queued" | "running") || run.created_ms().is_some_and(|at| at > since))
+        .any(|run| {
+            matches!(run.status, RunStatus::Queued | RunStatus::Running)
+                || run.created_ms().is_some_and(|at| at > since)
+        })
 }
 /// Queues one bot turn in its chat, reusing the chat's latest task context like
 /// room listening does. Errors leave the request for a later attempt.
@@ -1345,7 +1345,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
             .map_err(|_| "This bot's account is no longer available; choose another with /model.")?;
     }
     let recovery = (latest.kind.prompt_role() == control_context::agent_policy::PromptRole::Wake
-        && latest.status == "completed"
+        && latest.status == RunStatus::Completed
         && latest.attempts.last().is_some_and(|a| {
             a.context_trace.is_some()
                 && a.turn_mailbox
@@ -1410,7 +1410,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         recovery,
     }));
     if quiet {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         *run.result = "Patrol skipped: no team activity since the last patrol.".into();
     }
     let id = run.id.clone();
@@ -1458,7 +1458,7 @@ fn needs_recovery(state: &State, index: usize) -> bool {
     // A turn stopped at its time limit was cut off mid-work, not waiting; it
     // published nothing, so its workspace head is the previous one.
     let stopped = cut_off(run);
-    if !(run.status == "completed" || stopped)
+    if !(run.status == RunStatus::Completed || stopped)
         || attempt.review_only
         || attempt
             .context_trace
@@ -1518,7 +1518,7 @@ fn needs_recovery(state: &State, index: usize) -> bool {
     // writer. Never race it with a generic recovery or supersede newer input.
     !state.runtime.runs[index + 1..].iter().any(|newer| {
         newer.chat_id == run.chat_id
-            && (matches!(newer.status.as_str(), "queued" | "running" | "waiting")
+            && (newer.status.is_proceeding()
                 || newer.kind.prompt_role() == control_context::agent_policy::PromptRole::Instruction)
     })
 }
@@ -1678,7 +1678,7 @@ fn reconcile_with_wake_at(
                 return None;
             }
             let run = state.runtime.runs.iter().position(|run| {
-                run.id == working.run && run.status == "completed" && run.chat_id.as_deref() == Some(&chat.id)
+                run.id == working.run && run.status == RunStatus::Completed && run.chat_id.as_deref() == Some(&chat.id)
             })?;
             let head = if state.runtime.runs[run].action == identity::Action::Improve {
                 &chat.improve_workspace
@@ -1700,7 +1700,7 @@ fn reconcile_with_wake_at(
             let later_input = state.runtime.runs[run + 1..].iter().any(|r| {
                 r.chat_id.as_deref() == Some(&chat.id)
                     && r.kind.prompt_role() == control_context::agent_policy::PromptRole::Instruction
-                    && (r.status != "completed"
+                    && (r.status != RunStatus::Completed
                         || conversation
                             .position(&r.id)
                             .is_none_or(|position| position >= processed))
@@ -1788,7 +1788,7 @@ fn reconcile_with_wake_at(
             .outstanding()
             .filter(|(bot, _, turn)| match tagged.get(&(bot.0.as_str(), turn.0)) {
                 Some(&run) => crate::rooms::continuation_leaf(state, run, &index)
-                    .is_none_or(|leaf| crate::application::runs::status::finished(&state.runtime.runs[leaf].status)),
+                    .is_none_or(|leaf| state.runtime.runs[leaf].status.is_finished()),
                 None => !state
                     .bots
                     .requests
@@ -1902,10 +1902,12 @@ fn reconcile_with_wake_at(
     // conversation receipts have had a chance to retire this evidence.
     for (chat, cursor, info) in &peers {
         // Approval reconciliation above can itself enqueue a decision callback.
-        if !state.runtime.runs.iter().any(|run| {
-            run.chat_id.as_deref() == Some(chat)
-                && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
-        }) {
+        if !state
+            .runtime
+            .runs
+            .iter()
+            .any(|run| run.chat_id.as_deref() == Some(chat) && run.status.is_active())
+        {
             offer_at(state, chat, *cursor, Now(now), info.clone());
         }
     }
@@ -2249,7 +2251,7 @@ fn handle_with(
         .iter()
         .find(|run| {
             run.id == attempt.run
-                && run.status == "running"
+                && run.status == RunStatus::Running
                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;

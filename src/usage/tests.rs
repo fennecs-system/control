@@ -34,7 +34,7 @@ fn outcomes_keep_statuses_exact_and_bound_visible_models() {
         "unknown",
     ] {
         models.entry("Claude · '<model>'".into()).or_default().add(&Attempt {
-            status: status.into(),
+            status: serde_json::from_value(status.into()).unwrap(),
             ..Attempt::default()
         });
     }
@@ -144,7 +144,7 @@ fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {
                 cached_input_tokens: 80,
                 output_tokens: 20,
             }),
-            status: "failed".into(),
+            status: crate::usage::AttemptStatus::Failed,
             ..Attempt::default()
         },
         Attempt {
@@ -155,7 +155,7 @@ fn aggregates_retries_preserves_legacy_runs_and_escapes_content() {
                 cached_input_tokens: 10,
                 output_tokens: 5,
             }),
-            status: "completed".into(),
+            status: crate::usage::AttemptStatus::Completed,
             ..Attempt::default()
         },
     ];
@@ -281,4 +281,42 @@ fn attempts_record_usage_provenance_for_every_ending() {
     }
     assert_eq!((sum.attempts, sum.measured, sum.partial, sum.no_call), (5, 3, 1, 1));
     assert_eq!(sum.tokens.input_tokens, 20);
+}
+
+#[test]
+fn attempt_statuses_save_as_the_strings_older_builds_wrote() {
+    let table = [
+        (AttemptStatus::Unset, ""),
+        (AttemptStatus::Running, "running"),
+        (AttemptStatus::Completed, "completed"),
+        (AttemptStatus::Waiting, "waiting"),
+        (AttemptStatus::Blocked, "blocked"),
+        (AttemptStatus::Failed, "failed"),
+        (AttemptStatus::Interrupted, "interrupted"),
+        (AttemptStatus::Cancelled, "cancelled"),
+    ];
+    for (status, saved) in table.clone() {
+        assert_eq!(serde_json::to_string(&status).unwrap(), format!("\"{saved}\""));
+        assert_eq!(status.to_string(), saved);
+        assert_eq!(
+            serde_json::from_str::<AttemptStatus>(&format!("\"{saved}\"")).unwrap(),
+            status
+        );
+    }
+    // A record without a status loads as unset and saves the empty string, as before.
+    let missing: Attempt = serde_json::from_str("{}").unwrap();
+    assert_eq!(missing.status, AttemptStatus::Unset);
+    // Statuses no current code writes (none appears in fixtures) survive a load and save.
+    for saved in table
+        .clone()
+        .map(|(_, saved)| saved)
+        .into_iter()
+        .chain(["queued", "timed_out-by-an-older-build"])
+    {
+        let attempt: Attempt = serde_json::from_value(serde_json::json!({ "status": saved })).unwrap();
+        let text = serde_json::to_string(&attempt).unwrap();
+        let again: Attempt = serde_json::from_str(&text).unwrap();
+        assert_eq!(serde_json::to_string(&again).unwrap(), text);
+        assert!(text.contains(&format!(",\"status\":\"{saved}\",")), "{text}");
+    }
 }

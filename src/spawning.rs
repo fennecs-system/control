@@ -1,6 +1,7 @@
 //! Nonblocking admission of a bounded batch. Source is a captured immutable
 //! baseline; a running parent never lends its writable workspace to children.
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::{
     State, chat,
     delegation::{self, Persona, Role},
@@ -78,10 +79,10 @@ impl Batch {
         !self.cancelled
             && self.notify
             && (self.pending() > 0
-                || self.children.iter().any(|id| {
-                    delegation::leaf(state, id)
-                        .is_ok_and(|run| !crate::application::runs::status::finished(&run.status))
-                }))
+                || self
+                    .children
+                    .iter()
+                    .any(|id| delegation::leaf(state, id).is_ok_and(|run| !run.status.is_finished())))
     }
     pub(crate) fn reserved(&self) -> usize {
         self.input.objectives.len()
@@ -320,7 +321,7 @@ pub fn request(
         .runtime
         .runs
         .iter()
-        .position(|r| r.id == id && r.status == "running")
+        .position(|r| r.id == id && r.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     let run = &state.runtime.runs[index];
     identity::authorize(&run.actor, run.action)?;
@@ -626,7 +627,10 @@ fn fenced(state: &State, index: usize, batch_index: usize, authorized: bool) -> 
     }
     let mut current = parent;
     for _ in 0..=delegation::MAX_DEPTH + 1 {
-        if matches!(current.status.as_str(), "cancelled" | "cancelling" | "blocked") {
+        if matches!(
+            current.status,
+            RunStatus::Cancelled | RunStatus::Cancelling | RunStatus::Blocked
+        ) {
             return true;
         }
         let Some(ancestor_id) = current.persona.as_ref().and_then(|p| p.parent.as_ref()) else {
@@ -710,10 +714,16 @@ fn cancel_owned(state: &mut State, index: usize, batch_index: usize, selected: &
             for batch in &mut run.spawns {
                 batch.cancelled = true;
             }
-            match run.status.as_str() {
-                "running" | "cancelling" => run.status = "cancelling".into(),
-                "queued" | "waiting" => run.status = "cancelled".into(),
-                _ => continue,
+            match run.status {
+                RunStatus::Running | RunStatus::Cancelling => run.status = RunStatus::Cancelling,
+                RunStatus::Queued | RunStatus::Waiting => run.status = RunStatus::Cancelled,
+                RunStatus::Completed
+                | RunStatus::Blocked
+                | RunStatus::Failed
+                | RunStatus::Interrupted
+                | RunStatus::Cancelled
+                | RunStatus::Continued
+                | RunStatus::Unrecognised(_) => continue,
             }
             run.result = "Spawn batch cancelled; pending workers will not start.".into();
         }
@@ -828,7 +838,7 @@ pub fn manage(
         .runtime
         .runs
         .iter()
-        .find(|run| run.id == caller && run.status == "running")
+        .find(|run| run.id == caller && run.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     identity::authorize(&current.actor, current.action)?;
     if delegation::is_judge(current) {

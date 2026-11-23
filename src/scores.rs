@@ -9,6 +9,7 @@
 //! untrusted claims, kept as evidence for operators and offline scorecards
 //! (cost per outcome, progress per model turn). Reads are operator-only
 //! (`control.run.scores`) plus one line in the chat view.
+use crate::runtime::RunStatus;
 use crate::{
     State,
     tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost},
@@ -202,7 +203,7 @@ impl<'a> Teams<'a> {
         for run in progress
             .runs
             .iter()
-            .filter(|run| run.status == "completed" && !run.attempts.is_empty())
+            .filter(|run| run.status == RunStatus::Completed && !run.attempts.is_empty())
         {
             if let Some(chat) = run.chat_id.as_deref() {
                 count(chat)
@@ -557,7 +558,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
             .iter()
             .find(|run| {
                 run.id == attempt.run
-                    && run.status == "running"
+                    && run.status == RunStatus::Running
                     && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
             })
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;

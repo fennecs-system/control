@@ -1,4 +1,5 @@
 use crate::identity::{self, Action, Actor, Workspace};
+use crate::runtime::RunStatus;
 use crate::{State, runtime, storage};
 use control_isolation::Isolation;
 use std::{
@@ -211,7 +212,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                                 Err(error) => {
                                     let run = &mut s.runtime.runs[index];
                                     let previous = (
-                                        std::mem::replace(&mut run.status, "blocked".into()),
+                                        std::mem::replace(&mut run.status, RunStatus::Blocked),
                                         std::mem::replace(
                                             &mut run.result,
                                             format!("Could not prepare Control input: {error}").into(),
@@ -286,12 +287,12 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                             workers.failed.store(true, std::sync::atomic::Ordering::Relaxed);
                             if let Ok(mut s) = state.lock() {
                                 if let Some(run) = s.runtime.runs.iter_mut().find(|r| r.id == run) {
-                                    run.status = "blocked".into();
+                                    run.status = RunStatus::Blocked;
                                     run.result =
                                         "Could not start execution thread; restart Control after checking resources."
                                             .into();
                                     if let Some(attempt) = run.attempts.last_mut() {
-                                        attempt.status = "blocked".into();
+                                        attempt.status = crate::usage::AttemptStatus::Blocked;
                                     }
                                 }
                                 let _ = storage::save(&s);
@@ -341,7 +342,7 @@ fn run_task(isolation: &dyn Isolation, state: Arc<Mutex<State>>, task: Task) {
         });
     }
     if let Err(error) = crate::command_jobs::quiesce(&state, &task.0, &workspace_id) {
-        outcome = Err(("interrupted", error.to_string()));
+        outcome = Err((control_agent::Status::Interrupted, error.to_string()));
     }
     if !attempt.review_only
         && let Ok(workspace) = runtime::workspace(&workspace_id)
@@ -354,19 +355,19 @@ fn run_task(isolation: &dyn Isolation, state: Arc<Mutex<State>>, task: Task) {
             if outcome.is_ok() { "completed" } else { "observed" },
         );
     }
-    if !crate::shutdown::requested() && matches!(&outcome, Err(("waiting", _))) {
+    if !crate::shutdown::requested() && matches!(&outcome, Err((control_agent::Status::Waiting, _))) {
         outcome = match runtime::workspace(&workspace_id)
             .map_err(std::io::Error::other)
             .and_then(|workspace| publish_workspace(&mut attempt, &workspace, &workspace_id, Some((&state, &task.0))))
         {
-            Ok(()) => Err(("waiting", "Waiting for a design decision.".into())),
+            Ok(()) => Err((control_agent::Status::Waiting, "Waiting for a design decision.".into())),
             Err(_) => Err((
-                "failed",
+                control_agent::Status::Failed,
                 "Could not checkpoint the paused workspace. The previous published checkpoint is unchanged.".into(),
             )),
         };
     }
-    if outcome.is_err() && !matches!(&outcome, Err(("waiting", _))) {
+    if outcome.is_err() && !matches!(&outcome, Err((control_agent::Status::Waiting, _))) {
         if attempt.termination.is_none() {
             attempt.termination = Some(crate::attempt_control::Termination::PublicationFailed);
         }
@@ -421,7 +422,7 @@ fn commit(
     id: &str,
     action: Action,
     mut attempt: crate::usage::Attempt,
-    mut outcome: Result<String, (&'static str, String)>,
+    mut outcome: Result<String, (control_agent::Status, String)>,
     stopping: bool,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<(), ()> {
@@ -431,11 +432,11 @@ fn commit(
     if !crate::lifecycle::current(run, &attempt) {
         return Ok(());
     }
-    if stopping && !matches!(&outcome, Err(("interrupted", _))) {
-        outcome = Err(("interrupted", "Control stopped during this attempt. Its workspace and diagnostics are retained; the previous published checkpoint is unchanged. Retry explicitly after restart.".into()));
-    } else if run.status == "cancelling" && !matches!(&outcome, Err(("interrupted", _))) {
+    if stopping && !matches!(&outcome, Err((control_agent::Status::Interrupted, _))) {
+        outcome = Err((control_agent::Status::Interrupted, "Control stopped during this attempt. Its workspace and diagnostics are retained; the previous published checkpoint is unchanged. Retry explicitly after restart.".into()));
+    } else if run.status == RunStatus::Cancelling && !matches!(&outcome, Err((control_agent::Status::Interrupted, _))) {
         outcome = Err((
-            "cancelled",
+            control_agent::Status::Cancelled,
             "Cancelled. The previous published workspace is unchanged.".into(),
         ));
     }
@@ -457,14 +458,14 @@ fn commit(
             .map(|c| &c.published_parent)
             .unwrap_or(&attempt.parent_artifact);
         if current != baseline {
-            outcome = Err(("interrupted", "The conversation workspace changed. Outputs were retained; start a new turn to continue from the current version.".into()));
+            outcome = Err((control_agent::Status::Interrupted, "The conversation workspace changed. Outputs were retained; start a new turn to continue from the current version.".into()));
         }
         if attempt.project.is_some()
             && (chat.project.as_ref().and_then(|p| p.head.as_ref()) != attempt.project_base.as_ref()
                 || chat.project.as_ref().and_then(|p| p.grant.as_ref()) != attempt.project.as_ref())
         {
             outcome = Err((
-                "interrupted",
+                control_agent::Status::Interrupted,
                 "The project checkpoint changed. Outputs were retained; start a new turn.".into(),
             ));
         }
@@ -501,7 +502,7 @@ fn commit(
             });
         match candidate {
             Ok(candidate) => working = candidate,
-            Err(message) => outcome = Err(("interrupted", message.into())),
+            Err(message) => outcome = Err((control_agent::Status::Interrupted, message.into())),
         }
     }
     // A callback consumed by this writer must not become a second model turn.
@@ -542,7 +543,7 @@ fn commit(
         .iter()
         .enumerate()
         .filter(|(_, r)| {
-            r.status == "queued"
+            r.status == RunStatus::Queued
                 && r.chat_id == chat_id
                 && r.actor == run.actor
                 && r.action == action
@@ -566,35 +567,40 @@ fn commit(
     }
     let r = &mut s.runtime.runs[run_index];
     if let Err((status, _)) = &outcome
-        && *status != "waiting"
+        && *status != control_agent::Status::Waiting
     {
         attempt.termination.get_or_insert(match *status {
-            "cancelled" => crate::attempt_control::Termination::Cancelled,
-            "interrupted" => crate::attempt_control::Termination::PublicationFailed,
-            _ => crate::attempt_control::Termination::ProviderError,
+            control_agent::Status::Cancelled => crate::attempt_control::Termination::Cancelled,
+            control_agent::Status::Interrupted => crate::attempt_control::Termination::PublicationFailed,
+            control_agent::Status::Failed | control_agent::Status::Blocked | control_agent::Status::Waiting => {
+                crate::attempt_control::Termination::ProviderError
+            }
         });
     }
+    attempt.status = match &outcome {
+        Ok(_) => crate::usage::AttemptStatus::Completed,
+        Err((status, _)) => crate::usage::AttemptStatus::from(*status),
+    };
     let (status, result) = match outcome {
-        Ok(summary) => ("completed", summary),
+        Ok(summary) => (RunStatus::Completed, summary),
         Err((status, message)) => (
-            status,
-            if status == "waiting" {
+            RunStatus::from(status),
+            if status == control_agent::Status::Waiting {
                 r.question.as_ref().map(crate::design::summary).unwrap_or(message)
             } else {
                 message
             },
         ),
     };
-    let previous_status = std::mem::replace(&mut r.status, status.into());
+    let previous_status = std::mem::replace(&mut r.status, status.clone());
     let previous_result = std::mem::replace(&mut *r.result, result);
-    attempt.status.clone_from(&r.status);
     // A turn cut off before its handoff leaves a host-written note so the
     // next turn resumes; it shares this transaction and its rollback.
     let mut interrupted = None;
     let previous_attempt = r.attempts.last_mut().map(|last| {
         attempt.activity = std::mem::take(&mut last.activity);
         attempt.command_jobs = std::mem::take(&mut last.command_jobs);
-        if status == "failed" {
+        if status == RunStatus::Failed {
             interrupted = crate::turn_context::HostCheckpoint::of(&attempt, &attempt.activity);
         }
         // Carried by the checkpoint; the attempt record keeps none of it.
@@ -605,7 +611,8 @@ fn commit(
     // journal as one line before the save, so the save carries only live work.
     // Text positions stay valid (edits clear them); a failed save restores the
     // activity below.
-    let archived = crate::application::runs::status::finished(status)
+    let archived = status
+        .is_finished()
         .then(|| crate::history::archive_run(r).ok())
         .flatten();
     let previous_chat = chat_index.map(|index| {
@@ -635,7 +642,7 @@ fn commit(
                 continuity.interrupted = None;
             }
             // A later completed turn has had its chance to resume.
-            else if interrupted.is_some() || status == "completed" {
+            else if interrupted.is_some() || status == RunStatus::Completed {
                 continuity.interrupted = interrupted;
             }
         }
@@ -757,7 +764,7 @@ fn checkpoint_prepared(
         if *current != baseline {
             let (status, result) = (run.status.clone(), run.result.clone());
             let run = &mut state.runtime.runs[index];
-            run.status = "blocked".into();
+            run.status = RunStatus::Blocked;
             run.result = "A later turn changed this chat's files, so this retry cannot continue from its original checkpoint. Send a new message instead.".into();
             let chat_id = run.chat_id.clone();
             if let Some(chat) = state.chats.iter_mut().find(|c| Some(&c.id) == chat_id.as_ref()) {
@@ -804,7 +811,7 @@ fn checkpoint_prepared(
                 .is_some_and(|a| a.project != project.as_ref().and_then(|p| p.grant.clone())))
     {
         let previous = state.runtime.runs[index].clone();
-        state.runtime.runs[index].status = "blocked".into();
+        state.runtime.runs[index].status = RunStatus::Blocked;
         state.runtime.runs[index].result =
             "A later turn changed this project's files. Send a new message instead of retrying its older checkpoint."
                 .into();
@@ -870,7 +877,7 @@ fn checkpoint_prepared(
         None
     };
     let run = &mut state.runtime.runs[index];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let mut attempt = crate::usage::Attempt::new();
     attempt.explicit_timeout_seconds = crate::config::configured_worker_deadline().map(|d| d.as_secs());
     attempt.bot_timeout_seconds = crate::config::bot_turn_deadline();
@@ -907,7 +914,7 @@ fn checkpoint_prepared(
     if save(state).is_err() {
         // Dispatch did not happen: restore eligibility and remove the unstarted attempt.
         let run = &mut state.runtime.runs[index];
-        run.status = "queued".into();
+        run.status = RunStatus::Queued;
         run.attempts.pop();
         if let Some(i) = continuity_index {
             state.chats[i].continuity = None;
@@ -1076,10 +1083,10 @@ pub(crate) fn record_activity_for(
         return false;
     };
     let run = &mut **run;
-    if run.status != "running" {
+    if run.status != RunStatus::Running {
         // A synchronous copy can finish after cancellation was requested. Close
         // its existing internal phase; provider progress remains fenced out.
-        if run.status == "cancelling"
+        if run.status == RunStatus::Cancelling
             && event.kind == "workspace"
             && matches!(event.status.as_str(), "completed" | "failed")
         {
@@ -1096,7 +1103,7 @@ pub(crate) fn record_activity_for(
     if attempt.workspace_id.as_deref() != Some(generation) {
         return false;
     }
-    if run.status == "cancelling"
+    if run.status == RunStatus::Cancelling
         && !attempt
             .activity
             .iter()
@@ -1131,7 +1138,7 @@ pub(crate) fn record_usage_for(state: &mut State, id: &str, generation: &str, us
         .runtime
         .runs
         .iter_mut()
-        .find(|r| r.id == id && r.status == "running")
+        .find(|r| r.id == id && r.status == RunStatus::Running)
     else {
         return false;
     };
@@ -1284,9 +1291,9 @@ fn execute(
     action: Action,
     attempt: &mut crate::usage::Attempt,
     bridge: Option<(&Arc<Mutex<State>>, &str)>,
-) -> Result<String, (&'static str, String)> {
-    let blocked = |m: &str| ("blocked", m.to_owned());
-    let failed = |m: &str| ("failed", m.to_owned());
+) -> Result<String, (control_agent::Status, String)> {
+    let blocked = |m: &str| (control_agent::Status::Blocked, m.to_owned());
+    let failed = |m: &str| (control_agent::Status::Failed, m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
     let agent = attempt.backend.agent();
     let own_prompt = agent.own_prompt(objective, attempt.review_only);
@@ -1296,7 +1303,7 @@ fn execute(
         crate::turn_context::input(attempt).map_err(|e| failed(&e.to_string()))?
     };
     if crate::lifecycle::cancelled(bridge) {
-        return Err(("cancelled", "Cancelled before launch.".into()));
+        return Err((control_agent::Status::Cancelled, "Cancelled before launch.".into()));
     }
     let image = attempt.image.clone().ok_or_else(|| {
         blocked("No captured worker image. Configure the selected backend's pinned image and submit a new run.")

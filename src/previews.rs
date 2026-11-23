@@ -1,5 +1,6 @@
 //! Credential-free preview services with loopback-only ingress and no egress.
 //! Each preview has a separate browser hostname; Control cookies are host-only.
+use crate::runtime::RunStatus;
 use crate::{State, usage::Attempt};
 use control_isolation::{
     Access, Exec, ExecSpec, Isolation, Limits, Logs, MountKind, Network, Observed, Pid1, RunSpec, Size, Stream,
@@ -217,7 +218,7 @@ pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Resu
             .runtime
             .runs
             .iter()
-            .find(|r| r.id == run_id && r.status == "running")
+            .find(|r| r.id == run_id && r.status == RunStatus::Running)
             .ok_or_else(|| fail("Run is inactive"))?
             .clone();
         crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
@@ -311,7 +312,7 @@ fn checkpoint_launch(
 ) -> io::Result<()> {
     let active = state.runtime.runs.iter().any(|r| {
         r.id == run_id
-            && r.status == "running"
+            && r.status == RunStatus::Running
             && r.attempts
                 .last()
                 .is_some_and(|a| a.workspace_id == preview.attempt.workspace_id)
