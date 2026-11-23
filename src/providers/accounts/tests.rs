@@ -102,3 +102,46 @@ fn held_turns_read_the_same_in_every_view() {
         "cooling: one turn is checking whether the limit has lifted, 1 turn held"
     );
 }
+
+thread_local! {
+    /// How many times `Holds` counted the attempts occupying account slots.
+    pub(super) static SLOT_COUNTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+fn slot_counts(view: impl FnOnce()) -> usize {
+    SLOT_COUNTS.with(|counts| counts.set(0));
+    view();
+    SLOT_COUNTS.with(std::cell::Cell::get)
+}
+
+/// Thousands of runs, two queued and held: every view counts account slots
+/// once, not once per queued run or per chat; a view whose queued runs do
+/// not depend on the count (none queued, or no cap or cooldown) counts none.
+#[test]
+fn each_view_counts_account_slots_at_most_once() {
+    let (state, chat) = fixture(5_000);
+    assert_eq!(state.runtime.runs.len(), 5_004);
+    assert_eq!(slot_counts(|| drop(crate::chat::list(&state))), 1);
+    assert_eq!(slot_counts(|| drop(crate::chat::detail(&state, &chat))), 1);
+    assert_eq!(slot_counts(|| drop(crate::chat::transcript(&state, &chat))), 1);
+    assert_eq!(slot_counts(|| drop(super::held_notices(&state.runtime))), 1);
+    assert_eq!(
+        slot_counts(|| {
+            let _ = crate::scheduler::next_in(&state);
+        }),
+        1
+    );
+    let (mut idle, _) = fixture(5_000);
+    idle.runtime
+        .runs
+        .iter_mut()
+        .filter(|run| run.status == RunStatus::Queued)
+        .for_each(|run| run.status = RunStatus::Completed);
+    assert_eq!(slot_counts(|| drop(crate::chat::list(&idle))), 0);
+    // Queued turns on an account with no cap and no cooldown need no count.
+    let (mut free, _) = fixture(5_000);
+    free.runtime
+        .runs
+        .iter_mut()
+        .for_each(|run| run.target = Default::default());
+    assert_eq!(slot_counts(|| drop(crate::chat::list(&free))), 0);
+}

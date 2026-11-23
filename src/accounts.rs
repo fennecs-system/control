@@ -625,6 +625,10 @@ impl<B: Backend> Store<B> {
     pub fn get(&self, backend: B, name: &AccountName) -> Option<Account<B>> {
         self.of(backend).find(|a| a.id.name == *name)
     }
+    /// Whether any account has a cap; the implicit accounts never do.
+    pub fn capped(&self) -> bool {
+        self.accounts.iter().any(|account| account.cap.is_some())
+    }
     /// The account a choice runs on. A pool takes the enabled account that is
     /// not cooling down with the least `load`, the first on a tie; when every
     /// one is cooling it still takes one, which admission then holds. The
@@ -895,23 +899,25 @@ pub enum Hold {
 }
 /// Whether an attempt on `account` may start now, given the attempts it
 /// already runs. A due cooldown lets one attempt through as its probe. Pure,
-/// beside `bots::may_start`.
+/// beside `bots::may_start`. `running` is counted only when the answer
+/// depends on it (a cap, or a due cooldown), and at most once.
 pub fn may_start<B: Backend>(
     account: &Account<B>,
     status: &Status<B>,
-    running: usize,
+    running: impl FnOnce() -> usize,
     now: UnixSeconds,
 ) -> Result<(), Hold> {
+    let running = std::cell::LazyCell::new(running);
     match status
         .cooling(account.id.backend, &account.id.name)
         .map(|c| c.phase(now))
     {
         Some(Phase::Waiting(until)) => return Err(Hold::Cooling(until)),
-        Some(Phase::Due) if running > 0 => return Err(Hold::Probing),
+        Some(Phase::Due) if *running > 0 => return Err(Hold::Probing),
         Some(Phase::Due) | None => {}
     }
     match account.cap {
-        Some(cap) if running >= usize::from(cap.get()) => Err(Hold::Cap(cap)),
+        Some(cap) if *running >= usize::from(cap.get()) => Err(Hold::Cap(cap)),
         _ => Ok(()),
     }
 }

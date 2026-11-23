@@ -144,37 +144,109 @@ pub(crate) fn cooling(runtime: &crate::runtime::Runtime, backend: Backend) -> im
     move |name| runtime.account_status.cooling(backend, name).is_some()
 }
 
-/// Why `run` may not start on its captured account now: its account runs
-/// as many attempts as its cap allows, is cooling down, or is being probed.
-/// An account no longer in accounts.json starts as it was admitted.
-pub(crate) fn hold(runtime: &crate::runtime::Runtime, run: &crate::runtime::Run) -> Option<Hold> {
-    let target = &run.target;
-    let account = runtime.accounts.get(target.backend, &target.account)?;
-    let running = runtime
-        .runs
-        .iter()
-        .filter(|other| {
-            control_core::scheduling::RunView::occupies_slot(*other)
-                && other.target.backend == target.backend
-                && other.target.account == target.account
+/// What decides whether queued runs are held, read once for a whole listing:
+/// the time, and how many attempts occupy each account's slots. The slot
+/// counts take one pass over the runs, made only when a hold depends on them
+/// (an account with a cap or a due cooldown), so a view with no such queued
+/// run pays nothing for them and one with many pays once.
+pub(crate) struct Holds<'a> {
+    runtime: &'a crate::runtime::Runtime,
+    now: UnixSeconds,
+    /// No account has a cap and none is cooling: nothing can be held, which
+    /// is the usual state, so every hold is answered without a look.
+    none: bool,
+    running: std::cell::OnceCell<Vec<(Backend, &'a AccountName, usize)>>,
+    /// Each account's hold, once asked: it depends only on the account, so
+    /// a run on an account already seen costs a lookup in this short list.
+    decided: std::cell::RefCell<Vec<(Backend, AccountName, Option<Hold>)>>,
+}
+impl<'a> Holds<'a> {
+    pub(crate) fn of(runtime: &'a crate::runtime::Runtime) -> Self {
+        Self {
+            runtime,
+            now: now(),
+            none: !runtime.accounts.capped() && runtime.account_status.is_empty(),
+            running: std::cell::OnceCell::new(),
+            decided: std::cell::RefCell::default(),
+        }
+    }
+    /// Attempts occupying each account's slots, in one pass. Accounts are few,
+    /// so a list beats a map.
+    fn running(&self) -> &[(Backend, &'a AccountName, usize)] {
+        self.running.get_or_init(|| {
+            #[cfg(test)]
+            tests::SLOT_COUNTS.with(|counts| counts.set(counts.get() + 1));
+            self.runtime
+                .runs
+                .iter()
+                .filter(|run| control_core::scheduling::RunView::occupies_slot(*run))
+                .fold(Vec::new(), |mut running, run| {
+                    let (backend, account) = (run.target.backend, &run.target.account);
+                    match running.iter_mut().find(|(b, a, _)| *b == backend && *a == account) {
+                        Some((_, _, count)) => *count += 1,
+                        None => running.push((backend, account, 1)),
+                    }
+                    running
+                })
         })
-        .count();
-    crate::accounts::may_start(&account, &runtime.account_status, running, now()).err()
+    }
+    /// Why `run` may not start on its captured account now: its account runs
+    /// as many attempts as its cap allows, is cooling down, or is being
+    /// probed. An account no longer in accounts.json starts as it was admitted.
+    pub(crate) fn hold(&self, run: &crate::runtime::Run) -> Option<Hold> {
+        if self.none {
+            return None;
+        }
+        let target = &run.target;
+        let known = |(backend, name, _): &&(Backend, AccountName, Option<Hold>)| {
+            *backend == target.backend && *name == target.account
+        };
+        if let Some((_, _, hold)) = self.decided.borrow().iter().find(known) {
+            return hold.clone();
+        }
+        let hold = self.decide(run);
+        self.decided
+            .borrow_mut()
+            .push((target.backend, target.account.clone(), hold.clone()));
+        hold
+    }
+    fn decide(&self, run: &crate::runtime::Run) -> Option<Hold> {
+        let target = &run.target;
+        let account = self.runtime.accounts.get(target.backend, &target.account)?;
+        let running = || {
+            self.running()
+                .iter()
+                .find(|(backend, name, _)| *backend == target.backend && **name == target.account)
+                .map_or(0, |(_, _, count)| *count)
+        };
+        crate::accounts::may_start(&account, &self.runtime.account_status, running, self.now).err()
+    }
+    /// Why `run` waits in the queue for its account, when it is queued and
+    /// held. Other runs cost nothing.
+    pub(crate) fn held(&self, run: &crate::runtime::Run) -> Option<String> {
+        (run.status == crate::runtime::RunStatus::Queued)
+            .then(|| self.hold(run))
+            .flatten()
+            .map(|hold| self.reason(&hold, run))
+    }
+    /// Whether any run could be held, so a listing can skip asking for each.
+    pub(crate) fn possible(&self) -> bool {
+        !self.none
+    }
+    /// `hold` on `run`, in the words every interface shows.
+    pub(crate) fn reason(&self, hold: &Hold, run: &crate::runtime::Run) -> String {
+        held(hold, &run.target, self.now)
+    }
 }
-/// Why `run` waits in the queue for its account, when it is queued and held.
-pub(crate) fn held_run(runtime: &crate::runtime::Runtime, run: &crate::runtime::Run) -> Option<String> {
-    (run.status == crate::runtime::RunStatus::Queued)
-        .then(|| hold(runtime, run))
-        .flatten()
-        .map(|hold| held(&hold, &run.target, now()))
-}
+
 /// Queued runs newly held by a cooling account, each with the notice to send
 /// for it: only the first of its chat and account while none noticed earlier
 /// still waits, so a pile of held turns is one message. A run at its cap is
 /// ordinary queueing and sends nothing.
 pub(crate) fn held_notices(runtime: &crate::runtime::Runtime) -> Vec<(usize, Option<String>)> {
     use crate::runtime::RunStatus;
-    let now = now();
+    let holds = Holds::of(runtime);
+    let now = holds.now;
     let key = |run: &crate::runtime::Run| (run.chat_id.clone(), run.target.backend, run.target.account.clone());
     let noticed: Vec<_> = runtime
         .runs
@@ -187,7 +259,7 @@ pub(crate) fn held_notices(runtime: &crate::runtime::Runtime) -> Vec<(usize, Opt
         .iter()
         .enumerate()
         .filter(|(_, run)| run.status == RunStatus::Queued && run.emitted.is_none())
-        .filter_map(|(index, run)| match hold(runtime, run)? {
+        .filter_map(|(index, run)| match holds.hold(run)? {
             hold @ (Hold::Cooling(_) | Hold::Probing) => Some((index, run, held(&hold, &run.target, now))),
             Hold::Cap(_) => None,
         })
