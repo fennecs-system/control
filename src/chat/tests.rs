@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 // The host preparation API is read-only. Fixtures explicitly publish its result.
 fn enqueue_continuation(
@@ -22,11 +23,11 @@ fn preparing_a_continuation_does_not_publish_or_change_state() {
     let mut state = State::default();
     let chat = create(&mut state);
     send(&mut state, &chat, "Original task", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let before = serde_json::to_vec(&state).unwrap();
     let run = continuation(&state, &chat, 0, "Continue".into(), RunKind::PortDecision, "test").unwrap();
     assert_eq!(run.chat_id.as_deref(), Some(chat.as_str()));
-    assert_eq!(run.status, "queued");
+    assert_eq!(run.status, RunStatus::Queued);
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
 }
 
@@ -36,7 +37,7 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
     let chat = create(&mut state);
     send(&mut state, &chat, "Original task", "test").unwrap();
     let origin = &mut state.runtime.runs[0];
-    origin.status = "completed".into();
+    origin.status = RunStatus::Completed;
     origin.target.model = Some("model-a".into());
     origin.lenses = Some(vec!["lens-a".into()]);
     let origin_id = origin.id.clone();
@@ -78,7 +79,7 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
 fn invalid_continuation_input_leaves_the_queue_and_notice_unchanged() {
     let mut state = State::default();
     state.runtime.enqueue("original".into(), RunKind::Task, "test");
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.notice = "unchanged".into();
     for objective in [
         String::new(),
@@ -103,7 +104,7 @@ fn profile_continuation_admission() {
         let mut state = State::default();
         state.runtime.enqueue("original".into(), RunKind::Task, "fixture");
         let mut origin = state.runtime.runs.pop().unwrap();
-        origin.status = "completed".into();
+        origin.status = RunStatus::Completed;
         origin.target.model = Some("captured-model".into());
         origin.chat_id = Some("chat".into());
         state.runtime.runs = (0..retained)
@@ -193,7 +194,7 @@ fn conversation_index_preserves_first_matches_and_missing_run_replies() {
     let mut state = State::default();
     let id = create(&mut state);
     send(&mut state, &id, "Question", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[0].result = "First & original".into();
     let mut duplicate = state.runtime.runs[0].clone();
     duplicate.result = "Later duplicate".into();
@@ -229,7 +230,7 @@ fn completed_file_diffs_are_collapsed_escaped_and_separate_from_command_logs() {
     let mut state = State::default();
     let id = create(&mut state);
     send(&mut state, &id, "Edit the file", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         activity: vec![crate::usage::Activity {
             id: "workspace-diff".into(),
@@ -259,7 +260,7 @@ fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
     let mut state = State::default();
     let parent = create(&mut state);
     send(&mut state, &parent, "Build parser", "test").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     send(&mut state, &parent, "Add tests", "test").unwrap();
     let other = create(&mut state);
     send(&mut state, &other, "Other task", "test").unwrap();
@@ -267,15 +268,15 @@ fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
     assert!(send(&mut state, &parent, &format!("/cancel {other_run}"), "test").is_err());
     let revision = state.chats[0].revision;
     send(&mut state, &parent, "/cancel", "test").unwrap();
-    assert_eq!(state.runtime.runs[0].status, "cancelling");
-    assert_eq!(state.runtime.runs[1].status, "queued");
-    assert_eq!(state.runtime.runs[2].status, "queued");
+    assert_eq!(state.runtime.runs[0].status, RunStatus::Cancelling);
+    assert_eq!(state.runtime.runs[1].status, RunStatus::Queued);
+    assert_eq!(state.runtime.runs[2].status, RunStatus::Queued);
     assert!(state.chats[0].revision > revision);
     let html = transcript(&state, &parent).unwrap();
     assert!(html.contains("Stopping…") && !html.contains("http-equiv='refresh'"));
     let queued = state.runtime.runs[1].id.clone();
     send(&mut state, &parent, &format!("/cancel {queued}"), "test").unwrap();
-    assert_eq!(state.runtime.runs[1].status, "cancelled");
+    assert_eq!(state.runtime.runs[1].status, RunStatus::Cancelled);
     assert!(transcript(&state, &parent).unwrap().contains("Cancelled"));
     assert_eq!(state.runtime.runs.len(), 3);
 }
@@ -369,7 +370,7 @@ fn side_question_captures_context_without_reusing_parent_workspace_or_authority(
     state.chats[0].workspace = Some("published-parent".into());
     state.chats[0].improve_workspace = Some("source-parent".into());
     send(&mut state, &parent, "/improve Build a parser", "test").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     send(&mut state, &parent, "/btw What is a parser?", "test").unwrap();
     assert_eq!(state.chats.len(), 2);
     let child = &state.chats[1];
@@ -380,7 +381,7 @@ fn side_question_captures_context_without_reusing_parent_workspace_or_authority(
     assert!(!child.improve_mode);
     assert!(state.chats[0].improve_mode);
     assert_eq!(state.chats[0].workspace.as_deref(), Some("published-parent"));
-    assert_eq!(state.runtime.runs[0].status, "running");
+    assert_eq!(state.runtime.runs[0].status, RunStatus::Running);
     assert_eq!(state.runtime.runs[1].action, Action::Task);
     assert!(
         transcript(&state, &parent)
@@ -398,13 +399,13 @@ fn steering_is_durable_ordered_and_never_mutates_an_active_request() {
     let mut state = State::default();
     let id = create(&mut state);
     send(&mut state, &id, "Build a parser", "test").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let original = state.runtime.runs[0].objective.clone();
     send(&mut state, &id, "Also add examples", "test").unwrap();
     send(&mut state, &id, "/steer Keep the API small", "test").unwrap();
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.runtime.runs[0].objective, original);
-    assert_eq!(restored.runtime.runs[0].status, "running");
+    assert_eq!(restored.runtime.runs[0].status, RunStatus::Running);
     assert_eq!(restored.runtime.runs[1].objective, "Also add examples");
     assert_eq!(restored.runtime.runs[2].objective, "Keep the API small");
     assert_eq!(restored.runtime.runs[2].kind, RunKind::Steering);
@@ -416,7 +417,7 @@ fn steering_is_durable_ordered_and_never_mutates_an_active_request() {
             .all(|pair| pair[0].queue_order < pair[1].queue_order)
     );
     assert!(transcript(&restored, &id).unwrap().contains("Queued · next turn"));
-    restored.runtime.runs[0].status = "completed".into();
+    restored.runtime.runs[0].status = RunStatus::Completed;
     restored.runtime.runs[0].result = "Parser complete".into();
     let steering = restored.runtime.runs[2].id.clone();
     assert!(prompt(&restored, &steering).unwrap().contains("Parser complete"));
@@ -482,13 +483,13 @@ fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html()
         }],
         ..crate::usage::Attempt::default()
     });
-    state.runtime.runs[0].status = "failed".into();
+    state.runtime.runs[0].status = RunStatus::Failed;
     let mut stored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     stored
         .runtime
         .action("/retry-run", &std::collections::HashMap::from([("id".into(), run_id)]));
     assert_eq!(stored.runtime.runs[0].attempts.len(), 1);
-    assert_eq!(stored.runtime.runs[0].status, "queued");
+    assert_eq!(stored.runtime.runs[0].status, RunStatus::Queued);
     let html = transcript(&stored, &id).unwrap();
     assert!(html.contains("<p class='message-status attempt-status'><span title='Attempt 1'>attempt 1</span> · <span title='Context window · 1 earlier exchange excluded from attempt 1. Chat history retained.'>1 earlier exchange excluded</span></p>"), "{html}");
     assert!(html.contains("echo &lt;script&gt;"));
@@ -747,7 +748,7 @@ fn chats_keep_context_separate_and_keep_original_identity() {
     let first = create(&mut state);
     let second = create(&mut state);
     send(&mut state, &first, "Remember the cedar tree", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[0].result = "Cedar recorded".into();
     send(&mut state, &second, "Other chat", "test").unwrap();
     send(&mut state, &first, "What tree?", "test").unwrap();
@@ -814,7 +815,7 @@ fn existing_chats_attach_to_rooms_unless_a_bot_or_listener_owns_the_inbox() {
     let mut state = State::default();
     let id = create(&mut state);
     send(&mut state, &id, "Watch the farm", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     assert!(send(&mut state, &id, "/room lobby", "test").is_err());
     send(&mut state, &id, "/room general", "test").unwrap();
     assert_eq!(state.chats[0].room.as_deref(), Some(format!("general/{id}").as_str()));
@@ -846,19 +847,19 @@ fn tree() -> (State, String, String, String, String) {
     let mut state = State::default();
     let lead = create(&mut state);
     send(&mut state, &lead, "Lead the playtest", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let spawn = |state: &mut State, parent: &str, status: &str| {
         let chat = create(state);
         state.chats.iter_mut().find(|s| s.id == chat).unwrap().parent_chat = Some(parent.into());
         send(state, &chat, "Work", "test").unwrap();
-        state.runtime.runs.last_mut().unwrap().status = status.into();
+        state.runtime.runs.last_mut().unwrap().status = RunStatus::named(status);
         chat
     };
     let child = spawn(&mut state, &lead, "completed");
     let grandchild = spawn(&mut state, &child, "running");
     let unrelated = create(&mut state);
     send(&mut state, &unrelated, "Other work", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "running".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
     crate::bots::command(&mut state, &child, "on every 5").unwrap();
     (state, lead, child, grandchild, unrelated)
 }

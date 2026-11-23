@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::cell::RefCell;
 const BASE: &str = "1111111111111111111111111111111111111111";
 const TREE: &str = "2222222222222222222222222222222222222222";
@@ -358,7 +359,7 @@ fn only_completed_same_chat_improvements_can_be_published() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "/improve Implement a fixture", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     run.attempts.push(Attempt {
         status: "completed".into(),
         artifact: Some("a-fixture".into()),
@@ -393,7 +394,7 @@ fn only_completed_same_chat_improvements_can_be_published() {
     state.runtime.runs[0].action = Action::Task;
     assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());
     state.runtime.runs[0].action = Action::Improve;
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());
     state.chats[0].actor = Actor::Unknown;
     assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::cell::RefCell;
 const HEAD: &str = "1234567890123456789012345678901234567890";
 struct Mock {
@@ -117,7 +118,7 @@ fn ordinary_stale_judge_and_changed_owner_attempts_cannot_inspect() {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "/improve Inspect a PR", "test").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     state.runtime.runs[0].attempts.push(Attempt {
         workspace_id: Some("current-generation".into()),
         ..Default::default()
@@ -156,7 +157,7 @@ fn ordinary_stale_judge_and_changed_owner_attempts_cannot_inspect() {
     state.chats[0].actor = Actor::Unknown;
     assert!(authorize(&state, caller).is_err());
     state.chats[0].actor = Actor::LocalOperator;
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     assert!(authorize(&state, caller).is_err());
     let shared = Arc::new(Mutex::new(state));
     assert!(

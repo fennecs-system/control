@@ -1,12 +1,13 @@
 //! Advisor notes: the one extra effect of an approved read-only judge bot. They
 //! go to the member a fact is about, or to the lead's steering chat.
 use super::*;
+use crate::runtime::RunStatus;
 
 /// The lead's task tree, linked to a room, with a builder and an advisor
 /// (not yet approved) whose turn runs.
 fn team() -> (State, String, String, String, String) {
     let (mut state, lead, builder, _) = family();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.chats[0].room = Some("general".into());
     state.chats[0].lenses = Some(vec!["advisor".into()]);
     let advisor = spawned(&mut state, &lead);
@@ -273,7 +274,7 @@ fn an_active_lead_gets_one_callback_hint_per_note() {
     chat.continuity = Some(Box::default());
     let through = chat.messages.len() as u64;
     let target = &mut state.runtime.runs[0];
-    target.status = "running".into();
+    target.status = RunStatus::Running;
     let mut mailbox = control_context::turn_mailbox::Mailbox::default();
     mailbox
         .baseline
@@ -350,13 +351,13 @@ fn a_member_asks_its_teams_advisor_and_the_question_wakes_it() {
     );
     // Once its current turn settles, the question wakes the advisor at once,
     // though it was not sent urgent: a question is the advisor's only wake.
-    state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap().status = "completed".into();
+    state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap().status = RunStatus::Completed;
     crate::bots::reconcile_after_cooldown(&mut state).unwrap();
     let woken = state
         .runtime
         .runs
         .iter()
-        .rfind(|r| r.chat_id.as_deref() == Some(advisor.as_str()) && r.status == "queued")
+        .rfind(|r| r.chat_id.as_deref() == Some(advisor.as_str()) && r.status == RunStatus::Queued)
         .expect("the advisor is woken");
     assert!(
         woken.objective.contains("read-only advisor") && woken.objective.contains("one long routine better"),

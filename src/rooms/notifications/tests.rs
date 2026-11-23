@@ -1,8 +1,9 @@
 use super::*;
+use crate::runtime::RunStatus;
 #[test]
 fn a_bot_turn_stays_open_until_its_continuation_finishes() {
     let (mut state, _) = fixture();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let chat = state.chats[0].id.clone();
     crate::bots::command(&mut state, &chat, "on").unwrap();
     post(&mut state, "research", "operator: can any agent check the logs?", None);
@@ -15,7 +16,7 @@ fn a_bot_turn_stays_open_until_its_continuation_finishes() {
         .unwrap();
     running_attempt(&mut state, turn, "bot-attempt");
     let continuation = answer_question(&mut state, turn);
-    assert_eq!(state.runtime.runs[turn].status, "continued");
+    assert_eq!(state.runtime.runs[turn].status, RunStatus::Continued);
     post(&mut state, "research", "another message", None);
     crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
     assert!(
@@ -26,7 +27,7 @@ fn a_bot_turn_stays_open_until_its_continuation_finishes() {
         state.runtime.runs.iter().filter(|run| run.bot_turn.is_some()).count(),
         1
     );
-    state.runtime.runs[continuation].status = "completed".into();
+    state.runtime.runs[continuation].status = RunStatus::Completed;
     crate::bots::reconcile(&mut state, |_| Ok(())).unwrap();
     assert!(
         crate::bots::status(&state, &chat).unwrap().contains("sleeping"),
@@ -56,7 +57,7 @@ pub(super) fn fixture() -> (State, String) {
     state.chats[0].room = Some("research".into());
     crate::chat::send(&mut state, &chat, "Research the source", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.target.model = Some("captured-model".into());
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-one".into()),
@@ -211,7 +212,7 @@ fn one_shot_retains_grants_received_after_arming() {
     state.runtime.runs.push(continuation);
     state.runtime.runs[1].resource_grants.push(grant);
     for run in &mut state.runtime.runs {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
     }
     post(&mut state, "research", "New evidence", None);
     reconcile(&mut state, |_| Ok(())).unwrap();
@@ -232,7 +233,7 @@ fn one_shot_retains_grants_received_after_arming() {
 fn recorded_updates_preserve_one_shot_budget_and_unread_evidence() {
     let (mut state, run) = fixture();
     watch(&mut state, &run, true);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     for _ in 0..WINDOW + 1 {
         post(&mut state, "research", "Retained observation", Some("peer".into()));
         state.collective.posts.last_mut().unwrap().delivery = super::super::Delivery::Record;
@@ -246,10 +247,10 @@ fn recorded_updates_preserve_one_shot_budget_and_unread_evidence() {
     assert_eq!(state.collective.room_watches[0].cursor, 0);
     assert!(state.collective.room_watches[0].wake.is_some());
     state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let page = call(&mut state, &run, "control_room_notifications", &json!({})).unwrap();
     assert_eq!(page["posts"][0]["delivery"], "record");
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     post(&mut state, "research", "Decision needed", None);
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 2);
@@ -269,10 +270,10 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
     post(&mut state, "research", "A concise discovery", None);
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 1);
-    state.runtime.runs[0].status = "waiting".into();
+    state.runtime.runs[0].status = RunStatus::Waiting;
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 1);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let revision = state.chats[0].revision;
     assert!(reconcile(&mut state, fail).is_err());
     assert_eq!(state.runtime.runs.len(), 1);
@@ -309,7 +310,7 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         ),
         "room wakes cannot gain replacement generations"
     );
-    restored.runtime.runs[1].status = "running".into();
+    restored.runtime.runs[1].status = RunStatus::Running;
     restored.runtime.runs[1].attempts.push(crate::usage::Attempt {
         workspace_id: Some("notification-attempt".into()),
         ..Default::default()
@@ -325,7 +326,7 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         .is_err()
     );
     post(&mut restored, "research", "Another update", None);
-    restored.runtime.runs[1].status = "completed".into();
+    restored.runtime.runs[1].status = RunStatus::Completed;
     reconcile(&mut restored, |_| panic!("no implicit rearming")).unwrap();
     assert_eq!(restored.runtime.runs.len(), 2);
 }
@@ -336,9 +337,9 @@ fn cancellation_revocation_scope_changes_and_stale_generation_disarm_wakes() {
         let (mut state, run) = fixture();
         watch(&mut state, &run, true);
         post(&mut state, "research", "Wake candidate", None);
-        state.runtime.runs[0].status = "completed".into();
+        state.runtime.runs[0].status = RunStatus::Completed;
         match scenario {
-            0 => state.runtime.runs[0].status = "cancelled".into(),
+            0 => state.runtime.runs[0].status = RunStatus::Cancelled,
             1 => {
                 state.runtime.runs[0].actor = identity::Actor::Unknown;
                 state.collective.room_watches[0].actor = identity::Actor::Unknown;
@@ -396,7 +397,7 @@ fn self_posts_do_not_wake_and_checkpoint_failure_restores_watch_budget_and_ack()
     );
     assert_eq!(state.collective.room_watches.len(), 1);
     assert!(state.collective.room_watches[0].wake.is_some());
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 1);
     assert_eq!(
@@ -447,7 +448,7 @@ fn budget_cannot_be_refilled_by_disabling_or_by_child_personas() {
 
 fn running_attempt(state: &mut State, index: usize, generation: &str) {
     let run = &mut state.runtime.runs[index];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some(generation.into()),
         ..Default::default()
@@ -456,7 +457,7 @@ fn running_attempt(state: &mut State, index: usize, generation: &str) {
 fn answer_question(state: &mut State, index: usize) -> usize {
     let run = &mut state.runtime.runs[index];
     let generation = run.attempts.last().unwrap().workspace_id.clone().unwrap();
-    run.status = "waiting".into();
+    run.status = RunStatus::Waiting;
     let attempt = run.attempts.last_mut().unwrap();
     attempt.status = "waiting".into();
     attempt.artifact = Some(format!("checkpoint-{generation}"));
@@ -478,7 +479,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     let (mut state, root) = fixture();
     watch(&mut state, &root, true);
     let parent = &mut state.runtime.runs[0];
-    parent.status = "waiting".into();
+    parent.status = RunStatus::Waiting;
     parent.attempts[0].status = "waiting".into();
     parent.attempts[0].artifact = Some("parent-checkpoint".into());
     parent.delegation = Some(crate::delegation::Delegation {
@@ -501,10 +502,10 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     post(&mut state, "research", "Assign the next task", None);
     reconcile(&mut state, |_| panic!("child is still working")).unwrap();
     assert!(state.collective.room_watches[0].wake.is_some());
-    state.runtime.runs[1].status = "completed".into();
+    state.runtime.runs[1].status = RunStatus::Completed;
     state.runtime.runs[1].result = "Verified source".into();
     crate::delegation::reconcile(&mut state, |_| Ok(())).unwrap();
-    assert_eq!(state.runtime.runs[0].status, "continued");
+    assert_eq!(state.runtime.runs[0].status, RunStatus::Continued);
     let resumed = state.runtime.runs.len() - 1;
     reconcile(&mut state, |_| panic!("parent continuation is queued")).unwrap();
     running_attempt(&mut state, resumed, "resume-one");
@@ -521,7 +522,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     let leaf = answer_question(&mut state, resumed);
     reconcile(&mut state, |_| panic!("design continuation is queued")).unwrap();
     running_attempt(&mut state, leaf, "resume-two");
-    state.runtime.runs[leaf].status = "completed".into();
+    state.runtime.runs[leaf].status = RunStatus::Completed;
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     let count = restored.runtime.runs.len();
     reconcile(&mut restored, |_| Ok(())).unwrap();
@@ -546,10 +547,10 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
         running_attempt(&mut state, first, "second-attempt");
         let leaf = answer_question(&mut state, first);
         running_attempt(&mut state, leaf, "third-attempt");
-        state.runtime.runs[leaf].status = "completed".into();
+        state.runtime.runs[leaf].status = RunStatus::Completed;
         post(&mut state, "research", "Task for lead", None);
         match scenario {
-            0 => state.runtime.runs[leaf].status = "cancelled".into(),
+            0 => state.runtime.runs[leaf].status = RunStatus::Cancelled,
             1 => state.runtime.runs[leaf].attempts.push(crate::usage::Attempt {
                 workspace_id: Some("retry-generation".into()),
                 ..Default::default()
@@ -559,7 +560,7 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
             4 => state.runtime.runs[leaf].target.model = Some("different-model".into()),
             5 => {
                 let target = state.runtime.runs[first].id.clone();
-                state.runtime.runs[leaf].status = "continued".into();
+                state.runtime.runs[leaf].status = RunStatus::Continued;
                 state.runtime.runs[leaf].question = Some(crate::design::Question {
                     id: "cycle".into(),
                     nonce: "cycle".into(),
@@ -602,11 +603,11 @@ fn nonblocking_spawn_does_not_delay_the_idle_leads_room_wake() {
         bundle: None,
     });
     state.runtime.runs.push(child);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     post(&mut state, "research", "Child asks lead a question", None);
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
-    assert_eq!(state.runtime.runs[1].status, "running");
+    assert_eq!(state.runtime.runs[1].status, RunStatus::Running);
     assert_eq!(state.runtime.runs[2].kind, RunKind::RoomNotification);
 }
 
@@ -618,7 +619,7 @@ fn existing_design_continuation_without_persona_keeps_its_armed_watch() {
     // Older checkpoints copied a root's absent persona into design answers.
     state.runtime.runs[leaf].persona = None;
     running_attempt(&mut state, leaf, "legacy-design-attempt");
-    state.runtime.runs[leaf].status = "completed".into();
+    state.runtime.runs[leaf].status = RunStatus::Completed;
     post(&mut state, "research", "Pending assignment", None);
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
@@ -629,7 +630,7 @@ fn existing_design_continuation_without_persona_keeps_its_armed_watch() {
 fn full_regular_queue_retains_pending_wake_without_saving_or_overflowing() {
     let (mut state, run) = fixture();
     watch(&mut state, &run, true);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     post(&mut state, "research", "external update", None);
     for _ in 0..crate::scheduler::MAX_PENDING {
         state
@@ -660,7 +661,7 @@ fn profile_room_publication() {
     for retained in [16usize, 1024, 20_001] {
         let (mut state, id) = fixture();
         watch(&mut state, &id, true);
-        state.runtime.runs[0].status = "completed".into();
+        state.runtime.runs[0].status = RunStatus::Completed;
         let template = state.runtime.runs[0].clone();
         for index in 1..retained {
             let mut run = template.clone();
@@ -710,7 +711,7 @@ fn profile_idle_and_waiting_room_reconciliation() {
     for i in 0..20_000 {
         let mut old = template.clone();
         old.id = format!("retained-{i}");
-        old.status = "completed".into();
+        old.status = RunStatus::Completed;
         old.kind = RunKind::Task;
         state.runtime.runs.push(old);
     }

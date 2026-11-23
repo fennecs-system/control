@@ -20,7 +20,7 @@
 //! commit. Blocks no committed save references are deleted at load, and blocks
 //! a merge replaced are deleted only after the merge's save commits.
 use crate::State;
-use crate::application::runs::{Record, Run, status};
+use crate::application::runs::{Record, Run};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -75,8 +75,8 @@ pub(crate) fn candidates(state: &State) -> Vec<usize> {
         index < recent
             && !run.archived()
             && run.saved().is_some()
-            && status::finished(&run.status)
-            && !status::resumable(&run.status)
+            && run.status.is_finished()
+            && !run.status.is_resumable()
     };
     // Runs that stay hot keep the runs they point at hot too.
     let mut referenced = HashSet::new();

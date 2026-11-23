@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 #[test]
 fn operator_grants_persist_revoke_and_rollback_without_cross_chat_authority() {
     let mut state = State::default();
@@ -54,7 +55,7 @@ fn worker_cannot_approve_destinations_and_bad_capture_fails_before_docker() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build a page", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let id = run.id.clone();
     let shared = Arc::new(Mutex::new(state));
     let error = worker(&shared, &id, &json!({"url":"https://example.invalid/"})).unwrap_err();

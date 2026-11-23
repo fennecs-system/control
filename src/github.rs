@@ -1,5 +1,6 @@
 //! Scoped GitHub publication. The trusted broker consumes a private credential;
 //! models select immutable outputs, never a remote, token, host path or Git command.
+use crate::runtime::RunStatus;
 use crate::{
     State,
     identity::{Action, Actor},
@@ -366,7 +367,7 @@ fn selected(
                 && r.chat_id.as_deref() == Some(chat)
                 && r.actor == session.actor
                 && r.action == Action::Improve
-                && r.status == "completed"
+                && r.status == RunStatus::Completed
         })
         .ok_or_else(|| io::Error::other("Select a completed improvement in this chat"))?;
     if crate::delegation::is_judge(run) {
@@ -843,7 +844,7 @@ pub fn panel(publications: &[Publication], runs: &[crate::runtime::Run], chat: &
     if let Some(run) = runs.iter().rev().find(|r| {
         r.chat_id.as_deref() == Some(chat)
             && r.action == Action::Improve
-            && r.status == "completed"
+            && r.status == RunStatus::Completed
             && r.attempts
                 .last()
                 .is_some_and(|a| a.github_source.is_some() && a.artifact.is_some())

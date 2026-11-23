@@ -1,5 +1,6 @@
 //! Synthetic workloads: never load personal state or make provider calls.
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::{
     State, chat,
     usage::{Activity, Attempt},
@@ -24,7 +25,14 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             }
             .into(),
         );
-        run.status = ["completed", "running", "failed", "queued", "cancelled"][index % 5].into();
+        run.status = [
+            RunStatus::Completed,
+            RunStatus::Running,
+            RunStatus::Failed,
+            RunStatus::Queued,
+            RunStatus::Cancelled,
+        ][index % 5]
+            .clone();
         run.kind = if index % 7 == 0 {
             RunKind::Steering
         } else {
@@ -219,7 +227,7 @@ fn operator_views() {
             .take(questions)
             .enumerate()
         {
-            run.status = "waiting".into();
+            run.status = RunStatus::Waiting;
             run.question = Some(crate::design::Question {
                 id: format!("q-{index}").into(),
                 generation: format!("g-{index}"),
@@ -363,7 +371,13 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
         let mut turn = run.clone();
         turn.id = format!("run-{index}");
         turn.chat_id = Some(id(index));
-        turn.status = ["completed", "cancelled", "failed", "completed"][index % 4].into();
+        turn.status = [
+            RunStatus::Completed,
+            RunStatus::Cancelled,
+            RunStatus::Failed,
+            RunStatus::Completed,
+        ][index % 4]
+            .clone();
         turn.bot_turn = Some(Box::new(crate::bots::Turn {
             bot: id(index),
             turn: 1,
@@ -386,7 +400,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
         let mut turn = run.clone();
         turn.id = format!("run-live-bot-{index}");
         turn.chat_id = Some(format!("c-live-bot-{index}"));
-        turn.status = "completed".into();
+        turn.status = RunStatus::Completed;
         state.runtime.runs.push(turn);
         crate::bots::command(&mut state, &format!("c-live-bot-{index}"), "on every 10").unwrap();
     }
@@ -397,7 +411,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
     let mut live = run.clone();
     live.id = "run-live".into();
     live.chat_id = Some("c-live-agent".into());
-    live.status = "running".into();
+    live.status = RunStatus::Running;
     state.runtime.runs.push(live);
     state
 }
@@ -473,7 +487,11 @@ pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
         turn.id = format!("{:x}-{index}", 0x1790_0000_0000_0000_u64 + index as u64 * 1_000_000_000);
         turn.chat_id = Some(id(index % dms));
         turn.kind = [RunKind::Chat, RunKind::BotWake, RunKind::PortDecision][index % 3];
-        turn.status = if index % 20 == 0 { "failed" } else { "completed" }.into();
+        turn.status = if index % 20 == 0 {
+            RunStatus::Failed
+        } else {
+            RunStatus::Completed
+        };
         turn.target.model = Some(["gpt-5", "claude"][index % 2].into());
         *turn.objective = format!("Turn {index}: check the ore counts <&>");
         turn.attempts.push(Attempt {

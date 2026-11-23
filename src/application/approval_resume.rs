@@ -2,6 +2,7 @@
 //! The host admits candidates and checkpoints publication with request receipts.
 use super::conversations::{Message, Session};
 use super::runs::Run;
+use crate::runtime::RunStatus;
 use control_context::agent_policy::{MessageSpeaker, RunKind};
 
 /// Chat note headings for operator decisions. Notes stored before messages
@@ -66,11 +67,7 @@ pub(crate) enum Eligibility {
 /// ownership; they are not plans to retain across another writer or an await.
 pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str], cancelled_through: Option<u64>) -> Eligibility {
     let in_chat = |run: &&Run| run.chat_id.as_deref() == Some(chat);
-    if runs
-        .iter()
-        .filter(in_chat)
-        .any(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
-    {
+    if runs.iter().filter(in_chat).any(|run| run.status.is_active()) {
         return Eligibility::Wait;
     }
     let requested = runs.iter().rposition(|run| origins.contains(&run.id.as_str()));
@@ -91,7 +88,7 @@ pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str], cancelled_throu
         (Some(_), Some(at))
             if !steered
                 && !cancelled
-                && (runs[at].status == "completed" || crate::attempt_control::cut_off(&runs[at])) =>
+                && (runs[at].status == RunStatus::Completed || crate::attempt_control::cut_off(&runs[at])) =>
         {
             Eligibility::Candidate(at)
         }

@@ -1,5 +1,6 @@
 //! Bridge off-lock spool reads to the existing attempt mailbox. A receipt is
 //! evidence delivered, not processed; only workspace publication retires it.
+use crate::runtime::RunStatus;
 use crate::{State, tool_registry::AttemptRef};
 use control_context::turn_mailbox::{Delivery, Range};
 use std::io;
@@ -17,7 +18,7 @@ fn index(runs: &[crate::runtime::Run], attempt: &AttemptRef<'_>) -> io::Result<u
         .iter()
         .position(|r| {
             r.id == attempt.run
-                && r.status == "running"
+                && r.status == RunStatus::Running
                 && r.attempts
                     .last()
                     .is_some_and(|a| a.workspace_id.as_deref() == Some(attempt.generation))
@@ -91,7 +92,7 @@ pub(crate) fn drained(state: &State, chat: &str, retains: impl Fn(&str) -> bool)
             .runtime
             .runs
             .iter()
-            .any(|r| r.chat_id.as_deref() == Some(chat) && crate::application::runs::status::active(&r.status))
+            .any(|r| r.chat_id.as_deref() == Some(chat) && r.status.is_active())
     {
         return Vec::new();
     }

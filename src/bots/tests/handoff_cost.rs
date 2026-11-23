@@ -5,6 +5,7 @@
 //! refusal's fix by re-reading the context for wake_topics. The counts are
 //! the calls that protocol requires, not a model's behaviour.
 use super::*;
+use crate::runtime::RunStatus;
 use serde_json::json;
 
 #[derive(Debug, Default)]
@@ -104,7 +105,7 @@ fn turn(state: &mut State, chat: &str, posts: &[String], calls: &mut Calls) -> V
     crate::rooms::processed(state, chat, &working.processed);
     state.chats[chat_index].continuity.as_mut().unwrap().working = Some(working);
     state.chats[chat_index].workspace = Some("published".into());
-    state.runtime.runs[index].status = "completed".into();
+    state.runtime.runs[index].status = RunStatus::Completed;
     calls.turns += 1;
     accepted
 }
@@ -138,7 +139,7 @@ fn a_room_wake_needs_one_handoff_and_no_context_read() {
             .clone();
         assert!(processed.iter().any(|r| matches!(r, control_context::turn_mailbox::Range::Room { through, .. } if *through as usize == state.collective.posts.len())), "{processed:?}");
         assert!(
-            state.runtime.runs.iter().all(|r| r.status != "queued"),
+            state.runtime.runs.iter().all(|r| r.status != RunStatus::Queued),
             "processed posts woke the bot again"
         );
     }

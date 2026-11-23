@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 pub fn ask_without_io(state: &mut State, id: &str, nonce: &str, input: Input) -> Result<Value, &'static str> {
     ask_with_save(state, id, nonce, input, |_| Ok(()))
 }
@@ -8,7 +9,7 @@ pub fn fixture() -> (State, String) {
     state.chats[0].workspace = Some("last-good".into());
     chat::send(&mut state, &chat, "Build the parser", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let mut attempt = crate::usage::Attempt::new();
     attempt.workspace_id = Some("generation-1".into());
     attempt.parent_artifact = Some("last-good".into());
@@ -27,7 +28,7 @@ pub fn paused() -> (State, String) {
     let id = state.runtime.runs[0].id.clone();
     ask_with_save(&mut state, &id, "nonce-1", input(), |_| Ok(())).unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "waiting".into();
+    run.status = RunStatus::Waiting;
     run.attempts[0].status = "waiting".into();
     run.attempts[0].artifact = Some("paused-workspace".into());
     *run.result = summary(run.question.as_ref().unwrap());
@@ -129,7 +130,7 @@ fn pause_survives_reload_and_answer_keeps_authority_and_workspace_baseline() {
     let html = chat::requests(&state, &chat).unwrap();
     assert!(html.contains("Which format? &lt;script&gt;") && html.contains("JSON · recommended"));
     chat::send(&mut state, &chat, "2", "test").unwrap();
-    assert_eq!(state.runtime.runs[0].status, "continued");
+    assert_eq!(state.runtime.runs[0].status, RunStatus::Continued);
     assert_eq!(state.chats[0].workspace.as_deref(), Some("last-good"));
     let next = state.runtime.runs.last().unwrap();
     assert_eq!(next.objective, "JSON");
@@ -159,7 +160,7 @@ fn answering_a_design_question_preserves_the_existing_team_budget() {
     let mut used = state.runtime.runs[0].clone();
     used.id = "already-delegated".into();
     used.kind = RunKind::Delegated;
-    used.status = "completed".into();
+    used.status = RunStatus::Completed;
     used.question = None;
     used.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Worker,
@@ -171,7 +172,7 @@ fn answering_a_design_question_preserves_the_existing_team_budget() {
     state.runtime.runs.push(used);
     answer(&mut state, &chat, None, "1", "test").unwrap();
     let next = state.runtime.runs.last_mut().unwrap();
-    next.status = "running".into();
+    next.status = RunStatus::Running;
     next.attempts.push(crate::usage::Attempt {
         workspace_id: Some("design-resume".into()),
         ..Default::default()
@@ -224,7 +225,7 @@ fn own_direction_is_not_permission_escalation_and_cancel_removes_wait() {
     );
     let (mut state, chat) = paused();
     chat::send(&mut state, &chat, "/cancel", "test").unwrap();
-    assert_eq!(state.runtime.runs[0].status, "cancelled");
+    assert_eq!(state.runtime.runs[0].status, RunStatus::Cancelled);
     assert!(waiting(&state, &chat).is_none());
     assert!(answer(&mut state, &chat, None, "1", "test").is_err());
     let (mut state, chat) = paused();
@@ -260,14 +261,14 @@ fn multiple_decisions_preserve_original_objective_and_publication_baseline() {
     let (mut state, chat) = paused();
     answer(&mut state, &chat, None, "1", "test").unwrap();
     let run = &mut state.runtime.runs[1];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let mut attempt = crate::usage::Attempt::new();
     attempt.workspace_id = Some("generation-2".into());
     attempt.parent_artifact = Some("paused-workspace".into());
     run.attempts.push(attempt);
     let id = run.id.clone();
     ask_with_save(&mut state, &id, "nonce-2", input(), |_| Ok(())).unwrap();
-    state.runtime.runs[1].status = "waiting".into();
+    state.runtime.runs[1].status = RunStatus::Waiting;
     state.runtime.runs[1].attempts[0].status = "waiting".into();
     state.runtime.runs[1].attempts[0].artifact = Some("second-pause".into());
     answer(&mut state, &chat, None, "2", "test").unwrap();
@@ -286,12 +287,7 @@ fn answering_at_capacity_replaces_wait_instead_of_exceeding_admission() {
     answer(&mut state, &chat, None, "1", "test").unwrap();
     assert!(crate::scheduler::admit(&state.runtime).is_err());
     assert_eq!(
-        state
-            .runtime
-            .runs
-            .iter()
-            .filter(|r| ["queued", "running", "waiting"].contains(&r.status.as_str()))
-            .count(),
+        state.runtime.runs.iter().filter(|r| r.status.is_proceeding()).count(),
         crate::scheduler::MAX_PENDING
     );
 }

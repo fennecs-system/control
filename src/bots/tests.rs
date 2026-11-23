@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 #[test]
 #[ignore = "synthetic release request-view benchmark, no credentials or models"]
@@ -38,7 +39,7 @@ fn fixture() -> (State, String) {
     // Most bot tests request a timer; the gene that allows one is selected.
     state.chats[0].lenses = Some(vec!["timers".into()]);
     crate::chat::send(&mut state, &chat, "Watch the game and coordinate", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     (state, chat)
 }
 /// Records the host's refusal of the handoff of `runs[index]`'s last attempt.
@@ -118,7 +119,7 @@ fn targeted_peer_wakes_require_bot_approval_and_share_its_cooldown_and_budget() 
         .iter()
         .position(|run| run.bot_turn.is_some())
         .unwrap();
-    state.runtime.runs[index].status = "completed".into();
+    state.runtime.runs[index].status = RunStatus::Completed;
     reconcile_at(&mut state, 7, |_| Ok(())).unwrap();
     peer_message_at(&mut state, &chat, 4, Now(8));
     reconcile_at(&mut state, 31_000, |_| Ok(())).unwrap();
@@ -155,7 +156,7 @@ fn queued_peer_wakes_recheck_pause_and_stop_at_dispatch_and_survive_restart() {
         Some(state.runtime.runs.len() - 1),
         "a held bot does not block steering"
     );
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     command_at(&mut state, &chat, "resume", Now(4)).unwrap();
     assert_eq!(
         crate::scheduler::next_in(&state),
@@ -163,7 +164,7 @@ fn queued_peer_wakes_recheck_pause_and_stop_at_dispatch_and_survive_restart() {
         "resume reuses the original turn instead of duplicating it"
     );
     command_at(&mut state, &chat, "off", Now(5)).unwrap();
-    assert_eq!(state.runtime.runs[queued].status, "cancelled");
+    assert_eq!(state.runtime.runs[queued].status, RunStatus::Cancelled);
     reconcile_at(&mut state, 6, |_| Ok(())).unwrap();
     assert!(!defined(&state, &chat));
     peer_message_at(&mut state, &chat, 3, Now(7));
@@ -205,7 +206,7 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
     let (mut state, chat) = fixture();
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     let run = state.runtime.runs[0].id.clone();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     state.agent_messages.push(serde_json::from_value(json!({"key":"peer-receipt","origin":"peer-run","chat":chat,"run":"peer-evidence","peer_cursor":2,"urgent":true})).unwrap());
     assert!(
         state.bots.requests.is_empty(),
@@ -217,7 +218,7 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
         "a reconcile between the active worker's read and publication must defer the wake"
     );
     assert!(state.bots.requests.is_empty());
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.chats[0].workspace = Some("published".into());
     state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed {
         working: Some(WorkingState {
@@ -305,7 +306,7 @@ fn a_new_bot_does_not_receive_another_bots_undrained_backlog() {
     let second = crate::chat::create(&mut state);
     state.chats.iter_mut().find(|c| c.id == second).unwrap().room = Some("general".into());
     crate::chat::send(&mut state, &second, "Start a fresh playtest", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     command_at(&mut state, &second, "on", Now(1)).unwrap();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 1);
@@ -329,7 +330,7 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
     let id = state.runtime.runs[index].id.clone();
     let generation = format!("{id}-attempt-1");
     let run = &mut state.runtime.runs[index];
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     *run.result = "Verified the worker entrypoint at /workspace/task/main.rs".into();
     run.attempts.push(crate::usage::Attempt {
         context_trace: Some(Box::new(crate::turn_context::TraceRef {
@@ -347,13 +348,13 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
     state.chats[0].workspace = Some("published".into());
     assert!(needs_recovery(&state, index));
     for status in ["failed", "interrupted", "cancelled", "waiting", "continued"] {
-        state.runtime.runs[index].status = status.into();
+        state.runtime.runs[index].status = RunStatus::named(status);
         assert!(
             !needs_recovery(&state, index),
             "{status} requires its own recovery/decision path"
         );
     }
-    state.runtime.runs[index].status = "completed".into();
+    state.runtime.runs[index].status = RunStatus::Completed;
     state.chats[0].workspace = Some("newer-checkpoint".into());
     assert!(!needs_recovery(&state, index));
     state.chats[0].workspace = Some("published".into());
@@ -530,7 +531,7 @@ fn committed_runnable_work_resumes_once_and_failed_saves_retain_the_intent() {
     );
     let stored = serde_json::to_vec(&state).unwrap();
     let mut recovered: State = serde_json::from_slice(&stored).unwrap();
-    recovered.runtime.runs.last_mut().unwrap().status = "completed".into();
+    recovered.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     reconcile_at(&mut recovered, 40_000, |_| Ok(())).unwrap();
     assert_eq!(
         bot_runs(&recovered).len(),
@@ -575,7 +576,7 @@ fn room_messages_wake_a_bot_once_and_its_finished_turn_releases_the_next() {
         .iter()
         .position(|run| run.bot_turn.is_some())
         .unwrap();
-    state.runtime.runs[first].status = "completed".into();
+    state.runtime.runs[first].status = RunStatus::Completed;
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
     assert_eq!(
         bot_runs(&state).len(),
@@ -605,7 +606,7 @@ fn recorded_room_updates_do_not_wake_or_acknowledge_and_notifications_still_wake
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 1);
     let first = state.runtime.runs.iter().position(|r| r.bot_turn.is_some()).unwrap();
-    state.runtime.runs[first].status = "completed".into();
+    state.runtime.runs[first].status = RunStatus::Completed;
     post(&mut state, Some("lead"), "Recorded audit of the same milestone");
     state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
@@ -654,7 +655,7 @@ fn listening_and_bots_are_exclusive_and_stop_waits_for_the_turn() {
         .iter()
         .position(|run| run.bot_turn.is_some())
         .unwrap();
-    state.runtime.runs[turn].status = "completed".into();
+    state.runtime.runs[turn].status = RunStatus::Completed;
     reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
     assert!(!defined(&state, &chat));
     post(&mut state, None, "after stop");
@@ -679,7 +680,7 @@ fn failed_saves_roll_back_and_full_queues_keep_the_request() {
     assert_eq!(state.bots.requests.len(), 1, "the requested turn waits for queue space");
     for run in &mut state.runtime.runs {
         if run.source == "test" {
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
         }
     }
     reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
@@ -708,7 +709,7 @@ fn command_steps_never_drop_turn_requests_for_any_bot() {
     let index = state.chats.iter().position(|session| session.id == other).unwrap();
     state.chats[index].room = None;
     crate::chat::send(&mut state, &other, "Check the farm", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     command_at(&mut state, &other, "on every 1", Now(10)).unwrap();
     command_at(&mut state, &chat, "pause", Now(60_010)).unwrap();
     assert!(
@@ -736,7 +737,7 @@ fn requested_turns_survive_a_restart_and_are_queued_once() {
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     for run in &mut restored.runtime.runs {
         if run.source == "test" {
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
         }
     }
     reconcile_at(&mut restored, 2, |_| Ok(())).unwrap();
@@ -816,7 +817,7 @@ fn idle_passes_skip_work_until_an_event_or_deadline() {
 fn requester() -> (State, String, String) {
     let (mut state, parent) = fixture();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-a".into()),
         ..Default::default()
@@ -836,7 +837,7 @@ fn spawned(state: &mut State, parent: &str, title: &str) -> String {
         .find(|session| session.id == child)
         .unwrap()
         .title = title.into();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     child
 }
 fn ask(state: &mut State, nonce: &str, chat: &str, every_minutes: Option<u64>) -> io::Result<Value> {
@@ -876,7 +877,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
     let (mut state, parent, child) = requester();
     let grandchild = spawned(&mut state, &child, "Grandchild");
     let index = state.runtime.runs.len() - 1;
-    state.runtime.runs[index].status = "running".into();
+    state.runtime.runs[index].status = RunStatus::Running;
     state.runtime.runs[index].attempts.push(crate::usage::Attempt {
         workspace_id: Some("child-attempt".into()),
         ..Default::default()
@@ -946,7 +947,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
     assert_eq!(pending_count(&state, &parent), 0);
 }
 fn finish_requesting_turn(state: &mut State) {
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
 }
 
 #[test]
@@ -1043,7 +1044,7 @@ fn a_leads_helper_may_request_bots_for_controllers_another_helper_spawned() {
         .rev()
         .find(|run| run.chat_id.as_deref() == Some(helper.as_str()))
         .unwrap();
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-h".into()),
         ..Default::default()
@@ -1098,7 +1099,7 @@ fn decisions_for_a_superseded_requester_are_recorded_without_a_new_turn() {
         .to_owned();
     finish_requesting_turn(&mut state);
     crate::chat::send(&mut state, &parent, "Something else", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
     let runs = state.runtime.runs.len();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
@@ -1206,14 +1207,14 @@ fn earlier_continued_runs_do_not_block_resuming_the_requester() {
     let (mut state, parent, child) = requester();
     let index = state.runtime.runs.len();
     crate::chat::send(&mut state, &parent, "Earlier delegated work", "test").unwrap();
-    state.runtime.runs[index].status = "continued".into();
+    state.runtime.runs[index].status = RunStatus::Continued;
     let requesting = state.runtime.runs.remove(0);
     state.runtime.runs.push(requesting);
     let id = ask_last(&mut state, "n1", &child).unwrap()["request_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
@@ -1247,7 +1248,7 @@ fn a_one_shot_callback_can_request_the_next_stage_and_pause_is_durable() {
     let first = state.runtime.runs.len() - 1;
     assert!(arm_at(&mut state, &chat, Now(2)).unwrap());
     state.watches[0].observe_for_test(2, None);
-    state.runtime.runs[first].status = "completed".into();
+    state.runtime.runs[first].status = RunStatus::Completed;
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     reconcile_at(&mut restored, 3, |_| Ok(())).unwrap();
     assert_eq!(
@@ -1255,7 +1256,7 @@ fn a_one_shot_callback_can_request_the_next_stage_and_pause_is_durable() {
         2,
         "the explicit next callback survives restart"
     );
-    restored.runtime.runs.last_mut().unwrap().status = "completed".into();
+    restored.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     reconcile_at(&mut restored, 4, |_| Ok(())).unwrap();
     assert!(
         !defined(&restored, &chat),
@@ -1266,7 +1267,7 @@ fn a_one_shot_callback_can_request_the_next_stage_and_pause_is_durable() {
     reconcile_at(&mut state, 6, |_| Ok(())).unwrap();
     command_at(&mut state, &chat, "on every 1", Now(7)).unwrap();
     let run = state.runtime.runs.last_mut().unwrap();
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let mut attempt = crate::usage::Attempt::new();
     attempt.workspace_id = Some("pause-attempt".into());
     run.attempts.push(attempt);
@@ -1285,7 +1286,7 @@ fn a_one_shot_callback_can_request_the_next_stage_and_pause_is_durable() {
     assert_ne!(state.bots.supervisor.status(&bot(&chat)), Some(Status::Paused));
     handle(&mut state, &attempt, BotCall::Pause, |_| Ok(())).unwrap();
     assert_eq!(state.bots.supervisor.status(&bot(&chat)), Some(Status::Paused));
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     let count = state.runtime.runs.len();
     reconcile_at(&mut state, 1_000_000, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), count, "a real pause stops timer wakes");
@@ -1309,7 +1310,7 @@ fn control_initiated_turns_after_a_request_do_not_drop_its_resume() {
     )
     .unwrap();
     state.runtime.runs.push(continuation);
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
@@ -1367,7 +1368,7 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
         watching(&mut state, &chat, "w-result");
         state.watches[0].notification_channel = notifications;
         command_at(&mut state, &chat, "on", Now(0)).unwrap();
-        state.runtime.runs[0].status = "running".into();
+        state.runtime.runs[0].status = RunStatus::Running;
         let id = state.runtime.runs[0].id.clone();
         state.runtime.runs[0].attempts.push(crate::usage::Attempt {
             workspace_id: Some("attempt".into()),
@@ -1463,7 +1464,7 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
                 .unwrap(),
                 None
             );
-            skipped.runtime.runs[0].status = "cancelled".into();
+            skipped.runtime.runs[0].status = RunStatus::Cancelled;
             assert!(record(&mut skipped, &other, "w-result", &page, 5, false, |_| Ok(())).is_err());
         }
         for n in 0..300 {
@@ -1516,7 +1517,7 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
             .publication(None, &id, "attempt", "published", |_| true)
             .unwrap()
             .unwrap();
-        state.runtime.runs[0].status = "completed".into();
+        state.runtime.runs[0].status = RunStatus::Completed;
         state.chats[0].workspace = Some("published".into());
         state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed {
             working: Some(working),
@@ -1588,7 +1589,7 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
     }));
     state.watches[0].observe_for_test(1, None);
     state.watches[0].observe_for_test(2, None);
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let id = state.runtime.runs[0].id.clone();
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt".into()),
@@ -1844,7 +1845,7 @@ fn selected_watch_wakes_keep_exact_cursors_across_save_failure_and_restart() {
         }]
     ));
     assert!(!runs[0].objective.contains("status: unchanged"));
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     state.watches[0].observe_for_test(103, Some(1));
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 2, "the owner's own process exit still wakes it");
@@ -1870,7 +1871,7 @@ fn exit_only_watches_still_deliver_source_gaps_and_human_steering() {
             .objective
             .contains("missing source events after 0 through 3")
     );
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     post(&mut state, None, "Change direction");
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 2, "watch policy cannot hide human room input");
@@ -1914,7 +1915,7 @@ fn a_bot_follows_its_chats_watches_and_wakes_on_lines_and_exits() {
         .iter()
         .position(|run| run.bot_turn.is_some())
         .unwrap();
-    state.runtime.runs[first].status = "completed".into();
+    state.runtime.runs[first].status = RunStatus::Completed;
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
     assert!(
         bot_runs(&state)[1]
@@ -1974,7 +1975,7 @@ fn an_armed_wake_fires_once_on_watch_output_then_ends() {
         .iter()
         .position(|run| run.bot_turn.is_some())
         .unwrap();
-    state.runtime.runs[turn].status = "completed".into();
+    state.runtime.runs[turn].status = RunStatus::Completed;
     reconcile_at(&mut state, 3, |_| Ok(())).unwrap();
     assert!(!defined(&state, &chat), "the wake ends with its turn");
     reconcile_at(&mut state, 4, |_| Ok(())).unwrap();
@@ -2029,7 +2030,7 @@ fn a_finished_watch_still_delivers_its_last_output_and_exit() {
         .iter()
         .position(|run| run.bot_turn.is_some())
         .unwrap();
-    state.runtime.runs[first].status = "completed".into();
+    state.runtime.runs[first].status = RunStatus::Completed;
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
     assert!(
         bot_runs(&state)[1].objective.contains("exited with code 0"),
@@ -2056,19 +2057,19 @@ fn paused_queued_bot_is_not_reported_working_but_an_active_turn_remains_visible(
     assert!(!status(&restored, &chat).unwrap().contains("working"));
     let turn = restored.runtime.runs[index].bot_turn.as_ref().unwrap().turn;
     assert!(!restored.bots.supervisor.may_start(&bot(&chat), &TurnId(turn)));
-    restored.runtime.runs[index].status = "running".into();
+    restored.runtime.runs[index].status = RunStatus::Running;
     assert!(
         status(&restored, &chat)
             .unwrap()
             .contains("paused · current turn running")
     );
-    restored.runtime.runs[index].status = "cancelling".into();
+    restored.runtime.runs[index].status = RunStatus::Cancelling;
     assert!(
         status(&restored, &chat)
             .unwrap()
             .contains("paused · current turn stopping")
     );
-    restored.runtime.runs[index].status = "queued".into();
+    restored.runtime.runs[index].status = RunStatus::Queued;
     command_at(&mut restored, &chat, "resume", Now(4)).unwrap();
     assert!(status(&restored, &chat).unwrap().contains(" · queued · "));
     assert!(restored.bots.supervisor.may_start(&bot(&chat), &TurnId(turn)));
@@ -2191,7 +2192,7 @@ fn an_abandoned_producer_wakes_its_dependents_instead_of_leaving_them_asleep() {
         .iter()
         .position(|run| run.chat_id.as_deref() == Some(peer.as_str()))
         .unwrap();
-    state.runtime.runs[peer_run].status = "cancelled".into();
+    state.runtime.runs[peer_run].status = RunStatus::Cancelled;
     reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
     assert_eq!(
@@ -2218,7 +2219,7 @@ fn stopping_a_producer_bot_wakes_its_dependents_but_an_idle_one_does_not() {
         .runtime
         .runs
         .iter_mut()
-        .for_each(|run| run.status = "completed".into());
+        .for_each(|run| run.status = RunStatus::Completed);
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     command_at(&mut state, &peer, "on", Now(0)).unwrap();
     claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));

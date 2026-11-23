@@ -49,13 +49,13 @@ pub struct Runtime {
     #[serde(skip)]
     pub paused: Option<String>,
 }
-pub use crate::application::runs::Run;
 use crate::application::runs::Submission;
+pub use crate::application::runs::{Run, RunStatus};
 
 // Pending transitions change status/result and possibly a design answer. Keep
 // rollback bounded, without cloning attempts or completed conversation history.
 pub(crate) struct RunStatusCheckpoint {
-    runs: Vec<(String, String, String, Option<crate::design::Question>)>,
+    runs: Vec<(String, RunStatus, String, Option<crate::design::Question>)>,
     notice: String,
 }
 impl RunStatusCheckpoint {
@@ -86,10 +86,7 @@ impl RunStatusCheckpoint {
             runs: runtime
                 .runs
                 .iter()
-                .filter(|run| {
-                    ["queued", "running", "cancelling", "waiting"].contains(&run.status.as_str())
-                        && selected.contains(run.id.as_str())
-                })
+                .filter(|run| run.status.is_active() && selected.contains(run.id.as_str()))
                 .map(|run| {
                     (
                         run.id.clone(),
@@ -235,14 +232,16 @@ impl Runtime {
                 .max()
                 .unwrap_or(0)
                 .saturating_add(1);
-            if let Some(run) = self.runs.iter_mut().find(|r| {
-                r.id == id && crate::application::runs::status::resumable(&r.status) && !crate::design::asked(r)
-            }) {
+            if let Some(run) = self
+                .runs
+                .iter_mut()
+                .find(|r| r.id == id && r.status.is_resumable() && !crate::design::asked(r))
+            {
                 if let Err(message) = identity::authorize(&run.actor, run.action) {
                     self.notice = message.into();
                     return crate::history_view::AFTER_ACTION;
                 }
-                run.status = "queued".into();
+                run.status = RunStatus::Queued;
                 run.queue_order = order;
                 run.result.clear();
             }
@@ -269,7 +268,11 @@ impl Runtime {
                 // The Bots page process tree shows active turns; only queued work
                 // that has not started is listed here.
                 let mut h = String::new();
-                let mut queued = self.runs.iter().filter(|r| r.status == "queued").collect::<Vec<_>>();
+                let mut queued = self
+                    .runs
+                    .iter()
+                    .filter(|r| r.status == RunStatus::Queued)
+                    .collect::<Vec<_>>();
                 queued.sort_by_key(|r| r.queue_order);
                 if !queued.is_empty() {
                     h.push_str("<h3 class='form-title'>Queued</h3>");
@@ -322,7 +325,7 @@ pub(crate) fn usage(run: &Run) -> String {
 fn run_record(run: &Run) -> String {
     let mut html = format!(
         "<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}{}</p>",
-        escape(&run.status),
+        escape(run.status.as_str()),
         escape(run.kind.as_str()),
         escape(&run.source),
         escape(&run.objective),
@@ -359,10 +362,10 @@ fn run_record(run: &Run) -> String {
     if let Some(chat) = run.chat_id.as_ref().filter(|id| crate::chat::valid_id(id)) {
         html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(chat)));
     }
-    if ["queued", "running", "waiting"].contains(&run.status.as_str()) {
+    if run.status.is_proceeding() {
         html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&run.id)));
     }
-    if crate::application::runs::status::resumable(&run.status) {
+    if run.status.is_resumable() {
         html.push_str(&format!("<form class='decision-form' method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&run.id)));
     }
     html.push_str("</article>");

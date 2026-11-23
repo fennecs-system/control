@@ -1,3 +1,4 @@
+use crate::runtime::RunStatus;
 use crate::{escape, identity::Actor, runtime::Runtime};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -322,7 +323,7 @@ pub fn render(state: &crate::State) -> String {
     let mut daily = BTreeMap::<u64, u64>::new();
     let mut legacy = 0;
     for run in &runtime.runs {
-        if run.attempts.is_empty() && !["queued", "running"].contains(&run.status.as_str()) {
+        if run.attempts.is_empty() && !matches!(run.status, RunStatus::Queued | RunStatus::Running) {
             legacy += 1;
         }
         for attempt in &run.attempts {

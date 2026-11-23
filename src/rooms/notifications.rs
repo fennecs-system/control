@@ -3,6 +3,7 @@
 //! Usage, lifecycle and profiling fixtures live in notifications/tests.rs.
 #[cfg(test)]
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::{State, identity};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -82,7 +83,7 @@ pub(super) fn call(state: &mut State, run_id: &str, name: &str, args: &Value) ->
         .runtime
         .runs
         .iter()
-        .position(|run| run.id == run_id && run.status == "running")
+        .position(|run| run.id == run_id && run.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     let run = &state.runtime.runs[index];
     identity::authorize(&run.actor, run.action)?;
@@ -320,7 +321,7 @@ pub(crate) fn start_at_edge(state: &mut State, chat: &str) -> Result<(), &'stati
     // replacing its provider session or its already delivered receipts.
     for run in &mut state.runtime.runs {
         if run.chat_id.as_deref() == Some(chat)
-            && run.status == "running"
+            && run.status == RunStatus::Running
             && let Some(mailbox) = run.attempts.last_mut().and_then(|a| a.turn_mailbox.as_mut())
         {
             mailbox

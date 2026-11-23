@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 #[test]
 fn capacity_metadata_survives_selection_and_rolls_back_when_save_fails() {
     let mut state = crate::State::default();
@@ -252,7 +253,7 @@ fn backend_selection_is_captured_and_failed_settings_do_not_reroute_runs() {
     let mut restored: crate::State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.runtime.runs[1].target.backend, Backend::Claude);
     let id = restored.runtime.runs[1].id.clone();
-    restored.runtime.runs[1].status = "failed".into();
+    restored.runtime.runs[1].status = RunStatus::Failed;
     restored
         .runtime
         .action("/retry-run", &HashMap::from([("id".into(), id)]));

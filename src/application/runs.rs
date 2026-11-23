@@ -3,25 +3,122 @@
 use crate::identity::{Action, Actor};
 use control_context::agent_policy::RunKind;
 use serde::{Deserialize, Serialize};
-/// Run statuses, decided in one place.
-pub(crate) mod status {
+/// A run's lifecycle status, saved as its lowercase name.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStatus {
+    Queued,
+    Running,
+    Cancelling,
+    Waiting,
+    Completed,
+    Blocked,
+    Failed,
+    Interrupted,
+    Cancelled,
+    Continued,
+    /// A saved status no current code writes, kept verbatim so old state and
+    /// history still load and save unchanged. It is finished and inactive.
+    #[serde(untagged)]
+    Unrecognised(String),
+}
+impl RunStatus {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Cancelling => "cancelling",
+            Self::Waiting => "waiting",
+            Self::Completed => "completed",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+            Self::Cancelled => "cancelled",
+            Self::Continued => "continued",
+            Self::Unrecognised(status) => status,
+        }
+    }
     /// Executing, queued or awaiting input: the run will still change.
-    pub(crate) fn active(status: &str) -> bool {
-        matches!(status, "queued" | "running" | "cancelling" | "waiting")
+    pub fn is_active(&self) -> bool {
+        match self {
+            Self::Queued | Self::Running | Self::Cancelling | Self::Waiting => true,
+            Self::Completed
+            | Self::Blocked
+            | Self::Failed
+            | Self::Interrupted
+            | Self::Cancelled
+            | Self::Continued
+            | Self::Unrecognised(_) => false,
+        }
     }
     /// Every other status. A finished run does not execute again, though a
     /// resumable one can be continued by a new run, and a finished run's
     /// records (delivery, links) may still be updated.
-    pub(crate) fn finished(status: &str) -> bool {
-        !active(status)
+    pub fn is_finished(&self) -> bool {
+        !self.is_active()
     }
     /// Finished without success: a continuation can resume from it.
-    pub(crate) fn resumable(status: &str) -> bool {
-        matches!(status, "blocked" | "failed" | "interrupted" | "cancelled")
+    pub fn is_resumable(&self) -> bool {
+        match self {
+            Self::Blocked | Self::Failed | Self::Interrupted | Self::Cancelled => true,
+            Self::Queued
+            | Self::Running
+            | Self::Cancelling
+            | Self::Waiting
+            | Self::Completed
+            | Self::Continued
+            | Self::Unrecognised(_) => false,
+        }
     }
-    /// Finished because a continuation took over: its outcome is the continuation's.
-    pub(crate) fn superseded(status: &str) -> bool {
-        status == "continued"
+    /// Test fixtures name statuses as text; an unknown name is a typo there.
+    #[cfg(test)]
+    pub(crate) fn named(status: &str) -> Self {
+        match serde_json::from_value(serde_json::Value::String(status.into())) {
+            Ok(Self::Unrecognised(_)) | Err(_) => panic!("not a run status: {status}"),
+            Ok(known) => known,
+        }
+    }
+    /// Active and not being cancelled: queued, running or awaiting input.
+    pub fn is_proceeding(&self) -> bool {
+        matches!(self, Self::Queued | Self::Running | Self::Waiting)
+    }
+    /// Not stopped: still proceeding, or ended by success or a continuation.
+    /// Cancelling, blocked, failed, interrupted and cancelled work is stopped.
+    pub fn is_unstopped(&self) -> bool {
+        matches!(
+            self,
+            Self::Queued | Self::Running | Self::Waiting | Self::Completed | Self::Continued
+        )
+    }
+    /// Stopped work: being cancelled, or ended without success. An
+    /// unrecognised status is neither stopped nor unstopped.
+    pub fn is_stopped(&self) -> bool {
+        matches!(
+            self,
+            Self::Cancelling | Self::Blocked | Self::Failed | Self::Interrupted | Self::Cancelled
+        )
+    }
+    /// Holds a worker slot: executing, or stopping an execution.
+    pub fn occupies_slot(&self) -> bool {
+        matches!(self, Self::Running | Self::Cancelling)
+    }
+}
+impl std::fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+/// A failed or paused turn's outcome becomes its run's status.
+impl From<control_agent::Status> for RunStatus {
+    fn from(status: control_agent::Status) -> Self {
+        use control_agent::Status;
+        match status {
+            Status::Blocked => Self::Blocked,
+            Status::Failed => Self::Failed,
+            Status::Cancelled => Self::Cancelled,
+            Status::Waiting => Self::Waiting,
+            Status::Interrupted => Self::Interrupted,
+        }
     }
 }
 /// A run as saved. Code uses [`Run`], which remembers its saved form between
@@ -40,7 +137,7 @@ pub struct Record {
     pub room_wake_used: bool,
     /// The last status sent to frontends through the outbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub emitted: Option<String>,
+    pub emitted: Option<RunStatus>,
     #[serde(default)]
     pub persona: Option<crate::delegation::Persona>,
     #[serde(default)]
@@ -70,7 +167,7 @@ pub struct Record {
     pub id: String,
     pub objective: crate::history::Spilled<String>,
     pub kind: RunKind,
-    pub status: String,
+    pub status: RunStatus,
     pub source: String,
     pub result: crate::history::Spilled<String>,
 }
@@ -127,7 +224,7 @@ impl Submission {
             objective: self.objective.into(),
             kind: self.kind,
             source: self.source,
-            status: "queued".into(),
+            status: RunStatus::Queued,
             result: String::new().into(),
         }
         .into()
@@ -145,13 +242,13 @@ impl Record {
     /// Retires this queued turn: the active run `active` of its chat already
     /// delivered and processed its message.
     pub(crate) fn absorb(&mut self, active: &str) {
-        self.status = "completed".into();
+        self.status = RunStatus::Completed;
         self.result = format!("{ABSORBED}{active}; see that session's response.").into();
     }
     /// The run that processed this turn's message while it was active, when
     /// this turn never ran itself.
     pub(crate) fn absorbed_by(&self) -> Option<&str> {
-        if !self.attempts.is_empty() || self.status != "completed" {
+        if !self.attempts.is_empty() || self.status != RunStatus::Completed {
             return None;
         }
         self.result

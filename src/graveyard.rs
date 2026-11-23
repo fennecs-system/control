@@ -3,6 +3,7 @@
 //! request projects every dead chat; only one page of rows is formatted.
 //! `GET /bots/graveyard` returns the next page as an HTML fragment for the
 //! client's scroll loader; without the client the same cursor is a link.
+use crate::runtime::RunStatus;
 use crate::{State, escape};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -58,10 +59,11 @@ impl Reason {
     fn of(run: Option<&crate::runtime::Run>, bot: bool) -> Self {
         use crate::attempt_control::Termination;
         let Some(run) = run else { return Self::Stopped };
-        match run.status.as_str() {
-            "cancelled" => Self::Cancelled,
-            "interrupted" => Self::Interrupted,
-            "failed" | "blocked" => match run.attempts.last().and_then(|attempt| attempt.termination) {
+        match &run.status {
+            RunStatus::Cancelled => Self::Cancelled,
+            RunStatus::Interrupted => Self::Interrupted,
+            RunStatus::Failed | RunStatus::Blocked => match run.attempts.last().and_then(|attempt| attempt.termination)
+            {
                 Some(Termination::TimedOut) => Self::Timeout,
                 Some(Termination::StepLimit) => Self::StepLimit,
                 Some(Termination::Cancelled) => Self::Cancelled,
@@ -111,7 +113,7 @@ pub fn dead<'a>(state: &'a State, search: &str) -> Vec<Grave<'a>> {
             // An agent chat that never ran has nothing to remember.
             if !(bot || (chat.parent_chat.is_some() && run.is_some()))
                 || crate::bots::defined(state, &chat.id)
-                || run.is_some_and(|(_, run)| crate::application::runs::status::active(&run.status))
+                || run.is_some_and(|(_, run)| run.status.is_active())
             {
                 return None;
             }

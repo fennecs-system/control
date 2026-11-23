@@ -1,5 +1,6 @@
 //! Durable, credential-free commands. Model requests select capabilities, never mounts.
 mod tools;
+use crate::runtime::RunStatus;
 use crate::{State, tool_registry::AttemptRef, usage::Attempt};
 use control_effect::sync::{CancelToken, Recv};
 use control_isolation::{
@@ -124,7 +125,7 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
         .runtime
         .runs
         .iter_mut()
-        .find(|r| r.id == run && r.status == "running")
+        .find(|r| r.id == run && r.status == RunStatus::Running)
         .ok_or_else(|| fail("Run is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
     if crate::delegation::pausing(run) {

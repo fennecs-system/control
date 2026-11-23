@@ -1,4 +1,5 @@
 //! Shared room messages are data, never commands or authority grants.
+use crate::runtime::RunStatus;
 use crate::{State, escape};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -140,13 +141,7 @@ pub fn render(state: &State, room: &str) -> String {
     html.push_str(&format!("</div><form class='conversation-composer' method='post' action='/room'><input type='hidden' name='channel' value='{room}'><textarea name='message' aria-label='Shared update' placeholder='Message {label}…' required maxlength='2000' rows='3'></textarea><div class='composer-footer'><span class='muted'>Shared update</span><button class='send-message' aria-label='Post update'>↑</button></div></form></section><aside class='room-details' aria-label='Room details'><h2>Active participants</h2><ul class='room-participants'>"));
     let mut active = std::collections::HashSet::new();
     let mut activity = std::collections::HashMap::new();
-    for run in state
-        .runtime
-        .runs
-        .iter()
-        .rev()
-        .filter(|run| matches!(run.status.as_str(), "running" | "queued" | "waiting"))
-    {
+    for run in state.runtime.runs.iter().rev().filter(|run| run.status.is_proceeding()) {
         if let Some(chat) = run.chat_id.as_deref() {
             activity.entry(chat).or_insert(run.status.as_str());
         }
@@ -269,7 +264,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
             .runtime
             .runs
             .iter()
-            .find(|r| r.id == run && r.status == "running")
+            .find(|r| r.id == run && r.status == RunStatus::Running)
             .ok_or("Run is not active.")?;
         crate::identity::authorize(&run.actor, run.action)?;
         let chat_index = state

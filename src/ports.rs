@@ -11,6 +11,7 @@ mod multiplex_transport;
 #[path = "../tools/tcp-relay/protocol.rs"]
 mod protocol;
 mod tools;
+use crate::runtime::RunStatus;
 use crate::{
     State,
     identity::{self, Action, Actor},
@@ -342,7 +343,7 @@ fn admit(
         .runtime
         .runs
         .iter()
-        .find(|r| r.id == run_id && r.status == "running")
+        .find(|r| r.id == run_id && r.status == RunStatus::Running)
         .ok_or_else(|| io::Error::other("Run is not active"))?;
     identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     if crate::delegation::is_judge(run)
@@ -472,7 +473,7 @@ fn admit(
                 p.status == Status::Stopped
                     && !state.runtime.runs.iter().any(|r| {
                         r.id == p.origin_run
-                            && r.status == "running"
+                            && r.status == RunStatus::Running
                             && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(&p.origin_attempt)
                     })
             })
@@ -539,7 +540,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         .iter()
         .find(|r| {
             r.id == run
-                && r.status == "running"
+                && r.status == RunStatus::Running
                 && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(generation)
         })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;

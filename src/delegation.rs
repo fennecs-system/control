@@ -1,6 +1,7 @@
 //! Durable, bounded delegation. A parent releases its model slot before its
 //! child is admitted. Results are feedback, never an implicit merge or grant.
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::{State, chat, identity, runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -301,7 +302,7 @@ fn request_with_save(
         .runtime
         .runs
         .iter()
-        .position(|r| r.id == id && r.status == "running")
+        .position(|r| r.id == id && r.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     let run = &state.runtime.runs[index];
     identity::authorize(&run.actor, run.action)?;
@@ -356,14 +357,12 @@ fn request_with_save(
 /// child/continuation because their IDs are saved with the state transition.
 pub fn reconcile(state: &mut State, save: impl FnOnce(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
     let Some(index) = state.runtime.runs.iter().position(|r| {
-        r.status == "waiting"
+        r.status == RunStatus::Waiting
             && r.delegation.as_ref().is_some_and(|d| {
                 d.continuation.is_none()
-                    && d.child.as_ref().is_none_or(|id| {
-                        leaf(state, id).map_or(true, |c| {
-                            !matches!(c.status.as_str(), "queued" | "running" | "cancelling" | "waiting")
-                        })
-                    })
+                    && d.child
+                        .as_ref()
+                        .is_none_or(|id| leaf(state, id).map_or(true, |c| !c.status.is_active()))
             })
     }) else {
         return Ok(());
@@ -424,7 +423,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         || (attempt.project.is_some()
             && chat.project.as_ref().and_then(|p| p.head.as_ref()) != attempt.project_base.as_ref())
     {
-        state.runtime.runs[index].status = "blocked".into();
+        state.runtime.runs[index].status = RunStatus::Blocked;
         state.runtime.runs[index].result =
             "Conversation files changed while delegating. Start a new turn; child outputs remain retained.".into();
         return Ok(());
@@ -441,7 +440,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
                 resources.push(grant);
             }
         }
-        state.runtime.runs[index].status = "continued".into();
+        state.runtime.runs[index].status = RunStatus::Continued;
         state.runtime.enqueue_for("Continue the original task using the delegated feedback. Review findings critically; no child edits were applied.".into(),RunKind::DelegationResult,"delegation",parent.actor.clone(),parent.action)?;
         let next = state.runtime.runs.last_mut().unwrap();
         next.chat_id = parent.chat_id.clone();
@@ -570,7 +569,7 @@ pub(crate) fn leaf<'a>(state: &'a State, id: &str) -> Result<&'a runtime::Run, &
             .iter()
             .find(|r| r.id == id)
             .ok_or("Delegated child is missing; inspect retained state.")?;
-        if run.status != "continued" {
+        if run.status != RunStatus::Continued {
             return Ok(run);
         }
         id = run

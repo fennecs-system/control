@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 fn approved() -> (State, String) {
     let (mut state, run, chat) = super::super::tests::fixture();
     admit(
@@ -26,7 +27,7 @@ fn approved() -> (State, String) {
 #[test]
 fn dispatcher_wakes_only_after_acknowledged_checkpoint_and_never_on_replay() {
     let (mut state, _) = approved();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let checkpointed = std::cell::Cell::new(false);
     let wakes = std::cell::Cell::new(0);
     let before = serde_json::to_vec(&state).unwrap();
@@ -67,7 +68,7 @@ fn dispatcher_wakes_only_after_acknowledged_checkpoint_and_never_on_replay() {
 fn approval_waits_for_turn_and_wakes_once_with_captured_provider() {
     let (mut state, chat) = approved();
     advance(&mut state, |_| panic!("active turn must not queue another run")).unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[0].target.model = Some("captured-model".into());
     let before = serde_json::to_vec(&state).unwrap();
     assert!(advance(&mut state, |_| Err(io::Error::other("disk full"))).is_err());
@@ -84,7 +85,7 @@ fn approval_waits_for_turn_and_wakes_once_with_captured_provider() {
 #[test]
 fn bot_wake_turns_do_not_supersede_approvals() {
     let (mut state, chat) = approved();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let mut wake = state.runtime.runs[0].clone();
     wake.id = "bot-wake".into();
     wake.kind = crate::runtime::RunKind::BotWake;
@@ -104,9 +105,9 @@ fn bot_wake_turns_do_not_supersede_approvals() {
 #[test]
 fn newer_human_instruction_suppresses_delayed_approval_wake() {
     let (mut state, chat) = approved();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     crate::chat::send(&mut state, &chat, "Stop the playtest and leave resources alone", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     let count = state.runtime.runs.len();
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), count);
@@ -117,10 +118,10 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
     let (mut state, chat) = approved();
     let mut continuation = state.runtime.runs[0].clone();
     continuation.id = "after-design".into();
-    continuation.status = "completed".into();
+    continuation.status = RunStatus::Completed;
     continuation.kind = RunKind::DesignAnswer;
     continuation.persona = Some(crate::delegation::lineage(&state.runtime.runs[0]));
-    state.runtime.runs[0].status = "continued".into();
+    state.runtime.runs[0].status = RunStatus::Continued;
     state.runtime.runs[0].question = Some(crate::design::Question {
         id: "q-route".into(),
         generation: "attempt-a".into(),
@@ -146,10 +147,10 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
 #[test]
 fn requests_from_a_resumed_turn_wake_the_conversation_again() {
     let (mut state, chat) = approved();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     advance(&mut state, |_| Ok(())).unwrap();
     let resumed = state.runtime.runs.len() - 1;
-    state.runtime.runs[resumed].status = "completed".into();
+    state.runtime.runs[resumed].status = RunStatus::Completed;
     state.runtime.runs[resumed].attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-b".into()),
         ..Default::default()
@@ -175,7 +176,7 @@ fn requests_from_a_resumed_turn_wake_the_conversation_again() {
 #[test]
 fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
     let (mut state, lead) = approved();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state.ports[0].decision = None;
     let root = state.runtime.runs[0].id.clone();
     let mut later = state.runtime.runs[0].clone();
@@ -228,7 +229,7 @@ fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
 fn waiting_chat_does_not_starve_an_independent_ready_callback() {
     let (mut state, _) = approved(); // first task is still running
     let (mut other, chat) = approved();
-    other.runtime.runs[0].status = "completed".into();
+    other.runtime.runs[0].status = RunStatus::Completed;
     state.chats.extend(other.chats);
     state.runtime.runs.extend(other.runtime.runs);
     state.ports.extend(other.ports);
@@ -244,12 +245,12 @@ fn denial_wakes_without_granting_access_and_cancelled_requests_never_wake() {
     state.ports[0].status = Status::Stopping;
     state.ports[0].approval = None;
     state.ports[0].decision = Some(Receipt::pending(false));
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     advance(&mut state, |_| Ok(())).unwrap();
     assert!(state.runtime.runs[1].objective.contains("denied"));
     assert!(state.ports[0].approval.is_none());
     let (mut cancelled, _) = approved();
-    cancelled.runtime.runs[0].status = "cancelled".into();
+    cancelled.runtime.runs[0].status = RunStatus::Cancelled;
     advance(&mut cancelled, |_| panic!("cancelled origin must not wake")).unwrap();
     assert_eq!(cancelled.runtime.runs.len(), 1);
 }
@@ -277,7 +278,7 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     )
     .unwrap();
     // The requesting turn spent its model steps retrying while the request was pending.
-    state.runtime.runs[0].status = "failed".into();
+    state.runtime.runs[0].status = RunStatus::Failed;
     state.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::StepLimit);
     advance(&mut state, |_| panic!("nothing is decided yet")).unwrap();
     state.ports[0].status = Status::Approved;
@@ -304,7 +305,7 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     denied.ports[0].status = Status::Stopping;
     denied.ports[0].approval = None;
     denied.ports[0].decision = Some(Receipt::pending(false));
-    denied.runtime.runs[0].status = "failed".into();
+    denied.runtime.runs[0].status = RunStatus::Failed;
     denied.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::TimedOut);
     advance(&mut denied, |_| Ok(())).unwrap();
     let wake = denied.runtime.runs.last().unwrap();
@@ -316,14 +317,14 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     );
     // An ordinary failure (no host checkpoint) still does not wake.
     let (mut failed, _) = approved();
-    failed.runtime.runs[0].status = "failed".into();
+    failed.runtime.runs[0].status = RunStatus::Failed;
     advance(&mut failed, |_| panic!("a plain failure must not wake")).unwrap();
     // Nor does it later, whatever the eligibility rules become: it is retired.
     assert!(failed.ports[0].decision.as_ref().unwrap().acknowledged);
 }
 /// The requester's turn spent its model steps and failed with a host checkpoint.
 fn cut_off(state: &mut State) {
-    state.runtime.runs[0].status = "failed".into();
+    state.runtime.runs[0].status = RunStatus::Failed;
     state.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::StepLimit);
 }
 #[test]
@@ -387,7 +388,7 @@ fn a_chat_the_operator_cancelled_is_not_resumed_by_a_decision() {
     assert_eq!(state.runtime.runs.len(), 1);
     // A requester whose own latest turn was cancelled is not resumed either.
     let (mut state, _) = approved();
-    state.runtime.runs[0].status = "cancelled".into();
+    state.runtime.runs[0].status = RunStatus::Cancelled;
     state.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::Cancelled);
     advance(&mut state, |_| panic!("cancelled turn is not resumed")).unwrap();
     assert_eq!(state.runtime.runs.len(), 1);

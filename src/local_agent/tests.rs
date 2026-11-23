@@ -192,7 +192,7 @@ fn malformed_steps_get_bounded_corrective_feedback_and_never_execute() {
             .collect(),
     );
     let (status, message) = go(&mut host).err().unwrap();
-    assert_eq!(status, "failed");
+    assert_eq!(status, control_agent::Status::Failed);
     assert!(message.contains("4 malformed steps"), "{message}");
     assert!(host.calls.is_empty());
     assert_eq!(host.requests.len(), 4);
@@ -226,18 +226,24 @@ fn cancellation_and_deadlines_stop_between_steps_and_during_calls() {
     // next poll reports the cancellation and no tool runs.
     let mut host = Mock {
         replies: VecDeque::from([Err(io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled"))]),
-        polls: VecDeque::from([Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]),
+        polls: VecDeque::from([
+            Poll::Continue,
+            Poll::Stop((control_agent::Status::Cancelled, "Cancelled.".into())),
+        ]),
         ..Default::default()
     };
-    assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
+    assert_eq!(go(&mut host).err().unwrap().0, control_agent::Status::Cancelled);
     assert!(host.calls.is_empty());
     // Cancelled after a tool step: no further model request.
     let mut host = mock(vec![
         reply(None, call("control_room_post", r#"{"message":"x"}"#), "tool_calls"),
         reply(Some("late"), json!(null), "stop"),
     ]);
-    host.polls = VecDeque::from([Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]);
-    assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
+    host.polls = VecDeque::from([
+        Poll::Continue,
+        Poll::Stop((control_agent::Status::Cancelled, "Cancelled.".into())),
+    ]);
+    assert_eq!(go(&mut host).err().unwrap().0, control_agent::Status::Cancelled);
     assert_eq!(host.requests.len(), 1);
     // The step budget is a hard bound.
     let mut host = mock(
@@ -285,7 +291,7 @@ fn a_turn_near_its_step_cap_is_told_once_and_the_cap_leaves_a_host_checkpoint() 
     .err()
     .unwrap();
     assert_eq!(host.requests.len(), 16);
-    assert_eq!(failure.0, "failed");
+    assert_eq!(failure.0, control_agent::Status::Failed);
     assert!(
         failure.1.contains("host checkpoint") && failure.1.contains("local_agent_steps"),
         "{}",
@@ -350,7 +356,7 @@ fn oversized_mandatory_input_is_refused_before_any_model_call() {
     )
     .err()
     .unwrap();
-    assert_eq!(failure.0, "blocked");
+    assert_eq!(failure.0, control_agent::Status::Blocked);
     assert!(failure.1.contains("does not fit"), "{}", failure.1);
     assert!(host.requests.is_empty());
 }
@@ -970,9 +976,9 @@ fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
     host.polls = VecDeque::from([
         Poll::Continue,
         Poll::Continue,
-        Poll::Stop(("cancelled", "Cancelled.".into())),
+        Poll::Stop((control_agent::Status::Cancelled, "Cancelled.".into())),
     ]);
-    assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
+    assert_eq!(go(&mut host).err().unwrap().0, control_agent::Status::Cancelled);
     let last = *host.meters.last().unwrap();
     assert_eq!((last.calls, last.reported), (2, 1));
     assert_eq!(
@@ -992,8 +998,11 @@ fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
         call("control_room_post", r#"{"message":"a"}"#),
         "tool_calls",
     )]);
-    host.polls = VecDeque::from([Poll::Continue, Poll::Stop(("cancelled", "Cancelled.".into()))]);
-    assert_eq!(go(&mut host).err().unwrap().0, "cancelled");
+    host.polls = VecDeque::from([
+        Poll::Continue,
+        Poll::Stop((control_agent::Status::Cancelled, "Cancelled.".into())),
+    ]);
+    assert_eq!(go(&mut host).err().unwrap().0, control_agent::Status::Cancelled);
     assert_eq!(accounting(*host.meters.last().unwrap()).0, Accounting::Reported);
     // A failed turn keeps its totals too.
     let mut host = mock(
@@ -1001,7 +1010,7 @@ fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
             .map(|_| reply(None, call("control_room_post", "[1]"), "tool_calls"))
             .collect(),
     );
-    assert_eq!(go(&mut host).err().unwrap().0, "failed");
+    assert_eq!(go(&mut host).err().unwrap().0, control_agent::Status::Failed);
     assert_eq!(host.meters.last().unwrap().tokens.unwrap().input_tokens, 400);
     // Refused before any call: nothing is metered (the worker records not launched).
     let mut host = mock(vec![]);
@@ -1023,7 +1032,7 @@ fn stopped_turns_keep_the_usage_reported_before_they_stopped() {
         .err()
         .unwrap()
         .0,
-        "blocked"
+        control_agent::Status::Blocked
     );
     assert!(host.meters.is_empty());
 }

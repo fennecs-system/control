@@ -2,6 +2,7 @@
 //! the owner keeps its claims and their notes, and a bot's next wake says so.
 use super::advisor::{monitor, turn};
 use super::*;
+use crate::runtime::RunStatus;
 
 fn ok(_: &State) -> io::Result<()> {
     Ok(())
@@ -9,7 +10,7 @@ fn ok(_: &State) -> io::Result<()> {
 /// Marks `runs[index]` as stopped at its time limit, as the worker records it.
 fn time_out(state: &mut State, index: usize) {
     let run = &mut state.runtime.runs[index];
-    run.status = "failed".into();
+    run.status = RunStatus::Failed;
     *run.result = crate::worker::timeout_message(std::time::Duration::from_secs(600));
     run.attempts.last_mut().unwrap().termination = Some(crate::attempt_control::Termination::TimedOut);
 }
@@ -34,7 +35,7 @@ fn finish_advisor(state: &mut State, advisor: &str) {
         .iter_mut()
         .filter(|run| run.chat_id.as_deref() == Some(advisor) && run.bot_turn.is_some())
     {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         run.attempts = vec![crate::usage::Attempt {
             review_only: true,
             ..Default::default()
@@ -185,14 +186,14 @@ fn a_bot_woken_after_a_timed_out_turn_is_told_to_split_or_delegate() {
         .runtime
         .runs
         .iter()
-        .rposition(|run| run.bot_turn.is_some() && run.status == "queued")
+        .rposition(|run| run.bot_turn.is_some() && run.status == RunStatus::Queued)
         .unwrap();
     state.runtime.runs[index].attempts = vec![crate::usage::Attempt::default()];
     time_out(&mut state, index);
     post(&mut state, Some("peer"), "Another callback");
     reconcile_at(&mut state, 40_000, ok).unwrap();
     let run = bot_runs(&state).into_iter().last().unwrap();
-    assert_eq!(run.status, "queued");
+    assert_eq!(run.status, RunStatus::Queued);
     assert!(run.objective.contains(TIMEOUT_NOTE), "{}", run.objective);
     let woke = &state.chats[0].messages.last().unwrap().text;
     assert!(
@@ -204,9 +205,9 @@ fn a_bot_woken_after_a_timed_out_turn_is_told_to_split_or_delegate() {
         .runtime
         .runs
         .iter()
-        .rposition(|run| run.bot_turn.is_some() && run.status == "queued")
+        .rposition(|run| run.bot_turn.is_some() && run.status == RunStatus::Queued)
         .unwrap();
-    state.runtime.runs[index].status = "completed".into();
+    state.runtime.runs[index].status = RunStatus::Completed;
     state.runtime.runs[index].attempts = vec![crate::usage::Attempt::default()];
     post(&mut state, Some("peer"), "A third callback");
     reconcile_at(&mut state, 80_000, ok).unwrap();

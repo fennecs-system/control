@@ -7,6 +7,7 @@
 //! default, [`Recent`], is Control's long-standing character window, so
 //! behaviour is unchanged unless a node picks another. Providers' own
 //! compaction (Codex, Claude Code) is untouched either way.
+use crate::runtime::RunStatus;
 use crate::{
     State,
     chat::{Message, Session},
@@ -87,7 +88,7 @@ impl<'a> Entry<'a> {
         .render()
     }
     /// The run's status and reply, or the message's own reply without a run.
-    pub fn response(&self) -> (&'a str, &'a str) {
+    pub fn response(&self) -> (&'a crate::runtime::RunStatus, &'a str) {
         crate::chat::response_from_run(self.message, self.run)
     }
     pub fn speaker(&self) -> &'static str {
@@ -119,9 +120,9 @@ impl<'a> Entry<'a> {
         if self.task_view {
             use control_context::agent_policy::PromptRole;
             if let Some(run) = self.run.filter(|run| run.kind.prompt_role() == PromptRole::Wake) {
-                return if crate::application::runs::status::resumable(&run.status) {
+                return if run.status.is_resumable() {
                     format!("Failure from {}:\n{}\n", run.id, self.response().1)
-                } else if run.status == "completed" {
+                } else if run.status == RunStatus::Completed {
                     run.attempts
                         .last()
                         .and_then(|a| a.task_progress())

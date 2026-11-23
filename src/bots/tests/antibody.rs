@@ -2,6 +2,7 @@
 //! every team on the node.
 use super::advisor::turn;
 use super::*;
+use crate::runtime::RunStatus;
 
 fn ok(_: &State) -> io::Result<()> {
     Ok(())
@@ -10,7 +11,7 @@ fn ok(_: &State) -> io::Result<()> {
 pub(super) fn observer(state: &mut State) -> (String, String) {
     let root = crate::chat::create(state);
     crate::chat::send(state, &root, "Watch the node's teams", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(vec!["antibody".into()]);
     let judge = spawned(state, &root, "Antibody");
     let lead = state.runtime.runs[0].id.clone();
@@ -136,7 +137,7 @@ fn an_antibody_hears_pathologies_of_every_team_but_not_ordinary_coordination() {
     // A quiet team is ordinary: the advisor topic hears it, the node topic does not.
     let active = turn(&mut state, &worker, "running");
     reconcile_at(&mut state, 2, ok).unwrap();
-    state.runtime.runs[active].status = "completed".into();
+    state.runtime.runs[active].status = RunStatus::Completed;
     reconcile_at(&mut state, 3, ok).unwrap();
     assert!(node_facts(&state, &judge).is_empty());
 
@@ -219,7 +220,7 @@ fn cost_burn_reaches_the_antibody_and_progress_rearms_it() {
 
 fn finish_bot_turns(state: &mut State) {
     for run in state.runtime.runs.iter_mut().filter(|run| run.bot_turn.is_some()) {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         run.attempts = vec![crate::usage::Attempt {
             review_only: true,
             ..Default::default()
@@ -286,7 +287,11 @@ fn a_quiet_patrol_settles_without_a_model_turn_and_activity_still_wakes_one() {
         .filter(|run| run.chat_id.as_deref() == Some(judge.as_str()))
         .last()
         .unwrap();
-    assert_eq!(last.status, "queued", "activity on the node wakes a real patrol");
+    assert_eq!(
+        last.status,
+        RunStatus::Queued,
+        "activity on the node wakes a real patrol"
+    );
 }
 
 #[test]
@@ -308,5 +313,9 @@ fn a_flagged_team_keeps_patrols_real_while_it_sits_idle() {
         .filter(|run| run.chat_id.as_deref() == Some(judge.as_str()))
         .last()
         .unwrap();
-    assert_eq!(patrol.status, "queued", "only the patrol can see an idle stalled team");
+    assert_eq!(
+        patrol.status,
+        RunStatus::Queued,
+        "only the patrol can see an idle stalled team"
+    );
 }

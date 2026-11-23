@@ -1,10 +1,11 @@
 use super::*;
+use crate::runtime::RunStatus;
 fn fixture() -> (State, String) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Check knowledge", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("knowledge-attempt".into()),
         ..Default::default()
@@ -227,7 +228,7 @@ fn validation_bounds_and_authority_fail_closed() {
         .is_err()
     );
     state.runtime.runs[0].actor = Actor::LocalOperator;
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     assert!(
         worker(
             &mut state,
@@ -379,7 +380,7 @@ fn a_proposal_is_an_operator_request_decided_only_through_review() {
     )
     .unwrap();
     // Proposing pauses nothing: the worker's turn keeps running and asks no question.
-    assert!(state.runtime.runs[0].status == "running" && state.runtime.runs[0].question.is_none());
+    assert!(state.runtime.runs[0].status == RunStatus::Running && state.runtime.runs[0].question.is_none());
     let groups = crate::chat::pending_requests(&state);
     let group = groups
         .as_array()

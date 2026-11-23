@@ -5,6 +5,7 @@
 //! release and double as wait cursors. Each acquisition starts a new
 //! incarnation; waits name it, so reusing a key never delivers an old outcome.
 use crate::State;
+use crate::runtime::RunStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -162,7 +163,7 @@ pub(crate) fn active_owners(state: &State) -> HashSet<&str> {
         .runtime
         .runs
         .iter()
-        .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting"))
+        .filter(|run| run.status.is_proceeding())
         .filter_map(|run| run.chat_id.as_deref())
         .chain(
             state
@@ -471,10 +472,10 @@ fn evict(state: &mut State, room: &str) -> Result<(), &'static str> {
 /// An owner idle after a completed turn is not lost, and a persistent bot's
 /// failed turn is retried, so neither wakes dependents.
 fn lost_owners(state: &State) -> HashSet<&str> {
-    let mut latest: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut latest: std::collections::HashMap<&str, &RunStatus> = std::collections::HashMap::new();
     for run in &state.runtime.runs {
         if let Some(chat) = run.chat_id.as_deref() {
-            latest.insert(chat, run.status.as_str());
+            latest.insert(chat, &run.status);
         }
     }
     let chats: HashSet<&str> = state.chats.iter().map(|chat| chat.id.as_str()).collect();
@@ -486,9 +487,7 @@ fn lost_owners(state: &State) -> HashSet<&str> {
         .filter(|owner| {
             !chats.contains(owner)
                 || (!crate::bots::continuation_enabled(state, owner)
-                    && latest
-                        .get(owner)
-                        .is_some_and(|status| matches!(*status, "failed" | "cancelled" | "interrupted" | "blocked")))
+                    && latest.get(owner).is_some_and(|status| status.is_resumable()))
         })
         .collect()
 }

@@ -15,6 +15,7 @@
 //! the one last shown to the attempt carries a short "unchanged" marker. Output
 //! is untrusted program data, never instructions or authority. See
 //! docs/WATCHES.md#fresh-observations.
+use crate::runtime::RunStatus;
 use crate::{
     State,
     bots::now_ms,
@@ -344,7 +345,7 @@ fn prune<T>(state_runs: &[crate::runtime::Run], map: &mut BTreeMap<String, T>) {
     map.retain(|key, _| {
         state_runs
             .iter()
-            .any(|run| run.status == "running" && key.split_once('/').is_some_and(|(id, _)| id == run.id))
+            .any(|run| run.status == RunStatus::Running && key.split_once('/').is_some_and(|(id, _)| id == run.id))
     });
 }
 /// The current observation for `run`'s chat, refreshing a stale command and
@@ -441,7 +442,7 @@ fn result_within(shared: &Arc<Mutex<State>>, run: &str, wait: Duration, probe: P
         .runtime
         .runs
         .iter()
-        .any(|r| r.id == run && r.status == "running")
+        .any(|r| r.id == run && r.status == RunStatus::Running)
     {
         return None;
     }
@@ -633,7 +634,7 @@ fn set_with(
             .iter()
             .find(|r| {
                 r.id == attempt.run
-                    && r.status == "running"
+                    && r.status == RunStatus::Running
                     && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
             })
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;

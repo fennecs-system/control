@@ -1,11 +1,12 @@
 use super::super::tests::{fixture, post};
 use super::*;
+use crate::runtime::RunStatus;
 
 fn listen_fixture() -> (State, String) {
     let (mut state, _) = fixture();
     let chat = state.chats[0].id.clone();
     configure(&mut state, &chat, true).unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     (state, chat)
 }
 fn tick(state: &mut State, now: u64) {
@@ -18,7 +19,7 @@ fn future_human_and_agent_posts_wake_repeatedly_without_self_echoes() {
     let chat = state.chats[0].id.clone();
     post(&mut state, "research", "old", None);
     configure(&mut state, &chat, true).unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     post(&mut state, "research", "own post", Some(chat.clone()));
     post(&mut state, "engineering", "unrelated", None);
     tick(&mut state, 100);
@@ -36,7 +37,7 @@ fn future_human_and_agent_posts_wake_repeatedly_without_self_echoes() {
         // An active turn cannot receive a second queued listener response.
         tick(&mut state, now + 1);
         assert_eq!(state.runtime.runs.len(), before + 1);
-        state.runtime.runs.last_mut().unwrap().status = "completed".into();
+        state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
         // Inbox acknowledgements are independent of automatic delivery.
         tick(&mut state, now + 30);
         assert_eq!(state.runtime.runs.len(), before + 1);
@@ -85,13 +86,13 @@ fn batching_cooldown_and_queue_capacity_leave_later_posts_pending() {
     }
     tick(&mut state, 100);
     assert_eq!(state.collective.room_watches[0].listener.as_ref().unwrap().through, 8);
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     tick(&mut state, 129);
     assert_eq!(state.runtime.runs.len(), 2);
     tick(&mut state, 130);
     assert_eq!(state.collective.room_watches[0].listener.as_ref().unwrap().through, 16);
     let next = state.runtime.runs.last_mut().unwrap();
-    next.status = "completed".into();
+    next.status = RunStatus::Completed;
     // The regular queue gate remains authoritative.
     let limit = crate::scheduler::MAX_PENDING;
     for _ in 0..limit {
@@ -120,7 +121,7 @@ fn failed_checkpoint_rolls_back_delivery_and_pause() {
     let fail = &mut |_: &State| Err(std::io::Error::other("save failure"));
     assert!(reconcile(&mut state, 100, fail).is_err());
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
-    state.runtime.runs[0].status = "failed".into();
+    state.runtime.runs[0].status = RunStatus::Failed;
     let before = serde_json::to_value(&state).unwrap();
     assert!(reconcile(&mut state, 100, fail).is_err());
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
@@ -135,13 +136,13 @@ fn owner_can_stop_a_queued_followup_and_models_cannot_replace_intent() {
     let (mut state, chat) = listen_fixture();
     post(&mut state, "research", "hello", None);
     tick(&mut state, 100);
-    state.runtime.runs.last_mut().unwrap().status = "running".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
     let run = state.runtime.runs.last().unwrap().id.clone();
     for args in [json!({"enabled":false}), json!({"enabled":true,"wake":true})] {
         assert!(super::super::call(&mut state, &run, "control_room_watch", &args).is_err());
     }
     configure(&mut state, &chat, false).unwrap();
-    assert_eq!(state.runtime.runs.last().unwrap().status, "cancelling");
+    assert_eq!(state.runtime.runs.last().unwrap().status, RunStatus::Cancelling);
     assert!(status(&state, &chat).is_none());
     assert!(state.collective.room_watches.is_empty());
     post(&mut state, "research", "later", None);
@@ -158,11 +159,11 @@ fn child_lineage_is_preserved_and_changed_room_pauses() {
     persona.parent = Some("parent".into());
     state.runtime.runs[0].persona = Some(persona.clone());
     configure(&mut state, &chat, true).unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     post(&mut state, "research", "other bot", Some("other-agent".into()));
     tick(&mut state, 100);
     assert_eq!(state.runtime.runs.last().unwrap().persona, Some(persona));
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     state.chats[0].room = Some("engineering".into());
     tick(&mut state, 200);
     assert_eq!(status(&state, &chat).unwrap()["state"], "paused");
@@ -195,7 +196,7 @@ fn acknowledged_posts_during_cooldown_do_not_trigger_redundant_turns() {
     post(&mut state, "research", "first message", None);
     tick(&mut state, 100);
     let run = state.runtime.runs.last_mut().unwrap();
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let id = run.id.clone();
     post(
         &mut state,
@@ -212,7 +213,7 @@ fn acknowledged_posts_during_cooldown_do_not_trigger_redundant_turns() {
         &json!({"through":inbox["through"]}),
     )
     .unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     tick(&mut state, 130);
     assert_eq!(state.runtime.runs.len(), 2);
     post(&mut state, "research", "new unprocessed message", None);
@@ -226,7 +227,7 @@ fn all_ready_chats_progress_in_one_pass_without_retaining_origin_runs() {
     let second = crate::chat::create(&mut state);
     state.chats.last_mut().unwrap().room = Some("research".into());
     crate::chat::send(&mut state, &second, "Coordinate with the team", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     configure(&mut state, &second, true).unwrap();
     post(&mut state, "research", "new assignment", None);
     tick(&mut state, 100);
@@ -244,7 +245,7 @@ fn all_ready_chats_progress_in_one_pass_without_retaining_origin_runs() {
     }
     state.runtime.runs.retain(|run| run.source == "room-listener");
     for run in &mut state.runtime.runs {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
     }
     post(&mut state, "research", "another assignment", Some("teammate".into()));
     tick(&mut state, 130);

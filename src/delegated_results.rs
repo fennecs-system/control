@@ -1,5 +1,6 @@
 //! Read plans capture immutable delegated outputs under the authority lock.
 //! File IO then uses the existing verified artifact store without that lock.
+use crate::runtime::RunStatus;
 use crate::{State, artifacts, delegation, identity, runtime};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -38,7 +39,7 @@ pub struct Plan {
     child: String,
     run: String,
     target: crate::providers::Target,
-    status: String,
+    status: RunStatus,
     artifact: Option<String>,
     baseline: Option<String>,
     report: String,
@@ -82,7 +83,7 @@ fn root(run: &runtime::Run) -> &str {
     run.persona.as_ref().map_or(run.id.as_str(), |p| p.root.as_str())
 }
 fn next(run: &runtime::Run) -> Option<&str> {
-    if run.status != "continued" {
+    if run.status != RunStatus::Continued {
         return None;
     }
     run.question
@@ -259,7 +260,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
         .runtime
         .runs
         .iter()
-        .find(|r| r.id == run_id && r.status == "running")
+        .find(|r| r.id == run_id && r.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     identity::authorize(&caller.actor, caller.action)?;
     if !state
@@ -298,7 +299,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
             input,
         });
     }
-    if child.status != "completed" {
+    if child.status != RunStatus::Completed {
         return Err("Delegated child has not completed successfully; live files are never exposed.");
     }
     if !state

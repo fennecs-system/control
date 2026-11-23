@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 mod log;
 mod profiling;
 
@@ -10,7 +11,7 @@ fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() 
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "original task", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let origin = state.runtime.runs[0].id.clone();
     let decide = |state: &mut State| {
         crate::approvals::resume(
@@ -146,7 +147,7 @@ fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
     // it never persists an in-memory rollback over the retained candidate.
     let restored: State = serde_json::from_slice(&read_checkpoint(&directory).unwrap().unwrap()).unwrap();
     assert_eq!(restored.runtime.runs.len(), 1);
-    assert_eq!(restored.runtime.runs[0].status, "queued");
+    assert_eq!(restored.runtime.runs[0].status, RunStatus::Queued);
     fs::remove_dir_all(directory).unwrap();
 }
 
@@ -222,7 +223,7 @@ fn finished_diagnostics_survive_compact_and_pretty_serialization() {
         });
     }
     run.attempts.push(attempt);
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     let pretty = serde_json::to_vec_pretty(&state).unwrap();
     let compact = serde_json::to_vec(&state).unwrap();
     assert!(compact.len() < pretty.len());
@@ -243,7 +244,7 @@ fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
     for status in ["running", "cancelling", "queued", "completed"] {
         state.runtime.enqueue(status.into(), RunKind::Task, "test");
         let run = state.runtime.runs.last_mut().unwrap();
-        run.status = status.into();
+        run.status = RunStatus::named(status);
         let mut a = crate::usage::Attempt::new();
         a.workspace_id = Some(format!("{}-attempt-1", run.id));
         a.activity.push(crate::usage::Activity {
@@ -296,7 +297,7 @@ fn profile_durable_save_stages() {
                     .runtime
                     .enqueue("Synthetic completed task".into(), RunKind::Task, "benchmark");
                 let run = state.runtime.runs.last_mut().unwrap();
-                run.status = "completed".into();
+                run.status = RunStatus::Completed;
                 *run.result = "A bounded synthetic result.\n".repeat(16);
                 if handoffs {
                     let mut mailbox = control_context::turn_mailbox::Mailbox::default();
@@ -424,7 +425,7 @@ fn profile_checkpoint_by_state_size() {
             }
             let run = state.runtime.runs.last_mut().unwrap();
             run.attempts.push(attempt);
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
         }
         let size = serde_json::to_vec(&state).unwrap().len();
         assert!(

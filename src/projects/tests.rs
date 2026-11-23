@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::os::unix::fs::PermissionsExt;
 struct Fixture(PathBuf);
 /// Agent requests are never probed, so fixtures may name absent folders.
@@ -1158,7 +1159,7 @@ fn dismissal_reaches_the_requesting_agent_like_a_port_decision() {
         Some(crate::approvals::Outcome::Noted)
     );
     assert_eq!(state.runtime.runs.len(), 1);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     request(&mut state, &id, "/node/library", Requester::Agent { run }).unwrap();
     let idle = state.chats[0].project.as_ref().unwrap().request.clone();
     let Some(crate::approvals::Outcome::Resumed(resumed)) = dismiss(&mut state, &id, &idle).unwrap() else {
