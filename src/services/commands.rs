@@ -396,8 +396,70 @@ pub(crate) fn enqueue_test(
 }
 pub(super) fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_service_exec","description":"Run a one-off command inside an exact chat-owned running service, using its private files and approved loopback relays: setup, inspection, or installing and editing a routine. For anything repeated or polled, write a routine (control_watch_start) instead. Use shell commands/heredocs to create small task files, configure clients or install dependencies; bring files or trees from your task workspace with control_service_copy instead. No host paths, mounts or engine options. Results return inline when the command finishes within wait_seconds (default 15, max 30): final status, exit code and output, marked final=true. Call control_service_exec_status only when the result says running and gives an execution_id. Use wait_seconds=0 to return at once. Commands from every agent sharing the service run concurrently, each with its own execution_id, output and timeout, up to the service process limit (a larger shape allows more), capped by a node ceiling (default 64); at the limit, or while a control_service_copy holds the service, the request is refused with the active execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model turns only until then. Run routines and other long-running work with control_watch_start: restart=transient runs finite work such as large downloads once; restart=permanent restarts persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with every process it started, detached ones included. The service keeps running; it is stopped only if that cannot be verified. Background programs must redirect their output to private files; the service foreground process must remain alive. Uncertain commands are never replayed.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"command":{"type":"string","minLength":1,"maxLength":16000},"timeout_seconds":{"type":"integer","minimum":1,"maximum":1800,"default":120},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":DEFAULT_WAIT_SECONDS}},"required":["service_id","command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}}),
-        json!({"name":"control_service_exec_status","description":"Read a chat-owned service command's bounded live output, exit code and durable outcome. Only needed when control_service_exec or control_service_copy said running and gave an execution_id; a result marked final=true is already complete. Optional wait_seconds (max 30, default 0) waits for an active command to finish and returns as soon as it does. execution_id is the short handle results show (the full ID also works). Long output keeps its first and last bytes around one omission marker; unset fields (exit code, diagnostic, output) are omitted. Use a fresh execution_id only for a deliberate new command; retries with the same request identity never replay effects.","inputSchema":{"type":"object","properties":{"service_id":{"type":"string"},"execution_id":{"type":"string"},"wait_seconds":{"type":"integer","minimum":0,"maximum":MAX_WAIT_SECONDS,"default":0}},"required":["service_id","execution_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
+        json!({
+            "name": "control_service_exec",
+            "description": concat!(
+                "Run a one-off command inside an exact chat-owned running service, using its private files and ",
+                "approved loopback relays: setup, inspection, or installing and editing a routine. For anything ",
+                "repeated or polled, write a routine (control_watch_start) instead. Use shell commands/heredocs to ",
+                "create small task files, configure clients or install dependencies; bring files or trees from your ",
+                "task workspace with control_service_copy instead. No host paths, mounts or engine options. Results ",
+                "return inline when the command finishes within wait_seconds (default 15, max 30): final status, exit ",
+                "code and output, marked final=true. Call control_service_exec_status only when the result says ",
+                "running and gives an execution_id. Use wait_seconds=0 to return at once. Commands from every agent ",
+                "sharing the service run concurrently, each with its own execution_id, output and timeout, up to the ",
+                "service process limit (a larger shape allows more), capped by a node ceiling (default 64); at the ",
+                "limit, or while a control_service_copy holds the service, the request is refused with the active ",
+                "execution_ids and nothing is submitted. Commands are bounded by timeout_seconds; they survive model ",
+                "turns only until then. Run routines and other long-running work with control_watch_start: ",
+                "restart=transient runs finite work such as large downloads once; restart=permanent restarts ",
+                "persistent clients, servers or daemons after exit. Both survive model turns without a task deadline. ",
+                "Use exec for bounded commands: a timed-out or interrupted command is stopped inside the service with ",
+                "every process it started, detached ones included. The service keeps running; it is stopped only if ",
+                "that cannot be verified. Background programs must redirect their output to private files; the ",
+                "service foreground process must remain alive. Uncertain commands are never replayed."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "service_id": {"type": "string"},
+                    "command": {"type": "string", "minLength": 1, "maxLength": 16000},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 1800, "default": 120},
+                    "wait_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_WAIT_SECONDS,
+                        "default": DEFAULT_WAIT_SECONDS
+                    }
+                },
+                "required": ["service_id", "command"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true}
+        }),
+        json!({
+            "name": "control_service_exec_status",
+            "description": concat!(
+                "Read a chat-owned service command's bounded live output, exit code and durable outcome. Only needed ",
+                "when control_service_exec or control_service_copy said running and gave an execution_id; a result ",
+                "marked final=true is already complete. Optional wait_seconds (max 30, default 0) waits for an active ",
+                "command to finish and returns as soon as it does. execution_id is the short handle results show (the ",
+                "full ID also works). Long output keeps its first and last bytes around one omission marker; unset ",
+                "fields (exit code, diagnostic, output) are omitted. Use a fresh execution_id only for a deliberate ",
+                "new command; retries with the same request identity never replay effects."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "service_id": {"type": "string"},
+                    "execution_id": {"type": "string"},
+                    "wait_seconds": {"type": "integer", "minimum": 0, "maximum": MAX_WAIT_SECONDS, "default": 0}
+                },
+                "required": ["service_id", "execution_id"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": true, "openWorldHint": false}
+        }),
     ]
 }
 pub(super) fn hash(value: &[u8]) -> String {

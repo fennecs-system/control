@@ -3,7 +3,15 @@ use super::Model;
 use crate::{backend::Backend, runtime::Runtime};
 
 pub(crate) fn schema() -> serde_json::Value {
-    serde_json::json!({"type":"string","maxLength":128,"description":"Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a private endpoint model declared tool-capable; text-only endpoints are refused for agent turns."})
+    serde_json::json!({
+        "type": "string",
+        "maxLength": 128,
+        "description": concat!(
+            "Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured ",
+            "model. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a ",
+            "private endpoint model declared tool-capable; text-only endpoints are refused for agent turns."
+        )
+    })
 }
 
 /// Omission preserves a parent's captured choice even after configuration changes.

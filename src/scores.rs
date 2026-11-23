@@ -444,15 +444,37 @@ pub enum ScoreCall {
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![
-            json!({"name":"control_score_probe","description":"Declare how this chat's workload is scored, so progress is measured by the workload's own numbers rather than by claims or messages. The command runs in one of your services (as the service user, in /workspace, 10 s for this test run and 20 s later) and must print a JSON object of up to 8 numbers on its last line, e.g. {\"blocks_placed\":75,\"beds\":2}, {\"items\":120} or {\"alerts\":3}. It must be quick and read-only: report state your workload already keeps, never act. Control runs it now to check it, then every interval_seconds (default 300) and when your team completes a turn or a claim, and keeps a capped series the operator can read. A probe on the team's root chat scores the whole team. Redeclaring the same name replaces it; clear=true removes it. Up to 4 per chat.","inputSchema":{"type":"object","properties":{
-            "name":{"type":"string","minLength":1,"maxLength":32,"default":"score"},
-            "service_id":{"type":"string"},
-            "command":{"type":"string","minLength":1,"maxLength":MAX_COMMAND_BYTES},
-            "interval_seconds":{"type":"integer","minimum":MIN_INTERVAL,"maximum":MAX_INTERVAL,"default":DEFAULT_INTERVAL},
-            "clear":{"type":"boolean","default":false}},"additionalProperties":false},
-            "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
-        ]
+        vec![json!({
+            "name": "control_score_probe",
+            "description": concat!(
+                "Declare how this chat's workload is scored, so progress is measured by the workload's own ",
+                "numbers rather than by claims or messages. The command runs in one of your services (as the ",
+                "service user, in /workspace, 10 s for this test run and 20 s later) and must print a JSON object ",
+                "of up to 8 numbers on its last line, e.g. {\"blocks_placed\":75,\"beds\":2}, {\"items\":120} or ",
+                "{\"alerts\":3}. It must be quick and read-only: report state your workload already keeps, never ",
+                "act. Control runs it now to check it, then every interval_seconds (default 300) and when your ",
+                "team completes a turn or a claim, and keeps a capped series the operator can read. A probe on ",
+                "the team's root chat scores the whole team. Redeclaring the same name replaces it; clear=true ",
+                "removes it. Up to 4 per chat."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 32, "default": "score"},
+                    "service_id": {"type": "string"},
+                    "command": {"type": "string", "minLength": 1, "maxLength": MAX_COMMAND_BYTES},
+                    "interval_seconds": {
+                        "type": "integer",
+                        "minimum": MIN_INTERVAL,
+                        "maximum": MAX_INTERVAL,
+                        "default": DEFAULT_INTERVAL
+                    },
+                    "clear": {"type": "boolean", "default": false}
+                },
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+        })]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_score_probe"
