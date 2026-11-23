@@ -6,7 +6,7 @@ mod profiling;
 
 #[test]
 fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() {
-    let directory = std::env::temp_dir().join(format!("control-approved-checkpoint-{}", std::process::id()));
+    let directory = crate::test_support::scratch("control-approved-checkpoint");
     fs::create_dir(&directory).unwrap();
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
@@ -62,7 +62,7 @@ fn reconciliation_confirms_exact_bytes_and_never_acknowledges_different_data() {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    let root = Scratch(std::env::temp_dir().join(format!("control-checkpoint-reconcile-{}", std::process::id())));
+    let root = Scratch(crate::test_support::scratch("control-checkpoint-reconcile"));
     fs::create_dir(&root.0).unwrap();
     let published = root.0.join("state.json");
     let calls = std::cell::Cell::new(0);
@@ -117,7 +117,7 @@ fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
         );
         return;
     }
-    let directory = std::env::temp_dir().join(format!("control-checkpoint-fence-{}", std::process::id()));
+    let directory = crate::test_support::scratch("control-checkpoint-fence");
     fs::create_dir(&directory).unwrap();
     let state = std::sync::Mutex::new(State::default());
     let intended = std::cell::RefCell::new(Vec::new());
@@ -159,7 +159,7 @@ fn checkpoint_failures_preserve_the_publication_phase() {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    let root = Scratch(std::env::temp_dir().join(format!("control-checkpoint-phase-{}", std::process::id())));
+    let root = Scratch(crate::test_support::scratch("control-checkpoint-phase"));
     fs::create_dir(&root.0).unwrap();
     let published = root.0.join("state.json");
     let temporary = root.0.join("state.json.tmp");
@@ -402,7 +402,7 @@ fn profile_checkpoint_by_state_size() {
             );
         }
     }
-    let root = Cleanup(std::env::temp_dir().join(format!("control-checkpoint-{}", std::process::id())));
+    let root = Cleanup(crate::test_support::scratch("control-checkpoint"));
     let load_root = root.0.join("load");
     fs::create_dir_all(&load_root).unwrap();
     let ms = |d: Duration| d.as_secs_f64() * 1000.0;

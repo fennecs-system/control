@@ -5,7 +5,7 @@ fn live_stopped_writer_leaves_recovery_bytes_without_a_model_handoff() {
     let state_root = std::env::var("CONTROL_STATE_DIR").expect("isolated state directory");
     assert!(state_root.starts_with("/private/tmp/control-r1-") || state_root.starts_with("/tmp/control-r1-"));
     let image = crate::runtime::worker_image().expect("pinned worker image");
-    let generation = format!("r1-fixture-{}", std::process::id());
+    let generation = crate::test_support::unique("r1-fixture");
     let workspace = crate::runtime::workspace(&generation).unwrap();
     fs::create_dir_all(&workspace).unwrap();
     let source = workspace.canonicalize().unwrap();
@@ -74,7 +74,7 @@ fn live_stopped_writer_leaves_recovery_bytes_without_a_model_handoff() {
 }
 #[test]
 fn missing_source_never_creates_a_completed_candidate() {
-    let root = std::env::temp_dir().join(format!("control-recovery-missing-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-recovery-missing");
     let _ = fs::remove_dir_all(&root);
     let candidate = Candidate {
         generation: "attempt-1".into(),
@@ -151,7 +151,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
 }
 #[test]
 fn candidate_retains_bytes_independently_without_publishing_or_following_links() {
-    let root = std::env::temp_dir().join(format!("control-recovery-test-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-recovery-test");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("live")).unwrap();
     fs::write(root.join("live/notes.txt"), "useful work").unwrap();

@@ -64,14 +64,7 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
 #[test]
 fn private_limits_are_validated_and_do_not_come_from_saved_runtime_state() {
     use std::os::unix::fs::PermissionsExt;
-    let directory = std::env::temp_dir().join(format!(
-        "control-limits-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let directory = crate::test_support::scratch("control-limits");
     std::fs::create_dir(&directory).unwrap();
     let file = directory.join("execution.json");
     assert_eq!(load_limits_in(&file, None).unwrap().max_parallel_runs, 3);

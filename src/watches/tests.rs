@@ -121,14 +121,7 @@ fn selection_survives_restart_without_moving_evidence_or_selected_cursor() {
 
 #[test]
 fn filtering_keeps_raw_spool_and_reports_missing_evidence() {
-    let dir = std::env::temp_dir().join(format!(
-        "control-watch-policy-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = crate::test_support::scratch("control-watch-policy");
     fs::create_dir(&dir).unwrap();
     let path = dir.join("w.log");
     let mut watch = watch();

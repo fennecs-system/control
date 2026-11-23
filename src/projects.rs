@@ -89,22 +89,9 @@ fn valid_name(name: &str) -> bool {
 fn root() -> io::Result<PathBuf> {
     crate::config::state("projects").map_err(io::Error::other)
 }
-/// Time-ordered and unique within this process, even when concurrent imports
-/// read the same clock tick (macOS reports microseconds).
+/// Time-ordered and unique within this process.
 fn nonce() -> String {
-    static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let mut last = LAST.load(Ordering::Relaxed);
-    loop {
-        let next = now.max(last + 1);
-        match LAST.compare_exchange_weak(last, next, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return format!("p-{next:x}"),
-            Err(current) => last = current,
-        }
-    }
+    format!("p-{:x}", crate::ids::stamp())
 }
 /// Who is asking for a folder. Only the operator may learn whether a host path
 /// exists, so only an operator's `/open` probes it.
@@ -1233,6 +1220,10 @@ fn import_in(
     fs::create_dir(&staging)?;
     let mut pending = PendingGrant(Some(staging.clone()));
     compose(root, &project, &staging)?;
+    // Where a slow copy keeps an import running: tests hold it here, before the
+    // state lock, to observe the chat while the copy is still in progress.
+    #[cfg(test)]
+    tests::hold(id);
     let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
     if crate::shutdown::requested() {
         return Err(io::Error::other(

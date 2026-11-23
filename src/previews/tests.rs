@@ -123,7 +123,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     crate::storage::initialize().unwrap();
     let image = std::env::var("CONTROL_QA_IMAGE").expect("Pinned local image digest");
     assert!(image.starts_with("sha256:"));
-    let generation = format!("preview-qa-{}", std::process::id());
+    let generation = crate::test_support::unique("preview-qa");
     let workspace = crate::runtime::workspace(&generation).unwrap();
     fs::create_dir_all(&workspace).unwrap();
     fs::write(workspace.join("server.rs"),r#"use std::{io::{Read,Write},net::TcpListener};fn main(){for stream in TcpListener::bind("0.0.0.0:8080").unwrap().incoming(){let mut stream=stream.unwrap();let mut buf=[0;4096];let _=stream.read(&mut buf);stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\ncontrol-preview-ok").unwrap();}}"#).unwrap();

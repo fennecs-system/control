@@ -409,7 +409,7 @@ fn a_bot_whose_chat_links_by_posting_hears_that_room() {
 }
 #[test]
 fn mailbox_rejects_symlinks_and_oversized_requests() {
-    let dir = std::env::temp_dir().join(format!("control-room-test-{}", std::process::id()));
+    let dir = crate::test_support::scratch("control-room-test");
     fs::create_dir_all(&dir).unwrap();
     let link = dir.join("link");
     std::os::unix::fs::symlink("/etc/hosts", &link).unwrap();
@@ -421,7 +421,7 @@ fn mailbox_rejects_symlinks_and_oversized_requests() {
 
 #[test]
 fn a_late_reply_cannot_remove_the_next_mailbox_request() {
-    let dir = std::env::temp_dir().join(format!("control-room-late-reply-{}", std::process::id()));
+    let dir = crate::test_support::scratch("control-room-late-reply");
     fs::create_dir_all(&dir).unwrap();
     let first = json!({"nonce":"1","request":{"id":7}});
     let next = json!({"nonce":"2","request":{"id":7}});

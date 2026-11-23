@@ -30,13 +30,7 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
     let profile = crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap();
     let (mut state, run, _, time) = super::super::super::tests::fixture();
     state.runtime.runs[0].attempts.last_mut().unwrap().started_unix = now();
-    let node: NodeId = format!(
-        "latency-qa-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    )
-    .try_into()
-    .unwrap();
+    let node: NodeId = crate::test_support::unique("latency-qa").try_into().unwrap();
     super::super::super::admit_profile(
         &mut state,
         super::super::super::Request {
@@ -152,7 +146,8 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
                             let status = shared.lock().unwrap().services[0]
                                 .executions
                                 .iter()
-                                .find(|e| e.id == execution)
+                                // Tools return a short handle of the execution id.
+                                .find(|e| names(&e.id, &execution))
                                 .map(|e| e.status)
                                 .unwrap();
                             if started.is_none() && status != Status::Requested {
