@@ -268,14 +268,7 @@ fn cumulative_turn_keeps_original_source_without_recapturing_host() {
 }
 #[test]
 fn source_capture_rejects_dirty_untracked_ignored_and_stale_snapshot_inputs() {
-    let root = std::env::temp_dir().join(format!(
-        "control-github-source-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::test_support::scratch("control-github-source");
     fs::create_dir(&root).unwrap();
     struct Cleanup(PathBuf);
     impl Drop for Cleanup {

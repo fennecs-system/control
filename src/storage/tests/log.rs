@@ -5,7 +5,7 @@ use super::*;
 struct Scratch(PathBuf);
 impl Scratch {
     fn new(name: &str) -> Self {
-        let directory = std::env::temp_dir().join(format!("control-state-log-{}-{name}", std::process::id()));
+        let directory = crate::test_support::scratch(&format!("control-state-log-{name}"));
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
         Self(directory)

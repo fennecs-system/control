@@ -184,10 +184,7 @@ impl Runtime {
         if objective.is_empty() || control_context::limits::message_too_long(&objective) {
             return Err(control_context::limits::CHAT_MESSAGE_ERROR);
         }
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
+        let stamp = crate::ids::stamp();
         let request = Submission {
             objective,
             kind,

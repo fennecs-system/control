@@ -6,20 +6,11 @@ use crate::{
     identity::{Action, Actor},
     usage::Attempt,
 };
-use std::{
-    fs,
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{fs, path::PathBuf};
 struct Store(PathBuf);
 impl Store {
     fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "control-child-read-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let path = crate::test_support::scratch("control-child-read");
         fs::create_dir(&path).unwrap();
         Self(path)
     }

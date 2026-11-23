@@ -77,12 +77,12 @@ printf '%s\n' "$out"
     run(&format!(
         "set -eu; test ! -e '{path}'; if nix-store --check-validity '{path}' 2>/dev/null; then exit 42; fi; printf isolated"
     ));
-    let workspace = std::env::temp_dir().join(format!("control-profile-qa-{}", std::process::id()));
+    let workspace = crate::test_support::scratch("control-profile-qa");
     std::fs::create_dir(&workspace).unwrap();
     let actual = crate::host_shell::shell_scoped(
         crate::engine::isolation(),
         &image,
-        &format!("control-profile-qa-{}", std::process::id()),
+        &crate::test_support::unique("control-profile-qa"),
         "synthetic-profile-qa",
         &workspace,
         script,

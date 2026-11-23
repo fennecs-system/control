@@ -6,10 +6,7 @@ use crate::{
 };
 use control_context::commands::{self, Kind};
 use serde_json::{Value, json};
-use std::{
-    borrow::Cow,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::borrow::Cow;
 mod activity;
 mod lineage;
 pub(crate) use activity::changed as activity_changed;
@@ -182,11 +179,7 @@ pub(crate) fn continuation(
         return Err(ContinuationError::Rejected);
     }
     let grants = crate::services::grants(crate::services::ServiceAuthority::of(state), latest);
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let id = format!("{stamp:x}-{}", state.runtime.runs.len());
+    let id = format!("{:x}-{}", crate::ids::stamp(), state.runtime.runs.len());
     let order = state
         .runtime
         .runs
@@ -294,11 +287,7 @@ pub fn discord_actor(id: &str) -> Option<Actor> {
     })
 }
 pub fn create(state: &mut State) -> String {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let id = format!("c-{stamp:x}-{}", state.chats.len());
+    let id = format!("c-{:x}-{}", crate::ids::stamp(), state.chats.len());
     let activity_order = next_activity(state);
     state.chats.push(Session {
         model: None,

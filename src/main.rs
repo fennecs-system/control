@@ -25,6 +25,7 @@ mod design;
 mod history;
 mod history_view;
 mod host_shell;
+mod ids;
 mod observe;
 mod pagination;
 mod turn_context;
@@ -85,6 +86,8 @@ mod shutdown;
 mod solver;
 mod spawning;
 mod storage;
+#[cfg(test)]
+mod test_support;
 mod tool_catalog;
 mod tool_registry;
 mod toolbox;

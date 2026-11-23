@@ -464,10 +464,7 @@ pub fn ask_operator(
             }
         },
     };
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+    let stamp = crate::ids::stamp();
     let run_id = format!("{stamp:x}-{}", state.runtime.runs.len());
     let order = state
         .runtime

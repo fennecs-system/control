@@ -1,15 +1,9 @@
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
 const TIME: u64 = 1_793_145_600;
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
-        static N: AtomicU64 = AtomicU64::new(0);
-        Self(std::env::temp_dir().join(format!(
-            "control-federation-test-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        )))
+        Self(crate::test_support::scratch("control-federation-test"))
     }
 }
 impl Drop for Temp {

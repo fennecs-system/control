@@ -1,6 +1,5 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     fs,
     path::PathBuf,
@@ -143,8 +142,7 @@ fn main(){
 fn live_service_commands_download_and_connect_two_private_services() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let binary = std::env::var("CONTROL_QA_CONTROL_BIN").unwrap();
-    let root =
-        PathBuf::from("/private/tmp").join(format!("control-service-interaction-{}-{}", std::process::id(), now()));
+    let root = PathBuf::from("/private/tmp").join(crate::test_support::unique("control-service-interaction"));
     let state_dir = root.join("state");
     let config = root.join("config");
     fs::create_dir_all(&state_dir).unwrap();
@@ -574,8 +572,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let binary = std::env::var("CONTROL_QA_CONTROL_BIN").unwrap();
     let echo = Echo::start();
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let root = PathBuf::from(format!("/private/tmp/control-tcp-live-{}-{stamp}", std::process::id()));
+    let root = PathBuf::from("/private/tmp").join(crate::test_support::unique("control-tcp-live"));
     let state_dir = root.join("state");
     let config_dir = root.join("config");
     fs::create_dir_all(&state_dir).unwrap();

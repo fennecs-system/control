@@ -4,14 +4,7 @@ use std::process::Command;
 struct Temp(PathBuf);
 impl Temp {
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "control-packages-{label}-{}-{:x}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = crate::test_support::scratch(&format!("control-packages-{label}"));
         fs::create_dir_all(&path).unwrap();
         Self(path.canonicalize().unwrap())
     }

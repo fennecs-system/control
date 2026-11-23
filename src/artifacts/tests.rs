@@ -1,14 +1,7 @@
 use super::*;
 #[test]
 fn live_diff_reads_stay_inside_pinned_directories_and_skip_private_outputs() {
-    let root = std::env::temp_dir().join(format!(
-        "control-diff-safe-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::test_support::scratch("control-diff-safe");
     let workspace = root.join("workspace");
     let outside = root.join("outside");
     fs::create_dir_all(workspace.join("src")).unwrap();
@@ -99,7 +92,7 @@ fn artifact_tools_keep_chat_authority_and_reject_actor_overrides() {
 }
 #[test]
 fn followup_restores_published_files_and_detects_corruption() {
-    let directory = std::env::temp_dir().join(format!("control-artifact-lineage-{}", std::process::id()));
+    let directory = crate::test_support::scratch("control-artifact-lineage");
     fs::create_dir_all(directory.join("first/src")).unwrap();
     fs::write(directory.join("first/src/main.rs"), "first turn").unwrap();
     let outputs = directory.join("outputs");
@@ -124,7 +117,7 @@ fn followup_restores_published_files_and_detects_corruption() {
 }
 #[test]
 fn publication_is_bounded_sorted_and_never_promotes_symlinks_or_private_files() {
-    let root = std::env::temp_dir().join(format!("control-artifacts-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-artifacts");
     fs::create_dir_all(root.join("source/src")).unwrap();
     fs::write(root.join("source/src/main.rs"), "fn main() {}\n").unwrap();
     fs::write(root.join("source/.env"), "not-a-real-secret").unwrap();
@@ -178,7 +171,7 @@ fn publication_is_bounded_sorted_and_never_promotes_symlinks_or_private_files() 
 
 #[test]
 fn incomplete_turn_never_replaces_the_restorable_project_checkpoint() {
-    let root = std::env::temp_dir().join(format!("control-checkpoint-limits-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-checkpoint-limits");
     let source = root.join("source");
     let outputs = root.join("outputs");
     fs::create_dir_all(&source).unwrap();

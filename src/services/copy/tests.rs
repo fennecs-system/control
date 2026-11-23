@@ -4,11 +4,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 struct Scratch(PathBuf);
 impl Scratch {
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "control-copy-{label}-{}-{}",
-            std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-        ));
+        let path = crate::test_support::scratch(&format!("control-copy-{label}"));
         fs::create_dir_all(&path).unwrap();
         Self(path.canonicalize().unwrap())
     }
@@ -547,13 +543,7 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     fs::create_dir_all(&state_dir).unwrap();
     let profile = crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap();
     let (mut state, run, _, time) = super::super::tests::fixture();
-    let node: NodeId = format!(
-        "copy-qa-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    )
-    .try_into()
-    .unwrap();
+    let node: NodeId = crate::test_support::unique("copy-qa").try_into().unwrap();
     super::super::admit_profile(
         &mut state,
         super::super::Request {

@@ -26,7 +26,7 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.canonicalize().unwrap();
     let shared = Arc::new(Mutex::new(state));
-    let name = format!("control-mailbox-qa-{}", std::process::id());
+    let name = crate::test_support::unique("control-mailbox-qa");
     struct Cleanup(String);
     impl Drop for Cleanup {
         fn drop(&mut self) {
@@ -1012,7 +1012,7 @@ fn live_mailbox_survives_sustained_wake_driven_traffic() {
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.canonicalize().unwrap();
     let shared = Arc::new(Mutex::new(state));
-    let name = format!("control-mailbox-stress-{}", std::process::id());
+    let name = crate::test_support::unique("control-mailbox-stress");
     struct Cleanup(String);
     impl Drop for Cleanup {
         fn drop(&mut self) {

@@ -67,6 +67,11 @@ same, and the guard tests in `crates/config/src/tests.rs` and `src/worker/tests.
 should list them. Setting both variables to scratch directories when running
 tests remains good practice, especially for ignored live checks.
 
+Tests run on parallel threads of one process. Name scratch directories, container
+names and labels with `test_support::scratch` or `test_support::unique` (pid plus
+a process-wide stamp), never the pid or the clock alone, and key any
+process-wide test registry by such a unique id.
+
 Keep substantial unit-test suites beside their implementation: `file.rs` uses
 `#[cfg(test)] mod tests;` to load `file/tests.rs`. They retain private access and
 the same module paths. Keep short usage/contract documentation near the API and
