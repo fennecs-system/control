@@ -317,7 +317,25 @@ fn verify_source(root: &Path, paths: &[&str], mut read: impl FnMut(&str) -> io::
     Ok(commit.into())
 }
 pub fn definition() -> Value {
-    json!({"name":"control_github_open_pr","description":"Publish a completed successful improvement checkpoint to the operator-bound GitHub repository and open a draft pull request. Uses private broker credentials; never merges, force-pushes, edits the host checkout or accepts arbitrary destinations. Select a previous completed improvement run in this chat.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"title":{"type":"string","maxLength":200},"body":{"type":"string","maxLength":16000}},"required":["run_id","title"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}})
+    json!({
+        "name": "control_github_open_pr",
+        "description": concat!(
+            "Publish a completed successful improvement checkpoint to the operator-bound GitHub repository and open a ",
+            "draft pull request. Uses private broker credentials; never merges, force-pushes, edits the host checkout ",
+            "or accepts arbitrary destinations. Select a previous completed improvement run in this chat."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "title": {"type": "string", "maxLength": 200},
+                "body": {"type": "string", "maxLength": 16000}
+            },
+            "required": ["run_id", "title"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}
+    })
 }
 fn validate_input(input: &Input) -> io::Result<()> {
     if !crate::chat::valid_id(&input.run_id)

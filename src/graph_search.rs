@@ -21,26 +21,60 @@ const DEADLINE: Duration = Duration::from_secs(2);
 const EPSILON: f64 = 1e-9;
 
 pub fn definition() -> Value {
-    json!({"name":"control.search.path","description":"Shortest path by A* (Dijkstra without a heuristic) over a graph or grid you supply inline. Use it for routing, navigation, move or dependency search instead of reasoning paths out in tokens. Graph: nodes (ids, or {id, at:[x,y(,z)], h}), edges [from,to,cost?] (cost defaults to 1; undirected unless directed=true). heuristic auto uses explicit h values, else coordinates (Euclidean, scaled down if an edge is cheaper than its length, so results stay optimal), else none. Grid: size [w,h(,d)] and/or rows of text ('#' blocked, digits 1-9 cell cost, else 1), blocked cells, flat costs (x fastest), moves 4|8 (2D) or 6|26 (3D); entering a cell costs its cost times the step length, and diagonals never cut blocked corners. start, goal or goals (nearest wins), optional avoid (nodes or cells), avoid_edges, max_cost, max_expansions. Limits: 20000 nodes, 100000 edges, 1000000 cells, 256 goals, 2000000 expansions, 2 s. Returns path, cost, expanded count.","annotations":{"readOnlyHint":true,"openWorldHint":false},
-        "inputSchema":{"type":"object","properties":{
-            "nodes":{"type":"array","maxItems":MAX_NODES},
-            "edges":{"type":"array","maxItems":MAX_EDGES},
-            "directed":{"type":"boolean","default":false},
-            "grid":{"type":"object","properties":{
-                "size":{"type":"array","items":{"type":"integer","minimum":1},"minItems":2,"maxItems":3},
-                "rows":{"type":"array","items":{"type":"string"}},
-                "blocked":{"type":"array","items":{"type":"array","items":{"type":"integer"}}},
-                "costs":{"type":"array","items":{"type":"number","minimum":0}},
-                "moves":{"type":"integer","enum":[4,8,6,26]}},"additionalProperties":false},
-            "start":{},
-            "goal":{},
-            "goals":{"type":"array","maxItems":MAX_GOALS},
-            "heuristic":{"type":"string","enum":["auto","none","euclidean","manhattan","explicit"],"default":"auto"},
-            "avoid":{"type":"array"},
-            "avoid_edges":{"type":"array","items":{"type":"array","minItems":2,"maxItems":2}},
-            "max_cost":{"type":"number","minimum":0},
-            "max_expansions":{"type":"integer","minimum":1,"maximum":MAX_EXPANSIONS}},
-        "required":["start"],"additionalProperties":false}})
+    json!({
+        "name": "control.search.path",
+        "description": concat!(
+            "Shortest path by A* (Dijkstra without a heuristic) over a graph or grid you supply inline. Use it for ",
+            "routing, navigation, move or dependency search instead of reasoning paths out in tokens. Graph: nodes ",
+            "(ids, or {id, at:[x,y(,z)], h}), edges [from,to,cost?] (cost defaults to 1; undirected unless ",
+            "directed=true). heuristic auto uses explicit h values, else coordinates (Euclidean, scaled down if an ",
+            "edge is cheaper than its length, so results stay optimal), else none. Grid: size [w,h(,d)] and/or rows ",
+            "of text ('#' blocked, digits 1-9 cell cost, else 1), blocked cells, flat costs (x fastest), moves 4|8 ",
+            "(2D) or 6|26 (3D); entering a cell costs its cost times the step length, and diagonals never cut blocked ",
+            "corners. start, goal or goals (nearest wins), optional avoid (nodes or cells), avoid_edges, max_cost, ",
+            "max_expansions. Limits: 20000 nodes, 100000 edges, 1000000 cells, 256 goals, 2000000 expansions, 2 s. ",
+            "Returns path, cost, expanded count."
+        ),
+        "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "nodes": {"type": "array", "maxItems": MAX_NODES},
+                "edges": {"type": "array", "maxItems": MAX_EDGES},
+                "directed": {"type": "boolean", "default": false},
+                "grid": {
+                    "type": "object",
+                    "properties": {
+                        "size": {
+                            "type": "array",
+                            "items": {"type": "integer", "minimum": 1},
+                            "minItems": 2,
+                            "maxItems": 3
+                        },
+                        "rows": {"type": "array", "items": {"type": "string"}},
+                        "blocked": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+                        "costs": {"type": "array", "items": {"type": "number", "minimum": 0}},
+                        "moves": {"type": "integer", "enum": [4, 8, 6, 26]}
+                    },
+                    "additionalProperties": false
+                },
+                "start": {},
+                "goal": {},
+                "goals": {"type": "array", "maxItems": MAX_GOALS},
+                "heuristic": {
+                    "type": "string",
+                    "enum": ["auto", "none", "euclidean", "manhattan", "explicit"],
+                    "default": "auto"
+                },
+                "avoid": {"type": "array"},
+                "avoid_edges": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2}},
+                "max_cost": {"type": "number", "minimum": 0},
+                "max_expansions": {"type": "integer", "minimum": 1, "maximum": MAX_EXPANSIONS}
+            },
+            "required": ["start"],
+            "additionalProperties": false
+        }
+    })
 }
 
 #[derive(Deserialize)]
