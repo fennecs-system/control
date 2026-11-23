@@ -27,18 +27,20 @@ that `docker info` works as your normal user.
 ```sh
 git clone https://github.com/fennecs-system/control.git
 cd control
+nix build
 nix run .#setup
 nix run .#codex -- -c 'cli_auth_credentials_store="file"' login
-./target/release/control doctor
-./target/release/control serve
+./result/bin/control doctor
+./result/bin/control serve
 ```
 
-Setup builds the package, loads and pins the worker image, initializes private
-configuration and registers the checkout for `/improve`. It preserves existing
-configuration, state and models, and never signs in or starts services. For
-optional images and the `--full` worker profile, see [setup](setup.md#prerequisites).
+`nix build` makes `./result/bin/control`. Setup builds, loads and pins the worker
+image, refreshes `./result`, initializes private configuration and registers the
+checkout for `/improve`. It preserves existing configuration, state and models,
+and never signs in or starts services. For optional images and the `--full`
+worker profile, see [setup](setup.md#prerequisites).
 
-In another terminal, run `./target/release/control open` for the web UI (or
+In another terminal, run `./result/bin/control open` for the web UI (or
 `open --link` to print a single-use sign-in link), or `control tui` for terminal
 chat. The server listens on `127.0.0.1:8080`, so no firewall change is needed.
 Configuration lives in `~/.config/control/` and state in `~/.local/state/control/`.
@@ -94,10 +96,10 @@ Do not remove Docker images still used by active runs or services.
 
 ## Build only
 
-`nix build .#control` (or `nix build`) produces `./result/bin/control` without
-loading images, changing pins or starting services. The build vendors both Cargo
-lockfiles, builds the UI offline in its own derivation and runs the workspace
-tests. Images build separately, for example `nix build .#worker-image`; setup
+`nix build` (or `nix build .#control`) produces `./result/bin/control`, plus
+`control-harness` and `control-discord`, without loading images, changing pins
+or starting services. The build vendors both Cargo lockfiles, builds the UI
+offline in its own derivation and runs the workspace tests. Images build separately, for example `nix build .#worker-image`; setup
 loads and pins them.
 
 `nix build .#control-server` builds the same web/MCP server without the `tui`

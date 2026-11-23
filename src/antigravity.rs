@@ -71,7 +71,7 @@ const MAILBOX: &str = "antigravity-mailbox";
 const PROBE: &str = "antigravity-isolation-probe";
 /// Control's files for one container, beside the workspace and never in it.
 const PRIVATE: &str = "antigravity-private";
-const LOGIN: &str = "run ./target/release/control antigravity login, or save a Gemini API key; the login stays outside the checkout";
+const LOGIN: &str = "run control antigravity login, or save a Gemini API key; the login stays outside the checkout";
 const PROBE_TIMED_OUT: &str = "Antigravity tool isolation probe timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
 /// Headless and unattended. Approval prompts are skipped, so nothing is
 /// soft-denied; what stays blocked is the deny list in [`settings`], which

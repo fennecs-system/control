@@ -9,16 +9,16 @@ manually, build through a compatible Linux Nix builder, then load and pin the im
 
 ```sh
 docker load --input "$(nix build .#packages.aarch64-linux.browser-image --no-link --print-out-paths)"
-./target/release/control config init
+./result/bin/control config init
 umask 077
-docker image inspect --format '{{.Id}}' control-browser:nix > "$(./target/release/control config path)/browser-image-id"
+docker image inspect --format '{{.Id}}' control-browser:nix > "$(./result/bin/control config path)/browser-image-id"
 ```
 
 Use `x86_64-linux` instead when appropriate. `flake.lock` pins the Nix inputs;
 runs require an immutable image ID, never a mutable tag.
 
 ```sh
-./target/release/control browser capture path/to/preview.html 1280 800
+./result/bin/control browser capture path/to/preview.html 1280 800
 ```
 
 In the local web UI, open **Tools → Browser** (`/tools/browser`), enter a
@@ -55,7 +55,7 @@ it is unnecessary for basic layout screenshots.
 
 ## Codex MCP
 
-`./target/release/control mcp --root /absolute/control/checkout` is a stdio MCP server for the local
+`./result/bin/control mcp --root /absolute/control/checkout` is a stdio MCP server for the local
 operator. The optional `--root` bounds browser inputs; without it, the root is the
 node's state directory. It exposes read-only chat/lens/room/artifact tools and `control.browser.capture`,
 which accepts `input`, optional `width` and `height`, and returns PNG content plus
@@ -74,7 +74,7 @@ reads; capture can operate independently with a configured image.
 Register with Codex using its [documented stdio MCP setup](https://learn.chatgpt.com/docs/extend/mcp?surface=cli):
 
 ```sh
-codex mcp add control-local -- /absolute/control/target/release/control mcp --root /absolute/control
+codex mcp add control-local -- /absolute/control/result/bin/control mcp --root /absolute/control
 ```
 
 This laptop additionally records a non-secret executable PATH for its Nix and
