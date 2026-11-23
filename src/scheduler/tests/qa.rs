@@ -31,7 +31,7 @@ fn reference_next(runtime: &Runtime) -> Option<usize> {
         .filter(|r| {
             matches!(r.status.as_str(), "running" | "cancelling")
                 || (r.status == "waiting"
-                    && (r.delegation.is_some() || r.question.as_ref().is_some_and(|q| q.answer.is_none())))
+                    && (r.delegation.is_some() || r.question.as_ref().is_some_and(|q| q.pending())))
         })
         .filter_map(|r| r.chat_id.as_deref())
         .collect::<HashSet<_>>();
@@ -89,7 +89,14 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
                         options: vec!["a".into(), "b".into()],
                         recommended: None,
                     },
-                    answer: (draw() % 2 == 0).then(|| "a".into()),
+                    status: if draw() % 2 == 0 {
+                        crate::design::Status::Answered {
+                            answer: "a".into(),
+                            asked_at: None,
+                        }
+                    } else {
+                        crate::design::Status::Pending { asked_at: None }
+                    },
                     continuation: None,
                 });
             }
@@ -177,7 +184,7 @@ fn scheduling_profile() {
                         options: vec!["a".into(), "b".into()],
                         recommended: None,
                     },
-                    answer: None,
+                    status: crate::design::Status::Pending { asked_at: None },
                     continuation: None,
                 });
             }

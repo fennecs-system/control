@@ -653,7 +653,7 @@ fn respond(
     if !managed(state, run)
         || crate::delegation::is_judge(run)
         || crate::delegation::pausing(run)
-        || run.question.as_ref().is_some_and(|q| q.answer.is_none())
+        || run.question.as_ref().is_some_and(|q| q.pending())
     {
         return Err(err(format!(
             "Managed context is unavailable for this attempt (a review, a delegation pause or an open design question); end the turn without a handoff. {OPERATOR_FIX}"

@@ -1491,7 +1491,7 @@ fn needs_recovery(state: &State, index: usize) -> bool {
                             })
                     })
         })
-        || run.question.as_ref().is_some_and(|question| question.answer.is_none())
+        || run.question.as_ref().is_some_and(|question| question.pending())
         || crate::delegation::pausing(run)
         || chat
             .project

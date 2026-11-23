@@ -76,6 +76,7 @@ policies! {
     "control.chat.read" => (Chat,false,Read,true),
     "control.requests.list" => (Chat,false,Hidden,true),
     "control.chat.ask" => (Chat,true,Hidden,true),
+    "control.chat.withdraw" => (Chat,true,Hidden,true),
     "control.run.scores" => (Chat,false,Read,true),
     "control.intel.brief" => (Chat,false,Read,true),
     "control.chat.send" => (Chat,true,Hidden,true),

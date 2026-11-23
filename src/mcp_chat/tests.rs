@@ -308,7 +308,7 @@ fn a_waiting_design_question_stays_with_the_operator() {
     let refused = run(&mut remote, "chat_send", &json!({"id":chat,"message":"Use JSON"})).unwrap_err();
     assert!(refused.to_string().contains("design question"), "{refused}");
     assert!(remote.calls.iter().all(|(name, _)| name != "control.chat.send"));
-    assert!(remote.state.runtime.runs[0].question.as_ref().unwrap().answer.is_none());
+    assert!(remote.state.runtime.runs[0].question.as_ref().unwrap().pending());
     let requests = run(&mut remote, "chat_requests", &json!({"id":chat})).unwrap();
     assert!(
         requests.starts_with("question ") && requests.contains("cannot approve"),
@@ -571,6 +571,122 @@ fn design_ask_from_outside_a_run_raises_an_operator_question_on_the_decisions_de
     );
     assert!(
         run(&mut remote, "chat_requests", &json!({"id":desk}))
+            .unwrap()
+            .contains("Nothing")
+    );
+}
+
+#[test]
+fn the_asker_withdraws_its_question_and_history_keeps_it() {
+    let mut remote = Local::new();
+    let ask = |remote: &mut Local, text: &str| {
+        question(
+            &run(
+                remote,
+                "control_design_ask",
+                &json!({"question":text,"options":["Yes","No"]}),
+            )
+            .unwrap(),
+        )
+    };
+    let (moot, open) = (ask(&mut remote, "Rename the crate?"), ask(&mut remote, "Ship today?"));
+    let desk = crate::design::desk(&remote.state).unwrap().to_owned();
+    let revision = crate::design::decision_revision(&remote.state);
+    let withdrawn = run(
+        &mut remote,
+        "control_design_withdraw",
+        &json!({"question_id":moot,"reason":"Settled in review"}),
+    )
+    .unwrap();
+    assert!(
+        withdrawn.starts_with(&format!("Withdrew question {moot}")),
+        "{withdrawn}"
+    );
+    assert_ne!(crate::design::decision_revision(&remote.state), revision);
+    // Gone from every pending list, still in history with who and why.
+    let listed = run(&mut remote, "chat_requests", &json!({"id":desk})).unwrap();
+    assert!(
+        !listed.contains(&moot) && listed.contains(&format!("question {open}")),
+        "{listed}"
+    );
+    let held = remote
+        .state
+        .runtime
+        .runs
+        .iter()
+        .find(|r| r.question.as_ref().is_some_and(|q| q.id == *moot.as_str()))
+        .unwrap();
+    assert_eq!(held.status, "cancelled");
+    let crate::design::Status::Withdrawn { withdrawn, asked_at } = &held.question.as_ref().unwrap().status else {
+        panic!("withdrawn questions keep their record")
+    };
+    assert_eq!(withdrawn.by, crate::design::Withdrawer::Asker);
+    assert!(asked_at.is_some());
+    let read = run(&mut remote, "chat_read", &json!({"id":desk})).unwrap();
+    assert!(read.contains("Withdrawn by the asker: Settled in review"), "{read}");
+    // Once only, and never an answered question.
+    assert!(
+        run(&mut remote, "control_design_withdraw", &json!({"question_id":moot}))
+            .unwrap_err()
+            .to_string()
+            .contains("no longer pending")
+    );
+    remote
+        .tool(
+            "control.chat.send",
+            json!({"id":desk,"message":format!("/answer {open} 1")}),
+        )
+        .unwrap();
+    assert!(run(&mut remote, "control_design_withdraw", &json!({"question_id":open})).is_err());
+    assert!(
+        run(
+            &mut remote,
+            "control_design_withdraw",
+            &json!({"question_id":moot,"reason":" "})
+        )
+        .is_err(),
+        "a blank reason is refused"
+    );
+}
+
+#[test]
+fn an_agents_question_is_withdrawn_only_for_the_operator_and_its_run_ends_without_continuing() {
+    let (state, chat) = crate::design::tests::paused();
+    let mut remote = Local {
+        state,
+        calls: Vec::new(),
+        decisions: Vec::new(),
+    };
+    let id = remote.state.runtime.runs[0].question.as_ref().unwrap().id.to_string();
+    let refused = run(&mut remote, "control_design_withdraw", &json!({"question_id":id})).unwrap_err();
+    assert!(refused.to_string().contains("Only the party that asked"), "{refused}");
+    assert!(remote.state.runtime.runs[0].question.as_ref().unwrap().pending());
+    // The operator let this bridge decide questions, so it may also withdraw one.
+    let approvals = Approvals {
+        question: true,
+        ..Default::default()
+    };
+    call(
+        &mut remote,
+        "control_design_withdraw",
+        &json!({"question_id":id}),
+        approvals,
+    )
+    .unwrap();
+    let held = &remote.state.runtime.runs[0];
+    let crate::design::Status::Withdrawn { withdrawn, .. } = &held.question.as_ref().unwrap().status else {
+        panic!("withdrawn")
+    };
+    assert_eq!(withdrawn.by, crate::design::Withdrawer::Operator);
+    // Released as a cancel releases it: no continuation, the chat is free and
+    // the published workspace is unchanged.
+    assert_eq!(held.status, "cancelled");
+    assert_eq!(remote.state.runtime.runs.len(), 1);
+    assert_eq!(crate::scheduler::phase(held), control_core::scheduling::Phase::Inactive);
+    assert_eq!(remote.state.chats[0].workspace.as_deref(), Some("last-good"));
+    assert!(crate::design::pending(&remote.state, &chat).is_empty());
+    assert!(
+        run(&mut remote, "chat_requests", &json!({"id":chat}))
             .unwrap()
             .contains("Nothing")
     );

@@ -40,7 +40,7 @@ fn authorize_write(state: &State, caller: Caller<'_>) -> io::Result<()> {
             || run
                 .question
                 .as_ref()
-                .is_some_and(|q| q.generation == generation && q.answer.is_none())
+                .is_some_and(|q| q.generation == generation && q.pending())
         {
             return Err(io::Error::other(
                 "Attempt is handing off or waiting for a decision; no GitHub writes may run",

@@ -461,11 +461,11 @@ fn answer_question(state: &mut State, index: usize) -> usize {
     attempt.status = "waiting".into();
     attempt.artifact = Some(format!("checkpoint-{generation}"));
     run.question = Some(crate::design::Question {
-        id: format!("question-{generation}"),
+        id: format!("question-{generation}").into(),
         nonce: "question".into(),
         generation,
         input: crate::design::tests::input(),
-        answer: None,
+        status: crate::design::Status::Pending { asked_at: None },
         continuation: None,
     });
     let chat = run.chat_id.clone().unwrap();
@@ -562,7 +562,10 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
                     nonce: "cycle".into(),
                     generation: "third-attempt".into(),
                     input: crate::design::tests::input(),
-                    answer: Some("yes".into()),
+                    status: crate::design::Status::Answered {
+                        answer: "yes".into(),
+                        asked_at: None,
+                    },
                     continuation: Some(target),
                 });
             }
