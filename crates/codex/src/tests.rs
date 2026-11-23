@@ -13,6 +13,7 @@ fn codex_launch_vectors_are_pinned() {
         path: PathBuf::from("/golden/auth.json"),
         uid: 501,
         gid: 20,
+        write: control_agent::Write::ReadOnly,
     };
     let workspace = root.join("workspace");
     let text = text_container(
@@ -108,7 +109,7 @@ const TEXT: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=512m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m",
     "--tmpfs",
     "/home/agent/.codex:rw,nosuid,uid=501,gid=20,size=64m",
     "--mount",
@@ -202,7 +203,7 @@ const PROBE: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=512m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m",
     "--tmpfs",
     "/home/agent/.codex:rw,nosuid,uid=501,gid=20,size=64m",
     "--mount",
@@ -266,7 +267,7 @@ const TURN: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=512m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m",
     "--tmpfs",
     "/home/agent/.codex:rw,nosuid,uid=501,gid=20,size=64m",
     "--mount",
@@ -333,7 +334,7 @@ const TURN_REVIEW: &[&str] = &[
     "--tmpfs",
     "/tmp:rw,nosuid,size=512m",
     "--tmpfs",
-    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m",
     "--tmpfs",
     "/home/agent/.codex:rw,nosuid,uid=501,gid=20,size=64m",
     "--mount",
@@ -375,3 +376,48 @@ const TURN_REVIEW: &[&str] = &[
     "cli_auth_credentials_store=\"file\"",
     "-",
 ];
+
+/// The host decides whether Codex may write its sign-in back: the operator's
+/// own `auth.json` stays read-only, a named account's file is writable in
+/// place, and either way it lies beneath the private home.
+#[test]
+fn a_refreshable_sign_in_is_its_file_writable_in_place() {
+    let root = std::env::temp_dir().join(format!("control-codex-refresh-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let policy = root.join("worker-seccomp.json");
+    fs::write(&policy, b"{}").unwrap();
+    let workspace = root.join("workspace");
+    for (write, access) in [
+        (control_agent::Write::ReadOnly, Access::ReadOnly),
+        (control_agent::Write::Refreshable, Access::ReadWrite),
+    ] {
+        let auth = Credentials {
+            path: PathBuf::from("/golden/accounts/codex/second/auth.json"),
+            uid: 501,
+            gid: 20,
+            write,
+        };
+        let spec = turn_container(
+            "sha256:img",
+            "control-run-1",
+            &workspace,
+            &auth,
+            &policy,
+            "node-1",
+            None,
+            "gpt-5",
+            false,
+        )
+        .unwrap();
+        let secrets: Vec<_> = spec.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
+        assert_eq!(secrets, [(AUTH, access)]);
+        assert_eq!(control_agent::cli::secrets_private(&spec), Ok(()));
+    }
+    // A granted login carries the host's decision.
+    let owner = User { uid: 501, gid: 20 };
+    let named = Granted::refreshable("/golden/accounts/codex/second/auth.json".into(), owner);
+    let own = Granted::located(control_agent::Form::Session, "/home/me/.codex/auth.json".into(), owner);
+    assert_eq!(Credentials::from(&named).write, control_agent::Write::Refreshable);
+    assert_eq!(Credentials::from(&own).write, control_agent::Write::ReadOnly);
+    fs::remove_dir_all(root).unwrap();
+}

@@ -62,21 +62,39 @@ pub fn classify(bytes: &[u8]) -> Option<Cause> {
     .map(|(_, cause)| cause)
 }
 
+/// The command that signs a turn's account in again, exactly as the
+/// operator types it (`control claude login --account second`). The host
+/// knows the account; a backend never does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignIn(String);
+impl From<String> for SignIn {
+    fn from(command: String) -> Self {
+        Self(command)
+    }
+}
+impl SignIn {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl Cause {
-    /// The fixed sentence for `agent`, the backend's display name.
-    pub fn message(self, agent: &str) -> String {
+    /// The fixed sentence for `agent`, the backend's display name; a sign-in
+    /// failure names the one command that recovers this account.
+    pub fn message(self, agent: &str, sign_in: &SignIn) -> String {
+        let again = sign_in.as_str();
         match self {
             Self::UnsupportedModel => {
                 format!("The signed-in account does not support the requested {agent} model or runtime feature.")
             }
             Self::ReadOnlySession => format!(
-                "{agent} could not use or refresh the read-only account session. Refresh the host login and submit a new run. The credential mount was not made writable."
+                "{agent} could not use or refresh its account session. Sign in again with {again} and submit a new run."
             ),
             Self::PermissionDenied => format!(
                 "{agent} encountered a filesystem permission denial. Check credential ownership, ephemeral state, and sandbox compatibility."
             ),
             Self::AuthRejected => {
-                format!("{agent} account authentication was rejected. Refresh the host login and submit a new run.")
+                format!("{agent} account authentication was rejected. Sign in again with {again} and submit a new run.")
             }
             Self::Tls => format!(
                 "{agent} could not validate the provider TLS connection. Check the Nix worker certificate configuration."
@@ -89,9 +107,8 @@ impl Cause {
                 "{agent} could not complete its provider connection. Check container network connectivity and account availability."
             ),
             Self::SignIn => {
-                let command = agent.to_ascii_lowercase();
                 format!(
-                    "{agent}'s login is missing, expired or was rejected. Run control {command} check, then sign in again with control {command} login or replace the API key."
+                    "{agent}'s login is missing, expired or was rejected. Sign in again with {again} and submit a new run."
                 )
             }
         }
@@ -184,15 +201,15 @@ impl Failure {
             Self::Interrupted(_) | Self::UnfinishedTool => Status::Interrupted,
         }
     }
-    /// The user-facing wording.
-    pub fn message(&self) -> String {
+    /// The user-facing wording; `sign_in` recovers the turn's account.
+    pub fn message(&self, sign_in: &SignIn) -> String {
         match self {
             Self::Blocked(text)
             | Self::Failed(text)
             | Self::Ended(text)
             | Self::UnexpectedTools(text)
             | Self::Interrupted(text) => text.clone(),
-            Self::Provider { agent, cause } => cause.message(agent),
+            Self::Provider { agent, cause } => cause.message(agent, sign_in),
             Self::Unclassified(text) => (*text).to_owned(),
             Self::TimedOut(limit) => timeout_message(*limit),
             Self::Cancelled(Cancelled::BeforeLaunch(Some(agent))) => format!("Cancelled before {agent} launch."),

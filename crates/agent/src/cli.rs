@@ -281,6 +281,8 @@ pub struct Cli {
     /// The refusal when the host granted no login.
     pub no_login: &'static str,
     pub delivery: Delivery,
+    /// How the CLI writes back a sign-in it refreshed.
+    pub keeps: crate::Keeps,
     pub capture: Capture,
     /// The failure from the CLI's own ending and its bounded stderr.
     pub failure: fn(Option<Ending>, &[u8]) -> Failure,
@@ -378,7 +380,14 @@ pub fn turn(
         return Failure::Failed(format!("Cannot start the {} Nix container", cli.name)).into();
     };
     let stdin = stdin.map(|prompt| host.observed(prompt));
-    supervise(cli, child, &mailbox, stdin, started_unix, host)
+    let outcome = supervise(cli, child, &mailbox, stdin, started_unix, host);
+    // Only the sign-in outlives the turn in a folder the CLI could write.
+    // Best effort: the turn's result does not depend on it, and the next
+    // turn's sweep removes what this one could not.
+    if let (Some(folder), crate::Keeps::Folder(kept)) = (login.folder(cli.keeps), cli.keeps) {
+        let _ = crate::sweep(folder, kept.keep);
+    }
+    outcome
 }
 
 /// Supervises a started CLI to its reply: activity and usage are recorded as
@@ -503,6 +512,15 @@ pub fn supervise(
     }
 }
 
+/// The login a credential canary stands in for.
+#[derive(Clone, Copy, Debug)]
+pub enum Canary {
+    /// Read-only, as every key, cloud credential and the operator's own sign-in is.
+    ReadOnly(crate::Form),
+    /// A sign-in in a folder Control owns, written back as the CLI `keeps` it.
+    Refreshable(crate::Keeps),
+}
+
 /// `control ID check`'s credential canary: a fake credential, private and
 /// owned like a real login, beside the check's state; `launch` builds the
 /// turn container with it mounted at `target` as a turn would. Prints one
@@ -510,11 +528,11 @@ pub fn supervise(
 pub fn canary_check(
     isolation: &dyn Isolation,
     root: &Path,
-    form: crate::Form,
+    login: Canary,
     target: &str,
     launch: impl FnOnce(&crate::Granted) -> io::Result<RunSpec>,
 ) -> io::Result<()> {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     let meta = fs::metadata(root)?;
     let owner = User {
         uid: meta.uid(),
@@ -524,11 +542,33 @@ pub fn canary_check(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());
     let canary = format!("control-canary-{}-{nanos}", std::process::id());
-    let path = root.join("canary-credential");
+    // Fresh names for every case: Docker Desktop's shared-file cache keeps a
+    // stale entry for a name an earlier container mounted and the host then
+    // deleted, so a recreated `canary-credential` was intermittently unreadable
+    // in the next case's container. A sign-in kept in a folder gets a folder of
+    // its own, as an account has.
+    let (file, folder) = (
+        root.join(format!("canary-credential-{nanos}")),
+        root.join(format!("canary-login-{nanos}")),
+    );
+    let (granted, keeps) = match login {
+        Canary::ReadOnly(form) => (crate::Granted::located(form, file, owner), crate::Keeps::InPlace),
+        Canary::Refreshable(keeps @ crate::Keeps::Folder(kept)) => {
+            let _ = fs::remove_dir_all(&folder);
+            fs::DirBuilder::new().mode(0o700).create(&folder)?;
+            (crate::Granted::refreshable(folder.join(kept.file), owner), keeps)
+        }
+        Canary::Refreshable(keeps @ crate::Keeps::InPlace) => (crate::Granted::refreshable(file, owner), keeps),
+    };
+    let path = granted.path().to_path_buf();
     private_file(&path, &canary)?;
-    let results = launch(&crate::Granted::located(form, path.clone(), owner))
-        .and_then(|spec| canary::run(isolation, spec, target, &canary));
+    let target = match granted.form() {
+        crate::Form::Session => granted.session_target(target, keeps),
+        crate::Form::ApiKey | crate::Form::CloudDefault => target.to_owned(),
+    };
+    let results = launch(&granted).and_then(|spec| canary::run(isolation, spec, &target, &canary, granted.write()));
     let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(&folder);
     let (lines, held) = canary::report(&results?);
     lines.iter().for_each(|line| println!("{line}"));
     if held {

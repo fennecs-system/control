@@ -46,9 +46,6 @@ impl crate::accounts::Backend for Backend {
     fn signs_in(self) -> bool {
         self != Self::Local
     }
-    fn refreshes(self) -> bool {
-        self == Self::Codex
-    }
     fn implicit(self) -> (AccountKind, SecretRef) {
         let variable = |name: &'static str, join: Option<&'static str>| Location::Variable {
             name,
@@ -94,7 +91,13 @@ pub(crate) fn read() -> io::Result<Store<Backend>> {
 }
 /// Saves accounts.json privately; the server picks the change up (`refresh`).
 pub(crate) fn write(store: &Store<Backend>) -> io::Result<()> {
-    crate::config::write_private("accounts.json", &store.encode())
+    crate::config::write_private("accounts.json", &store.encode()).map_err(|error| match error.kind() {
+        // Setup creates the private configuration folder; say so instead of a bare OS error.
+        io::ErrorKind::NotFound => {
+            io::Error::other("Control's configuration folder does not exist yet: run nix run .#setup first")
+        }
+        _ => error,
+    })
 }
 /// Reloads accounts.json when it changed on disk since it was read, so
 /// `control accounts` changes apply without a restart. An invalid file keeps
@@ -289,7 +292,7 @@ fn listing(backend: Backend, store: &Store<Backend>) -> Vec<String> {
             if *name == default {
                 notes.push("default".to_owned());
             }
-            if let Some(cap) = account.effective_cap() {
+            if let Some(cap) = account.cap {
                 notes.push(format!("cap {cap}"));
             }
             if notes.is_empty() {

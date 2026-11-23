@@ -1,7 +1,8 @@
 //! Unmodified Claude Code harness; executable tools run in separate offline containers.
 use control_agent::{
-    Agent, Checked, Command, Failure, Form, Granted, Host, ImagePin, Login, Node, Outcome, Runs, TextCall, Turn, Turns,
-    cli::{self, Cli, Delivery, Ending, Probe},
+    Agent, Checked, Command, Failure, Folder, Form, Granted, Host, ImagePin, Keep, Keeps, Login, Names, Node, Outcome,
+    Runs, TextCall, Turn, Turns,
+    cli::{self, Canary, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Streams, Tmpfs, User};
 use std::{
@@ -65,7 +66,7 @@ impl Agent for Claude {
         Runs::Cli(self)
     }
     fn private_names(&self) -> &'static [&'static str] {
-        &[".claude", ".claude.json", ".mcp.json", KEY_FILE]
+        &[".claude", ".claude.json", ".mcp.json", ".claude-login", KEY_FILE]
     }
     fn host_shell(&self) -> bool {
         true
@@ -108,6 +109,7 @@ const CLI: Cli = Cli {
     mailbox: "claude-mailbox",
     no_login: "Claude login unavailable. Run control claude login; host keychain credentials are never extracted.",
     delivery: Delivery::Stdin,
+    keeps: Keeps::Folder(&SIGN_IN),
     capture: |reader, update, progress, bad_tools| {
         cli::capture_with(
             reader,
@@ -120,10 +122,29 @@ const CLI: Cli = Cli {
     },
     failure,
 };
-/// Where a turn mounts the login.
+/// Where a turn mounts a read-only login.
 const CREDENTIALS: &str = "/home/agent/.claude/.credentials.json";
-const UNCLASSIFIED: &str =
-    "Claude stopped without success. Check its login, selected model and usage limits; credentials remain read-only.";
+/// Where a refreshable sign-in's own folder is mounted, and what stays in it.
+/// Claude replaces its sign-in by writing `.credentials.json.tmp.<8 hex>`
+/// beside it and renaming it over the file (in place only when the rename
+/// fails), and serialises refreshes across processes with a
+/// `.oauth_refresh.lock` folder beside it. `CLAUDE_SECURESTORAGE_CONFIG_DIR`
+/// moves only that store: sessions, settings, caches and the MCP state stay in
+/// `CLAUDE_CONFIG_DIR` on the in-memory home (2.1.311, seen in its bundle and
+/// offline: `claude auth status` reads a sign-in there, and a turn wrote nothing else there).
+const SIGN_IN: Folder = Folder {
+    target: "/home/agent/.claude-login",
+    file: ".credentials.json",
+    variable: "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+    names: Names::Folder,
+    keep: &[
+        Keep::Name(".credentials.json"),
+        Keep::Between(".credentials.json.tmp.", ""),
+        Keep::Name(".oauth_refresh.lock"),
+        Keep::Name(KEY_FILE),
+    ],
+};
+const UNCLASSIFIED: &str = "Claude stopped without success. Check its login, selected model and usage limits.";
 
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
@@ -245,11 +266,14 @@ const KEY_SETTINGS: &str = concat!(
     "/home/agent/.control-key/anthropic-api-key",
     r#""}"#
 );
-/// The login, mounted read-only where the CLI reads its form of it.
+/// The login where the CLI reads its form of it: a key read-only, a sign-in
+/// as the host granted it.
 fn mount(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
     match login.form() {
         Form::ApiKey => login.mount(spec, "claude/api-key", KEY),
-        Form::Session | Form::CloudDefault => login.mount(spec, "claude/credentials", CREDENTIALS),
+        Form::Session | Form::CloudDefault => {
+            login.mount_session(spec, "claude/credentials", CREDENTIALS, Keeps::Folder(&SIGN_IN))
+        }
     }
 }
 /// The flags that point Claude at an API key; a sign-in needs none.
@@ -306,7 +330,10 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
             if !isolation.spawn(&spec, Streams::INHERIT)?.wait()?.success() {
                 return Err(fail("Claude login did not complete"));
             }
-            fs::set_permissions(directory.join(".credentials.json"), fs::Permissions::from_mode(0o600))?;
+            // Signing in again replaces the sign-in in place; whatever an earlier
+            // login kept beside it (sessions, settings) goes.
+            control_agent::sweep(&directory, SIGN_IN.keep)?;
+            fs::set_permissions(directory.join(SIGN_IN.file), fs::Permissions::from_mode(0o600))?;
             Ok(())
         }
         Some("check") if args.len() == 1 => {
@@ -329,19 +356,23 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     }
 }
 
-/// The credential canary in a turn's own container, for each form of login,
-/// on a fake credential.
+/// The credential canary in a turn's own container, for each form of login
+/// and a refreshable sign-in, on a fake credential.
 fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io::Result<()> {
     let mailbox = root.join(CLI.mailbox);
     fs::create_dir_all(&mailbox)?;
     let name = format!("control-claude-probe-{}-canary", std::process::id());
-    [(Form::Session, CREDENTIALS), (Form::ApiKey, KEY)]
-        .into_iter()
-        .try_for_each(|(form, target)| {
-            cli::canary_check(isolation, root, form, target, |login| {
-                turn_container(&name, node, login, &mailbox, image, "canary")
-            })
+    [
+        (Canary::ReadOnly(Form::Session), CREDENTIALS),
+        (Canary::Refreshable(Keeps::Folder(&SIGN_IN)), CREDENTIALS),
+        (Canary::ReadOnly(Form::ApiKey), KEY),
+    ]
+    .into_iter()
+    .try_for_each(|(login, target)| {
+        cli::canary_check(isolation, root, login, target, |login| {
+            turn_container(&name, node, login, &mailbox, image, "canary")
         })
+    })
 }
 
 fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {
@@ -351,12 +382,15 @@ fn login_container(name: &str, node: &str, owner: User, directory: &Path, image:
         ..cli::base(name, node, owner)
     }
     .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
+    // The sign-in alone is kept, in the account's folder, where turns find it;
+    // the rest of what the login writes stays on the in-memory home.
     .secret(
         "claude/login",
         cli::checked(directory)?,
-        "/home/agent/.claude",
+        SIGN_IN.target,
         Access::ReadWrite,
     )
+    .env(SIGN_IN.variable, SIGN_IN.target)
     .args(["claude", "auth", "login"]))
 }
 

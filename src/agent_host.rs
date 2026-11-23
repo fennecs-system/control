@@ -155,9 +155,10 @@ impl Events for Live {
     }
 }
 
-/// A failure as the attempt records it: its status and wording.
-pub(crate) fn status(failure: &Failure) -> (control_agent::Status, String) {
-    (failure.status(), failure.message())
+/// A failure as the attempt records it: its status and wording, which names
+/// `sign_in` when the account must sign in again.
+pub(crate) fn status(failure: &Failure, sign_in: &control_agent::SignIn) -> (control_agent::Status, String) {
+    (failure.status(), failure.message(sign_in))
 }
 
 /// Applies a finished turn to the attempt: launch, usage, and the activity
@@ -167,6 +168,7 @@ pub(crate) fn finish(
     attempt: &mut Attempt,
     bridge: Bridge<'_>,
     id: &str,
+    sign_in: &control_agent::SignIn,
 ) -> Result<String, (control_agent::Status, String)> {
     let result = match outcome {
         Outcome::NotLaunched(failure) => Err(failure),
@@ -186,7 +188,7 @@ pub(crate) fn finish(
             crate::worker::interrupt_unfinished_tools(bridge, id);
             attempt.termination = Some(crate::attempt_control::Termination::ProviderError);
         }
-        status(&failure)
+        status(&failure, sign_in)
     })
 }
 
