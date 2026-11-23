@@ -451,3 +451,16 @@ fn compression_scores_reward_terse_facts_and_count_lost_ones() {
     assert_eq!(kept("wall at z-54 done", &["north wall z-54 110/110", "chest 19,71"]), (1, 4));
     assert_eq!(kept("nothing", &["no facts here"]), (0, 0));
 }
+
+/// Every header of a Memory Tree page, so a change to how it responds cannot
+/// move a byte; the body is the error page, passed through unchanged.
+#[test]
+fn memory_page_response_head_is_pinned() {
+    let state = Arc::new(Mutex::new(State::default()));
+    let mut out = Vec::new();
+    assert!(http(&mut out, &state, "GET", "/dm/missing/memory/node", "", b""));
+    let text = String::from_utf8(out).unwrap();
+    let (head, body) = text.split_once("\r\n\r\n").unwrap();
+    assert!(body.starts_with("<!doctype html>"), "{body}");
+    assert_eq!(head, format!("HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'", body.len()));
+}

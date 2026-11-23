@@ -221,3 +221,16 @@ fn the_personas_page_lists_built_ins_and_saves_revisions() {
     assert!(save_with(&mut state, draft(&fields).unwrap(), |_| Ok(())).is_err(), "acting personas never see the node");
     assert!(tool(&mut state, "control.personas.list", &json!({})).unwrap().as_array().unwrap().iter().any(|p| p["id"] == "scout"));
 }
+
+/// Every header of the persona page, so a change to how it responds cannot
+/// move a byte; the body is the rendered page, passed through unchanged.
+#[test]
+fn page_response_head_is_pinned() {
+    let mut state = State::default();
+    let mut out = Vec::new();
+    assert!(handle(&mut out, &mut state, "GET", "/personas", &HashMap::new(), "", b""));
+    let text = String::from_utf8(out).unwrap();
+    let (head, body) = text.split_once("\r\n\r\n").unwrap();
+    assert!(body.starts_with("<!doctype html>"), "{body}");
+    assert_eq!(head, format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'", body.len()));
+}

@@ -106,9 +106,6 @@ struct Rendered {
     age: u64,
 }
 
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 type Prober = fn(&Service, &str, &str, Duration) -> io::Result<ProbeOutput>;
 
 /// The chat a run belongs to, when that chat declared an observation.
@@ -432,15 +429,15 @@ fn summary(declaration: Option<&Declaration>) -> Value {
 /// Declares, shows or clears the active attempt's chat observation.
 fn set_with(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, input: Input, save: impl Fn(&State) -> io::Result<()>, probe: Prober) -> io::Result<Value> {
     let (chat, declaration) = {
-        let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let run = state.runtime.runs.iter().find(|r| r.id == attempt.run && r.status == "running"
             && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
-            .ok_or_else(|| fail("Attempt is not active"))?;
-        identity::authorize(&run.actor, run.action).map_err(fail)?;
+            .ok_or_else(|| io::Error::other("Attempt is not active"))?;
+        identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
         if crate::delegation::is_judge(run) {
-            return Err(fail("Read-only attempts cannot declare observations"));
+            return Err(io::Error::other("Read-only attempts cannot declare observations"));
         }
-        let chat = run.chat_id.clone().ok_or_else(|| fail("A chat is required"))?;
+        let chat = run.chat_id.clone().ok_or_else(|| io::Error::other("A chat is required"))?;
         let source = match (input.service_id, input.command, input.watch_id, input.clear) {
             (None, None, None, true) => None,
             (None, None, None, false) => {
@@ -451,11 +448,11 @@ fn set_with(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, input: Input, 
             (Some(service), Some(command), None, false) => {
                 let command = command.trim().to_owned();
                 if command.is_empty() || command.len() > MAX_COMMAND {
-                    return Err(fail("command must be 1–4000 bytes"));
+                    return Err(io::Error::other("command must be 1–4000 bytes"));
                 }
                 if !state.services.iter().any(|s| s.resource.id.as_str() == service && s.live()
                     && crate::services::accessible(&state, s, &s.resource.owner.node, run)) {
-                    return Err(fail("Observe only a running service this chat can use"));
+                    return Err(io::Error::other("Observe only a running service this chat can use"));
                 }
                 Some(Source::Command { service, command })
             }
@@ -463,11 +460,11 @@ fn set_with(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, input: Input, 
                 let owned = state.watches.iter().find(|w| w.id == watch).is_some_and(|w| w.chat == chat
                     || state.services.iter().any(|s| s.resource.id.as_str() == w.service && crate::services::accessible(&state, s, &s.resource.owner.node, run)));
                 if !owned {
-                    return Err(fail("Observe only a watch of this chat or of a service it can use"));
+                    return Err(io::Error::other("Observe only a watch of this chat or of a service it can use"));
                 }
                 Some(Source::Watch { watch })
             }
-            _ => return Err(fail("Give service_id and command, or watch_id, or clear=true; omit all to show the current observation")),
+            _ => return Err(io::Error::other("Give service_id and command, or watch_id, or clear=true; omit all to show the current observation")),
         };
         let cap = state.runtime.execution.observation_max_bytes;
         let declaration = match source {
@@ -476,7 +473,7 @@ fn set_with(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, input: Input, 
                 let refresh_seconds = input.refresh_seconds.unwrap_or(DEFAULT_REFRESH_SECONDS);
                 let timeout_seconds = input.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
                 if !(MIN_BYTES..=cap).contains(&max_bytes) || refresh_seconds > MAX_REFRESH_SECONDS || !(1..=MAX_TIMEOUT_SECONDS).contains(&timeout_seconds) {
-                    return Err(fail(&format!("max_bytes must be {MIN_BYTES}–{cap}, refresh_seconds 0–{MAX_REFRESH_SECONDS} and timeout_seconds 1–{MAX_TIMEOUT_SECONDS}")));
+                    return Err(io::Error::other(format!("max_bytes must be {MIN_BYTES}–{cap}, refresh_seconds 0–{MAX_REFRESH_SECONDS} and timeout_seconds 1–{MAX_TIMEOUT_SECONDS}")));
                 }
                 Some(Declaration { source, max_bytes, refresh_seconds, timeout_seconds, _exec_results: false })
             }
@@ -523,7 +520,7 @@ impl AttemptTools for Tools {
         name == "control_observe_set"
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
-        let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| fail("Expected service_id and command, watch_id, or clear"))?;
+        let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| io::Error::other("Expected service_id and command, watch_id, or clear"))?;
         set_with(cx.host.0, &cx.attempt, input, crate::storage::save, crate::services::probe)
     }
 }

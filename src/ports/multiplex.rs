@@ -38,7 +38,7 @@ pub(super) fn serve(
     let Some(input) = child.stdin.take() else {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(fail("Relay input unavailable"));
+        return Err(io::Error::other("Relay input unavailable"));
     };
     let (transport, incoming, reader) = Transport::start(output, input, true);
     let ping = transport.clone();
@@ -74,7 +74,7 @@ pub(super) fn serve(
     for task in sessions {
         let _ = task.join();
     }
-    Err(fail("Relay stopped or lost its host connection"))
+    Err(io::Error::other("Relay stopped or lost its host connection"))
 }
 fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> io::Result<()> {
     let service = live_service(shared, port, cancel)?;
@@ -97,13 +97,13 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
                     .lock()
                     .is_ok_and(|state| peer_listening(&state, port))
                 {
-                    return Err(fail("Peer ingress is not listening"));
+                    return Err(io::Error::other("Peer ingress is not listening"));
                 }
                 let target = port
                     .approval
                     .as_ref()
                     .and_then(|approval| approval.pinned)
-                    .ok_or_else(|| fail("Missing pinned target"))?;
+                    .ok_or_else(|| io::Error::other("Missing pinned target"))?;
                 let socket = TcpStream::connect_timeout(&target, Duration::from_secs(2))?;
                 live_service(shared, port, cancel)?;
                 Ok(socket)

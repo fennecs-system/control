@@ -41,9 +41,6 @@ const EXECUTIONS: [&str; 3] = ["control_service_exec", "control_workspace_run", 
 /// Parent links followed from one chat; delegation depth is far smaller.
 const DEPTH: usize = 64;
 
-pub(super) fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
-}
 /// Remaining seconds at or below which an attempt with `limit` is warned.
 pub(crate) fn deadline_threshold(limit: u64) -> u64 {
     (limit.saturating_mul(DEADLINE_SHARE_PERCENT) / 100).max(DEADLINE_FLOOR_SECONDS.min(limit / 2))

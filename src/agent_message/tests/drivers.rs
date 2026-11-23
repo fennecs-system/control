@@ -41,7 +41,7 @@ async fn asynchronous(
         tokio::task::yield_now().await;
         trace.push(effect);
         if failure == Some(effect) {
-            return Err(fail("injected I/O failure"));
+            return Err(io::Error::other("injected I/O failure"));
         }
         if effect == Effect::Checkpoint {
             let _durable_snapshot = serde_json::to_vec(&*flight.state).unwrap();
@@ -81,7 +81,7 @@ fn blocking_and_tokio_drivers_share_effect_order_failure_rollback_and_restart_re
                 |_| {
                     trace.borrow_mut().push(Effect::ArchiveEvidence);
                     if failure == Some(Effect::ArchiveEvidence) {
-                        Err(fail("injected I/O failure"))
+                        Err(io::Error::other("injected I/O failure"))
                     } else {
                         Ok(())
                     }
@@ -90,7 +90,7 @@ fn blocking_and_tokio_drivers_share_effect_order_failure_rollback_and_restart_re
                     trace.borrow_mut().push(Effect::Checkpoint);
                     let _snapshot = serde_json::to_vec(state).unwrap();
                     if failure == Some(Effect::Checkpoint) {
-                        Err(fail("injected I/O failure"))
+                        Err(io::Error::other("injected I/O failure"))
                     } else {
                         Ok(())
                     }

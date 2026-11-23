@@ -22,7 +22,7 @@ impl Remote for Local {
         let response = crate::session_http::rpc(&mut self.state, &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}));
         let result = &response["result"];
         if result["isError"] == true {
-            return Err(fail(result["content"][0]["text"].as_str().unwrap_or("Tool request failed.")));
+            return Err(io::Error::other(result["content"][0]["text"].as_str().unwrap_or("Tool request failed.")));
         }
         Ok(result["structuredContent"]["data"].clone())
     }
@@ -147,7 +147,7 @@ fn reads_are_paged_and_bounded() {
 
 #[test]
 fn json_rpc_lists_tools_and_reports_unavailable_control_as_a_tool_error() {
-    let mut connect = || -> io::Result<Local> { Err(fail("Start the server first")) };
+    let mut connect = || -> io::Result<Local> { Err(io::Error::other("Start the server first")) };
     let mut connection = None;
     let listed = dispatch(&mut connect, &mut connection, &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}));
     assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), TOOLS.len() - 1, "chat_decide is hidden by default");

@@ -83,13 +83,12 @@ const BENCH: [&str; 3] = [
 ];
 /// Sequential end-to-end calls through the same adapter; memory is the server's to report.
 pub(crate) fn bench(endpoint: &Endpoint, runs: usize, cancel: &dyn Fn() -> bool) -> io::Result<Value> {
-    let mut results = Vec::new();
-    for run in 0..runs {
+    let results = (0..runs).map(|run| {
         let generation = generate(endpoint, SYSTEM, BENCH[run % BENCH.len()], Some(256), cancel)?;
-        results.push(json!({"run":run+1,"elapsed_ms":generation.elapsed.as_millis() as u64,"usage":generation.response.tokens,
+        Ok(json!({"run":run+1,"elapsed_ms":generation.elapsed.as_millis() as u64,"usage":generation.response.tokens,
             "output_tokens_per_second":generation.response.tokens.map(|t|((t.output_tokens as f64/generation.elapsed.as_secs_f64())*100.0).round()/100.0),
-            "provenance":endpoint.provenance(&generation.served)}));
-    }
+            "provenance":endpoint.provenance(&generation.served)}))
+    }).collect::<io::Result<Vec<_>>>()?;
     let mut elapsed: Vec<u64> = results.iter().filter_map(|r| r["elapsed_ms"].as_u64()).collect();
     elapsed.sort_unstable();
     Ok(json!({"model":endpoint.id,"revision":endpoint.revision,"runs":results,"median_elapsed_ms":elapsed[elapsed.len()/2],

@@ -10,7 +10,7 @@ fn operator_grants_persist_revoke_and_rollback_without_cross_chat_authority() {
         ("origin".into(), "https://example.com".into()),
         ("seconds".into(), "900".into()),
     ]);
-    assert!(change_access(&mut state, &fields, 100, |_| Err(fail("disk full"))).is_err());
+    assert!(change_access(&mut state, &fields, 100, |_| Err(io::Error::other("disk full"))).is_err());
     assert!(state.web_grants.is_empty());
     let mut saved = Vec::new();
     change_access(&mut state, &fields, 100, |s| {
@@ -25,7 +25,7 @@ fn operator_grants_persist_revoke_and_rollback_without_cross_chat_authority() {
     assert!(permitted(&state, &chat, &Actor::LocalOperator, &url, 1000).is_err());
     let revoke =
         std::collections::HashMap::from([("revoke".into(), state.web_grants[0].id.clone())]);
-    assert!(change_access(&mut state, &revoke, 101, |_| Err(fail("disk full"))).is_err());
+    assert!(change_access(&mut state, &revoke, 101, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(state.web_grants.len(), 1);
     change_access(&mut state, &revoke, 101, |_| Ok(())).unwrap();
     assert!(permitted(&state, &chat, &Actor::LocalOperator, &url, 101).is_err());

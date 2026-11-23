@@ -194,16 +194,14 @@ pub fn read_line(path: &Path, pos: u64) -> io::Result<Option<Vec<u8>>> {
     };
     // Streams to the wanted line: memory stays one line, reading stops there.
     let mut lines = io::BufReader::new(file);
-    let mut line = Vec::new();
-    for current in 0..=pos {
-        line.clear();
-        if current < pos {
-            if lines.skip_until(b'\n')? == 0 {
-                return Ok(None);
-            }
-        } else if lines.read_until(b'\n', &mut line)? == 0 || line.pop() != Some(b'\n') {
+    for _ in 0..pos {
+        if lines.skip_until(b'\n')? == 0 {
             return Ok(None);
         }
+    }
+    let mut line = Vec::new();
+    if lines.read_until(b'\n', &mut line)? == 0 || line.pop() != Some(b'\n') {
+        return Ok(None);
     }
     Ok(Some(line))
 }

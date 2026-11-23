@@ -123,8 +123,8 @@ fn a_failed_check_or_save_leaves_the_request_with_the_operator() {
     let id = egress(&mut state, &run, "web", "example.com", 443);
     let shared = Arc::new(Mutex::new(state));
     let pin = |endpoint: &Endpoint, loopback| validate_destination(endpoint, &["93.184.216.34:443".parse().unwrap()], loopback);
-    assert!(auto_approve(&shared, &id, &auto(), |_| Ok(()), |_, _| Err(fail("old relay image")), pin).is_none());
-    assert!(auto_approve(&shared, &id, &auto(), |_| Err(fail("disk full")), |_, _| Ok(()), pin).is_none());
+    assert!(auto_approve(&shared, &id, &auto(), |_| Ok(()), |_, _| Err(io::Error::other("old relay image")), pin).is_none());
+    assert!(auto_approve(&shared, &id, &auto(), |_| Err(io::Error::other("disk full")), |_, _| Ok(()), pin).is_none());
     let state = shared.lock().unwrap();
     assert_eq!(state.ports[0].status, Status::Pending);
     assert!(state.ports[0].approval.is_none() && state.auto_decisions.is_empty() && state.bots.notices.is_empty());

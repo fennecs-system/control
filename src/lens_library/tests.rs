@@ -129,3 +129,14 @@ fn editor_choices_sit_in_compact_rows() {
     assert!(css.contains(".dna-editor label{margin:14px 0}"));
     assert!(css.contains(".dna-editor .library-choice{margin:0;"), "chips override the field margin");
 }
+
+/// The whole response of an export, so a change to how the page responds
+/// cannot move a byte.
+#[test]
+fn export_response_bytes_are_pinned() {
+    let mut state = State::default();
+    let body = serde_json::to_string_pretty(&state.lens_library).unwrap();
+    let mut out = Vec::new();
+    assert!(handle(&mut out, &mut state, "GET", "/dna/export", &HashMap::new(), "", b""));
+    assert_eq!(String::from_utf8(out).unwrap(), format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\ncontent-disposition: attachment; filename=control-lenses.json\r\n\r\n{body}", body.len()));
+}

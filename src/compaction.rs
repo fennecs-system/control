@@ -284,19 +284,17 @@ fn prepare(state: &State) -> Option<Job> {
             .enumerate()
             .map(|(i, run)| (run.id.as_str(), i))
             .collect();
-        let mut indices = Vec::new();
-        for message in &session.messages {
-            let index = message
-                .run_id
-                .as_deref()
-                .and_then(|id| runs.get(id).copied());
-            let entry =
-                crate::conversation::Entry::source(message, index.map(|i| &state.runtime.runs[i]));
-            if entry.run.is_some_and(|r| !crate::application::runs::status::finished(&r.status)) {
-                break;
-            }
-            indices.push(index);
-        }
+        let indices: Vec<_> = session
+            .messages
+            .iter()
+            .map(|message| (message, message.run_id.as_deref().and_then(|id| runs.get(id).copied())))
+            .take_while(|(message, index)| {
+                let entry =
+                    crate::conversation::Entry::source(message, index.map(|i| &state.runtime.runs[i]));
+                !entry.run.is_some_and(|r| !crate::application::runs::status::finished(&r.status))
+            })
+            .map(|(_, index)| index)
+            .collect();
         if indices.len() > memory.settings.recent_entries as usize {
             return Some(Job {
                 chat: session.id.clone(),
@@ -458,11 +456,10 @@ fn execute(
     ) -> io::Result<control_ai::model::Response>,
 ) -> io::Result<View> {
     private_directory(directory)?;
-    let mut nodes = Vec::new();
-    for block in cut(job.entries.len() as u64, job.settings.recent_entries).filter(|b| !b.is_item())
-    {
-        nodes.push(build(job, block, directory, &mut call)?.into());
-    }
+    let nodes = cut(job.entries.len() as u64, job.settings.recent_entries)
+        .filter(|b| !b.is_item())
+        .map(|block| build(job, block, directory, &mut call).map(Into::into))
+        .collect::<io::Result<_>>()?;
     Ok(View {
         identity: job.identity.clone(),
         revision: job.revision,

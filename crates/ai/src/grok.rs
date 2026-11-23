@@ -28,9 +28,6 @@ pub struct Grok {
     responses: Option<Tokens>,
     model: Option<String>,
 }
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 fn clean(text: &str, limit: usize) -> String {
     text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').take(limit).collect()
 }
@@ -189,15 +186,15 @@ impl Decoder for Grok {
     }
     fn finish(self) -> io::Result<Output> {
         if let Some(tool) = &self.unexpected {
-            return Err(fail(&format!("Grok started with an unexpected tool ({tool}) and was stopped before doing work.")));
+            return Err(io::Error::other(format!("Grok started with an unexpected tool ({tool}) and was stopped before doing work.")));
         }
         if let Some(failure) = &self.failure {
-            return Err(fail(&format!("{failure}.")));
+            return Err(io::Error::other(format!("{failure}.")));
         }
         if self.invalid {
-            return Err(fail("Grok returned an invalid event stream"));
+            return Err(io::Error::other("Grok returned an invalid event stream"));
         }
-        let text = self.reply.ok_or_else(|| fail("Grok did not return a final result; check login or usage limits"))?;
+        let text = self.reply.ok_or_else(|| io::Error::other("Grok did not return a final result; check login or usage limits"))?;
         Ok(Output { text: Some(text), tokens: self.reported })
     }
 }

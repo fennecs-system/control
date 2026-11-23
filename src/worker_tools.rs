@@ -63,7 +63,7 @@ fn rpc_for(
             notes.extend(inbox);
         }
         if !refused {
-            notes.extend(nudges::notes(&mut state,run_id,name,nudges::now()));
+            notes.extend(nudges::notes(&mut state,run_id,name,crate::config::unix_seconds()));
         }
         // A service command that could not reach a host one of this chat's
         // egress requests names: wait for the decision, or use the relay.

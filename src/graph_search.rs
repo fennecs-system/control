@@ -134,29 +134,26 @@ struct GridSpec {
     moves: Option<u8>,
 }
 
-fn fail(message: impl Into<String>) -> io::Error {
-    io::Error::other(message.into())
-}
 
 pub fn call(args: &Value) -> io::Result<Value> {
-    let input = Input::deserialize(args).map_err(|error| fail(format!("Invalid search input: {error}")))?;
+    let input = Input::deserialize(args).map_err(|error| io::Error::other(format!("Invalid search input: {error}")))?;
     let limits = Limits {
         max_cost: input.max_cost.filter(|cost| cost.is_finite() && *cost >= 0.0).map_or(f64::INFINITY, |cost| cost + EPSILON),
         expansions: input.max_expansions.unwrap_or(MAX_EXPANSIONS).clamp(1, MAX_EXPANSIONS),
         deadline: DEADLINE,
     };
     if input.max_cost.is_some_and(|cost| !cost.is_finite() || cost < 0.0) {
-        return Err(fail("max_cost must be a non-negative number."));
+        return Err(io::Error::other("max_cost must be a non-negative number."));
     }
     let goals = input.goal.iter().chain(&input.goals).collect::<Vec<_>>();
     if goals.is_empty() || goals.len() > MAX_GOALS {
-        return Err(fail(format!("Give goal or 1–{MAX_GOALS} goals.")));
+        return Err(io::Error::other(format!("Give goal or 1–{MAX_GOALS} goals.")));
     }
     match input.grid {
-        Some(_) if !input.nodes.is_empty() || !input.edges.is_empty() || !input.avoid_edges.is_empty() => Err(fail("Use either grid or nodes/edges, not both.")),
+        Some(_) if !input.nodes.is_empty() || !input.edges.is_empty() || !input.avoid_edges.is_empty() => Err(io::Error::other("Use either grid or nodes/edges, not both.")),
         Some(ref spec) => {
             if !matches!(input.heuristic, Heuristic::Auto | Heuristic::None) {
-                return Err(fail("Grids choose their heuristic from moves; use heuristic auto or none."));
+                return Err(io::Error::other("Grids choose their heuristic from moves; use heuristic auto or none."));
             }
             let grid = Grid::new(spec, &input.avoid)?;
             let start = grid.cell(&input.start)?;
@@ -269,10 +266,10 @@ fn search(space: &impl Space, start: usize, goals: &[usize], limits: &Limits) ->
         }
         expanded += 1;
         if expanded > limits.expansions {
-            return Err(fail(format!("Search stopped after {} expansions without reaching a goal; raise max_expansions (≤{MAX_EXPANSIONS}), add a heuristic or shrink the input.", limits.expansions)));
+            return Err(io::Error::other(format!("Search stopped after {} expansions without reaching a goal; raise max_expansions (≤{MAX_EXPANSIONS}), add a heuristic or shrink the input.", limits.expansions)));
         }
         if expanded.is_multiple_of(4096) && began.elapsed() > limits.deadline {
-            return Err(fail(format!("Search stopped at the {} s limit after {expanded} expansions without reaching a goal.", limits.deadline.as_secs())));
+            return Err(io::Error::other(format!("Search stopped at the {} s limit after {expanded} expansions without reaching a goal.", limits.deadline.as_secs())));
         }
         successors.clear();
         space.successors(node, &mut successors);
@@ -306,7 +303,7 @@ struct Graph {
 impl Graph {
     fn new(input: &Input) -> io::Result<Self> {
         if input.nodes.len() > MAX_NODES || input.edges.len() > MAX_EDGES {
-            return Err(fail(format!("Graphs are limited to {MAX_NODES} nodes and {MAX_EDGES} edges.")));
+            return Err(io::Error::other(format!("Graphs are limited to {MAX_NODES} nodes and {MAX_EDGES} edges.")));
         }
         let mut graph = Graph { ids: Vec::new(), index: HashMap::new(), at: Vec::new(), h: Vec::new(), offsets: Vec::new(), targets: Vec::new(), blocked: Vec::new() };
         for spec in &input.nodes {
@@ -315,14 +312,14 @@ impl Graph {
                 NodeSpec::Full(node) => (&node.id, node.at.clone(), node.h),
             };
             if at.as_ref().is_some_and(|at| at.is_empty() || at.len() > 3 || at.iter().any(|x| !x.is_finite())) {
-                return Err(fail(format!("Node {} needs at as 1–3 finite coordinates.", id.key())));
+                return Err(io::Error::other(format!("Node {} needs at as 1–3 finite coordinates.", id.key())));
             }
             if h.is_some_and(|h| !h.is_finite() || h < 0.0) {
-                return Err(fail(format!("Node {} needs h as a non-negative number.", id.key())));
+                return Err(io::Error::other(format!("Node {} needs h as a non-negative number.", id.key())));
             }
             let index = graph.intern(id)?;
             if graph.at[index].is_some() || graph.h[index].is_some() {
-                return Err(fail(format!("Node {} is listed twice.", id.key())));
+                return Err(io::Error::other(format!("Node {} is listed twice.", id.key())));
             }
             (graph.at[index], graph.h[index]) = (at, h);
         }
@@ -342,7 +339,7 @@ impl Graph {
                 EdgeSpec::Object(edge) => (&edge.from, &edge.to, edge.cost.unwrap_or(1.0)),
             };
             if !cost.is_finite() || cost < 0.0 {
-                return Err(fail(format!("Edge {}→{} needs a non-negative finite cost.", from.key(), to.key())));
+                return Err(io::Error::other(format!("Edge {}→{} needs a non-negative finite cost.", from.key(), to.key())));
             }
             let (a, b) = (graph.intern(from)?, graph.intern(to)?);
             if !avoided.is_empty() && avoided.contains(&(from.key(), to.key())) {
@@ -381,7 +378,7 @@ impl Graph {
             return Ok(index);
         }
         if self.ids.len() == MAX_NODES {
-            return Err(fail(format!("Graphs are limited to {MAX_NODES} nodes.")));
+            return Err(io::Error::other(format!("Graphs are limited to {MAX_NODES} nodes.")));
         }
         self.index.insert(key, self.ids.len());
         self.ids.push(id.clone());
@@ -391,7 +388,7 @@ impl Graph {
     }
     fn index(&self, value: &Value) -> io::Result<usize> {
         let key = id(value)?.key();
-        self.index.get(&key).copied().ok_or_else(|| fail(format!("Unknown node {key}.")))
+        self.index.get(&key).copied().ok_or_else(|| io::Error::other(format!("Unknown node {key}.")))
     }
     fn edges(&self) -> impl Iterator<Item = (usize, usize, f64)> + '_ {
         (0..self.ids.len()).flat_map(move |from| {
@@ -409,11 +406,11 @@ impl Graph {
         if matches!(chosen, Heuristic::Euclidean | Heuristic::Manhattan) {
             let missing = self.at.iter().position(Option::is_none);
             if let Some(index) = missing {
-                return Err(fail(format!("A coordinate heuristic needs at on every node; {} has none.", self.ids[index].key())));
+                return Err(io::Error::other(format!("A coordinate heuristic needs at on every node; {} has none.", self.ids[index].key())));
             }
             let dims = self.at[0].as_ref().map_or(0, Vec::len);
             if self.at.iter().flatten().any(|at| at.len() != dims) {
-                return Err(fail("Every node's at needs the same number of coordinates."));
+                return Err(io::Error::other("Every node's at needs the same number of coordinates."));
             }
         }
         let mut space = GraphSpace { graph: self, label: "none", goals: goals.to_vec(), scale: None, metric: None };
@@ -439,7 +436,7 @@ impl Graph {
     }
 }
 fn id(value: &Value) -> io::Result<Id> {
-    Id::deserialize(value).map_err(|_| fail("Node ids are strings or integers."))
+    Id::deserialize(value).map_err(|_| io::Error::other("Node ids are strings or integers."))
 }
 type Metric = fn(&[f64], &[f64]) -> f64;
 fn euclidean(a: &[f64], b: &[f64]) -> f64 {
@@ -499,28 +496,28 @@ impl Grid {
         let size = match (&spec.size, spec.rows.first()) {
             (Some(size), _) => size.clone(),
             (None, Some(row)) => vec![row.chars().count(), spec.rows.len()],
-            (None, None) => return Err(fail("A grid needs size or rows.")),
+            (None, None) => return Err(io::Error::other("A grid needs size or rows.")),
         };
         if !(2..=3).contains(&size.len()) || size.contains(&0) {
-            return Err(fail("Grid size is [width, height] or [width, height, depth], each at least 1."));
+            return Err(io::Error::other("Grid size is [width, height] or [width, height, depth], each at least 1."));
         }
         let cells = size.iter().try_fold(1usize, |cells, side| cells.checked_mul(*side)).filter(|cells| *cells <= MAX_CELLS)
-            .ok_or_else(|| fail(format!("Grids are limited to {MAX_CELLS} cells.")))?;
+            .ok_or_else(|| io::Error::other(format!("Grids are limited to {MAX_CELLS} cells.")))?;
         let dims = size.len();
         let moves = spec.moves.unwrap_or(if dims == 2 { 4 } else { 6 });
         if !matches!((dims, moves), (2, 4 | 8) | (3, 6 | 26)) {
-            return Err(fail("moves is 4 or 8 for 2D grids and 6 or 26 for 3D grids."));
+            return Err(io::Error::other("moves is 4 or 8 for 2D grids and 6 or 26 for 3D grids."));
         }
         let mut grid = Grid { size: [size[0], size[1], size.get(2).copied().unwrap_or(1)], dims, cost: vec![1.0; cells], moves };
         if !spec.costs.is_empty() {
             if spec.costs.len() != cells || spec.costs.iter().any(|cost| !cost.is_finite() || *cost < 0.0) {
-                return Err(fail(format!("costs needs {cells} non-negative numbers, x fastest.")));
+                return Err(io::Error::other(format!("costs needs {cells} non-negative numbers, x fastest.")));
             }
             grid.cost.copy_from_slice(&spec.costs);
         }
         if !spec.rows.is_empty() {
             if dims != 2 || spec.rows.len() != grid.size[1] || spec.rows.iter().any(|row| row.chars().count() != grid.size[0]) {
-                return Err(fail("rows describe a 2D grid: one string per y, each width characters long."));
+                return Err(io::Error::other("rows describe a 2D grid: one string per y, each width characters long."));
             }
             for (y, row) in spec.rows.iter().enumerate() {
                 for (x, c) in row.chars().enumerate() {
@@ -541,12 +538,12 @@ impl Grid {
     fn locate(&self, at: &[i64]) -> io::Result<usize> {
         let inside = at.len() == self.dims && at.iter().zip(self.size).all(|(x, side)| (0..side as i64).contains(x));
         if !inside {
-            return Err(fail(format!("Cell {at:?} is outside the {}D grid {:?}.", self.dims, &self.size[..self.dims])));
+            return Err(io::Error::other(format!("Cell {at:?} is outside the {}D grid {:?}.", self.dims, &self.size[..self.dims])));
         }
         Ok(at[0] as usize + self.size[0] * (at[1] as usize + self.size[1] * at.get(2).copied().unwrap_or(0) as usize))
     }
     fn cell(&self, value: &Value) -> io::Result<usize> {
-        let at = Vec::<i64>::deserialize(value).map_err(|_| fail("Grid cells are [x, y] or [x, y, z] integer arrays."))?;
+        let at = Vec::<i64>::deserialize(value).map_err(|_| io::Error::other("Grid cells are [x, y] or [x, y, z] integer arrays."))?;
         self.locate(&at)
     }
     fn coords(&self, cell: usize) -> Vec<usize> {

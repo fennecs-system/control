@@ -1277,9 +1277,6 @@ impl Approval {
     }
 }
 
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 pub(crate) fn digest_id(parts: &[&str]) -> String {
     digest(parts)
 }
@@ -1383,7 +1380,7 @@ fn related(state: &State, chat: &str, requester: &str, actor: &identity::Actor) 
 pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: BotCall) -> io::Result<Value> {
     // Read outside the state lock.
     let policy = control::permissions::read().auto_approval;
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
     handle_with(&mut state, attempt, call, crate::storage::save, &policy)
 }
 #[cfg(test)]
@@ -1394,16 +1391,16 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
     let run = state.runtime.runs.iter()
         .find(|run| run.id == attempt.run && run.status == "running"
             && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
-        .ok_or_else(|| fail("Attempt is not active"))?;
-    identity::authorize(&run.actor, run.action).map_err(fail)?;
+        .ok_or_else(|| io::Error::other("Attempt is not active"))?;
+    identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     if crate::delegation::is_judge(run) {
-        return Err(fail("Judges cannot request bots"));
+        return Err(io::Error::other("Judges cannot request bots"));
     }
-    let requester = run.chat_id.clone().ok_or_else(|| fail("A chat is required"))?;
+    let requester = run.chat_id.clone().ok_or_else(|| io::Error::other("A chat is required"))?;
     let (origin, actor) = (run.id.clone(), run.actor.clone());
     match call {
         BotCall::Pause => {
-            if !defined(state, &requester) { return Err(fail("This chat has no bot to pause")); }
+            if !defined(state, &requester) { return Err(io::Error::other("This chat has no bot to pause")); }
             let previous = state.bots.clone();
             let notice = state.runtime.notice.clone();
             let effects = state.bots.supervisor.step(Event::Pause(bot(&requester)), Now(now_ms()));
@@ -1418,7 +1415,7 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
         BotCall::Status { chat_id } => {
             let chat = chat_id.unwrap_or_else(|| requester.clone());
             if !related(state, &chat, &requester, &actor) {
-                return Err(fail("Read bot state only for chats in this conversation"));
+                return Err(io::Error::other("Read bot state only for chats in this conversation"));
             }
             let requests = state.bots.approvals.iter().filter(|a| a.requester == requester).map(Approval::summary).collect::<Vec<_>>();
             Ok(json!({"chat_id":chat,"bot":status(state, &chat),"requests":requests}))
@@ -1427,51 +1424,51 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
             // An agent's own timer is opt-in per team; a persona's schedule
             // (an antibody's patrol) is that persona's gene.
             if every_minutes.is_some() && !offered_for(state, &chat_id, TIMER_TOOL) && !crate::personas::observes_node(state, &chat_id) {
-                return Err(fail(TIMERS_OFF));
+                return Err(io::Error::other(TIMERS_OFF));
             }
             // A persona's schedule behaviour is the default interval.
             let every_minutes = every_minutes.or_else(|| crate::personas::schedule(state, &chat_id));
             if !attempt.nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') || attempt.nonce.is_empty() || attempt.nonce.len() > 128 {
-                return Err(fail("Invalid request identity"));
+                return Err(io::Error::other("Invalid request identity"));
             }
             let id = format!("bot-{}", digest(&[attempt.run, attempt.generation, attempt.nonce, &chat_id]));
             if let Some(existing) = state.bots.approvals.iter().find(|a| a.id == id) {
                 return Ok(existing.summary());
             }
-            let target = state.chats.iter().find(|session| session.id == chat_id).ok_or_else(|| fail("Chat not found"))?;
+            let target = state.chats.iter().find(|session| session.id == chat_id).ok_or_else(|| io::Error::other("Chat not found"))?;
             if !related(state, &chat_id, &requester, &actor) {
-                return Err(fail("Request bots only for chats in this conversation"));
+                return Err(io::Error::other("Request bots only for chats in this conversation"));
             }
             if every_minutes.is_some_and(|m| !(1..=MAX_INTERVAL_MINUTES).contains(&m)) {
-                return Err(fail("every_minutes must be 1–1440"));
+                return Err(io::Error::other("every_minutes must be 1–1440"));
             }
             let linked = target.room.as_deref().is_some_and(crate::rooms::valid);
             // A read-only judge becomes its team's advisor: host facts, no timer or room.
             let advisor = judge_chat(state, &chat_id);
             let antibody = advisor && crate::personas::observes_node(state, &chat_id);
             if antibody && crate::personas::observer_offered(state, &chat_id) == Some(false) {
-                return Err(fail(ANTIBODY_OFF));
+                return Err(io::Error::other(ANTIBODY_OFF));
             }
             if advisor && !antibody {
-                team_gate(state, &chat_id).map_err(fail)?;
+                team_gate(state, &chat_id).map_err(io::Error::other)?;
             }
             if advisor && !antibody && every_minutes.is_some() {
-                return Err(fail("A team observer wakes on its team's questions, facts or completion; omit every_minutes"));
+                return Err(io::Error::other("A team observer wakes on its team's questions, facts or completion; omit every_minutes"));
             }
             if !advisor && !(room && linked) && every_minutes.is_none() && watch_sources(state, &chat_id).is_empty() {
-                return Err(fail("The chat has no room or watch to wake it; give every_minutes or start a watch"));
+                return Err(io::Error::other("The chat has no room or watch to wake it; give every_minutes or start a watch"));
             }
             if !state.runtime.runs.iter().any(|run| run.chat_id.as_deref() == Some(chat_id.as_str())) {
-                return Err(fail("The chat has no task yet; give it one before it becomes a bot"));
+                return Err(io::Error::other("The chat has no task yet; give it one before it becomes a bot"));
             }
             if crate::rooms::listening(state, &chat_id) {
-                return Err(fail("That chat listens to its room; it must turn off /listen first"));
+                return Err(io::Error::other("That chat listens to its room; it must turn off /listen first"));
             }
             if defined(state, &chat_id) || state.bots.approvals.iter().any(|a| a.chat == chat_id && a.decision == Decision::Pending) {
-                return Err(fail("That chat already runs a bot or has a pending request"));
+                return Err(io::Error::other("That chat already runs a bot or has a pending request"));
             }
             if state.bots.approvals.iter().filter(|a| a.decision == Decision::Pending).count() >= MAX_APPROVALS {
-                return Err(fail("Too many pending bot requests; wait for the operator"));
+                return Err(io::Error::other("Too many pending bot requests; wait for the operator"));
             }
             let previous = state.bots.clone();
             // An automatic approval starts the bot, which touches the chats and rooms too.

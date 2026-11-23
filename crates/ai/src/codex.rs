@@ -114,3 +114,60 @@ impl Decoder for Codex {
         })
     }
 }
+
+/// A text request's reply: one final agent message and no tool records.
+pub struct Text {
+    inner: Codex,
+    text: Option<String>,
+    bad: bool,
+    max: usize,
+}
+impl Text {
+    /// A reply of at most `max` bytes.
+    pub fn new(max: usize) -> Self {
+        Self { inner: Codex::default(), text: None, bad: false, max }
+    }
+}
+impl Decoder for Text {
+    fn decode(&mut self, value: &Value, emit: &mut dyn FnMut(Event)) {
+        self.inner.decode(value, &mut |_| {});
+        if value["type"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("item."))
+        {
+            match value["item"]["type"].as_str() {
+                Some("agent_message") if value["type"] == "item.completed" => {
+                    self.text = value["item"]["text"]
+                        .as_str()
+                        .filter(|text| text.len() <= self.max)
+                        .map(str::to_owned);
+                    if self.text.is_none() {
+                        self.bad = true;
+                        emit(Event::RejectedTools);
+                    }
+                }
+                Some("agent_message" | "reasoning") => {}
+                _ => {
+                    self.bad = true;
+                    emit(Event::RejectedTools);
+                }
+            }
+        }
+        if value["type"] == "error" || value["type"] == "turn.failed" {
+            self.bad = true;
+        }
+    }
+    fn malformed(&mut self) {
+        self.bad = true;
+    }
+    fn finish(self) -> io::Result<Output> {
+        if self.bad {
+            return Err(io::Error::other(
+                "CLI summary contained invalid/tool records",
+            ));
+        }
+        let mut output = self.inner.finish()?;
+        output.text = self.text;
+        Ok(output)
+    }
+}

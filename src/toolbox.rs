@@ -11,9 +11,6 @@ use std::{
 
 static PLAYGROUND: Mutex<()> = Mutex::new(());
 static SEARCH: Mutex<()> = Mutex::new(());
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 pub fn definitions() -> Vec<Value> {
     vec![
         crate::rust_bench::definition(),
@@ -42,7 +39,7 @@ pub fn call(name: &str, args: &Value) -> io::Result<Value> {
                 limit: Option<usize>,
             }
             let input: Input = serde_json::from_value(args.clone())
-                .map_err(|_| fail("Expected query and optional limit"))?;
+                .map_err(|_| io::Error::other("Expected query and optional limit"))?;
             search(&input.query, input.limit.unwrap_or(5))
         }
         "control.rust.run" => {
@@ -52,10 +49,10 @@ pub fn call(name: &str, args: &Value) -> io::Result<Value> {
                 code: String,
             }
             let input: Input = serde_json::from_value(args.clone())
-                .map_err(|_| fail("Expected Rust source code"))?;
+                .map_err(|_| io::Error::other("Expected Rust source code"))?;
             playground(&input.code)
         }
-        _ => Err(fail("Unknown tool")),
+        _ => Err(io::Error::other("Unknown tool")),
     }
 }
 pub fn result(value: io::Result<Value>) -> Value {
@@ -157,7 +154,7 @@ fn parse_search(html: &str, bing: bool, limit: usize) -> io::Result<Vec<Value>> 
     if results.is_empty()
         && !(html.contains("result--no-result") || html.contains("class=\"b_no\""))
     {
-        return Err(fail(
+        return Err(io::Error::other(
             "Search provider challenged the request or changed its result format",
         ));
     }
@@ -166,16 +163,16 @@ fn parse_search(html: &str, bing: bool, limit: usize) -> io::Result<Vec<Value>> 
 fn search(query: &str, limit: usize) -> io::Result<Value> {
     let query = query.trim();
     if query.is_empty() || query.chars().count() > 500 || !(1..=10).contains(&limit) {
-        return Err(fail("Expected a 1–500 character query and 1–10 results"));
+        return Err(io::Error::other("Expected a 1–500 character query and 1–10 results"));
     }
-    let _guard = SEARCH.try_lock().map_err(|_| fail("Search tool is busy"))?;
+    let _guard = SEARCH.try_lock().map_err(|_| io::Error::other("Search tool is busy"))?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(8))
         .connect_timeout(Duration::from_secs(4))
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("Mozilla/5.0 (compatible; Control/0.1; local search tool)")
         .build()
-        .map_err(|_| fail("Could not initialize search"))?;
+        .map_err(|_| io::Error::other("Could not initialize search"))?;
     let mut fallback = false;
     for (endpoint, bing, provider) in [
         ("https://html.duckduckgo.com/html/", false, "DuckDuckGo"),
@@ -186,24 +183,24 @@ fn search(query: &str, limit: usize) -> io::Result<Value> {
                 .get(endpoint)
                 .query(&[("q", query)])
                 .send()
-                .map_err(|_| fail("Search provider unavailable"))?;
+                .map_err(|_| io::Error::other("Search provider unavailable"))?;
             if !response.status().is_success() {
-                return Err(fail("Search provider unavailable"));
+                return Err(io::Error::other("Search provider unavailable"));
             }
             let mut bytes = Vec::new();
             response.take(1_048_577).read_to_end(&mut bytes)?;
             if bytes.len() > 1_048_576 {
-                return Err(fail("Search response too large"));
+                return Err(io::Error::other("Search response too large"));
             }
             parse_search(
-                std::str::from_utf8(&bytes).map_err(|_| fail("Invalid search response"))?,
+                std::str::from_utf8(&bytes).map_err(|_| io::Error::other("Invalid search response"))?,
                 bing,
                 limit,
             )
         })();
         if let Ok(results) = attempt {
             if fallback && results.is_empty() {
-                return Err(fail("Web search unavailable: DuckDuckGo failed and Bing returned no results. Try again later."));
+                return Err(io::Error::other("Web search unavailable: DuckDuckGo failed and Bing returned no results. Try again later."));
             }
             return Ok(
                 json!({"query":query,"provider":provider,"results":results,"fallback":fallback}),
@@ -211,7 +208,7 @@ fn search(query: &str, limit: usize) -> io::Result<Value> {
         }
         fallback = true;
     }
-    Err(fail(
+    Err(io::Error::other(
         "Web search unavailable: DuckDuckGo and Bing could not provide results. Try again later.",
     ))
 }
@@ -237,13 +234,13 @@ fn playground(code: &str) -> io::Result<Value> {
 }
 pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
     if code.trim().is_empty() || code.len() > 16384 {
-        return Err(fail("Expected Rust source of at most 16 KiB"));
+        return Err(io::Error::other("Expected Rust source of at most 16 KiB"));
     }
     let _guard = PLAYGROUND
         .try_lock()
-        .map_err(|_| fail("Rust playground is busy"))?;
+        .map_err(|_| io::Error::other("Rust playground is busy"))?;
     let image = crate::runtime::worker_image()
-        .ok_or_else(|| fail("No pinned Nix development image configured"))?;
+        .ok_or_else(|| io::Error::other("No pinned Nix development image configured"))?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -259,19 +256,19 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
     })?;
     let (bytes, truncated, status) = (finished.stdout, finished.stdout_truncated, finished.status);
     if !finished.delivered || !status.is_some_and(|s| s.success()) {
-        return Err(fail(
+        return Err(io::Error::other(
             "Playground stopped or exceeded its limits. Check the configured Nix image.",
         ));
     }
     let text = String::from_utf8_lossy(&bytes);
     let (status, output) = text
         .split_once('\n')
-        .ok_or_else(|| fail("Invalid playground response"))?;
+        .ok_or_else(|| io::Error::other("Invalid playground response"))?;
     if !["compile ", "run "]
         .iter()
         .any(|prefix| status.starts_with(prefix))
     {
-        return Err(fail("Invalid playground response"));
+        return Err(io::Error::other("Invalid playground response"));
     }
     let output = output
         .chars()

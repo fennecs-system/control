@@ -32,9 +32,6 @@ pub struct Antigravity {
     steps: Option<Tokens>,
     model: Option<String>,
 }
-fn fail(message: &str) -> io::Error {
-    io::Error::other(message)
-}
 fn clean(text: &str, limit: usize) -> String {
     text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').take(limit).collect()
 }
@@ -205,20 +202,20 @@ impl Decoder for Antigravity {
     }
     fn finish(self) -> io::Result<Output> {
         if let Some(tool) = &self.unexpected {
-            return Err(fail(&format!("Antigravity started with an unexpected tool ({tool}) and was stopped before doing work.")));
+            return Err(io::Error::other(format!("Antigravity started with an unexpected tool ({tool}) and was stopped before doing work.")));
         }
         if let Some(failure) = &self.failure {
-            return Err(fail(&format!("{failure}.")));
+            return Err(io::Error::other(format!("{failure}.")));
         }
         // A refused call is not a failed one: the CLI exits 0 and reports
         // success, so the turn would otherwise look complete.
         if let Some(tool) = &self.denied {
-            return Err(fail(&format!("Antigravity ended with a refused tool call ({tool}): its permission rules did not allow a Control tool.")));
+            return Err(io::Error::other(format!("Antigravity ended with a refused tool call ({tool}): its permission rules did not allow a Control tool.")));
         }
         if self.invalid {
-            return Err(fail("Antigravity returned an invalid event stream"));
+            return Err(io::Error::other("Antigravity returned an invalid event stream"));
         }
-        let text = self.reply.ok_or_else(|| fail("Antigravity did not return a final result; check login or usage limits"))?;
+        let text = self.reply.ok_or_else(|| io::Error::other("Antigravity did not return a final result; check login or usage limits"))?;
         Ok(Output { text: Some(text), tokens: self.reported })
     }
 }

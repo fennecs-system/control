@@ -31,7 +31,7 @@ fn dispatcher_wakes_only_after_acknowledged_checkpoint_and_never_on_replay() {
     let checkpointed = std::cell::Cell::new(false);
     let wakes = std::cell::Cell::new(0);
     let before = serde_json::to_vec(&state).unwrap();
-    assert!(advance_with_wake(&mut state, |_| Err(fail("disk full")), || wakes.set(wakes.get() + 1)).is_err());
+    assert!(advance_with_wake(&mut state, |_| Err(io::Error::other("disk full")), || wakes.set(wakes.get() + 1)).is_err());
     assert_eq!(wakes.get(), 0);
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     advance_with_wake(&mut state, |state| {
@@ -57,7 +57,7 @@ fn approval_waits_for_turn_and_wakes_once_with_captured_provider() {
     state.runtime.runs[0].status = "completed".into();
     state.runtime.runs[0].model = Some("captured-model".into());
     let before = serde_json::to_vec(&state).unwrap();
-    assert!(advance(&mut state, |_| Err(fail("disk full"))).is_err());
+    assert!(advance(&mut state, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 2);

@@ -2,9 +2,6 @@ use crate::{escape, toolbox};
 use serde_json::json;
 use std::net::TcpStream;
 
-fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &str) {
-    let _ = control_http::respond(stream, status, mime, body.as_bytes(), "", control_http::Policy::Embedded);
-}
 pub fn handle(
     stream: &mut TcpStream,
     method: &str,
@@ -16,12 +13,7 @@ pub fn handle(
         return false;
     }
     if !["GET", "POST"].contains(&method) {
-        respond(
-            stream,
-            "405 Method Not Allowed",
-            "text/plain",
-            "Use GET or POST.",
-        );
+        let _ = control_http::respond(stream, "405 Method Not Allowed", "text/plain", b"Use GET or POST.", "", control_http::Policy::Embedded);
         return true;
     }
     let fields = crate::fields(&String::from_utf8_lossy(body));
@@ -81,6 +73,9 @@ pub fn handle(
         }
     }
     let page = crate::render(&crate::State::default(), "tool-page", "none", &content);
-    respond(stream, "200 OK", "text/html; charset=utf-8", &page);
+    let _ = control_http::respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "", control_http::Policy::Embedded);
     true
 }
+
+#[cfg(test)]
+mod tests;

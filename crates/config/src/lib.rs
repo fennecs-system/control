@@ -212,6 +212,12 @@ fn url_for(addr: &str) -> String {
     }
 }
 
+/// The node's wall clock in whole Unix seconds, as state records store it; 0 if
+/// the clock reads before the epoch.
+pub fn unix_seconds() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
 /// Model run time limit: `CONTROL_WORKER_TIMEOUT_SECS` or `worker-timeout-secs` in the
 /// node configuration directory; default 600 s, clamped to 60 s – 24 h.
 pub fn worker_deadline() -> std::time::Duration {

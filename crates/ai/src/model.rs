@@ -285,8 +285,7 @@ pub fn decode_step(value: &Value, limits: &Limits) -> io::Result<Step> {
         }
         _ => return Err(io::Error::other("Completion content must be text")),
     };
-    let mut calls = Vec::new();
-    for call in message["tool_calls"].as_array().into_iter().flatten().take(64) {
+    let calls = message["tool_calls"].as_array().into_iter().flatten().take(64).map(|call| {
         let function = &call["function"];
         let name = function["name"].as_str().unwrap_or("").chars().take(128).collect();
         let arguments = match &function["arguments"] {
@@ -300,12 +299,12 @@ pub fn decode_step(value: &Value, limits: &Limits) -> io::Result<Step> {
             Value::Null => Ok(json!({})),
             _ => Err("arguments must be a JSON object".to_owned()),
         };
-        calls.push(Call {
+        Call {
             id: call["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 128).map(str::to_owned),
             name,
             arguments,
-        });
-    }
+        }
+    }).collect();
     Ok(Step { text, calls, truncated: choices[0]["finish_reason"] == "length", tokens: usage(value), reasoning })
 }
 

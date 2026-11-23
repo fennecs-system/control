@@ -57,9 +57,7 @@ pub(super) fn directory(generation: &str) -> io::Result<PathBuf> {
     }
     Ok(turns_directory()?.join(generation))
 }
-fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
-}
+use crate::config::unix_seconds as now;
 fn within(inner: &Root, block: Block) -> bool {
     inner.start >= block.start && inner.start + (1u64 << inner.level) <= block.end()
 }

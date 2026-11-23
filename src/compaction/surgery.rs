@@ -71,12 +71,7 @@ pub struct Event {
     pub detail: String,
 }
 
-pub(crate) fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::config::unix_seconds as now;
 
 impl Edits {
     /// No edit changes what an agent sees.
