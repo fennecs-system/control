@@ -7,12 +7,12 @@ fn picker_keeps_the_active_thread_and_links_to_history() {
     }
     let child = crate::chat::create(&mut state);
     state.chats.last_mut().unwrap().parent_chat = Some(ids[0].clone());
-    let roots = crate::conversations::ordered(&state)
+    let roots = crate::conversations::ordered(&state.chats)
         .iter()
         .filter(|entry| entry.depth == 0)
         .map(|entry| entry.session.id.clone())
         .collect::<Vec<_>>();
-    let picker = super::conversations(&state, &child);
+    let picker = super::Picker::of(&state.chats, &child).render();
     assert_eq!(
         picker.matches("href='/dm/").count(),
         11,
@@ -21,7 +21,9 @@ fn picker_keeps_the_active_thread_and_links_to_history() {
     assert!(picker.contains("href='/bots/history'"));
     assert!(picker.contains(&format!("data-chat-branch='{}' open", ids[0])));
     assert!(
-        super::conversations(&state, &ids[0]).contains(&format!("data-chat-branch='{}' open", ids[0])),
+        super::Picker::of(&state.chats, &ids[0])
+            .render()
+            .contains(&format!("data-chat-branch='{}' open", ids[0])),
         "The active parent's children must remain reachable"
     );
     assert_eq!(roots.len(), 25, "The child is nested, not a root");

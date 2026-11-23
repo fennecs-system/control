@@ -63,7 +63,7 @@ fn question_requires_valid_active_identity_and_durable_admission() {
     let again = ask_with_save(&mut state, &run, "nonce", input(), |_| panic!("replay must not write")).unwrap();
     assert_eq!(first, again);
     assert!(ask_with_save(&mut state, &run, "other", input(), |_| Ok(())).is_err());
-    let html = chat::transcript(&state, &chat).unwrap();
+    let html = chat::transcript(&state, &chat).unwrap().render();
     assert!(!html.contains("<script>"));
     assert!(html.contains("Saving the paused workspace"));
     assert!(!html.contains("value='/answer"));

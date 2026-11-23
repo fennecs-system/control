@@ -19,7 +19,7 @@ fn requests_profile() {
         for _ in 0..9 {
             let start = Instant::now();
             for _ in 0..iterations {
-                black_box(crate::chat::transcript(black_box(&state), &parent).unwrap());
+                black_box(crate::chat::transcript(black_box(&state), &parent).unwrap().render());
                 black_box(crate::chat::requests(black_box(&state), &parent).unwrap());
             }
             samples.push(start.elapsed().as_nanos() / u128::from(iterations));

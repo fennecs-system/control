@@ -99,7 +99,7 @@ fn transcript_fixtures_keep_activity_collapsed_without_a_folder_picker() {
         ),
     ] {
         let state = fixture(messages, unrelated);
-        let html = chat::transcript(&state, "benchmark-chat").unwrap();
+        let html = chat::transcript(&state, "benchmark-chat").unwrap().render();
         assert!(!html.contains("project-picker"));
         assert!(!html.contains("' open><summary>"));
         // Snapshots include the intentional closed activity defaults and keep
@@ -112,12 +112,12 @@ fn transcript_fixtures_keep_activity_collapsed_without_a_folder_picker() {
 fn hot_paths() {
     for (messages, unrelated) in [(10, 0), (100, 1000), (500, 5000)] {
         let state = fixture(messages, unrelated);
-        let html = chat::transcript(&state, "benchmark-chat").unwrap();
+        let html = chat::transcript(&state, "benchmark-chat").unwrap().render();
         let mut samples = Vec::new();
         for _ in 0..9 {
             let start = Instant::now();
             for _ in 0..10 {
-                black_box(chat::transcript(black_box(&state), "benchmark-chat").unwrap());
+                black_box(chat::transcript(black_box(&state), "benchmark-chat").unwrap().render());
             }
             samples.push(start.elapsed().as_nanos() / 10);
         }
@@ -330,7 +330,7 @@ fn chat_lists() {
         let workloads: [(&str, &View); 3] = [
             ("chats_list", &|s| chat::list(s).to_string().len()),
             ("web_conversation_tree", &move |s| {
-                crate::navigation::conversations(s, active).len()
+                crate::navigation::Picker::of(&s.chats, active).render().len()
             }),
             ("chat_read_heading", &move |s| {
                 chat::detail(s, active).unwrap()["title"].to_string().len()

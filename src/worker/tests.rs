@@ -384,7 +384,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
         )
         .contains("1 attempt(s) · 12000 input (11000 cached) · 300 output tokens so far")
     );
-    let transcript = crate::chat::transcript(&state, &chat).unwrap();
+    let transcript = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(transcript.contains(">↑ 12,000 in (11,000 cached)</span> · <span title='300 output tokens so far; the attempt is still running'>↓ 300 out…</span>"), "{transcript}");
 
     // Finished: the attempt's own record replaces the live one.
@@ -403,7 +403,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
     let monitor = crate::usage::render(&state);
     assert!(!monitor.contains("Running now"));
     assert!(monitor.contains("running (totals so far): 0"));
-    let transcript = crate::chat::transcript(&state, &chat).unwrap();
+    let transcript = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(
         transcript.contains("<span title='300 output tokens'>↓ 300 out</span>"),
         "{transcript}"

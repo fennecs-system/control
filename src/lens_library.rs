@@ -216,12 +216,20 @@ pub(crate) fn save_with(
     }
     Ok(draft)
 }
-pub fn choices(library: &control_context::Library, selected: &[String], form: &str) -> String {
+/// The current genes' ids and names, for a picker rendered later by [`choices`].
+pub fn names(library: &control_context::Library) -> Vec<(String, String)> {
+    library
+        .current()
+        .into_iter()
+        .map(|lens| (lens.id.clone(), lens.name.clone()))
+        .collect()
+}
+pub fn choices(genes: &[(String, String)], selected: &[String], form: &str) -> String {
     let mut html = format!(
         "<input type='hidden' name='composition' value='1' form='{form}'><div class='chat-tags'><details class='lens-selector'><summary>+ Genes</summary></details><div class='tag-options'>"
     );
-    for lens in library.current() {
-        html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(&lens.id),escape(&lens.id),if selected.contains(&lens.id){" checked"}else{""},escape(&lens.name)));
+    for (id, name) in genes {
+        html.push_str(&format!("<label class='lens-option lens-tag'><input type='checkbox' name='lens_{}' value='{}' form='{form}'{}><span>{}</span></label>",escape(id),escape(id),if selected.contains(id){" checked"}else{""},escape(name)));
     }
     html.push_str("</div><a class='lens-library-shortcut' href='/dna' aria-label='Open DNA library'>↗</a></div>");
     html

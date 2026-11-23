@@ -1,16 +1,16 @@
 use super::*;
-use crate::chat;
+use crate::{State, chat};
 #[test]
 fn recent_threads_contain_their_children_and_keep_order_after_restart() {
     let mut state = State::default();
     let first = chat::create(&mut state);
     let second = chat::create(&mut state);
-    assert_eq!(ordered(&state)[0].session.id, second);
+    assert_eq!(ordered(&state.chats)[0].session.id, second);
     chat::send(&mut state, &first, "Continue older conversation", "test").unwrap();
-    assert_eq!(ordered(&state)[0].session.id, first);
+    assert_eq!(ordered(&state.chats)[0].session.id, first);
     let child = chat::create(&mut state);
     state.chats.last_mut().unwrap().parent_chat = Some(second.clone());
-    let entries = ordered(&state);
+    let entries = ordered(&state.chats);
     assert_eq!(
         entries.iter().map(|e| e.session.id.as_str()).collect::<Vec<_>>(),
         [first.as_str(), second.as_str(), child.as_str()]
@@ -19,7 +19,7 @@ fn recent_threads_contain_their_children_and_keep_order_after_restart() {
     assert_eq!(entries[2].parent, Some(second.as_str()));
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(
-        ordered(&restored)
+        ordered(&restored.chats)
             .iter()
             .map(|e| e.session.id.as_str())
             .collect::<Vec<_>>(),
@@ -28,9 +28,9 @@ fn recent_threads_contain_their_children_and_keep_order_after_restart() {
     let api = chat::list(&restored);
     assert_eq!(api[2]["parent_chat"], second);
     assert_eq!(api[2]["depth"], 1);
-    let html = crate::navigation::conversations(&restored, &child);
+    let html = crate::navigation::Picker::of(&restored.chats, &child).render();
     assert!(html.contains(&format!("data-chat-branch='{second}' open")));
-    let html = crate::navigation::conversations(&restored, &second);
+    let html = crate::navigation::Picker::of(&restored.chats, &second).render();
     assert!(
         html.contains(&format!("data-chat-branch='{second}' open")),
         "Opening a parent conversation must keep its children reachable"
@@ -45,7 +45,7 @@ fn malformed_parents_never_hide_chats_or_cross_identity_boundaries() {
     state.chats[0].parent_chat = Some(b.clone());
     state.chats[1].parent_chat = Some(a.clone());
     state.chats[2].parent_chat = Some("c-missing".into());
-    let entries = ordered(&state);
+    let entries = ordered(&state.chats);
     assert_eq!(entries.len(), 3);
     assert!(
         entries
@@ -61,10 +61,10 @@ fn malformed_parents_never_hide_chats_or_cross_identity_boundaries() {
         3
     );
     state.chats[0].actor = crate::identity::Actor::Unknown;
-    let entries = ordered(&state);
+    let entries = ordered(&state.chats);
     assert_eq!(entries.len(), 2);
     assert!(entries.iter().find(|e| e.session.id == b).unwrap().parent.is_none());
-    let html = crate::navigation::conversations(&state, &b);
+    let html = crate::navigation::Picker::of(&state.chats, &b).render();
     assert!(!html.contains(&format!("/dm/{a}")));
 }
 #[test]
@@ -78,7 +78,7 @@ fn legacy_activity_defaults_and_deep_lineages_remain_iterative() {
         chat.activity_order = 0;
         parent = Some(id);
     }
-    let entries = ordered(&state);
+    let entries = ordered(&state.chats);
     assert_eq!(entries.len(), 256);
     assert_eq!(entries.last().unwrap().depth, 255);
     let mut value = serde_json::to_value(&state).unwrap();
@@ -86,5 +86,5 @@ fn legacy_activity_defaults_and_deep_lineages_remain_iterative() {
         chat.as_object_mut().unwrap().remove("activity_order");
     }
     let restored: State = serde_json::from_value(value).unwrap();
-    assert_eq!(ordered(&restored).len(), 256);
+    assert_eq!(ordered(&restored.chats).len(), 256);
 }

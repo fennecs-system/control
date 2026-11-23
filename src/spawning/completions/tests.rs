@@ -46,6 +46,7 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
     assert!(
         chat::transcript(&state, &parent_chat)
             .unwrap()
+            .render()
             .contains("Control update")
     );
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();

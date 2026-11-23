@@ -79,7 +79,7 @@ fn an_approved_advisor_notes_only_the_lead_and_posts_nothing_to_the_room() {
         "the advisor steers; it never posts to the room"
     );
     // The web transcript shows it as one distinct box, and the TUI detail marks it.
-    let html = crate::chat::transcript(&state, &lead).unwrap();
+    let html = crate::chat::transcript(&state, &lead).unwrap().render();
     assert!(html.contains(
         "<article class='advisor-note' aria-label='Observer note'><p class='advisor-note-label'>Advisor note from"
     ));

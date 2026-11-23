@@ -183,6 +183,7 @@ fn chat_command_controls_listener_without_spending_a_model_turn() {
     assert!(
         crate::chat::transcript(&state, &chat)
             .unwrap()
+            .render()
             .contains("Room #research · listening")
     );
     crate::chat::send(&mut state, &chat, "/listen off", "test").unwrap();

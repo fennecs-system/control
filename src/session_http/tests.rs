@@ -226,9 +226,19 @@ fn conversations_panel_is_rendered_from_the_remembered_cookie() {
 fn web_folder_picker_is_opt_in_and_bare_open_only_navigates() {
     let mut state = State::default();
     let id = chat::create(&mut state);
-    assert!(!chat::transcript(&state, &id).unwrap().contains("project-picker"));
+    assert!(
+        !chat::transcript(&state, &id)
+            .unwrap()
+            .render()
+            .contains("project-picker")
+    );
     chat::send(&mut state, &id, "Discuss the design", "test").unwrap();
-    assert!(!chat::transcript(&state, &id).unwrap().contains("project-picker"));
+    assert!(
+        !chat::transcript(&state, &id)
+            .unwrap()
+            .render()
+            .contains("project-picker")
+    );
     let before = serde_json::to_vec(&state).unwrap();
     let mut response = Vec::new();
     assert!(handle(

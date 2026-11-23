@@ -22,7 +22,7 @@ fn missing_activity_is_reported_in_chat_views_and_prompt_without_changing_state(
         .as_str()
         .expect("missing history must be visible");
     assert!(error.contains("missing record") && error.contains("42") && error.contains(&chat));
-    assert!(crate::chat::transcript(&state, &chat).unwrap().contains(error));
+    assert!(crate::chat::transcript(&state, &chat).unwrap().render().contains(error));
     assert!(crate::chat::prompt(&state, &next).unwrap().contains(error));
     assert_eq!(persisting(|| serde_json::to_vec(&state)).unwrap(), before);
 }

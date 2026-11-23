@@ -100,7 +100,7 @@ mod worker_profile;
 mod worker_tools;
 use std::{
     collections::HashMap,
-    io::{Read, Write},
+    io::{Read as _, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex},
 };
@@ -296,7 +296,7 @@ fn legacy_session_location(state: &State, query: &HashMap<String, String>) -> Op
         "session" => Some(
             query
                 .get("channel")
-                .filter(|id| chat::valid_id(id) && chat::detail(state, id).is_ok())
+                .filter(|id| chat::valid_id(id) && chat::viewable(&state.chats, id).is_ok())
                 .map_or_else(|| "/dms".to_owned(), |id| url_names::dm(id)),
         ),
         _ => None,
@@ -591,6 +591,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     if method == "GET" && serve_stylesheet(&mut stream, path) {
         return;
     }
+    if let Some(page) = session_http::ChatPage::of(method, path, &header) {
+        read_response(&mut stream, &state, &session_http::CHAT_PAGES, page);
+        return;
+    }
     state_response(&mut stream, &state, |mut stream, state| {
         let lens = lens_ui::selected(&state.lens_library, &header, query.get("lens").map(String::as_str));
         if method == "POST" && path == "/lens" {
@@ -776,23 +780,74 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     });
 }
 
-// Render and commit while locked, then release state before touching the socket.
-// Slow readers must never prevent other clients or the supervisor from progressing.
+// Commit while locked, then release state before touching the socket. Slow
+// readers must never prevent other clients or the supervisor from progressing.
+// Routes that change state run here; routes that only read it use `Read`.
 fn state_response(stream: &mut impl Write, state: &Mutex<State>, respond: impl FnOnce(&mut Vec<u8>, &mut State)) {
     let mut response = Vec::new();
     match state.lock() {
         Ok(mut state) => respond(&mut response, &mut state),
-        Err(_) => {
-            let body = "State unavailable. Restart Control after checking.";
-            let _ = control_http::respond(
-                &mut response,
-                "503 Service Unavailable",
-                "text/plain",
-                body.as_bytes(),
-                "",
-                control_http::Policy::Page,
-            );
+        Err(_) => unavailable(&mut response),
+    }
+    let _ = stream.write_all(&response);
+}
+fn unavailable(response: &mut Vec<u8>) {
+    let body = "State unavailable. Restart Control after checking.";
+    let _ = control_http::respond(
+        response,
+        "503 Service Unavailable",
+        "text/plain",
+        body.as_bytes(),
+        "",
+        control_http::Policy::Page,
+    );
+}
+/// A route that only reads state, in two steps: `view` copies what the page
+/// shows out of one critical section, and `render` builds the response after
+/// the lock is released. `render` gets nothing but that copy: the copy is
+/// `'static`, so it cannot borrow `State`, and a `fn` captures nothing that
+/// could reach the lock. `view` gets `&State`, so it cannot change state.
+pub(crate) struct Read<Q, V: 'static> {
+    pub view: fn(&State, Q) -> V,
+    pub render: fn(V) -> Reply,
+}
+/// A response that a read route built without the state lock.
+pub(crate) struct Reply {
+    pub status: &'static str,
+    pub mime: &'static str,
+    pub body: String,
+    pub extra: String,
+    pub policy: control_http::Policy,
+}
+impl Reply {
+    fn write(&self, output: &mut impl Write) -> std::io::Result<()> {
+        control_http::respond(
+            output,
+            self.status,
+            self.mime,
+            self.body.as_bytes(),
+            &self.extra,
+            self.policy,
+        )
+    }
+}
+impl<Q, V: 'static> Read<Q, V> {
+    /// The response for a caller that already holds the state.
+    pub(crate) fn reply(&self, state: &State, request: Q) -> Reply {
+        (self.render)((self.view)(state, request))
+    }
+}
+// Not inlined, so profiles can tell its wait for the state lock from rendering.
+#[inline(never)]
+fn read_response<Q, V: 'static>(stream: &mut impl Write, state: &Mutex<State>, route: &Read<Q, V>, request: Q) {
+    // The guard is dropped as soon as the view is copied.
+    let view = state.lock().map(|state| (route.view)(&state, request));
+    let mut response = Vec::new();
+    match view {
+        Ok(view) => {
+            let _ = (route.render)(view).write(&mut response);
         }
+        Err(_) => unavailable(&mut response),
     }
     let _ = stream.write_all(&response);
 }

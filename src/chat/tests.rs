@@ -221,7 +221,7 @@ fn conversation_index_preserves_first_matches_and_missing_run_replies() {
     assert_eq!(data["messages"][0]["reply"], "First & original");
     assert_eq!(data["messages"][1]["reply"], "Retained reply");
     assert_eq!(data["messages"][2]["reply"], "Local reply");
-    let html = transcript(&state, &id).unwrap();
+    let html = transcript(&state, &id).unwrap().render();
     assert!(html.contains("First &amp; original") && html.contains("Retained reply") && html.contains("Local reply"));
     assert!(!html.contains("Later duplicate"));
 }
@@ -241,7 +241,7 @@ fn completed_file_diffs_are_collapsed_escaped_and_separate_from_command_logs() {
         }],
         ..crate::usage::Attempt::default()
     });
-    let html = transcript(&state, &id).unwrap();
+    let html = transcript(&state, &id).unwrap().render();
     let diff = html
         .split("<details ")
         .find(|tag| tag.starts_with("class='edit-diff'"))
@@ -272,12 +272,12 @@ fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
     assert_eq!(state.runtime.runs[1].status, RunStatus::Queued);
     assert_eq!(state.runtime.runs[2].status, RunStatus::Queued);
     assert!(state.chats[0].revision > revision);
-    let html = transcript(&state, &parent).unwrap();
+    let html = transcript(&state, &parent).unwrap().render();
     assert!(html.contains("Stopping…") && !html.contains("http-equiv='refresh'"));
     let queued = state.runtime.runs[1].id().to_string();
     send(&mut state, &parent, &format!("/cancel {queued}"), "test").unwrap();
     assert_eq!(state.runtime.runs[1].status, RunStatus::Cancelled);
-    assert!(transcript(&state, &parent).unwrap().contains("Cancelled"));
+    assert!(transcript(&state, &parent).unwrap().render().contains("Cancelled"));
     assert_eq!(state.runtime.runs.len(), 3);
 }
 #[test]
@@ -306,6 +306,7 @@ fn explicit_spawn_inherits_snapshot_without_workspace_authority_or_recursion() {
     assert!(
         transcript(&state, &parent)
             .unwrap()
+            .render()
             .contains("target='_top'>Agent conversation")
     );
     assert!(render(&state, &child.id).unwrap().contains("Parent DM"));
@@ -347,7 +348,7 @@ fn slash_commands_replace_mode_form_controls_and_escape_chat_text() {
     let html = render(&state, &id).unwrap();
     assert!(html.contains("class='chat-command active-command'"));
     assert!(html.contains("data-command='/improve off'"));
-    let transcript = transcript(&state, &id).unwrap();
+    let transcript = transcript(&state, &id).unwrap().render();
     assert!(transcript.contains("<span class='chat-command'>/improve</span> &lt;script&gt;"));
     assert!(!transcript.contains("<script>"));
     assert_eq!(
@@ -386,6 +387,7 @@ fn side_question_captures_context_without_reusing_parent_workspace_or_authority(
     assert!(
         transcript(&state, &parent)
             .unwrap()
+            .render()
             .contains(&format!("href='/dm/{}'", child.id))
     );
     let captured = child.fork_context.clone();
@@ -416,7 +418,12 @@ fn steering_is_durable_ordered_and_never_mutates_an_active_request() {
             .windows(2)
             .all(|pair| pair[0].queue_order < pair[1].queue_order)
     );
-    assert!(transcript(&restored, &id).unwrap().contains("Queued · next turn"));
+    assert!(
+        transcript(&restored, &id)
+            .unwrap()
+            .render()
+            .contains("Queued · next turn")
+    );
     restored.runtime.runs[0].status = RunStatus::Completed;
     restored.runtime.runs[0].result = "Parser complete".into();
     let steering = restored.runtime.runs[2].id().to_string();
@@ -490,7 +497,7 @@ fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html()
         .action("/retry-run", &std::collections::HashMap::from([("id".into(), run_id)]));
     assert_eq!(stored.runtime.runs[0].attempts.len(), 1);
     assert_eq!(stored.runtime.runs[0].status, RunStatus::Queued);
-    let html = transcript(&stored, &id).unwrap();
+    let html = transcript(&stored, &id).unwrap().render();
     assert!(html.contains("<p class='message-status attempt-status'><span title='Attempt 1'>attempt 1</span> · <span title='Context window · 1 earlier exchange excluded from attempt 1. Chat history retained.'>1 earlier exchange excluded</span></p>"), "{html}");
     assert!(html.contains("echo &lt;script&gt;"));
     assert!(html.contains("&lt;img src=x onerror=bad()&gt;"));
@@ -575,7 +582,10 @@ fn preview_library_and_chat() {
         .replace("<body>", "<body class='session-view'>")
         .replace(
             &format!("src='/dm/{id}/transcript#latest'"),
-            &format!("srcdoc='{}'", escape(&inline(transcript(&state, &id).unwrap()))),
+            &format!(
+                "srcdoc='{}'",
+                escape(&inline(transcript(&state, &id).unwrap().render()))
+            ),
         );
     let landing = crate::render(&state, "session-list", "none", &landing(&state, "none", None))
         .replace("<body>", "<body class='session-view'>");
@@ -583,7 +593,7 @@ fn preview_library_and_chat() {
         ("rooms.html", crate::render(&state, "rooms", "none", "engineering")),
         ("chat.html", session),
         ("new.html", landing),
-        ("transcript.html", transcript(&state, &id).unwrap()),
+        ("transcript.html", transcript(&state, &id).unwrap().render()),
         ("lenses.html", crate::render(&state, "lenses", "engineering", "general")),
     ] {
         std::fs::write(std::path::Path::new(&directory).join(file), inline(html)).unwrap();
@@ -766,7 +776,12 @@ fn improvement_action_and_session_revision_are_preserved() {
     send(&mut state, &id, "/improve refine the UI", "test").unwrap();
     assert_eq!(state.runtime.runs[0].action, Action::Improve);
     assert_eq!(detail(&state, &id).unwrap()["revision"], 1);
-    assert!(!transcript(&state, &id).unwrap().contains("http-equiv='refresh'"));
+    assert!(
+        !transcript(&state, &id)
+            .unwrap()
+            .render()
+            .contains("http-equiv='refresh'")
+    );
 }
 #[test]
 fn automatic_updates_are_not_presented_as_user_messages() {
@@ -774,7 +789,7 @@ fn automatic_updates_are_not_presented_as_user_messages() {
     let id = create(&mut state);
     send(&mut state, &id, "Delegated task · completed", "test").unwrap();
     state.runtime.runs[0].kind = RunKind::DelegationResult;
-    let html = transcript(&state, &id).unwrap();
+    let html = transcript(&state, &id).unwrap().render();
     assert!(html.contains("aria-label='Control update'>Delegated task · completed"));
     assert!(!html.contains("aria-label='You'"));
     assert!(
@@ -785,9 +800,9 @@ fn automatic_updates_are_not_presented_as_user_messages() {
             .starts_with("Control event:")
     );
     state.runtime.runs[0].kind = RunKind::RoomNotification;
-    assert!(!transcript(&state, &id).unwrap().contains("aria-label='You'"));
+    assert!(!transcript(&state, &id).unwrap().render().contains("aria-label='You'"));
     state.runtime.runs[0].kind = RunKind::DesignAnswer;
-    assert!(transcript(&state, &id).unwrap().contains("aria-label='You'"));
+    assert!(transcript(&state, &id).unwrap().render().contains("aria-label='You'"));
     assert!(
         crate::conversation::Conversation::of(&state, &state.chats[0])
             .entry(0)
@@ -806,7 +821,7 @@ fn html_escapes_chat_and_api_does_not_accept_actor_overrides() {
         &json!({"id":id,"message":"<script>bad</script>","actor":{"type":"unknown"}}),
     )
     .unwrap();
-    assert!(transcript(&state, &id).unwrap().contains("&lt;script&gt;"));
+    assert!(transcript(&state, &id).unwrap().render().contains("&lt;script&gt;"));
     assert_eq!(state.runtime.runs[0].actor, Actor::LocalOperator);
     assert!(!valid_id("../../.env"));
 }
@@ -948,7 +963,9 @@ fn chats_show_callsigns_and_every_client_sees_the_same_rename() {
     assert_eq!(detail(&state, &chat).unwrap()["title"], "player1");
     assert!(render(&state, &chat).unwrap().contains("<h2>player1</h2>"));
     assert!(
-        crate::navigation::conversations(&state, &chat).contains("<span class='conversation-title'>player1</span>")
+        crate::navigation::Picker::of(&state.chats, &chat)
+            .render()
+            .contains("<span class='conversation-title'>player1</span>")
     );
     // Invalid names change nothing.
     assert_eq!(

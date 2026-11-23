@@ -72,7 +72,7 @@ fn decisions_wait_for_the_turn_then_resume_with_its_context() {
         !message.is_notice(Some(run)),
         "it renders with its run, not as a bare notice"
     );
-    let html = crate::chat::transcript(&state, &chat).unwrap();
+    let html = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(
         html.contains("<p class='message-status' aria-label='Control update'>Port decisions\nrelay: approved</p>"),
         "{html}"
@@ -149,7 +149,7 @@ fn a_noted_decision_is_a_control_notice_in_every_view() {
     assert_eq!((note.run_id.as_deref(), note.speaker), (None, MessageSpeaker::Control));
     assert_eq!(serde_json::to_value(note).unwrap()["speaker"], "control");
 
-    let html = crate::chat::transcript(&state, &chat).unwrap();
+    let html = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(html.contains("<p class='message-status preserve' aria-label='Control notice'>Control · Port decisions: relay: approved</p>"), "{html}");
     assert!(
         !html.contains("<p class='preserve'>Port decisions"),
@@ -245,6 +245,6 @@ fn notes_stored_before_speakers_are_recognised_by_their_heading() {
     state.chats[0]
         .messages
         .push(message("Bot decisions\nhelper (c-1): denied", None));
-    let html = crate::chat::transcript(&state, &chat).unwrap();
+    let html = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(html.contains("aria-label='Control notice'>Control · Bot decisions: helper (c-1): denied</p>"));
 }

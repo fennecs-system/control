@@ -290,7 +290,7 @@ fn service_commands_start_collapsed_during_and_after_their_run() {
     for service in ["svc-a", "svc-b"] {
         crate::services::enqueue_test_command(&mut state, &run, service, service, "echo probe", 60).unwrap();
     }
-    let live = crate::chat::transcript(&state, &chat).unwrap();
+    let live = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(live.contains("Commands · 2</summary>"));
     assert_eq!(
         live.matches("class='command-activity' data-transcript-key='service-command-")
@@ -303,7 +303,7 @@ fn service_commands_start_collapsed_during_and_after_their_run() {
         "Live commands start collapsed and remain available to expand"
     );
     state.runtime.runs[0].status = RunStatus::Completed;
-    let done = crate::chat::transcript(&state, &chat).unwrap();
+    let done = crate::chat::transcript(&state, &chat).unwrap().render();
     assert!(!done.contains("-commands' open"));
     assert!(!done.contains("' open><summary><span>"));
 }

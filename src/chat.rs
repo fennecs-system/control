@@ -10,9 +10,11 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 mod activity;
 mod lineage;
+mod transcript;
 pub(crate) use activity::changed as activity_changed;
 use activity::{agent_activity, command_html};
 pub(crate) use lineage::Lineage;
+pub use transcript::{Transcript, transcript};
 
 pub use crate::application::conversations::{Message, Session};
 pub fn selected_lenses(session: &Session) -> Vec<String> {
@@ -112,14 +114,14 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     }
     let mut html = format!(
         "<section class='conversation'><div class='conversation-heading'>{}<h2>New DM</h2></div>",
-        crate::navigation::conversation_button(state, "")
+        crate::navigation::Picker::of(&state.chats, "").button()
     );
     let selected = if state.lens_library.get(lens).is_some() {
         vec![lens.into()]
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&state.lens_library,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&crate::lens_library::names(&state.lens_library),&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
     html
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
@@ -1058,9 +1060,15 @@ pub(crate) fn response_from_run<'a>(
     })
     .unwrap_or((COMPLETED, &message.reply))
 }
-pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
-    let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
+/// The chat `id` when it exists and its actor may run tasks: what every chat
+/// view checks first, and all that a caller needing only that should check.
+pub fn viewable<'a>(chats: &'a [Session], id: &str) -> Result<&'a Session, &'static str> {
+    let session = chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
+    Ok(session)
+}
+pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
+    let session = viewable(&state.chats, id)?;
     let runs = crate::conversation::Conversation::of(state, session);
     let pending_questions = crate::design::pending_json(state, id, crate::design::UnixSeconds::now());
     Ok(
@@ -1099,7 +1107,7 @@ pub fn list(state: &State) -> Value {
     let bot_revision = crate::bots::decision_revision(state);
     let callsigns = crate::callsigns::all(&state.chats);
     let status = statuses(state);
-    json!(crate::conversations::ordered(state).into_iter().map(|entry| {
+    json!(crate::conversations::ordered(&state.chats).into_iter().map(|entry| {
         let s=entry.session;
         json!({"id":s.id,"title":crate::callsigns::label(s,callsigns[entry.position]),"lens":s.lens,"lenses":selected_lenses(s),"persona":s.persona,"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision,"status":status(s),"mode":if s.improve_mode {"improve"} else {"chat"},"project_pending":s.project.as_ref().is_some_and(|p|p.pending)})
     }).collect::<Vec<_>>())
@@ -1203,42 +1211,80 @@ pub fn pending_requests(state: &State) -> Value {
         ["pending_questions","pending_bots","pending_ports","pending_notices","pending_folders","pending_knowledge"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
     }).collect::<Vec<_>>())
 }
+/// The chat page from one consistent read of state.
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
-    let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
-    identity::authorize(&session.actor, Action::Task)?;
-    let room = session
-        .room
-        .as_deref()
-        .filter(|r| crate::rooms::valid(r))
-        .map(|r| format!(" · <a href='/?view=rooms&channel={r}'>#{r} ↗</a>"))
-        .unwrap_or_default();
-    let lenses = selected_lenses(session);
-    let room = format!(
-        "{room}<a href='{}'>Memory Tree ↗</a>",
-        crate::compaction::memory_url(id)
-    );
-    let room = format!(
-        "{room}{}",
-        session
-            .parent_chat
+    Page::of(&state.chats, &state.scores, &state.lens_library, id).map(|page| page.render())
+}
+/// What the DM page shows, copied out of state so it renders after the state
+/// lock is released. Errors are the not-found and not-authorized refusals.
+pub struct Page {
+    id: String,
+    title: String,
+    room: Option<String>,
+    parent: Option<String>,
+    improve: bool,
+    commands: (bool, bool),
+    picker: crate::navigation::Picker,
+    scores: Vec<String>,
+    genes: Vec<(String, String)>,
+    selected: Vec<String>,
+}
+impl Page {
+    pub fn of(
+        chats: &[Session],
+        scores: &[crate::scores::Probe],
+        library: &control_context::Library,
+        id: &str,
+    ) -> Result<Self, &'static str> {
+        let session = viewable(chats, id)?;
+        Ok(Self {
+            id: id.to_owned(),
+            title: crate::callsigns::name_or_id(chats, id).into_owned(),
+            room: session.room.clone().filter(|r| crate::rooms::valid(r)),
+            parent: session.parent_chat.clone().filter(|parent| valid_id(parent)),
+            improve: session.improve_mode,
+            commands: (
+                identity::authorize(&session.actor, Action::Task).is_ok(),
+                identity::authorize(&session.actor, Action::Improve).is_ok(),
+            ),
+            picker: crate::navigation::Picker::of(chats, id),
+            scores: crate::scores::summaries(scores, id),
+            genes: crate::lens_library::names(library),
+            selected: selected_lenses(session),
+        })
+    }
+    pub fn render(&self) -> String {
+        let id = &self.id;
+        let room = self
+            .room
             .as_deref()
-            .filter(|parent| valid_id(parent))
-            .map(|parent| format!("<a href='/dm/{parent}'>Parent DM ↗</a>"))
-            .unwrap_or_default()
-    );
-    let mode = if session.improve_mode {
-        "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"
-    } else {
-        ""
-    };
-    Ok(format!(
-        "<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/dm/{id}/artifacts'>Artifacts ↗</a></span>{}<details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/dm/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/dm/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/dm/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",
-        crate::navigation::conversation_button(state, id),
-        escape(&crate::callsigns::name_or_id(&state.chats, id)),
-        crate::scores::line(&state.scores, id),
-        command_menu(&session.actor),
-        crate::lens_library::choices(&state.lens_library, &lenses, "session-message")
-    ))
+            .map(|r| format!(" · <a href='/?view=rooms&channel={r}'>#{r} ↗</a>"))
+            .unwrap_or_default();
+        let room = format!(
+            "{room}<a href='{}'>Memory Tree ↗</a>",
+            crate::compaction::memory_url(id)
+        );
+        let room = format!(
+            "{room}{}",
+            self.parent
+                .as_deref()
+                .map(|parent| format!("<a href='/dm/{parent}'>Parent DM ↗</a>"))
+                .unwrap_or_default()
+        );
+        let mode = if self.improve {
+            "<span class='chat-command active-command' title='Use /improve off to return to regular chat'>/improve</span>"
+        } else {
+            ""
+        };
+        format!(
+            "<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/dm/{id}/artifacts'>Artifacts ↗</a></span>{}<details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/dm/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/dm/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/dm/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",
+            self.picker.button(),
+            escape(&self.title),
+            crate::scores::line(&self.scores),
+            command_menu_for(self.commands.0, self.commands.1),
+            crate::lens_library::choices(&self.genes, &self.selected, "session-message")
+        )
+    }
 }
 fn command_text(text: &str) -> String {
     if let Some(command) = commands::parse(text) {
@@ -1253,280 +1299,9 @@ fn command_text(text: &str) -> String {
         escape(text)
     }
 }
-pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
-    let session = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found.")?;
-    identity::authorize(&session.actor, Action::Task)?;
-    let runs = crate::conversation::Conversation::of(state, session);
-    let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
-    let project_message = crate::projects::message_index(session);
-    html.push_str(&crate::previews::links(&state.previews, id));
-    html.push_str(&crate::github::panel(
-        &state.github_publications,
-        &state.runtime.runs,
-        id,
-    ));
-    if let Some(listener) = crate::rooms::listener_status(state, id) {
-        html.push_str(&format!(
-            "<p class='message-status'>Room #{} · {}</p>",
-            escape(listener["room"].as_str().unwrap_or("")),
-            escape(listener["state"].as_str().unwrap_or(""))
-        ));
-    }
-    if let Some(bot) = crate::bots::status(state, id) {
-        html.push_str(&format!("<p class='message-status'>{}</p>", escape(&bot)));
-    }
-    let messages = &session.messages;
-    for (position, message) in messages.iter().enumerate() {
-        let run = message.run_id.as_deref().and_then(|id| runs.run(id));
-        let (run_status, run_reply) = response_from_run(message, run);
-        let status = match run_status {
-            RunStatus::Queued if run.is_some_and(|r| r.kind == RunKind::Steering) => "Queued · next turn",
-            RunStatus::Queued if state.runtime.paused.is_some() => "Queued · dispatch paused",
-            RunStatus::Queued => "Queued",
-            RunStatus::Running => "Working…",
-            RunStatus::Waiting if run.is_some_and(|r| r.delegation.is_some()) => "Delegated work",
-            RunStatus::Waiting => "Your decision",
-            RunStatus::Cancelling => "Stopping…",
-            RunStatus::Cancelled => "Cancelled",
-            RunStatus::Blocked => "Blocked",
-            RunStatus::Failed => "Failed",
-            RunStatus::Interrupted => "Interrupted",
-            RunStatus::Completed | RunStatus::Continued | RunStatus::Unrecognised(_) => "",
-        };
-        let status = if status.is_empty() {
-            String::new()
-        } else {
-            format!("<span class='message-status' role='status'>{status}</span>")
-        };
-        // Why a queued turn waits: dispatch is paused, or its account is at its cap or cooling down.
-        let held = run.filter(|_| *run_status == RunStatus::Queued).and_then(|run| {
-            crate::providers::accounts::hold(&state.runtime, run)
-                .map(|hold| crate::providers::accounts::held(&hold, run))
-        });
-        let status = match state
-            .runtime
-            .paused
-            .clone()
-            .filter(|_| *run_status == RunStatus::Queued)
-            .or(held)
-        {
-            Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(&reason)),
-            None => status,
-        };
-        let folder_request = message.run_id.is_none() && commands::tail(message.text.trim(), Kind::Open).is_some();
-        let opened = session
-            .project
-            .as_ref()
-            .and_then(|p| p.mounts.iter().find(|m| m.message_index == Some(position)));
-        let folder_reply = folder_request.then(|| {
-            opened
-                .map(|m| format!("Opened /workspace/{}", m.name))
-                .unwrap_or_else(|| {
-                    if message.reply == crate::projects::DISMISSED {
-                        message.reply.clone()
-                    } else {
-                        "Folder request replaced by a later request.".into()
-                    }
-                })
-        });
-        let reply = folder_reply.as_deref().unwrap_or(run_reply);
-        let reply = reply
-            .strip_prefix("Agent conversation: ")
-            .and_then(crate::url_names::dm_route)
-            .filter(|child| {
-                valid_id(child)
-                    && state
-                        .chats
-                        .iter()
-                        .any(|c| c.id == *child && c.parent_chat.as_deref() == Some(id))
-            })
-            .map(|child| format!("<a href='/dm/{child}' target='_top'>Agent conversation ↗</a>"))
-            .unwrap_or_else(|| escape(reply));
-        let question = run
-            .filter(|r| matches!(r.status, RunStatus::Running | RunStatus::Waiting | RunStatus::Continued))
-            .and_then(|r| {
-                r.question.as_ref().filter(|q| {
-                    r.attempts
-                        .last()
-                        .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
-                })
-            });
-        let body = question
-            .map(|q| {
-                if *run_status == RunStatus::Waiting {
-                    "<p class='message-status'>Decision requested · see Requests</p>".to_owned()
-                } else {
-                    crate::design::render(q, id, false)
-                }
-            })
-            .unwrap_or_else(|| format!("<p class='preserve'>{reply}</p>"));
-        let body = if project_message == Some(position) {
-            format!(
-                "{}{}",
-                if folder_request { String::new() } else { body },
-                if session.project.as_ref().is_some_and(|p| p.pending || p.grant.is_none()) {
-                    if crate::projects::importing(id).is_some() {
-                        "<p class='message-status' role='status'>Importing folder… · see Requests</p>"
-                    } else {
-                        "<p class='message-status'>Folder request · see Requests</p>"
-                    }
-                    .to_owned()
-                } else {
-                    crate::projects::panel(&state.chats, id)
-                }
-            )
-        } else {
-            body
-        };
-        // An observer's note is retained evidence with no reply: one distinct box.
-        if run.is_some_and(|r| r.source.as_str() == "advisor-note") {
-            let (label, note) = message.text.split_once('\n').unwrap_or((message.text.as_str(), ""));
-            html.push_str(&format!("<article class='advisor-note' aria-label='Observer note'><p class='advisor-note-label'>{} · read-only evidence</p><p class='preserve'>{}</p></article>", escape(label), escape(note)));
-            continue;
-        }
-        // A Control notice without a run (operator decisions): one status line.
-        if message.is_notice(run) {
-            html.push_str(&format!(
-                "<p class='message-status preserve' aria-label='Control notice'>{}</p>",
-                escape(&control_context::agent_policy::notice_line(&message.text))
-            ));
-            continue;
-        }
-        let input = match message.speaker(run) {
-            control_context::agent_policy::MessageSpeaker::User => format!(
-                "<article class='user-message' aria-label='You'><p class='preserve'>{}</p></article>",
-                command_text(&message.text)
-            ),
-            control_context::agent_policy::MessageSpeaker::Control => format!(
-                "<p class='message-status' aria-label='Control update'>{}</p>",
-                escape(&message.text)
-            ),
-        };
-        html.push_str(&format!(
-            "{input}<article class='assistant-message' aria-label='Control'>{status}{body}</article>"
-        ));
-        if let Some(child) = run
-            .and_then(|r| r.delegation.as_ref())
-            .and_then(|d| d.child.as_deref())
-            .and_then(|run_id| state.runtime.runs.get(run_id))
-            .and_then(|r| r.chat_id.as_deref())
-            .filter(|child| valid_id(child))
-        {
-            html.push_str(&format!(
-                "<p class='message-status'><a href='/dm/{}' target='_top'>Delegated conversation ↗</a></p>",
-                escape(child)
-            ));
-        }
-        if let Some(attempts) = run.map(|r| &r.attempts) {
-            for (index, attempt) in attempts.iter().enumerate() {
-                // One compact line per attempt; titles carry the full wording.
-                let parts = attempt.status(index);
-                let input=run.filter(|_|attempt.context_trace.is_some()).map(|run|format!("<a target='_top' href='/dm/{}/context?run={}&amp;attempt={}' title='Control input for attempt {}'>input ↗</a>",escape(id),escape(run.id()),index+1,index+1));
-                if parts.len() > 1 || input.is_some() {
-                    let mut line = parts
-                        .iter()
-                        .map(|p| format!("<span title='{}'>{}</span>", escape(&p.title), escape(&p.text)))
-                        .collect::<Vec<_>>();
-                    line.extend(input);
-                    html.push_str(&format!(
-                        "<p class='message-status attempt-status'>{}</p>",
-                        line.join(" · ")
-                    ));
-                }
-                let events = match crate::history::activity(run.and_then(|r| r.chat_id.as_deref()), attempt) {
-                    Ok(events) => events,
-                    Err(error) => {
-                        html.push_str(&format!(
-                            "<p class='message-status' role='alert'>{}</p>",
-                            escape(&error.to_string())
-                        ));
-                        continue;
-                    }
-                };
-                for event in events.iter().filter(|event| event.kind == "file_change") {
-                    let patch = &event.output;
-                    if patch.is_empty() {
-                        continue;
-                    }
-                    let mut body = String::new();
-                    for line in patch.lines() {
-                        let class = match control_diff::kind(line) {
-                            control_diff::Kind::Add => "diff-add",
-                            control_diff::Kind::Remove => "diff-remove",
-                            control_diff::Kind::Header => "diff-header",
-                            control_diff::Kind::Context => "diff-context",
-                        };
-                        body.push_str(&format!("<span class='diff-line {class}'>{}</span>", escape(line)));
-                    }
-                    html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),index+1,escape(&event.text)));
-                }
-                for event in events
-                    .iter()
-                    .filter(|event| event.kind == "message" && event.text.trim() != run_reply.trim())
-                {
-                    html.push_str(&format!("<article class='assistant-message' data-transcript-key='{position}-{index}-message-{}'><p class='preserve'>{}</p></article>",escape(&event.id),escape(&event.text)));
-                }
-                let mut events = events
-                    .iter()
-                    .filter(|event| event.kind != "file_change" && event.kind != "message")
-                    .enumerate()
-                    .peekable();
-                if events.peek().is_none() {
-                    continue;
-                }
-                html.push_str(&format!(
-                    "<details class='run-activity' data-transcript-key='{position}-{index}-activity'><summary>Recent activity · attempt {}</summary>", index + 1
-                ));
-                for (event_index, event) in events {
-                    html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", escape(&event.status), escape(&event.text), escape(&event.output)));
-                }
-                html.push_str("</details>");
-            }
-        }
-        if let Some(run) = message.run_id.as_deref() {
-            let commands: Vec<_> = crate::services::command_activity(state, run).collect();
-            if !commands.is_empty() {
-                html.push_str(&format!("<details class='run-activity' data-transcript-key='{position}-commands'><summary>Commands · {}</summary>",commands.len()));
-                for event in &commands {
-                    html.push_str(&command_html(event));
-                }
-                html.push_str("</details>");
-            }
-        }
-    }
-    let activity = agent_activity(state, id);
-    if !activity.is_empty() {
-        let agents = activity
-            .iter()
-            .map(|entry| entry.chat)
-            .collect::<std::collections::HashSet<_>>()
-            .len();
-        html.push_str(&format!("<details class='run-activity' data-transcript-key='agent-activity'><summary>Agent activity · {agents} active {}</summary>",if agents == 1 {"agent"} else {"agents"}));
-        for entry in activity {
-            html.push_str(&format!(
-                "<p class='message-status'><a target='_top' href='/dm/{}'>View agent ↗</a></p>{}",
-                escape(entry.chat),
-                command_html(&entry.activity)
-            ));
-        }
-        html.push_str("</details>");
-    }
-    if project_message.is_none()
-        && session
-            .project
-            .as_ref()
-            .is_some_and(|p| !p.pending && p.grant.is_some())
-    {
-        html.push_str(&crate::projects::panel(&state.chats, id));
-    }
-    html.push_str("<div id='latest'></div></body></html>");
-    Ok(html)
-}
-
 /// Independently embeddable approval view. Reuses each domain's scoped forms.
 pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
-    let session = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found.")?;
-    identity::authorize(&session.actor, Action::Task)?;
+    let session = viewable(&state.chats, id)?;
     let questions = crate::design::pending(state, id);
     let folders = state
         .chats

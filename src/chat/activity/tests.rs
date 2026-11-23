@@ -29,7 +29,7 @@ fn child_chat_messages_are_collapsed_scoped_and_refresh_ancestors() {
         event
     ));
     assert!(state.chats[0].revision > revision);
-    let html = crate::chat::transcript(&state, &parent).unwrap();
+    let html = crate::chat::transcript(&state, &parent).unwrap().render();
     assert!(html.contains("data-transcript-key='agent-activity'><summary>Agent activity · 1 active agent</summary>"));
     assert!(html.contains("<p class='preserve'>Checking &lt;inventory&gt;.</p>"));
     assert!(!html.contains("<pre>Checking"));
@@ -39,12 +39,14 @@ fn child_chat_messages_are_collapsed_scoped_and_refresh_ancestors() {
     assert!(
         crate::chat::transcript(&stored, &child)
             .unwrap()
+            .render()
             .contains("Checking &lt;inventory&gt;.")
     );
     stored.runtime.runs[0].result = "Checking <inventory>.".into();
     assert_eq!(
         crate::chat::transcript(&stored, &child)
             .unwrap()
+            .render()
             .matches("Checking &lt;inventory&gt;.")
             .count(),
         1,
