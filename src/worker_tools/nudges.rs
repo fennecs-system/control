@@ -57,6 +57,12 @@ pub(crate) const MARKS: &str = "Write key facts on lines starting Finding: and c
 pub(crate) fn deadline_text(remaining: u64) -> String {
     format!("{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn. {NOTES}")
 }
+/// The once-per-turn note when a local turn first shortens its older tool
+/// results: without it a model re-reads the files it lost, which are shortened
+/// again, instead of writing down what it needs.
+pub(crate) fn elision_text(kept: usize) -> String {
+    format!("Control now shortens tool results older than your last {kept} steps to save context, and a file read again is shortened again. {MARKS}")
+}
 /// What follows a turn that stops now. Only a persistent bot has a next turn:
 /// a chat that hands off without one simply ends, so the note must not promise
 /// a continuation.

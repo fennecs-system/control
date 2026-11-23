@@ -350,6 +350,11 @@ pub(crate) fn run(
         let mut view = lens.view(&messages, count - shrunk, false);
         let target = count.saturating_sub(policy.verbatim_steps);
         if percent(&view) >= policy.shrink_percent && target >= shrunk + policy.shrink_batch.max(1) {
+            if shrunk == 0 {
+                let note = crate::worker_tools::nudges::elision_text(policy.verbatim_steps);
+                host.record("note", "local-elision-note", &note, "", "completed");
+                append_note(&mut messages, &note);
+            }
             shrunk = target;
             view = lens.view(&messages, count - shrunk, false);
         }

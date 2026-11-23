@@ -330,9 +330,11 @@ fn a_long_turn_compacts_before_its_context_is_exhausted_and_is_told_once() {
     assert!(peak < budget, "peak {peak} of {budget}");
     // The summary was asked for under an explicit length.
     assert!(host.words.iter().all(|&w| w == crate::compaction::target_words(512)));
+    // Once, when older results first shrink, the turn is told to write down
+    // what it needs, since a file read again is shortened again.
+    let (elided, notes): (Vec<_>, Vec<_>) = host.records.iter().filter(|(k, _)| k == "note").partition(|(_, text)| text.starts_with("Control now shortens tool results older than your last 4 steps"));
+    assert!(elided.len() == 1 && elided[0].1.contains("Finding:"), "{elided:?}");
     // The context note was added once, to one tool result, naming the handoff.
-    let notes = host.records.iter().filter(|(k, _)| k == "note").collect::<Vec<_>>();
-    assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].1.starts_with("Context ") && notes[0].1.contains("% full: publish your checkpoint (control_turn_handoff)"));
     // It asks for findings and the plan in the working notes before they are compacted away.
     assert!(notes[0].1.contains("working notes, payload.findings and payload.next") && notes[0].1.contains("Finding:"), "{notes:?}");
