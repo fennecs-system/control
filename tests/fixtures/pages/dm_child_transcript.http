@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 514
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'><article class='advisor-note' aria-label='Observer note'><p class='advisor-note-label'>Advisor &lt;note&gt; · read-only evidence</p><p class='preserve'>Check the &amp; edge</p></article><div id='latest'></div></body></html>

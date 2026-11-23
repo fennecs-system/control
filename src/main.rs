@@ -1086,3 +1086,7 @@ mod url_names_tests;
 #[cfg(test)]
 #[path = "main/tests/ui_previews.rs"]
 mod ui_previews;
+
+#[cfg(test)]
+#[path = "main/tests/page_bytes.rs"]
+mod page_bytes;

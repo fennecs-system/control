@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 741
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+<aside class='section-navigation conversation-navigation'><h2>DMs</h2><nav aria-label='DMs'><a href='/dms?new=1'>+ New DM</a><details class='conversation-branch' data-chat-branch='c-100-0' open><summary data-conversation-depth='0'><a class='conversation-link' href='/dm/c-100-0' title='Zulu' data-conversation-depth='0'><span class='conversation-title'>Zulu</span></a></summary><div class='conversation-children'><a class='conversation-link' href='/dm/c-100-1' title='Olive' data-conversation-depth='1' aria-current='page'><span class='conversation-title'>Olive</span></a></div></details><a class='conversation-link' href='/dm/c-100-2' title='Hotel' data-conversation-depth='0'><span class='conversation-title'>Hotel</span></a></nav></aside>
