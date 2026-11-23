@@ -132,13 +132,31 @@ pub fn push(samples: &mut VecDeque<Sample>, sample: Sample) {
     samples.push_back(sample);
 }
 
+/// What a team's milestone count reads: the chat tree, completed runs and
+/// done claims. Read-only borrows, so counting cannot reach or change the
+/// rest of `State`.
+#[derive(Clone, Copy)]
+pub(crate) struct TeamProgress<'a> {
+    chats: &'a [crate::chat::Session],
+    runs: &'a [crate::runtime::Run],
+    claims: &'a [crate::rooms::claims::Claim],
+}
+impl<'a> TeamProgress<'a> {
+    pub(crate) fn of(state: &'a State) -> Self {
+        Self {
+            chats: &state.chats,
+            runs: &state.runtime.runs,
+            claims: &state.collective.claims,
+        }
+    }
+}
 /// Completed turns plus done claims across the team of `chat`: the count whose
 /// increase triggers a milestone sample.
-pub fn milestones(state: &State, chat: &str) -> u64 {
-    let teams = Teams::new(state);
+pub fn milestones(progress: TeamProgress<'_>, chat: &str) -> u64 {
+    let teams = Teams::new(progress.chats);
     teams
         .root(chat)
-        .and_then(|root| teams.milestones(state, &[root]).get(root).copied())
+        .and_then(|root| teams.milestones(progress, &[root]).get(root).copied())
         .unwrap_or(0)
 }
 /// Each chat's team root, computed once per pass: one walk over the chats and
@@ -147,9 +165,8 @@ struct Teams<'a> {
     roots: HashMap<&'a str, &'a str>,
 }
 impl<'a> Teams<'a> {
-    fn new(state: &'a State) -> Self {
-        let parents = state
-            .chats
+    fn new(chats: &'a [crate::chat::Session]) -> Self {
+        let parents = chats
             .iter()
             .map(|chat| (chat.id.as_str(), chat.parent_chat.as_deref()))
             .collect::<HashMap<_, _>>();
@@ -175,15 +192,14 @@ impl<'a> Teams<'a> {
         self.roots.get(chat).copied()
     }
     /// Milestones of the teams rooted at `wanted`.
-    fn milestones(&self, state: &State, wanted: &[&'a str]) -> HashMap<&'a str, u64> {
+    fn milestones(&self, progress: TeamProgress<'_>, wanted: &[&'a str]) -> HashMap<&'a str, u64> {
         let mut counts = wanted.iter().map(|root| (*root, 0)).collect::<HashMap<_, u64>>();
         let mut count = |chat: &str| {
             if let Some(total) = self.root(chat).and_then(|root| counts.get_mut(root)) {
                 *total += 1
             }
         };
-        for run in state
-            .runtime
+        for run in progress
             .runs
             .iter()
             .filter(|run| run.status == "completed" && !run.attempts.is_empty())
@@ -192,8 +208,7 @@ impl<'a> Teams<'a> {
                 count(chat)
             }
         }
-        for claim in state
-            .collective
+        for claim in progress
             .claims
             .iter()
             .filter(|claim| claim.status == crate::rooms::claims::Status::Done)
@@ -216,13 +231,13 @@ fn due(state: &State, time: u64) -> Vec<Due> {
     if state.scores.is_empty() {
         return Vec::new();
     }
-    let teams = Teams::new(state);
+    let teams = Teams::new(&state.chats);
     let roots = state
         .scores
         .iter()
         .filter_map(|probe| teams.root(&probe.chat))
         .collect::<Vec<_>>();
-    let counts = teams.milestones(state, &roots);
+    let counts = teams.milestones(TeamProgress::of(state), &roots);
     state
         .scores
         .iter()
@@ -391,8 +406,10 @@ pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
         .filter(|probe| team.contains(probe.chat.as_str()))
         .map(summary)
         .collect::<Vec<_>>();
-    Ok(json!({"root":root,"milestones":milestones(state, chat),"probes":probes,
-        "note":"Values are the workload's own untrusted claims; Control does not interpret them."}))
+    Ok(
+        json!({"root":root,"milestones":milestones(TeamProgress::of(state), chat),"probes":probes,
+        "note":"Values are the workload's own untrusted claims; Control does not interpret them."}),
+    )
 }
 /// One line for the chat view: the latest values of this chat's probes.
 pub fn line(probes: &[Probe], chat: &str) -> String {
@@ -604,7 +621,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
                 .map_err(|error| io::Error::other(format!("The probe was not saved: {error}")))?;
             let time = now();
             let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-            let milestones = milestones(&state, &chat);
+            let milestones = milestones(TeamProgress::of(&state), &chat);
             let mut probe = Probe {
                 chat: chat.clone(),
                 name: name.clone(),

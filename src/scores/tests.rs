@@ -119,9 +119,13 @@ fn milestones_count_completed_turns_and_done_claims_across_the_team() {
         claim(&root, "working"),
         claim(&outsider, "done"),
     ];
-    assert_eq!(milestones(&state, &root), 3);
-    assert_eq!(milestones(&state, &member), 3, "any chat names its team");
-    assert_eq!(milestones(&state, &outsider), 2);
+    assert_eq!(milestones(TeamProgress::of(&state), &root), 3);
+    assert_eq!(
+        milestones(TeamProgress::of(&state), &member),
+        3,
+        "any chat names its team"
+    );
+    assert_eq!(milestones(TeamProgress::of(&state), &outsider), 2);
 }
 
 #[test]
