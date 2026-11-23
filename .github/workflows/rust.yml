@@ -21,7 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        # Linux only for now: macOS runner minutes are costly. macOS is checked locally before merge.
+        # Add macos-15 back here to restore it; every cache key already includes the runner.
+        os: [ubuntu-24.04]
     env:
       # Incremental state is large and rarely reusable across fresh checkouts.
       CARGO_INCREMENTAL: "0"
