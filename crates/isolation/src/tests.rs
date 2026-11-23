@@ -154,3 +154,13 @@ fn a_writable_secret_is_mounted_writable() {
             .contains(&"type=bind,src=/t,dst=/home/agent/t".to_owned())
     );
 }
+
+/// A private tmpfs closes the mount point to every uid but its owner.
+#[test]
+fn a_private_tmpfs_is_owned_and_mode_0700() {
+    let owner = User { uid: 501, gid: 20 };
+    assert_eq!(
+        docker::tmpfs(&Tmpfs::new("/home/agent", Size::Mib(64)).private(owner)),
+        "/home/agent:rw,nosuid,mode=700,uid=501,gid=20,size=64m"
+    );
+}

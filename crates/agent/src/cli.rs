@@ -73,7 +73,10 @@ pub fn base(name: &str, node: &str, owner: User) -> RunSpec {
     .label("dev.control.attempt", name);
     label_purpose(spec, check)
         .tmpfs(Tmpfs::new("/tmp", Size::Mib(128)))
-        .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).owned(owner))
+        // Credentials are mounted under this home. Docker Desktop and OrbStack
+        // present a bind-mounted file as owned by whichever uid reads it, so
+        // only the home's own mode keeps other uids out.
+        .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).private(owner))
         .env("HOME", "/home/agent")
         .env("CLAUDE_CONFIG_DIR", "/home/agent/.claude")
 }
