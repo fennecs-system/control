@@ -1,7 +1,7 @@
 //! Explicit repository mutations through the existing trusted GitHub broker.
 use super::inspection::{Caller, ReadApi, authorize, project};
 use super::*;
-use control_client::github::Operation;
+use control_context::github::Operation;
 
 static MUTATION: Mutex<()> = Mutex::new(());
 
@@ -194,7 +194,8 @@ fn mutate(
     )
 }
 
-pub(super) fn http(stream: &mut impl Write, shared: &Arc<Mutex<State>>, request: &Value) {
+/// The `/mcp` reply; the caller frames it.
+pub(crate) fn mcp(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Input {
@@ -211,15 +212,7 @@ pub(super) fn http(stream: &mut impl Write, shared: &Arc<Mutex<State>>, request:
             .map_err(|_| fail("Expected chat_id and a typed GitHub operation"))
             .and_then(|input| execute(shared, Caller::Chat(&input.chat_id), input.operation))
     };
-    let response = json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(result)});
-    let _ = control_http::respond(
-        stream,
-        "200 OK",
-        "application/json",
-        response.to_string().as_bytes(),
-        "",
-        control_http::Policy::Restricted,
-    );
+    control_mcp::reply(&id, crate::toolbox::result(result))
 }
 
 #[cfg(test)]

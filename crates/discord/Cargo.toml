@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 control-client = { path = "../client" }
+control-delivery = { path = "../delivery" }
+control-diff = { path = "../diff" }
+control-ingress = { path = "../ingress" }
 control-config = { path = "../config" }
 control-identity = { path = "../identity" }
 control-context = { path = "../context" }

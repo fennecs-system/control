@@ -563,7 +563,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"control.package.revoke","description":"Operator only: revoke a package version. Terminal; files are kept for audit. New contexts and attempts stop receiving it.","inputSchema":{"type":"object","properties":{"name":{"type":"string","maxLength":64},"version":{"type":"integer","minimum":1},"reason":{"type":"string","minLength":1,"maxLength":300}},"required":["name","version","reason"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":false}}),
     ]
 }
-fn known(name: &str) -> bool {
+pub(crate) fn known(name: &str) -> bool {
     matches!(name, "control.packages.search" | "control.package.read" | "control.package.import" | "control.package.revoke")
 }
 /// Operator calls; the HTTP adapter has already authenticated the operator.
@@ -592,23 +592,6 @@ pub(crate) fn operator(shared: &Arc<Mutex<State>>, name: &str, args: &Value) -> 
         }
         _ => Err(fail("Unknown package tool")),
     }
-}
-/// Package tools are served before the shared state lock is taken, so an
-/// import's Git and copy work never blocks other requests. Other MCP
-/// requests fall through unchanged.
-pub(crate) fn http(stream: &mut impl Write, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
-    if method != "POST" || path != "/mcp" || !body.windows(15).any(|w| w == b"control.package") {
-        return false;
-    }
-    let Ok(request) = serde_json::from_slice::<Value>(body) else { return false };
-    let name = request["params"]["name"].as_str().unwrap_or("");
-    if request["jsonrpc"] != "2.0" || request["method"] != "tools/call" || request.get("id").is_none() || !known(name) {
-        return false;
-    }
-    let result = crate::toolbox::result(operator(shared, name, &request["params"]["arguments"]));
-    let body = json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string();
-    let _ = control_http::respond(stream, "200 OK", "application/json", body.as_bytes(), "", control_http::Policy::Embedded);
-    true
 }
 
 // ---------------------------------------------------------------- workers
@@ -680,13 +663,6 @@ pub(crate) fn prompt(packages: &[control_context::PackageInput]) -> String {
 // ---------------------------------------------------------------- CLI
 
 const USAGE: &str = "control package import NAME /absolute/path [--rev REF] [--commit SHA] [--description TEXT] [--usage TEXT] [--setup CMD]... [--entry PATH] [--run ID] [--chat ID] [--agent ID] [--evidence TEXT] [--recheck TEXT]\ncontrol package revoke NAME VERSION --reason TEXT\ncontrol package list [QUERY]\ncontrol package show NAME [VERSION]";
-pub fn cli(args: &[String]) -> io::Result<()> {
-    let (tool, arguments) = cli_request(args)?;
-    let mut hive = control_client::Hive::connect(&format!("http://{}", crate::config::server_addr()))?;
-    let result = hive.tool(tool, arguments)?;
-    println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
-    Ok(())
-}
 pub(crate) fn cli_request(args: &[String]) -> io::Result<(&'static str, Value)> {
     let usage = || fail(USAGE);
     let positional = args.iter().skip(1).take_while(|a| !a.starts_with("--")).cloned().collect::<Vec<_>>();

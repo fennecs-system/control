@@ -6,17 +6,12 @@ use reqwest::{
 };
 use serde_json::{Value, json};
 use std::{fs, io, time::Duration};
-const VERSION: &str = control_context::tool_policy::MCP_LATEST;
+const VERSION: &str = control_mcp::LATEST;
 pub mod channel;
 pub mod chats;
-pub mod github;
 pub mod operator;
 pub mod updates;
-// Client-facing contracts the server also writes or answers: the delivery feed,
-// user-facing URL names and diff previews.
-pub mod diff;
-pub mod outbox;
-pub mod url_names;
+use control_context::github;
 pub struct Hive {
     client: Client,
     endpoint: String,

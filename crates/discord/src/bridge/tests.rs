@@ -27,7 +27,7 @@ fn id(s: &str) -> DiscordId {
 }
 #[test]
 fn delivery_reserves_space_for_actual_changes_without_greening_or_losing_link() {
-    let change = control_client::outbox::Change {
+    let change = control_delivery::Change {
         text: "1 file · +1 −1".into(),
         output: "@@ -1 +1 @@\n-old\n+new\n".into(),
     };

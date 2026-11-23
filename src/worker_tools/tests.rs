@@ -1167,3 +1167,41 @@ fn a_cli_agent_gets_new_conversation_once_on_its_next_tool_result() {
     assert!(!first.to_string().contains("New callbacks"), "the inbox replaces the hint");
     assert!(!call("1-1").to_string().contains("north gate"), "shown once");
 }
+/// Pins the worker server's envelopes: the run is checked before the method,
+/// so an inactive run answers even an unknown method with -32602.
+#[test]
+fn worker_envelopes_are_pinned() {
+    let shared = Arc::new(Mutex::new(State::default()));
+    let request = |request: Value| json!({"nonce":"1","request":request});
+    for (envelope, expected) in [
+        (request(json!({"jsonrpc":"2.0","method":"notifications/initialized"})), Value::Null),
+        (request(json!({"jsonrpc":"1.0","id":1,"method":"ping"})), json!({"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}})),
+        (request(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":7}})), json!({"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"tools/call requires params.name"}})),
+        (request(json!({"jsonrpc":"2.0","id":3,"method":"prompts/list"})), json!({"jsonrpc":"2.0","id":3,"error":{"code":-32602,"message":"Run is not active"}})),
+        (request(json!({"jsonrpc":"2.0","id":4,"method":"initialize"})), json!({"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Run is not active"}})),
+        (request(json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"control_room_list"}})),
+            json!({"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"Run is not active"}],"isError":true}})),
+    ] {
+        assert_eq!(dispatch_raw(&shared, "missing", &envelope, None), expected, "{envelope}");
+    }
+    let mut state = State::default();
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "Envelope shapes", "test").unwrap();
+    state.runtime.runs[0].status = "running".into();
+    let run = state.runtime.runs[0].id.clone();
+    let shared = Arc::new(Mutex::new(state));
+    assert_eq!(dispatch_raw(&shared, &run, &request(json!({"jsonrpc":"2.0","id":6,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})), None),
+        json!({"jsonrpc":"2.0","id":6,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}}}));
+    assert_eq!(dispatch_raw(&shared, &run, &request(json!({"jsonrpc":"2.0","id":7,"method":"ping"})), None), json!({"jsonrpc":"2.0","id":7,"result":{}}));
+    assert_eq!(dispatch_raw(&shared, &run, &request(json!({"jsonrpc":"2.0","id":8,"method":"prompts/list"})), None),
+        json!({"jsonrpc":"2.0","id":8,"error":{"code":-32601,"message":"Unsupported worker method"}}));
+    let listed = dispatch_raw(&shared, &run, &request(json!({"jsonrpc":"2.0","id":9,"method":"tools/list"})), None);
+    assert!(listed["result"]["tools"].as_array().is_some_and(|tools| !tools.is_empty()), "{listed}");
+    let guidance = dispatch_raw(&shared, &run, &request(json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"control_guidance","arguments":{}}})), None);
+    assert_eq!(guidance["result"]["content"][0]["type"], "text", "{guidance}");
+    assert!(guidance["result"].get("isError").is_some());
+    assert_eq!(answer(&json!({"nonce":"3","request":[]}), |_| Value::Null),
+        json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Empty JSON-RPC batch"}}));
+    assert_eq!(answer(&json!({"nonce":"4","request":[42]}), |_| Value::Null),
+        json!([{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid JSON-RPC batch element"}}]));
+}

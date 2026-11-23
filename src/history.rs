@@ -481,14 +481,14 @@ fn outbox_path() -> io::Result<PathBuf> {
     #[cfg(test)]
     return Ok(std::env::temp_dir().join(format!("control-history-test-{}", std::process::id())).join("_outbox.jsonl"));
     #[cfg(not(test))]
-    control_client::outbox::path().map_err(io::Error::other)
+    control_delivery::path().map_err(io::Error::other)
 }
 /// Appends a delivery event for every run that reached a new deliverable
 /// status, for frontends following the outbox. Events are at least once; the
 /// caller's save records what was emitted, and followers deduplicate by run
 /// and status.
 pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) -> io::Result<()>) -> io::Result<()> {
-    use control_client::outbox::{Change, DELIVERABLE, Delivery};
+    use control_delivery::{Change, DELIVERABLE, Delivery};
     let mut emitted = Vec::new();
     for (index, run) in state.runtime.runs.iter().enumerate() {
         if !DELIVERABLE.contains(&run.status.as_str()) || run.emitted.as_deref() == Some(run.status.as_str()) {

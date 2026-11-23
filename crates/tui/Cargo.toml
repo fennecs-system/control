@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 control-client = { path = "../client" }
+control-diff = { path = "../diff" }
+control-url-names = { path = "../url-names" }
 control-config = { path = "../config" }
 control-context = { path = "../context" }
 control-ai = { path = "../ai" }
