@@ -31,9 +31,15 @@ Control picks the login from which private file exists under
 
 | File | Login |
 | --- | --- |
-| `gemini-api-key` (0600, created by the operator) | Gemini API key: `"modelProvider": "gemini"` and `GEMINI_API_KEY`. Billed to the key's project, not a subscription. |
+| `gemini-api-key` (0600, created by the operator, or by `control antigravity key` for an API-key account) | Gemini API key: `"modelProvider": "gemini"` and `GEMINI_API_KEY`. Billed to the key's project, not a subscription. |
 | `adc.json` (0600) | Google Cloud Application Default Credentials, with `AGY_ADC_AUTH=true`. |
 | `login/gemini/antigravity-cli/antigravity-oauth-token` | The Google sign-in that `control antigravity login` saved. |
+
+A named API-key account (`control accounts add antigravity NAME --kind api-key`,
+then `pbpaste | control antigravity key --account NAME`) always uses its
+`gemini-api-key`, never another file. With a key, Control's MCP server is
+started through `env -u GEMINI_API_KEY`, so only the CLI holds the key the
+entrypoint exports.
 
 Each file is mounted read-only into the CLI's own container and nowhere else:
 not into the workspace, the shell containers or the isolation probe. Control

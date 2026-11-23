@@ -1,6 +1,7 @@
 //! Port requests under the node's automatic approval policy. Service checks
 //! and DNS pinning are injected; the transition is the operator's `approve`.
 use super::*;
+use crate::runtime::RunStatus;
 use control::permissions::{AutoApproval, Mode};
 
 fn auto() -> AutoApproval {
@@ -104,7 +105,7 @@ fn public_https_is_approved_and_recorded_with_the_policy_as_decider() {
     drop(state);
     // The tool result carried the decision: no decision turn is queued.
     let mut state = shared.lock().unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let runs = state.runtime.runs.len();
     decisions::advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), runs);

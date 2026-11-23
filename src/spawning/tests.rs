@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use crate::{
     backend::Backend,
     identity::{Action, Actor},
@@ -18,7 +19,7 @@ pub(super) fn active() -> (State, String) {
         .unwrap();
     let run = s.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(chat);
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.target.backend = Backend::Codex;
     run.target.model = Some("captured-model".into());
     run.attempts.push(Attempt {
@@ -81,12 +82,12 @@ fn configured_override_is_captured_for_the_batch_and_bad_override_creates_nothin
 fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
     let (mut s, id) = active();
     let first = request(&mut s, &id, "parent-attempt", "nonce", input(3), |_| Ok(())).unwrap();
-    assert_eq!(s.runtime.runs[0].status, "running");
+    assert_eq!(s.runtime.runs[0].status, RunStatus::Running);
     assert!(!delegation::pausing(&s.runtime.runs[0]));
     assert_eq!(s.runtime.runs.len(), 4);
     assert_eq!(s.chats.len(), 4);
     for child in &s.runtime.runs[1..] {
-        assert_eq!(child.status, "queued");
+        assert_eq!(child.status, RunStatus::Queued);
         assert_eq!(child.target.model.as_deref(), Some("captured-model"));
         assert_eq!(child.target.backend, Backend::Codex);
         assert_eq!(child.persona.as_ref().unwrap().parent.as_deref(), Some(id.as_str()));
@@ -110,7 +111,7 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
     assert!(request(&mut restored, &id, "parent-attempt", "nonce", input(2), |_| Ok(())).is_err());
     assert_eq!(restored.runtime.runs.len(), 4);
     // A later human turn in the same chat can inspect the durable receipt.
-    restored.runtime.runs[0].status = "completed".into();
+    restored.runtime.runs[0].status = RunStatus::Completed;
     let parent_chat = restored.runtime.runs[0].chat_id.clone();
     restored
         .runtime
@@ -124,7 +125,7 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
         .unwrap();
     let next = restored.runtime.runs.last_mut().unwrap();
     next.chat_id = parent_chat;
-    next.status = "running".into();
+    next.status = RunStatus::Running;
     let next_id = next.id.clone();
     assert!(
         crate::delegated_results::prepare(
@@ -134,7 +135,7 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
         )
         .is_ok()
     );
-    restored.runtime.runs[1].status = "running".into();
+    restored.runtime.runs[1].status = RunStatus::Running;
     assert!(
         crate::delegated_results::prepare(
             &restored,
@@ -184,7 +185,7 @@ fn child_budget_authority_and_cancellation_are_shared_with_delegation() {
     assert!(delegation::budget(&s, &s.runtime.runs[0], Role::Worker).is_err());
     assert!(request(&mut s, &id, "parent-attempt", "another", input(1), |_| Ok(())).is_err());
     crate::lifecycle::request_cancel(&mut s.runtime, &id, &Actor::LocalOperator).unwrap();
-    assert!(s.runtime.runs[1..].iter().all(|run| run.status == "cancelled"));
+    assert!(s.runtime.runs[1..].iter().all(|run| run.status == RunStatus::Cancelled));
     let (mut s, id) = active();
     s.runtime.runs[0].action = Action::Improve;
     s.runtime.runs[0].attempts[0].parent_artifact = None;
@@ -212,7 +213,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
     );
     let mut s: State = serde_json::from_slice(&snapshot).unwrap();
     for child in &mut s.runtime.runs[1..11] {
-        child.status = "completed".into();
+        child.status = RunStatus::Completed;
     }
     s.runtime.runs[0].target.model = Some("new live model must not leak".into());
     let before = serde_json::to_vec(&s).unwrap();
@@ -227,7 +228,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
         assert_eq!(chat.workspace.as_deref(), Some("immutable-baseline"));
     }
     for run in &mut s.runtime.runs {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
     }
     reconcile(&mut s, |_| Ok(())).unwrap();
     assert_eq!(s.runtime.runs.len(), 51);
@@ -242,7 +243,7 @@ fn later_originating_turn_pages_and_cancels_backlog_atomically() {
     let (mut s, id) = active();
     let accepted = request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| Ok(())).unwrap();
     let batch = accepted["batch"].clone();
-    s.runtime.runs[0].status = "completed".into();
+    s.runtime.runs[0].status = RunStatus::Completed;
     let originating = s.runtime.runs[0].chat_id.clone();
     s.runtime
         .enqueue_for(
@@ -254,7 +255,7 @@ fn later_originating_turn_pages_and_cancels_backlog_atomically() {
         )
         .unwrap();
     let caller = s.runtime.runs.last_mut().unwrap();
-    caller.status = "running".into();
+    caller.status = RunStatus::Running;
     caller.chat_id = originating;
     let caller = caller.id.clone();
     let args = json!({"batch":batch,"offset":10,"limit":20});
@@ -285,7 +286,11 @@ fn later_originating_turn_pages_and_cancels_backlog_atomically() {
     )
     .unwrap();
     assert!(s.runtime.runs[0].spawns[0].cancelled);
-    assert!(s.runtime.runs[1..32].iter().all(|run| run.status == "cancelled"));
+    assert!(
+        s.runtime.runs[1..32]
+            .iter()
+            .all(|run| run.status == RunStatus::Cancelled)
+    );
     reconcile(&mut s, |_| panic!("Cancelled backlog cannot spawn")).unwrap();
     assert_eq!(s.runtime.runs.len(), 33);
     s.runtime.runs.last_mut().unwrap().chat_id = Some("unrelated-chat".into());
@@ -318,7 +323,7 @@ fn cancellation_revocation_and_intent_limits_fence_unmaterialized_work() {
 fn node_backlog_budget_is_shared_across_independent_roots() {
     let (mut s, id) = active();
     request(&mut s, &id, "parent-attempt", "fifty", input(50), |_| Ok(())).unwrap();
-    s.runtime.runs[0].status = "completed".into();
+    s.runtime.runs[0].status = RunStatus::Completed;
     s.runtime.execution.max_pending_agent_intents = 20;
     let next_chat = chat::create(&mut s);
     s.runtime
@@ -331,7 +336,7 @@ fn node_backlog_budget_is_shared_across_independent_roots() {
         )
         .unwrap();
     let root = s.runtime.runs.last_mut().unwrap();
-    root.status = "running".into();
+    root.status = RunStatus::Running;
     root.chat_id = Some(next_chat);
     root.attempts.push(crate::usage::Attempt {
         workspace_id: Some("other-attempt".into()),
@@ -354,13 +359,13 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
     let mut next = s.runtime.runs[1].clone();
     next.id = "continued-child".into();
     next.kind = RunKind::DelegationResult;
-    next.status = "running".into();
+    next.status = RunStatus::Running;
     next.attempts.push(crate::usage::Attempt {
         workspace_id: Some("continued-attempt".into()),
         parent_artifact: Some("child-baseline".into()),
         ..Default::default()
     });
-    s.runtime.runs[1].status = "continued".into();
+    s.runtime.runs[1].status = RunStatus::Continued;
     s.runtime.runs[1].delegation = Some(delegation::Delegation {
         input: delegation::Input {
             model: None,
@@ -398,9 +403,9 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
     );
     assert_eq!(serde_json::to_vec(&s).unwrap(), before);
     manage(&mut s, &id, "control_agent_spawn_cancel", &args, |_| Ok(())).unwrap();
-    assert_eq!(s.runtime.runs[2].status, "cancelling");
+    assert_eq!(s.runtime.runs[2].status, RunStatus::Cancelling);
     assert!(s.runtime.runs[2].spawns[0].cancelled);
-    assert!(s.runtime.runs[3..].iter().all(|run| run.status == "cancelled"));
+    assert!(s.runtime.runs[3..].iter().all(|run| run.status == RunStatus::Cancelled));
     reconcile(&mut s, |_| panic!("Descendant backlog must remain fenced")).unwrap();
 }
 #[test]
@@ -411,7 +416,7 @@ fn configured_team_above_legacy_graph_limit_remains_inspectable() {
     request(&mut s, &id, "parent-attempt", "large-team", input(1030), |_| Ok(())).unwrap();
     while s.runtime.runs[0].spawns[0].pending() > 0 {
         for child in &mut s.runtime.runs[1..] {
-            child.status = "completed".into();
+            child.status = RunStatus::Completed;
         }
         reconcile(&mut s, |_| Ok(())).unwrap();
     }
@@ -424,7 +429,7 @@ fn configured_team_above_legacy_graph_limit_remains_inspectable() {
 #[ignore = "manual optimized profile of the no-backlog reconciliation path"]
 fn profile_idle_backlog_reconciliation() {
     let (mut s, _) = active();
-    s.runtime.runs[0].status = "completed".into();
+    s.runtime.runs[0].status = RunStatus::Completed;
     let template = s.runtime.runs[0].clone();
     for index in 0..20000 {
         let mut run = template.clone();
@@ -549,7 +554,7 @@ fn an_advisor_never_uses_the_teams_member_capacity() {
     // Spawning it returned at once: the lead's turn keeps running.
     assert_eq!(
         s.runtime.runs.iter().find(|run| run.id == id).unwrap().status,
-        "running"
+        RunStatus::Running
     );
 }
 #[test]
@@ -618,7 +623,7 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
     // The advisor's batch aborted the completion scan too, so no parent on the
     // node heard that its workers had finished.
     for run in s.runtime.runs.iter_mut().filter(|run| run.kind == RunKind::Spawned) {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
     }
     for _ in 0..3 {
         reconcile(&mut s, |_| Ok(())).unwrap();
@@ -626,7 +631,7 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
     assert!(s.runtime.runs.iter().any(|run| run.kind == RunKind::AgentCompletion));
     // Once the workers are announced the scan reaches the advisor's batch.
     for run in &mut s.runtime.runs {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
     }
     reconcile(&mut s, |_| Ok(())).unwrap();
 }

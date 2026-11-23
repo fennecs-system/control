@@ -3,6 +3,7 @@
 //! each woken by a room post after a dozen earlier callbacks.
 use super::*;
 use crate::delegation::{Persona, Role};
+use crate::runtime::RunStatus;
 
 struct Team {
     state: State,
@@ -45,7 +46,7 @@ fn turn(
         run.lenses = seed.lenses.clone();
     }
     run.persona = persona;
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     *run.result = "Claimed the next milestone; routine running; waiting on its events.".into();
     let id = run.id.clone();
     let session = state.chats.iter_mut().find(|c| c.id == chat).unwrap();
@@ -70,7 +71,7 @@ fn team() -> Team {
     .unwrap();
     let seed = state.runtime.runs[0].clone();
     assert!(seed.context.is_some(), "the lead captures its lens context");
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let root = seed.id.clone();
     let member_chat = chat_with(&mut state, Some(&lead_chat), &["swarm", "advisor"]);
     let worker = Persona {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::unix_seconds as now;
+use crate::runtime::RunStatus;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +11,7 @@ fn running(timeout: Option<u64>) -> (State, String, String) {
     crate::chat::send(&mut state, &chat, "Steer the team", "test").unwrap();
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let run = &mut state.runtime.runs[0];
-    assert_eq!(run.status, "running");
+    assert_eq!(run.status, RunStatus::Running);
     let attempt = run.attempts.last_mut().unwrap();
     assert!(attempt.turn_mailbox.is_some());
     (attempt.started_unix, attempt.explicit_timeout_seconds) = (1000, timeout);
@@ -27,7 +28,7 @@ fn member(state: &mut State, parent: &str, status: &str) -> String {
         .unwrap()
         .parent_chat = Some(parent.into());
     crate::chat::send(state, &child, "Member work", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = status.into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::named(status);
     child
 }
 
@@ -86,7 +87,7 @@ fn explicit_limits_replace_the_default_and_finished_runs_are_not_nudged() {
     );
     // Finished runs are not nudged.
     let (mut state, _, run) = running(None);
-    state.runtime.runs[0].status = "failed".into();
+    state.runtime.runs[0].status = RunStatus::Failed;
     assert!(notes(&mut state, &run, "control_room_read", 1000 + 590).is_empty());
 }
 

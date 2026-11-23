@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 #[test]
 #[ignore = "release approval admission benchmark/perf fixture; synthetic state, no models"]
@@ -12,7 +13,7 @@ fn profile_approval_resume() {
     for retained in [16, 1024, 20_001] {
         let (mut state, chat, _) = requested();
         let mut template = state.runtime.runs.pop().unwrap();
-        template.status = "completed".into();
+        template.status = RunStatus::Completed;
         state.runtime.runs = (0..retained)
             .map(|index| {
                 let mut run = template.clone();

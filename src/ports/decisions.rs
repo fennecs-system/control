@@ -46,11 +46,7 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
     // A turn cut off before its handoff (time limit, step cap, provider
     // failure) left a host checkpoint; its request still belongs to the chat.
     let cut_off = crate::attempt_control::cut_off(origin);
-    if (!cut_off
-        && matches!(
-            origin.status.as_str(),
-            "cancelled" | "cancelling" | "failed" | "interrupted" | "blocked"
-        ))
+    if (!cut_off && origin.status.is_stopped())
         || !origin
             .attempts
             .iter()
@@ -137,10 +133,12 @@ fn advance_with_wake(
             let Some(chat) = root.chat_id.as_deref() else {
                 return false;
             };
-            if state.runtime.runs.iter().any(|run| {
-                run.chat_id.as_deref() == Some(chat)
-                    && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
-            }) {
+            if state
+                .runtime
+                .runs
+                .iter()
+                .any(|run| run.chat_id.as_deref() == Some(chat) && run.status.is_active())
+            {
                 return false;
             }
             let mut pending = false;

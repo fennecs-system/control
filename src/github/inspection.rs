@@ -1,5 +1,6 @@
 //! Bounded repository inspection over the existing credential broker. No writes.
 use super::*;
+use crate::runtime::RunStatus;
 use crate::tool_registry::{AttemptCall, AttemptTools};
 use control_context::github::{Query, Section};
 
@@ -90,7 +91,7 @@ pub(super) fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
                 .runtime
                 .runs
                 .iter()
-                .find(|r| r.id == run && r.status == "running")
+                .find(|r| r.id == run && r.status == RunStatus::Running)
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;
             if run.action != Action::Improve
                 || crate::delegation::is_judge(run)

@@ -156,8 +156,8 @@ impl Events for Live {
 }
 
 /// A failure as the attempt records it: its status and wording.
-pub(crate) fn status(failure: &Failure) -> (&'static str, String) {
-    (failure.status().as_str(), failure.message())
+pub(crate) fn status(failure: &Failure) -> (control_agent::Status, String) {
+    (failure.status(), failure.message())
 }
 
 /// Applies a finished turn to the attempt: launch, usage, and the activity
@@ -167,7 +167,7 @@ pub(crate) fn finish(
     attempt: &mut Attempt,
     bridge: Bridge<'_>,
     id: &str,
-) -> Result<String, (&'static str, String)> {
+) -> Result<String, (control_agent::Status, String)> {
     let result = match outcome {
         Outcome::NotLaunched(failure) => Err(failure),
         Outcome::Launched { result, usage } => {

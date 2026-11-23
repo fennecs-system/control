@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use control_comonad::Store;
 
 fn chat(turns: usize, text: usize) -> (State, String) {
@@ -7,7 +8,7 @@ fn chat(turns: usize, text: usize) -> (State, String) {
     for turn in 0..turns {
         crate::chat::send(&mut state, &id, &format!("turn {turn} {}", "x".repeat(text)), "test").unwrap();
         let run = state.runtime.runs.last_mut().unwrap();
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         *run.result = format!("reply {turn}");
     }
     (state, id)

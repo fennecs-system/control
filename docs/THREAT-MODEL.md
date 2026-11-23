@@ -83,6 +83,21 @@ arbitrary downloaded code safe.
   [streams.rs](../crates/ai/tests/streams.rs), and
   [ANTIGRAVITY.md](ANTIGRAVITY.md) for Antigravity's offline checks.
 
+- **API keys.** A key is in one private file and reaches a turn only as a
+  typed read-only secret mount in the CLI's own container: never in an
+  argument, `RunSpec.env`, a file Control writes, an activity record, a
+  diagnostic or a published workspace (canary tests in
+  `src/worker/tests/attempts.rs`, one per backend). What keeps the model from
+  reading it today differs by backend. Codex: its own sandbox denies reads of
+  its configuration directory, where the key's `auth.json` is mounted
+  (verified earlier by experiment). Claude and Grok: their built-in tools are
+  removed and the model's shell is a separate offline container with no
+  secret; Claude reads the key through its `apiKeyHelper`, Grok through
+  `XAI_API_KEY` exported inside the CLI's process. Antigravity: its built-in
+  tools are denied only by the CLI's own permission rules (checked offline,
+  see above), which is weaker; its shell is likewise a separate container. A credential-injecting proxy,
+  so that no key enters a container at all, is the planned stronger guarantee.
+
 - **Malicious builds and base-image integrity.** Pinned Nix images run non-root
   with dropped capabilities, no-new-privileges and resource limits. Lite and
   credential-bearing harnesses keep read-only roots. Opt-in Full tool containers

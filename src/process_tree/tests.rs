@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 fn tree(edges: &[(usize, usize)], n: usize) -> Vec<Vec<usize>> {
     let mut children = vec![Vec::new(); n];
@@ -178,7 +179,7 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
         .enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(other);
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let both = render(&state, "").unwrap();
     assert_eq!(
         both.matches(&format!(" {low:.1})'")).count(),
@@ -189,7 +190,7 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
         .runtime
         .runs
         .iter_mut()
-        .for_each(|run| run.status = "completed".into());
+        .for_each(|run| run.status = RunStatus::Completed);
     assert!(
         render(&state, "").is_none(),
         "trees without bots, services or active turns are omitted"
@@ -206,7 +207,7 @@ fn nodes_show_callsigns_and_renames() {
         .runtime
         .enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
     state.runtime.runs[0].chat_id = Some(worker.clone());
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let svg = render(&state, "").unwrap();
     let lead_name = crate::callsigns::name(&state.chats, &lead).unwrap().into_owned();
     assert!(svg.contains(&format!(">{lead_name}</text>")), "{svg}");

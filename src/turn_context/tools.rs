@@ -1,5 +1,6 @@
 //! Active-session callbacks and recovery drafts. No provider-specific protocol.
 use super::*;
+use crate::runtime::RunStatus;
 use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools};
 #[cfg(test)]
 use control_context::turn_mailbox::Mailbox;
@@ -359,7 +360,7 @@ pub(crate) fn inbox(state: &mut State, id: &str, save: impl FnOnce(&State) -> io
         .runtime
         .runs
         .iter()
-        .position(|r| r.id == id && r.status == "running")?;
+        .position(|r| r.id == id && r.status == RunStatus::Running)?;
     let run = &state.runtime.runs[index];
     let attempt = run.attempts.last()?;
     let generation = attempt.workspace_id.as_deref()?;
@@ -755,7 +756,7 @@ fn reject(state: &mut State, attempt: &AttemptRef<'_>, error: &str) {
         .iter()
         .find(|r| {
             r.id == attempt.run
-                && r.status == "running"
+                && r.status == RunStatus::Running
                 && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .and_then(|r| r.chat_id.clone())
@@ -791,7 +792,7 @@ fn respond(
         .iter()
         .position(|r| {
             r.id == attempt.run
-                && r.status == "running"
+                && r.status == RunStatus::Running
                 && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or_else(|| err(format!("Attempt is not active: this turn has ended. {OPERATOR_FIX}")))?;

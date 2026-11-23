@@ -1,10 +1,11 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 /// A team root with one worker; the worker's turn spent tokens just now.
 fn team(state: &mut State, goal: &str) -> (String, String) {
     let root = crate::chat::create(state);
     crate::chat::send(state, &root, goal, "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     let worker = crate::chat::create(state);
     state
         .chats
@@ -14,7 +15,7 @@ fn team(state: &mut State, goal: &str) -> (String, String) {
         .parent_chat = Some(root.clone());
     crate::chat::send(state, &worker, "Build the wall", "test").unwrap();
     let run = state.runtime.runs.last_mut().unwrap();
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     run.attempts = vec![crate::usage::Attempt {
         started_unix: now(),
         tokens: Some(control_ai::Tokens {
@@ -178,7 +179,7 @@ fn member(state: &mut State, root: &str, ago: u64) -> String {
         .parent_chat = Some(root.to_owned());
     crate::chat::send(state, &chat, "Work", "test").unwrap();
     let run = state.runtime.runs.last_mut().unwrap();
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     run.id = format!("{:x}-t", u128::from(now() - ago - 40) * 1_000_000_000);
     run.attempts = vec![crate::usage::Attempt {
         started_unix: now() - ago,
@@ -204,13 +205,13 @@ fn a_team_brief_lists_each_member_s_activity() {
     let (root, _) = team(&mut state, "Build a castle");
     let active = member(&mut state, &root, 60);
     crate::chat::send(&mut state, &active, "Next", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "running".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
     claim(&mut state, &active, "wall", "working");
     let holder = member(&mut state, &root, 900);
     claim(&mut state, &holder, "gate", "working");
     // A peer's message is retained as a completed run with no attempt: not a turn.
     crate::chat::send(&mut state, &holder, "Peer note", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     let free = member(&mut state, &root, 1_200);
     claim(&mut state, &free, "roof", "done");
     state.watches.push(serde_json::from_value(json!({"id":"w","name":"n","chat":free,"service":"s","generation":1,"permanent":true,"command":"c","stopped":false})).unwrap());

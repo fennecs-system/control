@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 fn run(remote: &mut impl Remote, name: &str, args: &Value) -> io::Result<String> {
     call(remote, name, args, Approvals::default())
@@ -567,7 +568,7 @@ fn design_ask_from_outside_a_run_raises_an_operator_question_on_the_decisions_de
             .runtime
             .runs
             .iter()
-            .all(|r| r.status == "completed" && r.attempts.is_empty())
+            .all(|r| r.status == RunStatus::Completed && r.attempts.is_empty())
     );
     assert!(
         run(&mut remote, "chat_requests", &json!({"id":desk}))
@@ -616,7 +617,7 @@ fn the_asker_withdraws_its_question_and_history_keeps_it() {
         .iter()
         .find(|r| r.question.as_ref().is_some_and(|q| q.id == *moot.as_str()))
         .unwrap();
-    assert_eq!(held.status, "cancelled");
+    assert_eq!(held.status, RunStatus::Cancelled);
     let crate::design::Status::Withdrawn { withdrawn, asked_at } = &held.question.as_ref().unwrap().status else {
         panic!("withdrawn questions keep their record")
     };
@@ -680,7 +681,7 @@ fn an_agents_question_is_withdrawn_only_for_the_operator_and_its_run_ends_withou
     assert_eq!(withdrawn.by, crate::design::Withdrawer::Operator);
     // Released as a cancel releases it: no continuation, the chat is free and
     // the published workspace is unchanged.
-    assert_eq!(held.status, "cancelled");
+    assert_eq!(held.status, RunStatus::Cancelled);
     assert_eq!(remote.state.runtime.runs.len(), 1);
     assert_eq!(crate::scheduler::phase(held), control_core::scheduling::Phase::Inactive);
     assert_eq!(remote.state.chats[0].workspace.as_deref(), Some("last-good"));
@@ -764,7 +765,7 @@ fn design_ask_in_a_named_chat_never_pauses_a_turn() {
             .find(|r| r.id == run_id)
             .unwrap()
             .status,
-        "cancelled"
+        RunStatus::Cancelled
     );
 }
 

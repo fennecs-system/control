@@ -1,4 +1,5 @@
 //! Bounded node execution with deterministic per-conversation ownership.
+use crate::runtime::RunStatus;
 use crate::runtime::Runtime;
 use control_core::scheduling::{self, AttemptStamp, Capacity, Phase};
 use std::io;
@@ -166,14 +167,20 @@ fn load_limits_in(path: &std::path::Path, override_limit: Option<std::ffi::OsStr
 
 #[inline]
 pub(crate) fn phase(run: &crate::runtime::Run) -> Phase {
-    match run.status.as_str() {
-        "queued" => Phase::Queued,
-        "running" => Phase::Running,
-        "cancelling" => Phase::Cancelling,
-        "waiting" => Phase::Waiting {
+    match run.status {
+        RunStatus::Queued => Phase::Queued,
+        RunStatus::Running => Phase::Running,
+        RunStatus::Cancelling => Phase::Cancelling,
+        RunStatus::Waiting => Phase::Waiting {
             reserves_chat: run.delegation.is_some() || run.question.as_ref().is_some_and(|q| q.pending()),
         },
-        _ => Phase::Inactive,
+        RunStatus::Completed
+        | RunStatus::Blocked
+        | RunStatus::Failed
+        | RunStatus::Interrupted
+        | RunStatus::Cancelled
+        | RunStatus::Continued
+        | RunStatus::Unrecognised(_) => Phase::Inactive,
     }
 }
 #[inline]
@@ -224,7 +231,7 @@ fn next_where(runtime: &Runtime, permitted: impl Fn(&crate::runtime::Run) -> boo
         .runs
         .iter()
         .enumerate()
-        .filter(|(_, run)| run.status == "queued" && permitted(run))
+        .filter(|(_, run)| run.status == RunStatus::Queued && permitted(run))
     {
         if let Some(chat) = run.chat_id.as_deref() {
             heads
@@ -234,7 +241,7 @@ fn next_where(runtime: &Runtime, permitted: impl Fn(&crate::runtime::Run) -> boo
         }
     }
     let candidate = |index: usize, run: &crate::runtime::Run| {
-        run.status == "queued"
+        run.status == RunStatus::Queued
             && permitted(run)
             && run
                 .chat_id
@@ -274,7 +281,7 @@ struct Lane<'a> {
 }
 impl scheduling::RunView for Lane<'_> {
     fn phase(&self) -> Phase {
-        if self.run.status == "queued" && !self.queued {
+        if self.run.status == RunStatus::Queued && !self.queued {
             Phase::Inactive
         } else {
             phase(self.run)
@@ -314,20 +321,20 @@ impl scheduling::RunView for crate::runtime::Run {
     }
     #[inline]
     fn occupies_slot(&self) -> bool {
-        matches!(self.status.as_str(), "running" | "cancelling")
+        self.status.occupies_slot()
     }
     #[inline]
     fn is_queued(&self) -> bool {
-        self.status == "queued"
+        self.status == RunStatus::Queued
     }
     #[inline]
     fn is_pending(&self) -> bool {
-        matches!(self.status.as_str(), "queued" | "running" | "cancelling" | "waiting")
+        self.status.is_active()
     }
     #[inline]
     fn reserves_chat(&self) -> bool {
         self.occupies_slot()
-            || (self.status == "waiting"
+            || (self.status == RunStatus::Waiting
                 && (self.delegation.is_some() || self.question.as_ref().is_some_and(|q| q.pending())))
     }
 }

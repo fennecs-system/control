@@ -19,11 +19,10 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
             run.id = format!("bench-{index}-{turn}");
             run.chat_id = Some(chat.clone());
             run.status = if (index + turn) % 20 == 0 {
-                "failed"
+                RunStatus::Failed
             } else {
-                "completed"
-            }
-            .into();
+                RunStatus::Completed
+            };
             run.attempts = vec![crate::usage::Attempt::default()];
             state.runtime.runs.push(run);
         }

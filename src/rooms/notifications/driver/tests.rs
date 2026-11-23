@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use operation::Effect;
 use std::{
     cell::RefCell,
@@ -15,7 +16,7 @@ fn fixture() -> State {
         &serde_json::json!({"enabled":true,"wake":true}),
     )
     .unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     state
 }
 fn queued(state: &State) -> operation::Change {

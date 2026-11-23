@@ -65,7 +65,7 @@ impl Agent for Claude {
         Runs::Cli(self)
     }
     fn private_names(&self) -> &'static [&'static str] {
-        &[".claude", ".claude.json", ".mcp.json"]
+        &[".claude", ".claude.json", ".mcp.json", KEY_FILE]
     }
     fn host_shell(&self) -> bool {
         true
@@ -98,7 +98,7 @@ impl Turns for Claude {
 pub const PROBE_TIMED_OUT: &str = "Claude tool isolation probe timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
 pub const PROBE: Probe = Probe {
     directory: "claude-isolation-probe",
-    command: "set -eu; test ! -e /home/agent/.claude/.credentials.json; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.claude/.credentials.json; test -z \"${ANTHROPIC_API_KEY-}${CLAUDE_CODE_OAUTH_TOKEN-}\"; printf verified > isolation-check",
+    command: "set -eu; test ! -e /home/agent/.claude/.credentials.json; test ! -e /home/agent/.control-key; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.claude/.credentials.json; test -z \"${ANTHROPIC_API_KEY-}${CLAUDE_CODE_OAUTH_TOKEN-}\"; printf verified > isolation-check",
     timed_out: PROBE_TIMED_OUT,
     failed: "Claude workspace isolation check failed; no credentials were mounted",
 };
@@ -156,8 +156,7 @@ fn text_container(
         ..cli::base(name, node, owner)
     }
     .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner));
-    Ok(login
-        .mount(spec, "claude/credentials", CREDENTIALS)?
+    Ok(mount(spec, login)?
         .bind(cli::checked(workspace)?, "/workspace", Access::ReadOnly)
         .args([
             "claude",
@@ -179,7 +178,8 @@ fn text_container(
             "dontAsk",
             "--model",
             model,
-        ]))
+        ])
+        .args(settings(login)))
 }
 
 fn turn_container(
@@ -202,8 +202,7 @@ fn turn_container(
         ..cli::base(name, node, owner)
     }
     .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner));
-    Ok(login
-        .mount(spec, "claude/credentials", CREDENTIALS)?
+    Ok(mount(spec, login)?
         .bind(cli::checked(mailbox)?, "/workspace", Access::ReadWrite)
         .args([
             "claude",
@@ -227,7 +226,38 @@ fn turn_container(
             &tools,
             "--model",
             model,
-        ]))
+        ])
+        .args(settings(login)))
+}
+
+/// The name of an API-key account's key file, in its directory and here.
+const KEY_FILE: &str = "anthropic-api-key";
+const KEY: &str = "/home/agent/.control-key/anthropic-api-key";
+/// Claude runs `apiKeyHelper` itself and keeps what it prints in memory
+/// (`claude --help`: under `--bare` "Anthropic auth is strictly
+/// ANTHROPIC_API_KEY or apiKeyHelper via --settings"; `--restricted` keeps
+/// `--settings`). Verified offline in the pinned image: the init event
+/// reports `"apiKeySource":"apiKeyHelper"`. The setting names only the
+/// file, so no argument, variable or file Control writes holds the key, and
+/// the CLI's own tools that could read the file are removed.
+const KEY_SETTINGS: &str = concat!(
+    r#"{"apiKeyHelper":"cat "#,
+    "/home/agent/.control-key/anthropic-api-key",
+    r#""}"#
+);
+/// The login, mounted read-only where the CLI reads its form of it.
+fn mount(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
+    match login.form() {
+        Form::ApiKey => login.mount(spec, "claude/api-key", KEY),
+        Form::Session | Form::CloudDefault => login.mount(spec, "claude/credentials", CREDENTIALS),
+    }
+}
+/// The flags that point Claude at an API key; a sign-in needs none.
+fn settings(login: &Granted) -> &'static [&'static str] {
+    match login.form() {
+        Form::ApiKey => &["--settings", KEY_SETTINGS],
+        Form::Session | Form::CloudDefault => &[],
+    }
 }
 
 /// `control claude login | check`.
@@ -244,7 +274,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     if !matches!(args, [a] if a == "login" || a == "check") {
         if matches!(args, [a] if a == "--help" || a == "-h" || a == "help") {
             println!(
-                "control claude login: sign in inside the pinned Nix Claude container\ncontrol claude check: offline tool isolation check, then a fake-credential canary in a turn container; no real credentials or model calls"
+                "control claude login: sign in inside the pinned Nix Claude container\ncontrol claude key --account NAME: save an API-key account's key from standard input\ncontrol claude check: offline tool isolation check, then a fake-credential canary in a turn container for each login form; no real credentials or model calls"
             );
             return Ok(());
         }
@@ -299,14 +329,19 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     }
 }
 
-/// The credential canary in a turn's own container, on a fake credential.
+/// The credential canary in a turn's own container, for each form of login,
+/// on a fake credential.
 fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io::Result<()> {
     let mailbox = root.join(CLI.mailbox);
     fs::create_dir_all(&mailbox)?;
     let name = format!("control-claude-probe-{}-canary", std::process::id());
-    cli::canary_check(isolation, root, Form::Session, CREDENTIALS, |login| {
-        turn_container(&name, node, login, &mailbox, image, "canary")
-    })
+    [(Form::Session, CREDENTIALS), (Form::ApiKey, KEY)]
+        .into_iter()
+        .try_for_each(|(form, target)| {
+            cli::canary_check(isolation, root, form, target, |login| {
+                turn_container(&name, node, login, &mailbox, image, "canary")
+            })
+        })
 }
 
 fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {

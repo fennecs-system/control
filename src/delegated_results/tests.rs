@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::{
     backend::Backend,
     delegation::{Delegation, Input as Task, Persona, Role},
@@ -62,12 +63,12 @@ pub(crate) fn fixture() -> State {
         .unwrap();
     let parent = &mut s.runtime.runs[0];
     parent.id = "parent".into();
-    parent.status = "continued".into();
+    parent.status = RunStatus::Continued;
     parent.chat_id = Some(parent_chat);
     parent.attempts.push(Attempt {
         workspace_id: Some("parent-attempt-1".into()),
         artifact: Some("parent-attempt-1".into()),
-        status: "waiting".into(),
+        status: crate::usage::AttemptStatus::Waiting,
         ..Attempt::default()
     });
     parent.delegation = Some(Delegation {
@@ -89,7 +90,7 @@ pub(crate) fn fixture() -> State {
     let mut child = parent.clone();
     child.id = "child".into();
     child.kind = RunKind::Delegated;
-    child.status = "completed".into();
+    child.status = RunStatus::Completed;
     child.delegation = None;
     child.chat_id = Some(child_chat);
     child.persona = Some(Persona {
@@ -103,13 +104,13 @@ pub(crate) fn fixture() -> State {
         workspace_id: Some("child-attempt-1".into()),
         artifact: Some("child-attempt-1".into()),
         parent_artifact: Some("parent-attempt-1".into()),
-        status: "completed".into(),
+        status: crate::usage::AttemptStatus::Completed,
         ..Attempt::default()
     }];
     child.result = "All requested changes implemented and verified".into();
     let mut resumed = parent.clone();
     resumed.id = "resumed".into();
-    resumed.status = "running".into();
+    resumed.status = RunStatus::Running;
     resumed.delegation = None;
     resumed.attempts.clear();
     resumed.persona = Some(Persona {
@@ -243,7 +244,7 @@ fn sibling_and_unrelated_same_actor_chats_do_not_gain_access() {
     let mut s = fixture();
     let mut sibling = s.runtime.runs[1].clone();
     sibling.id = "sibling".into();
-    sibling.status = "running".into();
+    sibling.status = RunStatus::Running;
     sibling.persona.as_mut().unwrap().role = Role::Judge;
     let sibling_chat = crate::chat::create(&mut s);
     sibling.chat_id = Some(sibling_chat);
@@ -260,7 +261,7 @@ fn sibling_and_unrelated_same_actor_chats_do_not_gain_access() {
 fn live_failed_and_missing_artifacts_never_fall_back_to_workspaces() {
     for status in ["running", "waiting", "failed", "interrupted", "cancelled"] {
         let mut s = fixture();
-        s.runtime.runs[1].status = status.into();
+        s.runtime.runs[1].status = RunStatus::named(status);
         assert!(prepare(&s, "resumed", json!({"child":"child","section":"summary"})).is_err());
     }
     let mut s = fixture();
@@ -340,7 +341,7 @@ fn child_continuations_are_followed_but_forged_cross_chat_chains_are_denied() {
     next.id = "child-continuation".into();
     next.attempts[0].workspace_id = Some("child-continuation-attempt-1".into());
     next.attempts[0].artifact = Some("child-continuation-attempt-1".into());
-    s.runtime.runs[1].status = "continued".into();
+    s.runtime.runs[1].status = RunStatus::Continued;
     let mut d = s.runtime.runs[0].delegation.clone().unwrap();
     d.child = None;
     d.continuation = Some(next.id.clone());

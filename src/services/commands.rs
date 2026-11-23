@@ -1,6 +1,7 @@
 //! Durable commands inside an exact, credential-free service. No host paths or
 //! engine options enter the request. Uncertain effects are never replayed.
 use super::*;
+use crate::runtime::RunStatus;
 use control_effect::sync::{CancelToken, Changes, Recv};
 use std::{io::Read, process::Child, thread::JoinHandle, time::Instant};
 mod routine;
@@ -264,7 +265,7 @@ impl Receipt {
 pub(super) fn live_attempt(runs: &[crate::runtime::Run], run: &str, attempt: &str) -> bool {
     runs.iter().any(|r| {
         r.id == run
-            && r.status == "running"
+            && r.status == RunStatus::Running
             && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt)
     })
 }

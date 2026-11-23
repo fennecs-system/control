@@ -100,14 +100,23 @@ fn every_run_denies_the_clis_own_tools_and_only_a_turn_allows_controls() {
     assert!(!FLAGS.contains(&"--dangerously-skip-permissions"));
     assert_eq!(FLAGS[0], "--disable-slash-commands");
     // Every Control tool is eager, under the server name the decoder expects.
-    let mcp = mcp_config();
+    let mcp = mcp_config(Form::Session);
     let server = &mcp["mcpServers"]["control"];
     assert_eq!(server["command"], "/bin/control-room-mcp");
-    // The transport never inherits an API key from the CLI.
-    assert_eq!(server["env"]["GEMINI_API_KEY"], "");
     for name in control_context::worker_mcp_names() {
         assert_eq!(server["tools"][name]["eager"], true, "{name}");
     }
+    // With a key, the server starts without the variable the entrypoint exports.
+    let keyed = mcp_config(Form::ApiKey);
+    let server = &keyed["mcpServers"]["control"];
+    assert_eq!(
+        (&server["command"], &server["args"]),
+        (
+            &json!("/bin/env"),
+            &json!(["-u", "GEMINI_API_KEY", "/bin/control-room-mcp"])
+        )
+    );
+    assert_eq!(server["tools"], mcp["mcpServers"]["control"]["tools"]);
 }
 
 #[test]
@@ -116,7 +125,7 @@ fn a_turn_keeps_its_configuration_and_prompt_private_beside_the_workspace() {
     let private = prepare(
         &root,
         &granted(Form::Session, &root),
-        Some(&mcp_config()),
+        Some(&mcp_config(Form::Session)),
         Some("objective"),
     )
     .unwrap();

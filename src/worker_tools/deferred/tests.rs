@@ -1,5 +1,6 @@
 use super::*;
 use crate::State;
+use crate::runtime::RunStatus;
 use std::sync::{Arc, Mutex};
 
 fn facts(role: Audience) -> Facts {
@@ -325,7 +326,7 @@ fn member_state() -> (String, Value) {
     let lead = crate::chat::create(&mut state);
     state.chats[0].room = Some("general".into());
     crate::chat::send(&mut state, &lead, "Lead the team", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let chat = crate::chat::create(&mut state);
     let session = state.chats.iter_mut().find(|c| c.id == chat).unwrap();
     (session.parent_chat, session.room) = (Some(lead), Some("general".into()));
@@ -340,7 +341,7 @@ fn member_state() -> (String, Value) {
     });
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let id = state.runtime.runs[index].id.clone();
-    assert_eq!(state.runtime.runs[index].status, "running");
+    assert_eq!(state.runtime.runs[index].status, RunStatus::Running);
     (id, serde_json::to_value(&state).unwrap())
 }
 fn fresh(snapshot: &Value) -> Arc<Mutex<State>> {

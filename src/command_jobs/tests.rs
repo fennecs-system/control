@@ -5,6 +5,7 @@ fn command_deadline_respects_owner_without_limiting_persistent_service_lifetime(
     assert!(super::effective_deadline(600, 600, Some(600)).is_err());
 }
 use super::*;
+use crate::runtime::RunStatus;
 use crate::tool_registry::{AttemptCall, AttemptTools, LocalHost};
 fn call(
     shared: &Arc<Mutex<State>>,
@@ -40,7 +41,7 @@ fn fixture() -> (State, String, String) {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "fixture", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     let generation = format!("{}-attempt-1", run.id);
     run.attempts.push(Attempt {
         workspace_id: Some(generation.clone()),
@@ -79,7 +80,7 @@ fn status_cannot_cross_attempt_or_job_boundaries() {
         .to_string()
         .contains("Unknown job")
     );
-    state.lock().unwrap().runtime.runs[0].status = "cancelled".into();
+    state.lock().unwrap().runtime.runs[0].status = RunStatus::Cancelled;
     assert!(
         call(
             &state,
@@ -418,7 +419,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     // retain their independent captured image and immutable container ID.
     let recovered: State = serde_json::from_slice(&serde_json::to_vec(&*state.lock().unwrap()).unwrap()).unwrap();
     let mut recovered = recovered;
-    recovered.runtime.runs[0].status = "interrupted".into();
+    recovered.runtime.runs[0].status = RunStatus::Interrupted;
     crate::lifecycle::reconcile(
         crate::engine::isolation(),
         &crate::lifecycle::owners(&recovered.runtime.runs),

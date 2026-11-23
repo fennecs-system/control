@@ -314,6 +314,68 @@ const LOGIN: &[&str] = &[
     "--device-auth",
 ];
 
+/// An API-key account's containers: the key is one read-only secret mount,
+/// `control-grok` exports it for Grok alone, and Control's MCP server starts
+/// without it.
+#[test]
+fn an_api_key_is_mounted_and_exported_only_inside_grok() {
+    let root = std::env::temp_dir().join(format!("control-grok-key-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let key = root.join(KEY_FILE);
+    cli::private_file(&key, "xai-CANARY").unwrap();
+    let meta = fs::symlink_metadata(&key).unwrap();
+    let granted = Granted::located(
+        Form::ApiKey,
+        key.clone(),
+        User {
+            uid: meta.uid(),
+            gid: meta.gid(),
+        },
+    );
+    let call = TextCall {
+        image: "sha256:img",
+        name: "control-summary-1",
+        workspace: &root,
+        node: "node-1",
+        model: "grok-4.7",
+        login: Some(&granted),
+    };
+    let text = text_container(&call, &granted).unwrap();
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        &granted,
+        &root.join("grok-config.toml"),
+        &root.join("grok-prompt"),
+        &root,
+        "sha256:img",
+        "grok-4.7",
+    )
+    .unwrap();
+    assert_eq!(turn.argv[0], "control-grok");
+    assert!(text.argv[2].contains("exec control-grok "), "{:?}", text.argv);
+    for spec in [&text, &turn] {
+        let [secret] = spec.secrets.as_slice() else {
+            panic!("one secret: {:?}", spec.secrets)
+        };
+        assert_eq!(
+            (
+                secret.name.as_str(),
+                secret.target.as_str(),
+                secret.access,
+                &secret.source
+            ),
+            ("grok/api-key", KEY, Access::ReadOnly, &key)
+        );
+        let shown = format!("{:?}{:?}", spec.argv, spec.env);
+        assert!(!shown.contains("CANARY") && !shown.contains("XAI_API_KEY"), "{shown}");
+    }
+    assert_eq!(config_for(&granted), KEY_CONFIG);
+    assert!(KEY_CONFIG.contains(r#"args = ["-u", "XAI_API_KEY", "/bin/control-room-mcp"]"#));
+    assert!(Grok.private_names().contains(&KEY_FILE));
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A rejected tool is the typed failure even when the ending's wording
 /// resembles a provider cause (a tool named after a login error).
 #[test]
@@ -329,37 +391,41 @@ fn a_rejected_tool_is_always_an_unexpected_tool_failure() {
     );
 }
 
-/// A turn and a text call run as the login's owner and carry the login
-/// read-only beneath the CLI's private home, and nothing else secret.
+/// A turn and a text call run as the login's owner and carry the login,
+/// whatever its form, read-only beneath the CLI's private home, and nothing
+/// else secret.
 #[test]
 fn the_login_is_read_only_beneath_the_private_home_of_the_cli_uid() {
     let auth = login("private");
     let root = auth.parent().unwrap().to_path_buf();
-    let granted = granted(&auth);
-    let turn = turn_container(
-        "control-run-1",
-        "node-1",
-        &granted,
-        &root.join("grok-config.toml"),
-        &root.join("grok-prompt"),
-        &root.join(MAILBOX),
-        "sha256:img",
-        "grok-4.7",
-    )
-    .unwrap();
-    let call = TextCall {
-        image: "sha256:img",
-        name: "control-summary-1",
-        workspace: &root.join("workspace"),
-        node: "node-1",
-        model: "grok-4.7",
-        login: Some(&granted),
-    };
-    let text = text_container(&call, &granted).unwrap();
-    for spec in [turn, text] {
-        assert_eq!(spec.user, Some(granted.owner()));
-        assert_eq!(cli::secrets_private(&spec), Ok(()));
-        let targets: Vec<_> = spec.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
-        assert_eq!(targets, [(AUTH, Access::ReadOnly)]);
+    let owner = granted(&auth).owner();
+    for (form, target) in [(Form::Session, AUTH), (Form::ApiKey, KEY)] {
+        let granted = Granted::located(form, auth.clone(), owner);
+        let turn = turn_container(
+            "control-run-1",
+            "node-1",
+            &granted,
+            &root.join("grok-config.toml"),
+            &root.join("grok-prompt"),
+            &root.join(MAILBOX),
+            "sha256:img",
+            "grok-4.7",
+        )
+        .unwrap();
+        let call = TextCall {
+            image: "sha256:img",
+            name: "control-summary-1",
+            workspace: &root.join("workspace"),
+            node: "node-1",
+            model: "grok-4.7",
+            login: Some(&granted),
+        };
+        let text = text_container(&call, &granted).unwrap();
+        for spec in [turn, text] {
+            assert_eq!(spec.user, Some(owner));
+            assert_eq!(cli::secrets_private(&spec), Ok(()));
+            let targets: Vec<_> = spec.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
+            assert_eq!(targets, [(target, Access::ReadOnly)], "{form:?}");
+        }
     }
 }

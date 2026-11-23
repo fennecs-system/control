@@ -5,6 +5,7 @@
 //! their supervisor's deferral (see `bots::Message::Retained`).
 use crate::State;
 use crate::application::messages::{Sent, awaiting};
+use crate::runtime::RunStatus;
 use control_context::agent_policy::RunKind;
 
 /// Entries quoted in one digest; the rest are counted.
@@ -71,9 +72,11 @@ fn starved(state: &State, now_ms: u64) -> Vec<String> {
     chats.sort_unstable();
     chats.dedup();
     chats.retain(|chat| {
-        !state.runtime.runs.iter().any(|run| {
-            run.chat_id.as_deref() == Some(chat.as_str()) && crate::application::runs::status::active(&run.status)
-        })
+        !state
+            .runtime
+            .runs
+            .iter()
+            .any(|run| run.chat_id.as_deref() == Some(chat.as_str()) && run.status.is_active())
     });
     chats
 }
@@ -146,7 +149,9 @@ pub(crate) fn settle(
         .runs
         .iter()
         .enumerate()
-        .filter(|(_, run)| run.kind == RunKind::AgentMessage && run.status == "queued" && run.attempts.is_empty())
+        .filter(|(_, run)| {
+            run.kind == RunKind::AgentMessage && run.status == RunStatus::Queued && run.attempts.is_empty()
+        })
         .filter(|(_, run)| {
             state
                 .agent_messages
@@ -174,8 +179,8 @@ pub(crate) fn settle(
         .collect::<Vec<_>>();
     for &index in &settled {
         let run = &mut state.runtime.runs[index];
-        run.status = "completed".into();
-        run.emitted = Some("completed".into());
+        run.status = RunStatus::Completed;
+        run.emitted = Some(RunStatus::Completed);
         run.result = "Already delivered to a running turn.".into();
     }
     if save(state).is_err() {

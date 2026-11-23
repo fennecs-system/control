@@ -2,6 +2,7 @@
 //! no polling model, extra thread, lifetime reply quota or per-post model call.
 use super::*;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use std::collections::HashSet;
 
 const COOLDOWN_SECONDS: u64 = 30;
@@ -50,9 +51,7 @@ pub(crate) fn configure(state: &mut State, chat: &str, enabled: bool) -> Result<
             }) {
                 let id = run.id.clone();
                 let actor = session.actor.clone();
-                if matches!(run.status.as_str(), "queued" | "running" | "waiting")
-                    && identity::authorize(&actor, run.action).is_ok()
-                {
+                if run.status.is_proceeding() && identity::authorize(&actor, run.action).is_ok() {
                     crate::lifecycle::request_cancel(&mut state.runtime, &id, &actor)?;
                 }
             }
@@ -90,10 +89,7 @@ pub(crate) fn configure(state: &mut State, chat: &str, enabled: bool) -> Result<
     if crate::delegation::is_judge(origin) {
         return Err("Read-only judges cannot enable room listening.");
     }
-    if !matches!(
-        origin.status.as_str(),
-        "queued" | "running" | "waiting" | "continued" | "completed"
-    ) {
+    if !origin.status.is_unstopped() {
         return Err("Start a new task before enabling listening.");
     }
     let listener = Listener {
@@ -145,7 +141,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
         .runtime
         .runs
         .iter()
-        .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
+        .filter(|run| run.status.is_active())
         .filter_map(|run| run.chat_id.as_deref())
         .collect::<HashSet<_>>();
     let mut authorize = identity::authorizer();
@@ -168,10 +164,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
                             && session.actor == watch.actor
                             && session.room.as_deref() == Some(&watch.room)
                     })
-                    && !matches!(
-                        latest.status.as_str(),
-                        "cancelled" | "cancelling" | "failed" | "interrupted" | "blocked"
-                    )
+                    && !latest.status.is_stopped()
                     && watch.cursor <= state.collective.posts.len()
                     && listener.through <= state.collective.posts.len()
             });
@@ -182,7 +175,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
                 return None;
             }
             let latest = valid.unwrap();
-            if state.runtime.runs[latest].status != "completed" {
+            if state.runtime.runs[latest].status != RunStatus::Completed {
                 return None;
             }
             let batch = batch_from(watch, &state.collective.posts, watch.cursor.max(listener.through));

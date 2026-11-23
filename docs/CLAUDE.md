@@ -56,6 +56,15 @@ task runs, so runs cannot modify it. It never extracts a macOS Keychain entry.
 `CONTROL_CLAUDE_AUTH_FILE` can point to another absolute, private credential file.
 Repeat `login` when the session expires.
 
+An Anthropic API key instead (billed per use): `control accounts add claude NAME
+--kind api-key`, then `pbpaste | control claude key --account NAME`. The key is
+mounted read-only at `/home/agent/.control-key/anthropic-api-key` in Claude's
+own container, and `--settings '{"apiKeyHelper":"cat <that file>"}'` has Claude
+read it itself (`--restricted` keeps `--settings`; verified offline in the pinned
+image, whose init event reports `apiKeySource: apiKeyHelper`). The key is in no
+argument, variable or file Control writes; Claude's built-in tools are removed
+and its shell runs in a separate container with no secret.
+
 In **Manage → Models & providers**, click a saved Claude Code model to make it
 the default, or use **+ New model** / **Edit** to manage backend/model pairs. The
 default applies to new runs. Existing runs and retries keep their backend and

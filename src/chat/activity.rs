@@ -1,4 +1,5 @@
 //! Bounded command evidence shared by web and terminal chat clients.
+use crate::runtime::RunStatus;
 use crate::{State, escape, usage::Activity};
 use std::collections::HashSet;
 
@@ -41,7 +42,7 @@ pub(super) fn agent_activity<'a>(state: &'a State, id: &str) -> Vec<AgentActivit
         .runtime
         .runs
         .iter()
-        .filter(|run| run.status == "running" && run.actor == session.actor)
+        .filter(|run| run.status == RunStatus::Running && run.actor == session.actor)
         .filter_map(|run| {
             let child = run.chat_id.as_deref()?;
             if child == id {

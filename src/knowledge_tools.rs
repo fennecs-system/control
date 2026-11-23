@@ -1,5 +1,6 @@
 //! Bounded knowledge projections and checkpointed proposals. Only the operator
 //! review surface can admit a proposal; a worker never edits accepted records.
+use crate::runtime::RunStatus;
 use crate::{
     State,
     collective::Knowledge,
@@ -290,7 +291,7 @@ pub fn worker(
         .runtime
         .runs
         .iter()
-        .find(|run| run.id == run_id && run.status == "running")
+        .find(|run| run.id == run_id && run.status == RunStatus::Running)
         .ok_or("Run is not active")?;
     identity::authorize(&run.actor, run.action)?;
     if crate::delegation::is_judge(run) && canonical(name) == "control.knowledge.propose" {

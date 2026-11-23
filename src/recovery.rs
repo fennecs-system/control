@@ -1,5 +1,6 @@
 //! Unpublished, immutable workspace candidates. Retention never advances a chat
 //! head or callback cursor and never admits another model turn.
+use crate::runtime::RunStatus;
 use crate::{
     State,
     attempt_control::Termination,
@@ -133,7 +134,12 @@ pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mute
             .runtime
             .runs
             .iter()
-            .filter(|r| matches!(r.status.as_str(), "failed" | "interrupted" | "cancelled"))
+            .filter(|r| {
+                matches!(
+                    r.status,
+                    RunStatus::Failed | RunStatus::Interrupted | RunStatus::Cancelled
+                )
+            })
             .filter_map(|r| {
                 let a = r.attempts.last()?;
                 (a.termination.is_some() && a.recovery.is_none() && !a.review_only).then(|| (r.id.clone(), a.clone()))
@@ -147,7 +153,13 @@ pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mute
             .runtime
             .runs
             .iter_mut()
-            .find(|r| r.id == id && matches!(r.status.as_str(), "failed" | "interrupted" | "cancelled"))
+            .find(|r| {
+                r.id == id
+                    && matches!(
+                        r.status,
+                        RunStatus::Failed | RunStatus::Interrupted | RunStatus::Cancelled
+                    )
+            })
             .and_then(|r| r.attempts.last_mut())
             .filter(|a| a.workspace_id == attempt.workspace_id)
         else {
@@ -257,7 +269,7 @@ impl AttemptTools for Tools {
                 .runtime
                 .runs
                 .iter()
-                .find(|r| r.id == cx.attempt.run && r.status == "running")
+                .find(|r| r.id == cx.attempt.run && r.status == RunStatus::Running)
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;
             crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
             if run.chat_id.is_none() {

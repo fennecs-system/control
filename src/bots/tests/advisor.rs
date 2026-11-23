@@ -2,13 +2,14 @@
 //! monitor's only source is its task tree's host lifecycle facts; the advisor
 //! hears none and wakes on its members' questions.
 use super::*;
+use crate::runtime::RunStatus;
 
 /// Appends one executed member turn with `status`.
 pub(super) fn turn(state: &mut State, chat: &str, status: &str) -> usize {
     let mut run = state.runtime.runs[0].clone();
     run.id = format!("turn-{}", state.runtime.runs.len());
     run.chat_id = Some(chat.into());
-    run.status = status.into();
+    run.status = RunStatus::named(status);
     run.persona = None;
     run.bot_turn = None;
     run.attempts = vec![crate::usage::Attempt::default()];
@@ -89,7 +90,7 @@ fn finish(state: &mut State, chat: &str) {
         .iter_mut()
         .filter(|run| run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some())
     {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         run.attempts = vec![crate::usage::Attempt {
             review_only: true,
             ..Default::default()
@@ -205,7 +206,7 @@ fn quiescence_fires_once_per_settled_activity_and_history_before_subscription_is
     let active = turn(&mut state, &worker, "running");
     reconcile_at(&mut state, 3, ok).unwrap();
     assert!(advisor_runs(&state, &advisor).is_empty(), "an active team is not quiet");
-    state.runtime.runs[active].status = "completed".into();
+    state.runtime.runs[active].status = RunStatus::Completed;
     reconcile_at(&mut state, 4, ok).unwrap();
     let runs = advisor_runs(&state, &advisor);
     assert_eq!(runs.len(), 1, "the edge wakes the advisor once");
@@ -255,7 +256,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     (note.id, note.chat_id, note.status, note.kind, note.attempts) = (
         "note-1".into(),
         Some(root.clone()),
-        "completed".into(),
+        RunStatus::Completed,
         RunKind::AgentMessage,
         Vec::new(),
     );
@@ -302,7 +303,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
     assert!(woken[0].objective.contains("an observer's note"));
     let id = woken[0].id.clone();
     let woken = state.runtime.runs.iter_mut().find(|run| run.id == id).unwrap();
-    woken.status = "completed".into();
+    woken.status = RunStatus::Completed;
     woken.attempts = vec![crate::usage::Attempt::default()];
     reconcile_at(&mut state, 80_000, ok).unwrap();
     reconcile_at(&mut state, 120_000, ok).unwrap();
@@ -1295,7 +1296,7 @@ fn a_member_idle_with_a_working_claim_while_peers_work_is_one_fact_per_idle_spel
         .clone();
     (message.id, message.status, message.kind, message.attempts) = (
         "peer-message-1".into(),
-        "completed".into(),
+        RunStatus::Completed,
         RunKind::AgentMessage,
         Vec::new(),
     );

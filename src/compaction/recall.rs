@@ -1,5 +1,6 @@
 //! Scoped recall plans capture authority under lock; cache reads run outside it.
 use super::*;
+use crate::runtime::RunStatus;
 use crate::tool_registry::{AttemptCall, AttemptTools};
 use serde_json::{Value, json};
 #[derive(Clone, Deserialize)]
@@ -217,7 +218,7 @@ impl AttemptTools for Tools {
                 .iter()
                 .find(|r| {
                     r.id == cx.attempt.run
-                        && r.status == "running"
+                        && r.status == RunStatus::Running
                         && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(cx.attempt.generation)
                 })
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;

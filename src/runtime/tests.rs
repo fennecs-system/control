@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 #[test]
 fn run_history_shows_attempts_and_measured_tokens() {
     let mut runtime = Runtime::default();
@@ -21,7 +22,7 @@ fn run_history_shows_attempts_and_measured_tokens() {
     );
     // A running attempt shows its live totals as a lower bound so far.
     runtime.runs[0].attempts.push(crate::usage::Attempt {
-        status: "running".into(),
+        status: crate::usage::AttemptStatus::Running,
         tokens: Some(crate::usage::Tokens {
             input_tokens: 1000,
             cached_input_tokens: 900,
@@ -40,7 +41,7 @@ fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
     for status in ["queued", "running"] {
         let mut state = crate::State::default();
         state.runtime.enqueue("Keep my work".into(), RunKind::Task, "test");
-        state.runtime.runs[0].status = status.into();
+        state.runtime.runs[0].status = RunStatus::named(status);
         state.runtime.runs[0].result = "Existing progress".into();
         state.runtime.notice = "Before cancellation".into();
         let id = state.runtime.runs[0].id.clone();
@@ -67,9 +68,9 @@ fn retry_does_not_repeat_completed_work() {
     let mut rt = Runtime::default();
     rt.enqueue("Improve review".into(), RunKind::SelfImprovement, "website");
     let id = rt.runs[0].id.clone();
-    rt.runs[0].status = "completed".into();
+    rt.runs[0].status = RunStatus::Completed;
     rt.action("/retry-run", &HashMap::from([("id".into(), id)]));
-    assert_eq!(rt.runs[0].status, "completed");
+    assert_eq!(rt.runs[0].status, RunStatus::Completed);
 }
 #[test]
 fn snapshots_exclude_secrets_and_symlinks() {

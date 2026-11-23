@@ -27,7 +27,17 @@ inside the image: open the address it prints and enter its code; never paste
 codes or credentials into chat. The login lives under `~/.config/control/grok/`.
 Control checks its metadata and mounts only `auth.json`, read-only, into task
 runs. `CONTROL_GROK_AUTH_FILE` can point to another absolute, private credential
-file. An `XAI_API_KEY` is never passed. Repeat `login` when the session expires.
+file. Repeat `login` when the session expires.
+
+An xAI API key instead (billed per use): `control accounts add grok NAME --kind
+api-key`, then `pbpaste | control grok key --account NAME`. Grok documents the
+`XAI_API_KEY` variable as its API-key path (docs/user-guide/02-authentication.md
+at the pinned revision), so the key is mounted read-only at
+`/home/agent/.control-key/xai-api-key` and the image's `control-grok` entrypoint
+exports it for Grok's process alone: it is never a variable of the container
+or in the launch description. Control's MCP server is started through
+`env -u XAI_API_KEY`, because Grok passes its environment to MCP servers. Not
+yet confirmed with a real key.
 
 ## How a turn runs
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
@@ -195,7 +196,7 @@ fn live_service_commands_download_and_connect_two_private_services() {
     state.services[1].resource.owner.chat = client_chat.clone().try_into().unwrap();
     state.runtime.runs[0].chat_id = Some(client_chat);
     state.runtime.runs[0].resource_grants = vec![state.services[0].grant(), state.services[2].grant()];
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let write = |state: &State| fs::write(state_dir.join("state.json"), serde_json::to_vec(state).unwrap()).unwrap();
     let read = || serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
     write(&state);
@@ -271,7 +272,7 @@ fn live_service_commands_download_and_connect_two_private_services() {
     assert_eq!(probe["exit_code"], 7);
     server.stop();
     state = read();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let source_command = r#"set -eu
 cat > /workspace/server.rs <<'RUST'
 use std::{io::{Read,Write},net::{TcpListener,Shutdown}};
@@ -302,7 +303,7 @@ printf source-ready
     )
     .unwrap();
     let ingress_id = ingress["port_id"].as_str().unwrap().to_owned();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     let execution = |service: usize, id: &str| {
@@ -374,7 +375,7 @@ printf source-ready
     });
     server.stop();
     state = read();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let mut pending = Vec::new();
     for (name, local, target) in [
         ("peer-route", 34003, None),
@@ -402,7 +403,7 @@ printf source-ready
         .unwrap();
         pending.push(value["port_id"].as_str().unwrap().to_owned());
     }
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     wait(
@@ -425,7 +426,7 @@ printf source-ready
     );
     server.stop();
     state = read();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let command = format!(
         r#"set -eu
 test "$(cat /workspace/settings)" = persistent
@@ -442,7 +443,7 @@ printf verified-download >> /workspace/completions
     );
     let receipt =
         crate::services::enqueue_test_command(&mut state, &run, "download-connect", &ids[1], &command, 60).unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     let execution_id = receipt["execution_id"].as_str().unwrap();
@@ -458,9 +459,9 @@ printf verified-download >> /workspace/completions
     download_thread.join().unwrap();
     server.stop();
     state = read();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let check=crate::services::enqueue_test_command(&mut state,&run,"verify-retention",&ids[1],"test $(wc -c < /workspace/asset) = 262144; test $(cat /workspace/completions) = verified-download; printf retained-once",10).unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     wait(
@@ -471,7 +472,7 @@ printf verified-download >> /workspace/completions
     assert_eq!(execution(1, check["execution_id"].as_str().unwrap())["exit_code"], 0);
     server.stop();
     state = read();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let failed = crate::services::enqueue_test_command(
         &mut state,
         &run,
@@ -481,7 +482,7 @@ printf verified-download >> /workspace/completions
         10,
     )
     .unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     wait(
@@ -499,7 +500,7 @@ printf verified-download >> /workspace/completions
     assert!(matches!(read().services[1].resource.phase, Phase::Running(_)));
     server.stop();
     state = read();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let timeout = crate::services::enqueue_test_command(
         &mut state,
         &run,
@@ -509,7 +510,7 @@ printf verified-download >> /workspace/completions
         1,
     )
     .unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     wait(
@@ -523,7 +524,7 @@ printf verified-download >> /workspace/completions
     assert!(matches!(read().services[0].resource.phase, Phase::Running(_)));
     server.stop();
     state = read();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let crash = crate::services::enqueue_test_command(
         &mut state,
         &run,
@@ -533,7 +534,7 @@ printf verified-download >> /workspace/completions
         30,
     )
     .unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     wait(
@@ -594,7 +595,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     let address = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
     let url = format!("http://{address}");
     let (mut state, run, _) = super::tests::fixture();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let service = &mut state.services[0];
     service.resource.owner.node = node.clone().try_into().unwrap();
     service.resource.id = format!("svc-{node}").try_into().unwrap();
@@ -657,7 +658,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
         }
     }
     let _cleanup = Cleanup(container.clone());
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     for (name, direction, service_port, target) in [
         ("ingress", Direction::Ingress, 33001, None),
         (
@@ -714,7 +715,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
         )
         .unwrap();
     }
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     write(&state);
     server = launch();
     let client = reqwest::blocking::Client::builder()

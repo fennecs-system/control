@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 #[test]
 fn maximum_unicode_instructions_reach_both_native_adapters_at_admission() {
     for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
@@ -14,7 +15,7 @@ fn maximum_unicode_instructions_reach_both_native_adapters_at_admission() {
             let input = super::input(attempt).unwrap().unwrap();
             assert!(input.contains(&initial), "original assignment must remain intact");
             assert!(input.contains(instruction), "current request must remain intact");
-            state.runtime.runs[index].status = "completed".into();
+            state.runtime.runs[index].status = RunStatus::Completed;
         }
     }
 }
@@ -71,7 +72,7 @@ fn wake(state: &mut State, chat: &str, kind: crate::runtime::RunKind, text: &str
         .unwrap();
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(chat.into());
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     *run.result = "Read room, read watch, checked status, acknowledged; still waiting".into();
     let id = run.id.clone();
     state.chats[0].messages.push(crate::chat::Message {
@@ -85,7 +86,7 @@ fn wake(state: &mut State, chat: &str, kind: crate::runtime::RunKind, text: &str
 #[test]
 fn cass_monitoring_fixture_keeps_task_context_constant_over_a_hundred_wakes() {
     let (mut state, chat) = fixture();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let before = project(&state, &state.runtime.runs[0].id).unwrap();
     for _ in 0..100 {
         wake(
@@ -197,7 +198,7 @@ fn progress_failure_peer_messages_and_later_steering_survive_without_wake_prose(
         crate::runtime::RunKind::BotWake,
         "failed bookkeeping",
     );
-    state.runtime.runs.last_mut().unwrap().status = "failed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Failed;
     *state.runtime.runs.last_mut().unwrap().result = "Command failed: retained diagnostic".into();
     wake(
         &mut state,
@@ -288,7 +289,7 @@ fn admission_rejects_changed_chat_attempt_and_cancelled_work_without_rewriting_i
     state.runtime.runs[0].attempts.push(Attempt::default());
     assert!(!plan.current(&state));
     state.runtime.runs[0].attempts.clear();
-    state.runtime.runs[0].status = "cancelled".into();
+    state.runtime.runs[0].status = RunStatus::Cancelled;
     assert!(!plan.current(&state));
     assert!(
         read(&trace).is_ok(),
@@ -334,7 +335,7 @@ fn active_context_profile() {
         if !managed {
             state.chats[0].continuity = None;
         }
-        state.runtime.runs[0].status = "completed".into();
+        state.runtime.runs[0].status = RunStatus::Completed;
         for _ in 0..turns {
             wake(
                 &mut state,

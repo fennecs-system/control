@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 fn captured(backend: Backend, model: &str) -> Target {
     Target {
         backend,
@@ -427,7 +428,7 @@ fn an_account_at_its_cap_holds_its_next_turn_and_says_why() {
     );
     assert_eq!(crate::scheduler::next_in(&state), Some(0));
     // Codex rewrites its own sign-in, so a named Codex account runs one at a time.
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     assert_eq!(crate::scheduler::next_in(&state), None, "the second turn is held");
     let held = crate::providers::accounts::hold(&state.runtime, &state.runtime.runs[1]).unwrap();
     assert_eq!(held, crate::accounts::Hold::Cap(std::num::NonZeroU8::MIN));

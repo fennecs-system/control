@@ -93,7 +93,7 @@ impl Turns for Antigravity {
             let private = prepare(
                 prepared.root,
                 prepared.login,
-                Some(&mcp_config()),
+                Some(&mcp_config(prepared.login.form())),
                 prepared.prompt.as_deref(),
             )
             .map_err(|_| Failure::Failed("Cannot prepare Antigravity configuration".into()))?;
@@ -196,18 +196,22 @@ fn settings(login: Form, tools: bool) -> Value {
 /// Control's tools as the one MCP server. Each is loaded eagerly: a lazy tool
 /// is found by reading its schema file, which the deny list forbids
 /// (https://antigravity.google/docs/mcp#tool-loading-lazy-vs-eager).
-/// The CLI reads an API key only from its environment, which an MCP server
-/// inherits; the transport gets it blanked.
-fn mcp_config() -> Value {
+fn mcp_config(login: Form) -> Value {
     let tools: serde_json::Map<String, Value> = control_context::worker_mcp_names()
         .into_iter()
         .map(|name| (name.to_owned(), json!({"eager": true})))
         .collect();
-    json!({"mcpServers": {"control": {
-        "command": "/bin/control-room-mcp",
-        "env": {"GEMINI_API_KEY": ""},
-        "tools": tools,
-    }}})
+    let server = match login {
+        // The entrypoint exports a key for the CLI (tools/antigravity); the
+        // CLI does not document it, but a server inherits its environment
+        // (seen offline in 1.5.14); Control's server needs no key, so it
+        // starts without it.
+        Form::ApiKey => {
+            json!({"command": "/bin/env", "args": ["-u", "GEMINI_API_KEY", "/bin/control-room-mcp"], "tools": tools})
+        }
+        Form::Session | Form::CloudDefault => json!({"command": "/bin/control-room-mcp", "tools": tools}),
+    };
+    json!({"mcpServers": {"control": server}})
 }
 /// Writes the private directory a container reads its settings, MCP server
 /// and prompt from.
@@ -303,7 +307,7 @@ fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io
         .into_iter()
         .try_for_each(|(form, target)| {
             cli::canary_check(isolation, root, form, target, |login| {
-                let private = prepare(root, login, Some(&mcp_config()), Some(""))?;
+                let private = prepare(root, login, Some(&mcp_config(login.form())), Some(""))?;
                 turn_container(&name, node, login, &private, &mailbox, image, "canary")
             })
         })
@@ -373,11 +377,12 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
         image,
         directory,
         login,
+        ..
     } = command;
     let [action] = args else { return Err(fail(USAGE)) };
     if matches!(action.as_str(), "--help" | "-h" | "help") {
         println!(
-            "control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity check: offline tool isolation, a fake-credential canary in a turn container for each login form, then the binary, the saved login and the model list it can see"
+            "control antigravity login: sign in to Google inside the pinned Nix Antigravity container; the token stays in a private directory outside the checkout\ncontrol antigravity key --account NAME: save an API-key account's Gemini key from standard input\ncontrol antigravity check: offline tool isolation, a fake-credential canary in a turn container for each login form, then the binary, the saved login and the model list it can see"
         );
         return Ok(());
     }

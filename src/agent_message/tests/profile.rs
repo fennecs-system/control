@@ -1,13 +1,14 @@
 //! Credential-free release fixture for existing downward message delivery.
 //! Copy this fixture unchanged to a baseline checkout for paired profiling.
 use super::*;
+use crate::runtime::RunStatus;
 use std::{hint::black_box, time::Instant};
 
 fn fixture(chats: usize) -> (State, String, String, usize) {
     let mut state = State::default();
     let lead = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &lead, "Own an independent task", "benchmark").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         workspace_id: Some("benchmark-attempt".into()),
         ..Default::default()
@@ -22,7 +23,7 @@ fn fixture(chats: usize) -> (State, String, String, usize) {
         let mut task = run.clone();
         task.id = format!("benchmark-run-{index}");
         task.chat_id = Some(chat.id.clone());
-        task.status = "completed".into();
+        task.status = RunStatus::Completed;
         task.attempts.clear();
         state.chats.push(chat);
         state.runtime.runs.push(task);

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use crate::{
     application::runs::Submission,
     identity::{Action, Actor},
@@ -14,7 +15,7 @@ fn run(id: &str, chat: &str, status: &str, kind: RunKind) -> Run {
     }
     .into_run(id.into(), 1, Default::default());
     run.chat_id = Some(chat.into());
-    run.status = status.into();
+    run.status = RunStatus::named(status);
     run
 }
 
