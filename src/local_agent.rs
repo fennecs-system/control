@@ -109,6 +109,10 @@ pub(crate) trait Host {
     /// The turn reached its model-step cap without a final report or handoff;
     /// the worker then writes a host checkpoint for the next turn.
     fn step_limit(&mut self) {}
+    /// Whether another turn follows a handoff: the chat is a persistent bot.
+    fn continues(&mut self) -> bool {
+        true
+    }
     /// The turn's usage so far, after every model call (answered or not).
     fn metered(&mut self, meter: &Meter);
     /// The chat's declared observation for the next request, refreshed when
@@ -346,6 +350,11 @@ pub(crate) fn run(
         let mut view = lens.view(&messages, count - shrunk, false);
         let target = count.saturating_sub(policy.verbatim_steps);
         if percent(&view) >= policy.shrink_percent && target >= shrunk + policy.shrink_batch.max(1) {
+            if shrunk == 0 {
+                let note = crate::worker_tools::nudges::elision_text(policy.verbatim_steps);
+                host.record("note", "local-elision-note", &note, "", "completed");
+                append_note(&mut messages, &note);
+            }
             shrunk = target;
             view = lens.view(&messages, count - shrunk, false);
         }
@@ -390,7 +399,8 @@ pub(crate) fn run(
         }
         // Once per turn: the turn has filled most of its context (or lost
         // detail to a fold); ask for a checkpoint before it runs out.
-        let note = crate::worker_tools::nudges::context_text(reached, names.contains("control_turn_handoff"));
+        let next = crate::worker_tools::nudges::Next::of(names.contains("control_turn_handoff"), host.continues(), names.contains("control_bot_request"));
+        let note = crate::worker_tools::nudges::context_text(reached, next);
         if !noted && (reached >= NOTE_PERCENT || folded) && used(&view).saturating_add(tokens(note.len() + 16)) <= budget {
             noted = true;
             host.record("note", "local-context-note", &note, "", "completed");
@@ -401,7 +411,7 @@ pub(crate) fn run(
         let left = policy.max_steps - steps;
         if !step_noted && steps > 0 && left <= STEP_NOTE_LEFT.min(policy.max_steps / 4) {
             step_noted = true;
-            let note = crate::worker_tools::nudges::steps_text(left, names.contains("control_turn_handoff"));
+            let note = crate::worker_tools::nudges::steps_text(left, next);
             host.record("note", "local-step-note", &note, "", "completed");
             append_note(&mut messages, &note);
             view = lens.view(&messages, verbatim, shrink_all);
@@ -650,6 +660,11 @@ impl Host for Live<'_> {
     }
     fn observation(&mut self, first: bool) -> Option<String> {
         crate::observe::step(self.shared, self.run, first)
+    }
+    fn continues(&mut self) -> bool {
+        let Ok(state) = self.shared.lock() else { return true };
+        let chat = state.runtime.runs.iter().find(|run| run.id == self.run).and_then(|run| run.chat_id.as_deref());
+        chat.is_some_and(|chat| crate::bots::continuation_enabled(&state, chat))
     }
     fn inbox(&mut self) -> Option<String> {
         let mut state = self.shared.lock().ok().filter(|_| self.managed)?;
