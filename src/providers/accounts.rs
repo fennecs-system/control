@@ -443,3 +443,6 @@ fn listing(backend: Backend, store: &Store<Backend>, cooling: &[Note]) -> Vec<St
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
