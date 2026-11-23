@@ -1322,7 +1322,7 @@ pub(crate) fn observe_workspace_diff(state: &Arc<Mutex<State>>, run: &str, gener
     // File reads and diff computation never hold the control-plane state lock.
     let Some(baseline)=workspace.parent().map(|p|p.join("baseline")) else {return;};
     let (Ok(before),Ok(after))=(crate::artifacts::diff_snapshot(&baseline),crate::artifacts::diff_snapshot(workspace)) else {return;};
-    let preview=control::diff::between(&before,&after);
+    let preview=control_client::diff::between(&before,&after);
     let text=if preview.files==0 && preview.omitted==0 {String::new()} else {preview.summary()};
     if let Ok(mut state)=state.lock() {
         record_activity_for(&mut state,run,generation,crate::usage::Activity {

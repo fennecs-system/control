@@ -144,22 +144,24 @@ dependencies = [
  "control",
  "control-ai",
  "control-bot",
+ "control-client",
  "control-comonad",
+ "control-config",
  "control-context",
  "control-core",
+ "control-discord",
  "control-effect",
  "control-http",
+ "control-identity",
  "control-journal",
- "crossterm",
+ "control-tui",
  "libc",
- "ratatui",
  "reqwest",
  "ring",
  "scraper",
  "serde",
  "serde_json",
  "tokio",
- "tungstenite",
 ]
 
 [[package]]
@@ -180,8 +182,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-client"
+version = "0.1.0"
+dependencies = [
+ "control-config",
+ "control-context",
+ "control-effect",
+ "control-identity",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "control-comonad"
 version = "0.1.0"
+
+[[package]]
+name = "control-config"
+version = "0.1.0"
+dependencies = [
+ "control-journal",
+ "libc",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "control-context"
@@ -199,6 +224,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-discord"
+version = "0.1.0"
+dependencies = [
+ "control-client",
+ "control-config",
+ "control-context",
+ "control-identity",
+ "control-journal",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tungstenite",
+]
+
+[[package]]
 name = "control-effect"
 version = "0.1.0"
 
@@ -210,11 +251,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-identity"
+version = "0.1.0"
+dependencies = [
+ "control-config",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "control-journal"
 version = "0.1.0"
 dependencies = [
  "control-comonad",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "control-tui"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "control-ai",
+ "control-client",
+ "control-config",
+ "control-context",
+ "control-http",
+ "crossterm",
+ "ratatui",
+ "reqwest",
+ "ring",
  "serde_json",
 ]
 

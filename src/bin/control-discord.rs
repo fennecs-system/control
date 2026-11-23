@@ -1,3 +1,3 @@
 fn main() {
-    control::discord::bridge::command(&std::env::args().collect::<Vec<_>>());
+    control_discord::bridge::command(&std::env::args().collect::<Vec<_>>());
 }

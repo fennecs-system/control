@@ -1087,7 +1087,7 @@ fn chats_show_callsigns_and_every_client_sees_the_same_rename() {
     assert_eq!(state.runtime.runs.len(), runs, "renaming starts no run");
     assert_eq!(state.chats[0].messages.last().unwrap().reply, "Renamed this DM to player1.");
     let rows = list(&state);
-    let rows = control::client::chats::entries(rows.as_array().unwrap());
+    let rows = control_client::chats::entries(rows.as_array().unwrap());
     assert_eq!(rows[0].title, "player1");
     assert_eq!(detail(&state, &chat).unwrap()["title"], "player1");
     assert!(render(&state, &chat).unwrap().contains("<h2>player1</h2>"));

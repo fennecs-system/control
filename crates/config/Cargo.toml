@@ -1,0 +1,15 @@
+[package]
+name = "control-config"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Test builds of dependent crates enable this so node directories never resolve
+# to the operator's real home locations (see `test_root`).
+test-isolation = []
+
+[dependencies]
+control-journal = { path = "../journal" }
+serde = "1"
+serde_json = "1"
+libc = "0.2"

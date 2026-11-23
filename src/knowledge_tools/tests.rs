@@ -389,7 +389,7 @@ fn search_result_count_and_proposal_storage_are_bounded() {
 }
 #[test]
 fn a_proposal_is_an_operator_request_decided_only_through_review() {
-    use control::client::{channel, operator::{self, Command, Kind}};
+    use control_client::{channel, operator::{self, Command, Kind}};
     let (mut state, id) = fixture();
     let chat = state.runtime.runs[0].chat_id.clone().unwrap();
     worker(&mut state, &id, "control_knowledge_propose", &input(), "request-1", |_| Ok(())).unwrap();

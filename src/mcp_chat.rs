@@ -6,7 +6,8 @@
 //! opt-ins (`control::permissions`) and formats bounded plain text. The same
 //! tools, scoped to an agent's own task, back the opt-in `control_chat`
 //! worker tool (`AgentTools`). See docs/CHAT-MCP.md.
-use control::{client::{Hive, PortDecision}, permissions::Approvals};
+use control::permissions::Approvals;
+use control_client::{Hive, PortDecision};
 use serde_json::{json, Value};
 use std::io;
 
@@ -267,10 +268,10 @@ fn chat_requests(remote: &mut impl Remote, args: &Value, approvals: Approvals) -
     let mut out = Vec::new();
     // The same reading of a request group as the TUI and Discord.
     for group in groups.as_array().into_iter().flatten().filter(|g| g["chat_id"] == root.as_str()) {
-        for pending in control::client::operator::pending(group) {
+        for pending in control_client::operator::pending(group) {
             let kind = pending.kind.as_str();
             let chat = group["pending_folders"].as_array().into_iter().flatten()
-                .find(|f| pending.kind == control::client::operator::Kind::Folder && f["request"] == pending.id)
+                .find(|f| pending.kind == control_client::operator::Kind::Folder && f["request"] == pending.id)
                 .and_then(|f| f["chat_id"].as_str()).unwrap_or(&root);
             let body = if pending.body.is_empty() { String::new() } else { format!(": {}", clip(pending.body, 400)) };
             out.push(format!("{kind} {} (chat {chat}) · {}{body}", pending.id, clip(&pending.heading, 300)));
