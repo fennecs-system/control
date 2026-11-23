@@ -1,12 +1,12 @@
 name: Rust
 
 on:
-  # Changes under docs/ alone do not run CI.
+  # Documentation alone does not run CI. DESIGN.md is compiled into the binary, so it still does.
   pull_request:
-    paths-ignore: ["docs/**"]
+    paths-ignore: ["docs/**", "README.md", "CONTRIBUTING.md", "AGENTS.md"]
   push:
     branches: [main]
-    paths-ignore: ["docs/**"]
+    paths-ignore: ["docs/**", "README.md", "CONTRIBUTING.md", "AGENTS.md"]
   workflow_dispatch:
 
 permissions:

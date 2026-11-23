@@ -79,7 +79,8 @@ standalone tools. Crate entry points and shared `#[path]` modules use explicit
 paths where needed; keep those paths relative to their declaring source file.
 
 CI runs those checks on Linux for pull requests and pushes to `main`; macOS is
-checked locally before merge, and a change under `docs/` alone does not run CI.
+checked locally before merge, and a change to `docs/`, `README.md`,
+`CONTRIBUTING.md` or `AGENTS.md` alone does not run CI (`DESIGN.md` is compiled into the binary, so it does).
 The default `tui` feature preserves `control tui` and `control-harness`. The
 server-only build omits terminal presentation and its dependencies; CI also
 checks that its normal dependency graph contains neither ratatui nor crossterm.
