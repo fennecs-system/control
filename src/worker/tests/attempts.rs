@@ -538,17 +538,16 @@ fn an_antigravity_attempt_runs_from_probe_to_published_workspace() {
     let finished = attempt(Backend::Antigravity, |spec| cli(spec, &before, &after, &[]));
     let turn = finished.turn();
     assert_eq!(turn.image.as_str(), IMAGE);
-    assert_secret(
-        turn,
-        Backend::Antigravity,
-        "antigravity/api-key",
-        "/home/agent/.control-key/gemini-api-key",
-    );
+    // The key in the implicit account's folder is proxied like a named
+    // account's: a placeholder where the key would be, no secret, no network.
+    assert!(turn.secrets.is_empty(), "{:?}", turn.secrets);
+    let placeholder = fs::read_to_string(host(turn, "/home/agent/.control-key/gemini-api-key")).unwrap();
+    assert!(placeholder.starts_with("ctl-"), "{placeholder}");
     assert_eq!(
         fs::canonicalize(host(turn, "/workspace")).unwrap(),
         finished.root.join("antigravity-mailbox")
     );
-    assert_eq!(turn.network, Network::Engine);
+    assert_eq!(turn.network, Network::None);
     let private = host(turn, "/home/agent/.control");
     let mcp: Value = serde_json::from_slice(&fs::read(private.join("mcp_config.json")).unwrap()).unwrap();
     // This account is an API key: the server starts without the exported key.
@@ -556,7 +555,7 @@ fn an_antigravity_attempt_runs_from_probe_to_published_workspace() {
         mcp["mcpServers"]["control"]["args"],
         json!(["-u", "GEMINI_API_KEY", "/bin/control-room-mcp"])
     );
-    assert_eq!(turn.argv[..2], ["control-agy", "turn"]);
+    assert_eq!(turn.argv[5..7], ["control-agy", "turn"]);
     assert_eq!(
         finished.activity(),
         [
