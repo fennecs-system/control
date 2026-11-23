@@ -210,16 +210,49 @@ pub fn definition() -> Value {
         .map(|solver| format!("{} ({}): {}", solver.id, solver.formats.join("/"), solver.summary))
         .collect::<Vec<_>>()
         .join("; ");
-    json!({"name":"control.solve","description":format!("Solve an optimisation or constraint model with an exact solver instead of reasoning it out in tokens: assignment, scheduling, packing, routing, allocation and consistency checks. Runs in a fresh offline container; returns status (optimal, feasible, infeasible, unbounded, infeasible_or_unbounded, timeout, unknown or error), objective, a bounded variable assignment and solver provenance. Solvers: {catalogue}. Model text up to 256 KiB inline; time limit up to {MAX_TIME_LIMIT} s. Larger or longer solves: control_workspace_start with environment solver. Requires the pinned solver image."),
-        "inputSchema":{"type":"object","properties":{
-            "solver":{"type":"string","enum":solvers},
-            "model":{"type":"string","minLength":1,"maxLength":MAX_MODEL_BYTES},
-            "format":{"type":"string","enum":["lp","mps","smt2","mzn"],"description":"Model format; defaults to the solver's first format"},
-            "time_limit_seconds":{"type":"integer","minimum":1,"maximum":MAX_TIME_LIMIT,"default":DEFAULT_TIME_LIMIT},
-            "memory_mb":{"type":"integer","minimum":*MEMORY_MB.start(),"maximum":*MEMORY_MB.end(),"default":DEFAULT_MEMORY_MB},
-            "nonzero_only":{"type":"boolean","default":false,"description":"Omit variables whose value is 0 or false"}},
-        "required":["solver","model"],"additionalProperties":false},
-        "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}})
+    json!({
+        "name": "control.solve",
+        "description": format!(
+            "Solve an optimisation or constraint model with an exact solver instead of reasoning it out in tokens: \
+             assignment, scheduling, packing, routing, allocation and consistency checks. Runs in a fresh offline \
+             container; returns status (optimal, feasible, infeasible, unbounded, infeasible_or_unbounded, timeout, \
+             unknown or error), objective, a bounded variable assignment and solver provenance. Solvers: {catalogue}. \
+             Model text up to 256 KiB inline; time limit up to {MAX_TIME_LIMIT} s. Larger or longer solves: \
+             control_workspace_start with environment solver. Requires the pinned solver image."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "solver": {"type": "string", "enum": solvers},
+                "model": {"type": "string", "minLength": 1, "maxLength": MAX_MODEL_BYTES},
+                "format": {
+                    "type": "string",
+                    "enum": ["lp", "mps", "smt2", "mzn"],
+                    "description": "Model format; defaults to the solver's first format"
+                },
+                "time_limit_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_TIME_LIMIT,
+                    "default": DEFAULT_TIME_LIMIT
+                },
+                "memory_mb": {
+                    "type": "integer",
+                    "minimum": *MEMORY_MB.start(),
+                    "maximum": *MEMORY_MB.end(),
+                    "default": DEFAULT_MEMORY_MB
+                },
+                "nonzero_only": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Omit variables whose value is 0 or false"
+                }
+            },
+            "required": ["solver", "model"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+    })
 }
 
 pub fn validate(input: Input) -> io::Result<Request> {

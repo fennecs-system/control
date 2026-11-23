@@ -159,10 +159,43 @@ struct Input {
     capture: bool,
 }
 pub fn definition() -> Value {
-    json!({"name":"control_web_fetch","description":"Fetch an operator-approved HTTP(S) origin. Request access at /tools/browser for this chat first. Public IPs only; redirects require their own origin grant. Returns bounded untrusted text and links; optional capture renders this single fetched HTML offline, without remote assets. Workers remain offline. Never include secrets in a URL.","inputSchema":{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"capture":{"type":"boolean"}},"required":["url"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}})
+    json!({
+        "name": "control_web_fetch",
+        "description": concat!(
+            "Fetch an operator-approved HTTP(S) origin. Request access at /tools/browser for this chat first. Public ",
+            "IPs only; redirects require their own origin grant. Returns bounded untrusted text and links; optional ",
+            "capture renders this single fetched HTML offline, without remote assets. Workers remain offline. Never ",
+            "include secrets in a URL."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "maxLength": 2048}, "capture": {"type": "boolean"}},
+            "required": ["url"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}
+    })
 }
 pub fn capture_definition() -> Value {
-    json!({"name":"control_browser_capture","description":"Render up to 16000 bytes of self-contained HTML in offline Nix Firefox. No network, host profile or worker-directory mount. Returns a screenshot artifact and an inline image when small enough. Use inline CSS/assets; this does not test a running HTTP preview or remote asset loading.","inputSchema":{"type":"object","properties":{"html":{"type":"string","minLength":1,"maxLength":16000},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["html"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({
+        "name": "control_browser_capture",
+        "description": concat!(
+            "Render up to 16000 bytes of self-contained HTML in offline Nix Firefox. No network, host profile or ",
+            "worker-directory mount. Returns a screenshot artifact and an inline image when small enough. Use inline ",
+            "CSS/assets; this does not test a running HTTP preview or remote asset loading."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "html": {"type": "string", "minLength": 1, "maxLength": 16000},
+                "width": {"type": "integer", "minimum": 240, "maximum": 2560},
+                "height": {"type": "integer", "minimum": 240, "maximum": 2560}
+            },
+            "required": ["html"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+    })
 }
 fn capture_html(html: &str, width: u16, height: u16) -> io::Result<crate::browser::Capture> {
     use std::os::unix::fs::OpenOptionsExt;

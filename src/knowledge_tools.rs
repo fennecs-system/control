@@ -44,9 +44,63 @@ struct Read {
 
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control.knowledge.search","description":"Search admitted claims and documents. Workers see their captured lens documents; ordinary notes are not verified facts. At most 10 concise results.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"limit":{"type":"integer","minimum":1,"maximum":10}},"required":["query"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
-        json!({"name":"control.knowledge.read","description":"Read an admitted claim or selected document by search result ID. Text is paged in Unicode characters, at most 4000 per call. Notes are not verified facts.","inputSchema":{"type":"object","properties":{"id":{"type":"string","maxLength":200},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":4000}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
-        json!({"name":"control.knowledge.propose","description":"Propose one concise claim with evidence, scope and recheck condition. Propose only a verified finding other tasks can reuse. Pending until the operator reviews it; returns at once, so carry on. Does not edit documents or accepted facts. Local MCP callers supply their own local operator chat ID; workers use their bound chat.","inputSchema":{"type":"object","properties":{"claim":{"type":"string","minLength":1,"maxLength":280},"evidence":{"type":"string","minLength":1,"maxLength":1000},"scope":{"type":"string","minLength":1,"maxLength":300},"validity":{"type":"string","minLength":1,"maxLength":300},"chat":{"type":"string","maxLength":128}},"required":["claim","evidence","scope","validity"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
+        json!({
+            "name": "control.knowledge.search",
+            "description": concat!(
+                "Search admitted claims and documents. Workers see their captured lens documents; ordinary notes are ",
+                "not verified facts. At most 10 concise results."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10}
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": true}
+        }),
+        json!({
+            "name": "control.knowledge.read",
+            "description": concat!(
+                "Read an admitted claim or selected document by search result ID. Text is paged in Unicode ",
+                "characters, at most 4000 per call. Notes are not verified facts."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "maxLength": 200},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 4000}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": true}
+        }),
+        json!({
+            "name": "control.knowledge.propose",
+            "description": concat!(
+                "Propose one concise claim with evidence, scope and recheck condition. Propose only a verified ",
+                "finding other tasks can reuse. Pending until the operator reviews it; returns at once, so carry on. ",
+                "Does not edit documents or accepted facts. Local MCP callers supply their own local operator chat ",
+                "ID; workers use their bound chat."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "minLength": 1, "maxLength": 280},
+                    "evidence": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "scope": {"type": "string", "minLength": 1, "maxLength": 300},
+                    "validity": {"type": "string", "minLength": 1, "maxLength": 300},
+                    "chat": {"type": "string", "maxLength": 128}
+                },
+                "required": ["claim", "evidence", "scope", "validity"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": false}
+        }),
     ]
 }
 fn canonical(name: &str) -> &str {
