@@ -306,10 +306,12 @@ const LOGIN: &[&str] = &[
     "--tty",
     "--env",
     "GROK_HOME=/home/agent/.grok",
+    "--env",
+    "GROK_AUTH_PATH=/home/agent/.grok-login/auth.json",
     "--tmpfs",
     "/workspace:rw,nosuid,size=1m",
     "--mount",
-    "type=bind,src={root},dst=/home/agent/.grok",
+    "type=bind,src={root},dst=/home/agent/.grok-login",
     "sha256:img",
     "grok",
     "login",
@@ -430,4 +432,97 @@ fn the_login_is_read_only_beneath_the_private_home_of_the_cli_uid() {
             assert_eq!(targets, [(target, Access::ReadOnly)], "{form:?}");
         }
     }
+}
+
+/// A refreshable sign-in changes exactly two things in the pinned turn and
+/// text vectors: its folder is mounted writable instead of the file
+/// read-only, and Grok is pointed at the file in it.
+#[test]
+fn a_refreshable_sign_in_mounts_its_own_folder_writable() {
+    use control_isolation::golden::{fill, pin_equivalent, run};
+    let auth = login("refreshable");
+    let root = auth.parent().unwrap().to_path_buf();
+    let meta = fs::symlink_metadata(&auth).unwrap();
+    let (uid, gid) = (meta.uid().to_string(), meta.gid().to_string());
+    let values = [
+        ("root", root.to_str().unwrap()),
+        ("uid", uid.as_str()),
+        ("gid", gid.as_str()),
+    ];
+    let refreshed = |golden: &[&str]| {
+        let file = fill(
+            &["type=bind,src={root}/auth.json,dst=/home/agent/.grok/auth.json,readonly"],
+            &values,
+        );
+        fill(golden, &values)
+            .into_iter()
+            .flat_map(|word| {
+                if word == "GROK_HOME=/home/agent/.grok" {
+                    vec![
+                        word,
+                        "--env".to_owned(),
+                        "GROK_AUTH_PATH=/home/agent/.grok-login/auth.json".to_owned(),
+                    ]
+                } else if word == file[0] {
+                    fill(&["type=bind,src={root},dst=/home/agent/.grok-login"], &values)
+                } else {
+                    vec![word]
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let granted = Granted::refreshable(
+        auth.clone(),
+        User {
+            uid: meta.uid(),
+            gid: meta.gid(),
+        },
+    );
+    let workspace = root.join("workspace");
+    let call = TextCall {
+        image: "sha256:img",
+        name: "control-summary-1",
+        workspace: &workspace,
+        node: "node-1",
+        model: "grok-4.7",
+        login: Some(&granted),
+    };
+    let text = text_container(&call, &granted).unwrap();
+    pin_equivalent(&run(&text), &refreshed(TEXT));
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        &granted,
+        &root.join("grok-config.toml"),
+        &root.join("grok-prompt"),
+        &root.join(MAILBOX),
+        "sha256:img",
+        "grok-4.7",
+    )
+    .unwrap();
+    pin_equivalent(&run(&turn), &refreshed(TURN));
+    for spec in [turn, text] {
+        assert_eq!(cli::secrets_private(&spec), Ok(()));
+        assert_eq!(spec.secrets[0].access, Access::ReadWrite);
+    }
+    // The turn sweeps that folder; the sign-in, the lock Grok never deletes,
+    // its temporary copies and a corrupt backup stay.
+    assert_eq!(
+        control_agent::sweep_plan(
+            [
+                "auth.json",
+                "auth.json.lock",
+                ".41.7.tmp",
+                "auth.json.corrupt.1700000000000",
+                KEY_FILE,
+                "config.toml",
+                "sessions",
+                "logs",
+            ],
+            SIGN_IN.keep
+        ),
+        ["config.toml", "sessions", "logs"]
+    );
+    assert!(Grok.private_names().contains(&".grok-login"));
+    fs::remove_dir_all(root).unwrap();
 }

@@ -5,9 +5,9 @@
 //! `<config>/accounts/BACKEND/NAME/`. Backends never learn which account
 //! they were handed. An API-key account's key is read once, from standard
 //! input by `control ID key`, and written only to its private file.
-use crate::accounts::{AccountKind, AccountName, KeyWriter, Location, Roots, Store};
+use crate::accounts::{AccountKind, AccountName, KeyWriter, Location, Owner, Roots, Store};
 use crate::backend::Backend;
-use control_agent::{ApiKey, Form, Granted};
+use control_agent::{ApiKey, Form, Granted, Write};
 
 /// One account of one backend, as accounts.json defines it.
 pub(crate) type Account = crate::accounts::Account<Backend>;
@@ -83,14 +83,15 @@ pub(crate) fn account(store: &Store<Backend>, backend: Backend, name: &AccountNa
     })
 }
 
-/// The account's login for a turn or text call, in the form its kind gives.
+/// The account's login for a turn or text call, in the form its kind gives,
+/// writable back only where [`write_policy`] says so.
 pub(crate) fn locate(account: &Account) -> io::Result<Granted> {
     let located = || resolve(account)?.ok_or_else(|| fail("This backend has no login location"));
     let form = match account.kind {
         AccountKind::ApiKey => Form::ApiKey,
         AccountKind::Subscription | AccountKind::Cloud => Form::Session,
     };
-    match (account.id.backend, account.kind) {
+    let granted = match (account.id.backend, account.kind) {
         (Backend::Codex, _) => codex_validate(&located()?.1, form).map_err(|error| {
             if account.id.name.is_implicit() {
                 fail(error)
@@ -106,6 +107,28 @@ pub(crate) fn locate(account: &Account) -> io::Result<Granted> {
         }
         (Backend::Antigravity, AccountKind::Subscription | AccountKind::Cloud) => antigravity(&located()?.1),
         (Backend::Local, _) => Err(fail("Local endpoints use no provider login")),
+    }?;
+    Ok(with_policy(granted, write_policy(account.kind, located()?.0.owner())))
+}
+
+/// Whether a turn may write an account's sign-in back, so a token its CLI
+/// refreshes is kept: only a subscription kept in a folder Control owns. The
+/// operator's own sign-in (`~/.codex`, or a file a variable names) and every
+/// API key and cloud credential stay read-only.
+pub(crate) fn write_policy(kind: AccountKind, owner: Owner) -> Write {
+    match (kind, owner) {
+        (AccountKind::Subscription, Owner::Control) => Write::Refreshable,
+        (AccountKind::Subscription, Owner::Operator) | (AccountKind::ApiKey | AccountKind::Cloud, _) => Write::ReadOnly,
+    }
+}
+/// The checked login, refreshable when the policy allows and it is a sign-in:
+/// an Antigravity account finds a key or cloud credential in its folder too,
+/// and those stay read-only whatever the account's kind.
+fn with_policy(granted: Granted, write: Write) -> Granted {
+    match (granted.form(), write) {
+        (Form::Session, Write::Refreshable) => Granted::refreshable(granted.path().to_path_buf(), granted.owner()),
+        (Form::Session, Write::ReadOnly)
+        | (Form::ApiKey | Form::CloudDefault, Write::ReadOnly | Write::Refreshable) => granted,
     }
 }
 

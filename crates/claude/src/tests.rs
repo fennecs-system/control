@@ -269,6 +269,8 @@ const LOGIN: &[&str] = &[
     "HOME=/home/agent",
     "--env",
     "CLAUDE_CONFIG_DIR=/home/agent/.claude",
+    "--env",
+    "CLAUDE_SECURESTORAGE_CONFIG_DIR=/home/agent/.claude-login",
     "--workdir",
     "/workspace",
     "--interactive",
@@ -276,7 +278,7 @@ const LOGIN: &[&str] = &[
     "--tmpfs",
     "/workspace:rw,nosuid,size=1m",
     "--mount",
-    "type=bind,src=/golden/auth,dst=/home/agent/.claude",
+    "type=bind,src=/golden/auth,dst=/home/agent/.claude-login",
     "sha256:img",
     "claude",
     "auth",
@@ -361,4 +363,83 @@ fn an_api_key_is_mounted_and_read_by_claudes_own_helper() {
     assert!(!spec.argv.contains(&"--settings".to_owned()));
     assert!(Claude.private_names().contains(&KEY_FILE));
     fs::remove_dir_all(root).unwrap();
+}
+
+/// A refreshable sign-in changes exactly two things in the pinned turn and
+/// text vectors: its folder is mounted writable instead of the file
+/// read-only, and Claude is pointed at it.
+#[test]
+fn a_refreshable_sign_in_mounts_its_own_folder_writable() {
+    use control_isolation::golden::{fill, pin_equivalent, run};
+    let owner = User { uid: 501, gid: 20 };
+    let root = Path::new("/golden/root");
+    let auth = Granted::refreshable("/golden/auth/.credentials.json".into(), owner);
+    let tools = control_context::worker_mcp_names()
+        .into_iter()
+        .map(|name| format!("mcp__control__{name}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let values = [("tools", tools.as_str())];
+    let refreshed = |golden: &[&str]| {
+        fill(golden, &values)
+            .into_iter()
+            .flat_map(|word| {
+                if word
+                    == "type=bind,src=/golden/auth/.credentials.json,dst=/home/agent/.claude/.credentials.json,readonly"
+                {
+                    vec!["type=bind,src=/golden/auth,dst=/home/agent/.claude-login".to_owned()]
+                } else if word == "CLAUDE_CONFIG_DIR=/home/agent/.claude" {
+                    vec![
+                        word,
+                        "--env".to_owned(),
+                        "CLAUDE_SECURESTORAGE_CONFIG_DIR=/home/agent/.claude-login".to_owned(),
+                    ]
+                } else {
+                    vec![word]
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        &auth,
+        &root.join("claude-mailbox"),
+        "sha256:img",
+        "opus",
+    )
+    .unwrap();
+    pin_equivalent(&run(&turn), &refreshed(TURN));
+    let text = text_container(
+        "sha256:img",
+        "control-summary-1",
+        &root.join("workspace"),
+        "node-1",
+        "sonnet",
+        &auth,
+    )
+    .unwrap();
+    pin_equivalent(&run(&text), &refreshed(TEXT));
+    for spec in [turn, text] {
+        assert_eq!(cli::secrets_private(&spec), Ok(()));
+        assert_eq!(spec.secrets[0].access, Access::ReadWrite);
+    }
+    // The turn sweeps that folder; the sign-in, its lock and Claude's
+    // temporary copies stay.
+    assert_eq!(
+        control_agent::sweep_plan(
+            [
+                ".credentials.json",
+                ".credentials.json.tmp.0123abcd",
+                ".oauth_refresh.lock",
+                KEY_FILE,
+                ".claude.json",
+                "projects",
+                "settings.json",
+            ],
+            SIGN_IN.keep
+        ),
+        [".claude.json", "projects", "settings.json"]
+    );
+    assert!(Claude.private_names().contains(&".claude-login"));
 }

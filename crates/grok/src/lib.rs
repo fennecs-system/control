@@ -2,8 +2,9 @@
 //! only tools are Control's over MCP, and executable work runs in separate
 //! offline containers through the host shell tool.
 use control_agent::{
-    Agent, Checked, Command, Failure, Form, Granted, Host, ImagePin, Login, Node, Outcome, Runs, TextCall, Turn, Turns,
-    cli::{self, Cli, Delivery, Ending, Probe},
+    Agent, Checked, Command, Failure, Folder, Form, Granted, Host, ImagePin, Keep, Keeps, Login, Names, Node, Outcome,
+    Runs, TextCall, Turn, Turns,
+    cli::{self, Canary, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Streams, Tmpfs, User};
 use std::{
@@ -23,7 +24,7 @@ impl Agent for Grok {
     }
     /// Its credential names: never mounted in a workspace today, and never published if one appears there.
     fn private_names(&self) -> &'static [&'static str] {
-        &[".grok", KEY_FILE]
+        &[".grok", ".grok-login", KEY_FILE]
     }
     fn name(&self) -> &'static str {
         "Grok"
@@ -111,8 +112,29 @@ impl Turns for Grok {
     }
 }
 const MAILBOX: &str = "grok-mailbox";
-/// Where a turn mounts the login.
+/// Where a turn mounts a read-only login.
 const AUTH: &str = "/home/agent/.grok/auth.json";
+/// Where a refreshable sign-in's own folder is mounted, and what stays in it.
+/// Grok replaces `auth.json` by writing `.<pid>.<n>.tmp` beside it and renaming
+/// it over the file, serialises refreshes across processes with an
+/// `auth.json.lock` it never deletes, re-reads the file under that lock, and
+/// backs a corrupt file up as `auth.json.corrupt.<millis>`; `GROK_AUTH_PATH`
+/// moves only that file (xai-grok-login `storage.rs` and `manager/lock.rs`,
+/// xai-grok-config `fs_atomic.rs`, at the pinned revision). Sessions, logs and
+/// settings stay in `GROK_HOME` on the in-memory home.
+const SIGN_IN: Folder = Folder {
+    target: "/home/agent/.grok-login",
+    file: "auth.json",
+    variable: "GROK_AUTH_PATH",
+    names: Names::File,
+    keep: &[
+        Keep::Name("auth.json"),
+        Keep::Name("auth.json.lock"),
+        Keep::Between(".", ".tmp"),
+        Keep::Between("auth.json.corrupt.", ""),
+        Keep::Name(KEY_FILE),
+    ],
+};
 const LOGIN: &str = "run control grok login; its private login stays outside the checkout";
 const PROBE: Probe = Probe {
     directory: "grok-isolation-probe",
@@ -126,6 +148,7 @@ const CLI: Cli = Cli {
     mailbox: MAILBOX,
     no_login: "Grok login unavailable. Run control grok login; no other login on this host is used.",
     delivery: Delivery::File,
+    keeps: Keeps::Folder(&SIGN_IN),
     capture: |reader, update, progress, bad_tools| {
         cli::capture_with(
             reader,
@@ -186,7 +209,7 @@ fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
 /// The shared CLI container with Grok's home on a tmpfs, so sessions and logs
-/// die with it, and the login mounted read-only.
+/// die with it, and the login mounted as the host granted it.
 fn container(name: &str, node: &str, login: &Granted, image: &str) -> io::Result<RunSpec> {
     let owner = login.owner();
     let spec = RunSpec {
@@ -198,7 +221,9 @@ fn container(name: &str, node: &str, login: &Granted, image: &str) -> io::Result
     .tmpfs(Tmpfs::new("/home/agent/.grok", Size::Mib(64)).owned(owner));
     match login.form() {
         Form::ApiKey => login.mount(spec, "grok/api-key", KEY),
-        Form::Session | Form::CloudDefault => login.mount(spec, "grok/auth.json", AUTH),
+        Form::Session | Form::CloudDefault => {
+            login.mount_session(spec, "grok/auth.json", AUTH, Keeps::Folder(&SIGN_IN))
+        }
     }
 }
 fn text_container(call: &TextCall<'_>, login: &Granted) -> io::Result<RunSpec> {
@@ -256,14 +281,18 @@ fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io
     cli::private_file(&prompt, "")?;
     fs::create_dir_all(&mailbox)?;
     let name = format!("control-grok-probe-{}-canary", std::process::id());
-    [(Form::Session, AUTH), (Form::ApiKey, KEY)]
-        .into_iter()
-        .try_for_each(|(form, target)| {
-            cli::canary_check(isolation, root, form, target, |login| {
-                cli::private_file(&config, config_for(login))?;
-                turn_container(&name, node, login, &config, &prompt, &mailbox, image, "canary")
-            })
+    [
+        (Canary::ReadOnly(Form::Session), AUTH),
+        (Canary::Refreshable(Keeps::Folder(&SIGN_IN)), AUTH),
+        (Canary::ReadOnly(Form::ApiKey), KEY),
+    ]
+    .into_iter()
+    .try_for_each(|(login, target)| {
+        cli::canary_check(isolation, root, login, target, |login| {
+            cli::private_file(&config, config_for(login))?;
+            turn_container(&name, node, login, &config, &prompt, &mailbox, image, "canary")
         })
+    })
 }
 fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {
     Ok(RunSpec {
@@ -273,12 +302,15 @@ fn login_container(name: &str, node: &str, owner: User, directory: &Path, image:
     }
     .env("GROK_HOME", "/home/agent/.grok")
     .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
+    // The sign-in alone is kept, in the account's folder, where turns find it;
+    // the rest of what the login writes stays on the in-memory home.
     .secret(
         "grok/login",
         cli::checked(directory)?,
-        "/home/agent/.grok",
+        SIGN_IN.target,
         Access::ReadWrite,
     )
+    .env(SIGN_IN.variable, &SIGN_IN.credential())
     .args(["grok", "login", "--device-auth"]))
 }
 /// A fixed message for a failure the shared classifier knows (a usage limit, a
@@ -293,7 +325,7 @@ fn diagnose(ended: Option<Ending>, stderr: &[u8]) -> Failure {
         .or_else(|| ended.map(Ending::failure))
         .or_else(|| known(stderr))
         .unwrap_or(Failure::Unclassified(
-            "Grok stopped without success. Check its login, selected model and usage limits; credentials remain read-only.",
+            "Grok stopped without success. Check its login, selected model and usage limits.",
         ))
 }
 
@@ -344,7 +376,10 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
             if !isolation.spawn(&spec, Streams::INHERIT)?.wait()?.success() {
                 return Err(fail("Grok login did not complete"));
             }
-            fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
+            // Signing in again replaces the sign-in in place; whatever an earlier
+            // login kept beside it (sessions, logs, settings) goes.
+            control_agent::sweep(&directory, SIGN_IN.keep)?;
+            fs::set_permissions(directory.join(SIGN_IN.file), fs::Permissions::from_mode(0o600))
         }
         "check" => {
             let (image, node_id) = (image()?, node_id()?);

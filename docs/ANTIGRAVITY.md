@@ -41,8 +41,10 @@ then `pbpaste | control antigravity key --account NAME`) always uses its
 started through `env -u GEMINI_API_KEY`, so only the CLI holds the key the
 entrypoint exports.
 
-Each file is mounted read-only into the CLI's own container and nowhere else:
-not into the workspace, the shell containers or the isolation probe. Control
+Each file is mounted into the CLI's own container and nowhere else: not into
+the workspace, the shell containers or the isolation probe. A key and `adc.json`
+are read-only; the saved Google sign-in is writable, so a token the CLI
+refreshes can be kept (docs/LOCAL-MODELS.md, "Sign-ins stay signed in"). Control
 checks file metadata only and never reads a credential.
 
 `control antigravity login` starts the pinned image with a terminal, with
@@ -73,8 +75,11 @@ Like Grok, and given what Codex is given:
   (https://antigravity.google/docs/install), so the wrapper still exports it;
   Control's MCP server gets it blanked (`"env": {"GEMINI_API_KEY": ""}`), and
   shell commands are denied, so nothing the model can start inherits it.
-- The login is read-only beneath the CLI's mode-0700 home; no other uid in the
-  container can read it (see the threat model).
+- The login is beneath the CLI's mode-0700 home; no other uid in the
+  container can read or write it (see the threat model). Offline, with a fake
+  expired token and no network, the CLI did not rewrite the token file; its
+  token store (`authstore.fileStore`) is closed source, so whether it saves a
+  refresh in place or by rename is not known.
 - Control's tools are the one MCP server, every tool loaded eagerly. A turn is
   stopped if the CLI calls any other tool or starts a subagent, and fails if it
   reports a Control tool call as refused even though the run says success.
@@ -132,9 +137,15 @@ A failure never falls back to another backend or the host.
 - That the sign-in completes through the printed address inside the container
   and writes the token file above. If `login` reports "sign-in saved: no",
   report the file names it lists.
-- That a read-only token is enough: an access token lasts about an hour, so run
-  `check` again after an hour; it refreshes in memory and the CLI cannot save
-  it. If it then fails to persist the token, the mount must become writable.
+- That a refreshed token is kept: an access token lasts about an hour. Note the
+  modification time of `login/gemini/antigravity-cli/antigravity-oauth-token`
+  (`ls -l`; never open it), run a turn or `check` more than an hour later, and
+  confirm the time changed; then confirm a turn the next day still works
+  without signing in again. Only the token file is
+  mounted (writable); if the CLI replaces it by rename rather than rewriting
+  it, the rename fails on the mounted file, the token stays in memory for that
+  turn, and the next turn refreshes again. If `check` the next day asks for a
+  sign-in, its folder must be mounted instead, like Claude's and Grok's.
 - That Control's tools appear as `mcp_control_TOOL` and calls arrive as `tool`
   steps under that name, as the MCP page describes. Any other name stops the turn
   with "unexpected tool (NAME)", which names what to allow.

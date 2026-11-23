@@ -1,9 +1,10 @@
 //! The credential canary of `control ID check`: a fake credential mounted
 //! exactly as a turn mounts the real one, in the turn's own container with a
-//! stand-in program, and read from inside as the CLI's uid and as another.
+//! stand-in program, and read and written from inside as the CLI's uid and as another.
 //! No model, no network, no real credential. What is asserted is data
 //! ([`assertions`]); [`run`] is the thin layer that starts the container and
 //! execs each reader.
+use crate::Write;
 use control_isolation::{ExecSpec, Input, Isolation, Network, RunSpec, Stream, Streams, Target, User};
 use std::io;
 
@@ -56,11 +57,28 @@ fn read(reader: Reader, path: &str, expect: Expect) -> Assertion {
         expect,
     }
 }
+/// Opens `path` for appending and writes nothing, so the canary is unchanged
+/// whether or not the mount lets it.
+fn write(reader: Reader, path: &str, expect: Expect) -> Assertion {
+    Assertion {
+        reader,
+        attempt: format!("write {path}"),
+        argv: ["sh", "-c", ": 2>/dev/null >>\"$1\"", "sh", path]
+            .map(str::to_owned)
+            .to_vec(),
+        expect,
+    }
+}
 /// What must hold for a credential mounted at `target` whose contents are
-/// `canary`. The CLI's own read comes first and last: it proves the
-/// container ran throughout, so a refusal in between is the kernel's.
-pub fn assertions(cli: User, target: &str, canary: &str) -> Vec<Assertion> {
+/// `canary`, which the host made writable or not (`policy`). The CLI's own
+/// read comes first and last: it proves the container ran throughout, so a
+/// refusal in between is the kernel's.
+pub fn assertions(cli: User, target: &str, canary: &str, policy: Write) -> Vec<Assertion> {
     let (own, other) = (Reader::Cli(cli), Reader::Other(OTHER));
+    let writes = match policy {
+        Write::Refreshable => Expect::Succeeds,
+        Write::ReadOnly => Expect::Fails,
+    };
     vec![
         read(own, target, Expect::Succeeds),
         Assertion {
@@ -80,6 +98,8 @@ pub fn assertions(cli: User, target: &str, canary: &str) -> Vec<Assertion> {
         read(other, target, Expect::Fails),
         read(other, &format!("/proc/1/root{target}"), Expect::Fails),
         read(other, "/proc/1/environ", Expect::Fails),
+        write(own, target, writes),
+        write(other, target, Expect::Fails),
         read(own, target, Expect::Succeeds),
     ]
 }
@@ -116,13 +136,19 @@ pub fn stand_in(turn: RunSpec) -> RunSpec {
 }
 /// Starts the stand-in of `turn`, runs every assertion inside it and removes
 /// it. A reader whose exec cannot start counts as refused.
-pub fn run(isolation: &dyn Isolation, turn: RunSpec, target: &str, canary: &str) -> io::Result<Vec<(Assertion, bool)>> {
+pub fn run(
+    isolation: &dyn Isolation,
+    turn: RunSpec,
+    target: &str,
+    canary: &str,
+    policy: Write,
+) -> io::Result<Vec<(Assertion, bool)>> {
     let cli = turn
         .user
         .ok_or_else(|| io::Error::other("the turn container names no user"))?;
     let id = isolation.run_detached(&stand_in(turn))?;
     let quiet = Streams::new(Stream::Null, Stream::Null, Stream::Null);
-    let results = assertions(cli, target, canary)
+    let results = assertions(cli, target, canary, policy)
         .into_iter()
         .map(|assertion| {
             let exec = ExecSpec {

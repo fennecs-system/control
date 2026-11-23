@@ -1948,6 +1948,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
         path: root.join("synthetic-auth.json"),
         uid: meta.uid(),
         gid: meta.gid(),
+        write: control_agent::Write::ReadOnly,
     };
     fs::write(&auth.path, b"{}").unwrap();
     let policy = root.join("seccomp.json");
@@ -1997,6 +1998,7 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
         path: PathBuf::from("/private/auth.json"),
         uid: 502,
         gid: 20,
+        write: control_agent::Write::ReadOnly,
     };
     let spec = container_spec(
         "sha256:test",

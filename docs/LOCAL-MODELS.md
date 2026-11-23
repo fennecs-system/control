@@ -64,10 +64,39 @@ then select it in a chat with `/model codex+second:gpt-6.1-sol` (or give that
 selection to a spawn's `model`). Each named account's login lives in its own
 private directory, `<config>/accounts/BACKEND/NAME/`, holding the same file the
 backend's default location holds (`auth.json`, `.credentials.json`, or
-Antigravity's files). The host locates and checks it and mounts only that file,
-read-only, into the account's turns; a backend is never told which account it
-was handed, and no turn sees another account's login. The Codex default
-account stays your own `~/.codex` sign-in (`codex login` on the host).
+Antigravity's files). The host locates and checks it and mounts only that
+account's login into its turns; a backend is never told which account it was
+handed, and no turn sees another account's login. The Codex default account
+stays your own `~/.codex` sign-in (`codex login` on the host).
+
+**Sign-ins stay signed in.** A subscription sign-in kept in Control's own
+folder (every named account, and the Claude, Grok and Antigravity defaults) is
+mounted writable, so a token the CLI refreshes during a turn is kept for the
+next one. Your own Codex sign-in (`~/.codex/auth.json`, or the
+`CONTROL_CODEX_AUTH_FILE` / `CODEX_HOME` file) is mounted read-only: no
+container can write it. API keys and cloud credentials are always read-only.
+What is mounted follows how each CLI saves its sign-in:
+
+- Codex rewrites `auth.json` in place, so the file alone is mounted, and only
+  `auth.json` stays in a named account's folder after a turn or a login.
+- Claude and Grok replace theirs by renaming a new copy over it and lock
+  refreshes beside it, so the account's folder is mounted
+  (`/home/agent/.claude-login`, `/home/agent/.grok-login`) and only the sign-in
+  is pointed there (`CLAUDE_SECURESTORAGE_CONFIG_DIR`, `GROK_AUTH_PATH`);
+  sessions, settings and caches stay on the turn's in-memory home. After each
+  turn, and after each login, everything in the folder but the sign-in, its lock
+  and the CLI's in-flight copies is removed, which also clears what an earlier
+  login kept there.
+- Antigravity's token file alone is mounted, writable; whether its CLI
+  rewrites it in place is not yet confirmed (docs/ANTIGRAVITY.md).
+
+Several agents on one account share its one sign-in, as two terminals on one
+machine do. If a sign-in stops working (expired, revoked, or damaged by a
+turn), the failure, `control accounts list`, `control BACKEND check` and
+**Manage → Models & providers** name the one command that fixes that account:
+`control BACKEND login --account NAME`, which replaces the sign-in in place
+(`control BACKEND key --account NAME` for a key; `codex login` on the host for
+your own Codex sign-in).
 
 `control accounts list` shows each account with its kind, default, cap and
 whether it is signed in; `control accounts default codex second` makes it the
@@ -114,9 +143,7 @@ from the model is in docs/THREAT-MODEL.md.
 **Caps and cooldowns.** An account at its `cap` holds its next turn in the queue
 with a notice; other accounts and conversations are not held. No account has a
 cap unless you set one (`control accounts add … --cap N`): a named account runs
-as many attempts at once as the default sign-in does. Control mounts a named
-Codex sign-in read-only, so a refreshed token is not kept; sign in again if Codex
-reports the login expired, and set a cap if concurrent refreshes ever collide. When a turn reports a
+as many attempts at once as the default sign-in does. When a turn reports a
 usage limit, its account cools down: new turns on it wait, with a notice, until
 it is cleared on **Manage → Models & providers** (no retry time is read from the
 provider). Nothing moves to another account automatically; a `+*` pool picks an

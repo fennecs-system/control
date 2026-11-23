@@ -39,8 +39,10 @@ arbitrary downloaded code safe.
   `workers_discover_only_captured_packages_and_read_them_as_evidence`,
   `revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts`.
 
-- **Credentials and executable code.** Codex credentials are read-only mounts
-  into its account-bearing harness. Its inner execution sandbox denies credential
+- **Credentials and executable code.** A Codex sign-in is mounted into its
+  account-bearing harness beneath a mode-0700 home: the operator's own
+  `~/.codex/auth.json` read-only, a named account's `auth.json` writable (see
+  **Writable sign-ins** below). Its inner execution sandbox denies credential
   paths and network access; a canary/PID-namespace probe must pass before real
   credentials are mounted. Its seccomp profile and relaxed masked-path setting
   support that inner sandbox; the probe is required, not an optional fallback.
@@ -58,7 +60,7 @@ arbitrary downloaded code safe.
 - **The model inside a vendor CLI and its credential.** Claude, Grok and
   Antigravity keep their login in the turn container, readable by the uid the
   CLI runs as. Enforced by construction: the model's commands run in the
-  separate credential-free shell container; the login is read-only beneath a
+  separate credential-free shell container; the login is beneath a
   mode-0700 home owned by the CLI's uid, so no other uid in the container
   reaches it (Docker Desktop and OrbStack show a bind-mounted file as owned by
   whoever reads it, so the file's own mode protects nothing there), and a turn
@@ -75,13 +77,43 @@ arbitrary downloaded code safe.
   no-new-privileges (setuid and `unshare(CLONE_NEWUSER)` were refused in the
   pinned images, as root and as the CLI uid), so separating it would need
   `SETUID`/`SETGID`, which Control does not grant; it reads and writes only
-  fixed mailbox paths. `control claude|grok|antigravity check` runs a
+  fixed mailbox paths. `control codex|claude|grok|antigravity check` runs a
+  fake-credential canary|grok|antigravity check` runs a
   fake-credential canary in the turn's own container, one line per assertion.
   Evidence: `control_agent::cli::canary` and `secrets_private` tests, each
   backend's `…beneath_the_private_home_of_the_cli_uid` test,
   `nothing_after_a_forbidden_call_reaches_activity` in
   [streams.rs](../crates/ai/tests/streams.rs), and
   [ANTIGRAVITY.md](ANTIGRAVITY.md) for Antigravity's offline checks.
+
+- **Writable sign-ins.** A subscription sign-in in Control's own folder (every
+  named account, and the Claude, Grok and Antigravity defaults) is mounted
+  writable so a token the CLI refreshes is kept; the operator's own Codex
+  sign-in and every API key and cloud credential stay read-only. The host
+  decides this from who owns the location and the account's kind
+  (`crate::logins::write_policy`); a key cannot be granted writable
+  (`Granted::refreshable` makes only sign-ins). Each account has exactly one
+  folder, `<config>/accounts/BACKEND/NAME/`, and a turn mounts only its own:
+  Codex's and Antigravity's file alone, Claude's and Grok's folder, which
+  holds nothing but the sign-in (the CLI is pointed there by
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR` / `GROK_AUTH_PATH`, so its sessions,
+  settings and caches stay on the in-memory home, and the host removes
+  anything else after each turn and login). The writable mount is still
+  beneath the CLI's mode-0700 home and the model's shell still has no secret,
+  so a compromised CLI can do one more thing than before: overwrite or delete
+  its own account's sign-in. That costs availability for that account (fix:
+  `control BACKEND login --account NAME`, named in the failure), not
+  disclosure: it could already read that sign-in, and it reaches no other
+  account's folder, nothing persists in the folder but credential files, and
+  the operator's own Codex sign-in is unwritable. `control BACKEND check`'s
+  canary asserts the CLI uid may write a refreshable mount and not a read-only
+  one, and no other uid may write either. Several turns on one account share
+  one sign-in, as two terminals do; Grok and Claude lock refreshes in that
+  folder, Codex re-reads `auth.json` before refreshing but takes no lock.
+  Evidence: `accounts_of_one_backend_each_mount_only_their_own_login` and
+  `only_the_refreshed_sign_in_outlives_a_turn_in_its_folder` in
+  `src/worker/tests/attempts.rs`, `only_a_subscription_control_keeps_is_refreshable`
+  in `src/logins/tests.rs`, and each backend's refreshable-sign-in test.
 
 - **API keys.** A key is in one private file and reaches a turn only as a
   typed read-only secret mount in the CLI's own container: never in an

@@ -298,6 +298,24 @@ pub enum Location {
     /// Under the node configuration directory.
     Config(RelativePath),
 }
+/// Who a credential location belongs to, which decides whether a turn may
+/// write the sign-in there back (see `crate::logins`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Owner {
+    /// The operator's own: their home (`~/.codex`) or a file a variable names.
+    /// Never written by a container.
+    Operator,
+    /// Control's configuration folder, which Control's own logins fill.
+    Control,
+}
+impl Location {
+    pub fn owner(&self) -> Owner {
+        match self {
+            Self::Variable { .. } | Self::Home(_) => Owner::Operator,
+            Self::Config(_) => Owner::Control,
+        }
+    }
+}
 /// Where the host finds an account's credential: the first location whose
 /// root is available (a set variable, a known home). Empty when the backend
 /// needs none. A reference only, never contents.

@@ -541,3 +541,36 @@ fn every_login_form_is_read_only_beneath_the_private_home_of_the_cli_uid() {
         assert_eq!(targets, [(target, Access::ReadOnly)], "{form:?}");
     }
 }
+
+/// A refreshable Google sign-in is the token file alone, writable, at the
+/// same place: the CLI's caches and the settings Control copies in each turn
+/// stay on the in-memory home, and no key or cloud credential is writable.
+#[test]
+fn a_refreshable_sign_in_is_the_token_file_alone_writable() {
+    let root = directory("refreshable");
+    let private = root.join(PRIVATE);
+    fs::create_dir(&private).unwrap();
+    let file = root.join("antigravity-oauth-token");
+    cli::private_file(&file, "").unwrap();
+    let owner = granted(Form::Session, &file).owner();
+    let login = Granted::refreshable(file.clone(), owner);
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        &login,
+        &private,
+        &root.join(MAILBOX),
+        "sha256:img",
+        "gemini",
+    )
+    .unwrap();
+    assert_eq!(cli::secrets_private(&turn), Ok(()));
+    let secrets: Vec<_> = turn
+        .secrets
+        .iter()
+        .map(|s| (s.target.as_str(), s.access, s.source.as_path()))
+        .collect();
+    assert_eq!(secrets, [(TOKEN, Access::ReadWrite, file.as_path())]);
+    assert!(args(&turn).contains(&format!("type=bind,src={},dst={TOKEN}", file.display())));
+    assert!(turn.tmpfs.iter().any(|fs| fs.target == "/home/agent/.gemini"));
+}
