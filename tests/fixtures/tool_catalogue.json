@@ -119,7 +119,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
+      "description": "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL, codex+ACCOUNT:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
       "inputSchema": {
         "properties": {
           "genes": {
@@ -180,7 +180,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Select the model for a chat's future turns (as /model does); active turns keep theirs. Omit model to list the configured choices.",
+      "description": "Select the model for a chat's future turns (as /model does: BACKEND:MODEL, BACKEND+ACCOUNT:MODEL, or BACKEND+*:MODEL for any enabled account); active turns keep theirs. Omit model to list the configured choices and one example per form with this node's backends and accounts.",
       "inputSchema": {
         "properties": {
           "id": {
@@ -2605,7 +2605,7 @@
         "additionalProperties": false,
         "properties": {
           "model": {
-            "description": "Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a private endpoint model declared tool-capable; text-only endpoints are refused for agent turns.",
+            "description": "Optional configured model ID, e.g. claude:opus or codex:MODEL_ID; codex+NAME:MODEL_ID runs on a named account and codex+*:MODEL_ID on any enabled account. Omit to inherit the parent's captured model and account. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a private endpoint model declared tool-capable; text-only endpoints are refused for agent turns.",
             "maxLength": 128,
             "type": "string"
           },
@@ -2649,7 +2649,7 @@
             "type": "array"
           },
           "model": {
-            "description": "Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a private endpoint model declared tool-capable; text-only endpoints are refused for agent turns.",
+            "description": "Optional configured model ID, e.g. claude:opus or codex:MODEL_ID; codex+NAME:MODEL_ID runs on a named account and codex+*:MODEL_ID on any enabled account. Omit to inherit the parent's captured model and account. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a private endpoint model declared tool-capable; text-only endpoints are refused for agent turns.",
             "maxLength": 128,
             "type": "string"
           },

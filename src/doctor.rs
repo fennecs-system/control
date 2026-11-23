@@ -107,14 +107,14 @@ pub fn run() -> io::Result<()> {
             );
             if installed {
                 // Offline isolation probe with an empty canary credential: no account is mounted and no model is called.
-                let probe = agent.probe(isolation, image);
+                let probe = agent.probe(&crate::agent_host::NODE, isolation, image);
                 match probe {
                     Ok(()) => check(&format!("{name}: offline sandbox probe"), true, ""),
                     Err(reason) => check(&format!("{name}: offline sandbox probe"), false, &reason),
                 }
             }
         }
-        let credentials = agent.credentials_ready();
+        let credentials = crate::logins::ready(backend);
         match credentials {
             Ok(()) => check(&format!("{name}: credential metadata"), true, ""),
             Err(reason) => check(&format!("{name}: credential metadata"), false, &reason),

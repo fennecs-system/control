@@ -107,7 +107,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "chat_create",
         write: true,
-        description: "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
+        description: "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL, codex+ACCOUNT:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
         schema: || json!({"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":32},"model":{"type":"string","maxLength":128},"genes":{"type":"array","items":{"type":"string"},"maxItems":32},"persona":{"type":"string","maxLength":128}}}),
     },
     Tool {
@@ -119,7 +119,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "chat_model",
         write: true,
-        description: "Select the model for a chat's future turns (as /model does); active turns keep theirs. Omit model to list the configured choices.",
+        description: "Select the model for a chat's future turns (as /model does: BACKEND:MODEL, BACKEND+ACCOUNT:MODEL, or BACKEND+*:MODEL for any enabled account); active turns keep theirs. Omit model to list the configured choices and one example per form with this node's backends and accounts.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID},"model":{"type":"string","maxLength":128}},"required":["id"]}),
     },
     Tool {
@@ -216,6 +216,18 @@ fn token<'a>(args: &'a Value, key: &str) -> io::Result<Option<&'a str>> {
         _ => Err(io::Error::other(format!(
             "{key} must be a single word of letters, digits and -_.:/@."
         ))),
+    }
+}
+/// A model selection, parsed by the one selection grammar before it is sent
+/// as `/model SELECTION`: whatever the grammar accepts, and nothing that could
+/// add a second word to the command.
+fn selection(args: &Value) -> io::Result<Option<&str>> {
+    match args.get("model") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if value.len() <= 128 => crate::providers::selection::parse(value)
+            .map(|_| Some(value.trim()))
+            .map_err(|error| io::Error::other(format!("model: {error}"))),
+        _ => Err(io::Error::other("model must be a selection of at most 128 characters.")),
     }
 }
 fn chat_id(args: &Value) -> io::Result<&str> {
@@ -657,7 +669,7 @@ fn chat_create(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
         }
         _ => return Err(io::Error::other("title must be non-empty text.")),
     };
-    let model = token(args, "model")?;
+    let model = selection(args)?;
     let persona = token(args, "persona")?;
     let mut create = json!({"mode":"chat"});
     if let Some(genes) = genes(args)? {
@@ -748,7 +760,7 @@ fn chat_model(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     command(
         remote,
         id,
-        format!("/model {}", token(args, "model")?.unwrap_or(""))
+        format!("/model {}", selection(args)?.unwrap_or(""))
             .trim_end()
             .to_owned(),
     )

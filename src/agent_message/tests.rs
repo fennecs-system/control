@@ -128,7 +128,7 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
     state.runtime.runs[0].status = "completed".into();
     let alice_run = activate(&mut state, &alice);
     let cass_index = crate::chat::latest_task(&state, &cass, &state.chats[0].actor).unwrap();
-    state.runtime.runs[cass_index].model = Some("recipient-model".into());
+    state.runtime.runs[cass_index].target.model = Some("recipient-model".into());
     let root_messages = state.chats[0].messages.len();
     let call = || MessageCall {
         chat_id: cass.clone(),
@@ -145,7 +145,7 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
     let queued = state.runtime.runs.last().unwrap();
     assert_eq!(queued.chat_id.as_deref(), Some(cass.as_str()));
     assert_eq!(
-        queued.model.as_deref(),
+        queued.target.model.as_deref(),
         Some("recipient-model"),
         "the recipient retains its own captured execution settings"
     );

@@ -137,12 +137,15 @@ pub(crate) fn schedule(runs: &[crate::runtime::Run], chat: &str) -> Option<u64> 
 }
 
 /// Capture persona `id`'s current revision, with its SOUL.md resolved.
-pub(crate) fn capture(state: &State, id: &str) -> Result<Captured, String> {
-    let definition = state
-        .personas
+pub(crate) fn capture(
+    personas: &control_context::persona::Library,
+    documents: &[crate::knowledge::Document],
+    id: &str,
+) -> Result<Captured, String> {
+    let definition = personas
         .get(id.trim())
         .ok_or_else(|| format!("Unknown persona: {id}. control.personas.list names them."))?;
-    Captured::of(definition, &crate::lens_library::inputs(&state.documents))
+    Captured::of(definition, &crate::lens_library::inputs(documents))
 }
 
 /// Validate genes, SOUL.md and the library, then append `draft` as the next
@@ -164,7 +167,7 @@ pub(crate) fn save_with(
         tools.sort();
         tools.dedup();
     }
-    crate::lens_library::resolve(state, &draft.lenses)?;
+    crate::lens_library::resolve(crate::lens_library::Sources::of(state), &draft.lenses)?;
     Captured::of(&draft, &crate::lens_library::inputs(&state.documents))?;
     let mut candidate = state.personas.clone();
     candidate.definitions.push(draft.clone());
@@ -182,7 +185,7 @@ pub(crate) fn save_with(
 pub(crate) fn select(state: &mut State, chat: &str, persona: Option<&str>) -> Result<(), &'static str> {
     let captured = match persona {
         Some(id) => Some(
-            capture(state, id)
+            capture(&state.personas, &state.documents, id)
                 .map_err(|_| "Unknown persona or its SOUL.md cannot be captured; control.personas.list names them.")?,
         ),
         None => None,
@@ -191,7 +194,7 @@ pub(crate) fn select(state: &mut State, chat: &str, persona: Option<&str>) -> Re
         return Err("Read-only personas run as spawned observers (control_agent_spawn with persona), not as a DM.");
     }
     if let Some(captured) = &captured {
-        crate::lens_library::resolve(state, &captured.lenses)
+        crate::lens_library::resolve(crate::lens_library::Sources::of(state), &captured.lenses)
             .map_err(|_| "The persona's genes cannot be resolved; check its DNA.")?;
     }
     let session = state.chats.iter_mut().find(|s| s.id == chat).ok_or("Chat not found.")?;
@@ -209,7 +212,11 @@ pub(crate) fn select(state: &mut State, chat: &str, persona: Option<&str>) -> Re
 }
 /// Applies a root DM's selected persona to its newly queued run: the captured
 /// purpose and standing, and its body when the DM has no explicit model.
-pub(crate) fn apply_to_root(state: &mut State, chat: &str, run_index: usize) -> Result<(), &'static str> {
+pub(crate) fn apply_to_root(
+    state: &mut State,
+    chat: &str,
+    run_index: usize,
+) -> Result<(), std::borrow::Cow<'static, str>> {
     let Some(id) = state
         .chats
         .iter()
@@ -218,8 +225,8 @@ pub(crate) fn apply_to_root(state: &mut State, chat: &str, run_index: usize) -> 
     else {
         return Ok(());
     };
-    let bundle =
-        capture(state, &id).map_err(|_| "The DM's persona cannot be captured; check it on the Personas page.")?;
+    let bundle = capture(&state.personas, &state.documents, &id)
+        .map_err(|_| "The DM's persona cannot be captured; check it on the Personas page.")?;
     let explicit = state
         .chats
         .iter()
@@ -229,8 +236,7 @@ pub(crate) fn apply_to_root(state: &mut State, chat: &str, run_index: usize) -> 
     let body = if !explicit && !bundle.model.is_empty() {
         Some(crate::providers::selection::resolve(
             &state.runtime,
-            run.backend,
-            &run.model.clone().unwrap_or_else(|| run.backend.default_model()),
+            &run.target,
             Some(&bundle.model),
         )?)
     } else {
@@ -238,8 +244,7 @@ pub(crate) fn apply_to_root(state: &mut State, chat: &str, run_index: usize) -> 
     };
     let run = &mut state.runtime.runs[run_index];
     if let Some(body) = body {
-        run.backend = body.backend;
-        run.model = Some(body.model);
+        run.target = body;
     }
     run.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Worker,
@@ -450,7 +455,7 @@ pub(crate) fn render(state: &State, id: &str, submitted: Option<&Definition>, no
         escape(&if definition.behaviours.is_empty() { String::new() } else { serde_json::to_string(&definition.behaviours).unwrap_or_default() })));
     if existing && submitted.is_none() {
         html.push_str("<details class='resolved-context' open><summary>First instruction</summary>");
-        match capture(state, &definition.id) {
+        match capture(&state.personas, &state.documents, &definition.id) {
             Ok(captured) => html.push_str(&format!("<pre class='manifest'>{}</pre>", escape(&captured.prompt()))),
             Err(error) => html.push_str(&format!("<p class='save-error'>{}</p>", escape(&error))),
         }

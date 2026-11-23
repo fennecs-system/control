@@ -123,7 +123,7 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     let mut room_read = None;
     let mut bad_post = None;
     while Instant::now() < deadline {
-        pump(&shared, &run, &workspace, false);
+        pump_at(&shared, &run, &workspace, &workspace, false);
         while let Ok(line) = replies.try_recv() {
             let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
             for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
@@ -220,7 +220,7 @@ fn ordinary_agents_receive_the_shared_continuity_mcp_without_bot_authority() {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Carry out the assigned work", "test").unwrap();
-        state.runtime.runs[0].backend = backend;
+        state.runtime.runs[0].target.backend = backend;
         crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
         assert!(!crate::bots::defined(&state, &chat));
         let id = state.runtime.runs[0].id.clone();
@@ -419,7 +419,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
     let run = &mut s.runtime.runs[0];
     let id = run.id.clone();
     run.status = "running".into();
-    run.backend = crate::backend::Backend::Claude;
+    run.target.backend = crate::backend::Backend::Claude;
     run.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
         root: "root".into(),
@@ -565,7 +565,7 @@ fn every_advertised_worker_tool_has_ui_registration() {
             crate::chat::send(&mut state, &chat, "Inspect tools", "test").unwrap();
             let run = &mut state.runtime.runs[0];
             run.status = "running".into();
-            run.backend = backend;
+            run.target.backend = backend;
             let id = run.id.clone();
             let shared = Arc::new(Mutex::new(state));
             let response = rpc_at(
@@ -602,8 +602,11 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
         },
         nonce: "delegate-fixture".into(),
         generation: "pause-generation".into(),
-        backend: run.backend,
-        model: "fixture".into(),
+        target: crate::providers::Target {
+            backend: run.target.backend,
+            model: Some("fixture".into()),
+            ..Default::default()
+        },
         child: None,
         continuation: None,
     });
@@ -910,7 +913,7 @@ fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
     let state = Arc::new(Mutex::new(state));
     let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_workspace_run","arguments":{"command":"true"}}}});
     assert!(crate::toolbox::failure_text(&rpc(&state, &id, &request)).is_some());
-    state.lock().unwrap().runtime.runs[0].backend = crate::backend::Backend::Claude;
+    state.lock().unwrap().runtime.runs[0].target.backend = crate::backend::Backend::Claude;
     let tools = rpc(
         &state,
         &id,
@@ -1087,11 +1090,11 @@ fn live_mailbox_survives_sustained_wake_driven_traffic() {
             }
         }
     });
-    let wake = crate::mailbox_wake::MailboxWake::new(&workspace);
+    let wake = control_agent::mailbox_wake::MailboxWake::new(&workspace);
     let deadline = Instant::now() + Duration::from_secs(600);
     let mut observed = 0i64;
     while Instant::now() < deadline && observed <= calls {
-        pump(&shared, &run, &workspace, false);
+        pump_at(&shared, &run, &workspace, &workspace, false);
         while let Ok(line) = replies.try_recv() {
             let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
             assert_eq!(value["id"], json!(observed), "{value}");

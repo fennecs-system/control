@@ -373,13 +373,13 @@ fn a_spawn_rate_refusal_sends_members_to_their_approved_advisor() {
     let (mut state, lead, builder, advisor, _) = team();
     let limit = crate::delegation::HELPERS_SPENT;
     assert_eq!(
-        crate::delegation::refusal(&state, Some(&builder), limit),
+        crate::delegation::refusal(&state, Some(&builder), limit.into()),
         limit,
         "no approved advisor yet"
     );
     crate::bots::command(&mut state, &advisor, "on").unwrap();
     for chat in [&builder, &lead] {
-        let shown = crate::delegation::refusal(&state, Some(chat), limit);
+        let shown = crate::delegation::refusal(&state, Some(chat), limit.into());
         assert!(
             shown.starts_with("This chat, woken by Control events, has spawned enough helpers this hour."),
             "{shown}"
@@ -392,7 +392,7 @@ fn a_spawn_rate_refusal_sends_members_to_their_approved_advisor() {
         assert!(crate::worker_tools::fixes::names_fix(&shown));
     }
     let other = "Delegation depth limit reached (2).";
-    assert_eq!(crate::delegation::refusal(&state, Some(&builder), other), other);
+    assert_eq!(crate::delegation::refusal(&state, Some(&builder), other.into()), other);
     // The advisor takes that question: see a_member_asks_its_teams_advisor_and_the_question_wakes_it.
 }
 

@@ -278,7 +278,7 @@ fn dna_page() {
             let start = Instant::now();
             for _ in 0..10 {
                 black_box(crate::lens_library::render(
-                    black_box(&state),
+                    black_box(crate::lens_library::Sources::of(&state)),
                     &selected,
                     None,
                     None,
@@ -288,7 +288,8 @@ fn dna_page() {
             samples.push(start.elapsed().as_nanos() / 10);
         }
         samples.sort_unstable();
-        let bytes = crate::lens_library::render(&state, &selected, None, None, false).len();
+        let bytes =
+            crate::lens_library::render(crate::lens_library::Sources::of(&state), &selected, None, None, false).len();
         println!(
             "{}",
             serde_json::json!({"workload":"web_dna_page","genes":genes,"median_ns":samples[samples.len() / 2],"min_ns":samples[0],"bytes":bytes})
@@ -473,7 +474,7 @@ pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
         turn.chat_id = Some(id(index % dms));
         turn.kind = [RunKind::Chat, RunKind::BotWake, RunKind::PortDecision][index % 3];
         turn.status = if index % 20 == 0 { "failed" } else { "completed" }.into();
-        turn.model = Some(["gpt-5", "claude"][index % 2].into());
+        turn.target.model = Some(["gpt-5", "claude"][index % 2].into());
         *turn.objective = format!("Turn {index}: check the ore counts <&>");
         turn.attempts.push(Attempt {
             started_unix: 1_700_000_000 + index as u64 * 13,

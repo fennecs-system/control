@@ -254,7 +254,7 @@ fn due(state: &State, time: u64) -> Vec<Due> {
             } else {
                 return None;
             };
-            let target = crate::services::probe_target(state, &probe.service, |service| {
+            let target = crate::services::probe_target(&state.services, &probe.service, |service| {
                 service.resource.generation.get() == probe.generation
             })
             .map(|service| (service, probe.command.clone()))
@@ -386,7 +386,7 @@ pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
         .find(|session| session.id == chat)
         .ok_or("Chat not found.")?;
     crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
-    let team = crate::chat::tree(state, chat);
+    let team = crate::chat::Lineage::of(&state.chats).tree(chat);
     let root = team
         .iter()
         .copied()
@@ -610,7 +610,12 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
                     .iter()
                     .find(|service| {
                         service.resource.id.as_str() == service_id
-                            && crate::services::accessible(&state, service, &node, &caller)
+                            && crate::services::accessible(
+                                crate::chat::Lineage::of(&state.chats),
+                                service,
+                                &node,
+                                &caller,
+                            )
                     })
                     .ok_or_else(|| io::Error::other("Service is not owned by this chat or its team"))?
                     .binding_snapshot()

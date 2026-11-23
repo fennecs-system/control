@@ -8,63 +8,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Always-on environment essentials. The detail is read on demand
-/// (`control_guidance` topic `environment`).
-pub(crate) const ENVIRONMENT_CORE: &str = "Images and shared caches are immutable and network is scoped; read control_guidance topic environment before Nix builds, extra toolchains or network use.";
+pub(crate) use control_context::agent_policy::ENVIRONMENT_CORE;
 /// On-demand detail behind `ENVIRONMENT_CORE`.
 pub(crate) const ENVIRONMENT_GUIDANCE: &str = "The pinned Nix-built base image is immutable. Edit task files in /workspace and use /tmp for scratch builds. Lite workers provide Rust tools. If the operator selected the full profile, credential-free workspace tools and persistent services additionally provide Nix, Node/npm, Java, Python and curl. Use control_workspace_start or workspace command tools for private Nix builds; the model CLI container remains read-only. Full has pinned local nixpkgs and a private single-user store; cached/local builds work offline. Network access is separately scoped, so remote packages are not automatically reachable. Never modify or publish shared images or caches; there is no host Nix daemon access.";
 
-/// How long an offline isolation probe may take. Its container usually exits
-/// within seconds, but a busy engine (just after a build, image load or
-/// restart) can take far longer to start one.
-pub(crate) const SANDBOX_PROBE_WAIT: Duration = Duration::from_secs(90);
-
-pub(crate) fn timeout_message(limit: Duration) -> String {
-    format!(
-        "Worker reached its {} s time limit and was stopped. Files are retained in the run directory; the previous published checkpoint is unchanged. Hand off before the limit and continue in the next turn; operators can raise it with worker-timeout-secs (all turns), local-turn-timeout-secs (local-model turns) or bot-turn-timeout-secs (approved persistent bots) in the node configuration.",
-        limit.as_secs()
-    )
-}
-pub(crate) const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
-
-pub(crate) fn worker_failure(bytes: &[u8]) -> &'static str {
-    // Classify captured diagnostics internally; never emit raw errors or credential-bearing text.
-    let message = String::from_utf8_lossy(bytes).to_ascii_lowercase();
-    if message.contains("not supported") || message.contains("model_not_found") {
-        "The signed-in account does not support the requested Codex model or runtime feature."
-    } else if message.contains("read-only file system")
-        || message.contains("refresh token")
-        || message.contains("token refresh")
-    {
-        "Codex could not use or refresh the read-only account session. Refresh the host login and submit a new run. The credential mount was not made writable."
-    } else if message.contains("permission denied") {
-        "Codex encountered a filesystem permission denial. Check credential ownership, ephemeral state, and sandbox compatibility."
-    } else if message.contains("401")
-        || message.contains("unauthorized")
-        || message.contains("not logged in")
-        || message.contains("invalid api key")
-        || message.contains("authentication_failed")
-    {
-        "Codex account authentication was rejected. Refresh the host login and submit a new run."
-    } else if message.contains("certificate") || message.contains("ssl") {
-        "Codex could not validate the provider TLS connection. Check the Nix worker certificate configuration."
-    } else if message.contains("unexpected argument")
-        || message.contains("error parsing")
-        || message.contains("unknown variant")
-        || message.contains("unknown permission")
-    {
-        "The pinned Codex worker rejected its runtime configuration. Check CLI and permission-profile compatibility."
-    } else if message.contains("quota") || message.contains("usage limit") || message.contains("rate limit") {
-        "The signed-in Codex account reached a usage or rate limit."
-    } else if message.contains("stream disconnected")
-        || message.contains("error sending request")
-        || message.contains("connection")
-    {
-        "Codex could not complete its provider connection. Check container network connectivity and account availability."
-    } else {
-        UNKNOWN_FAILURE
-    }
-}
+pub(crate) use control_agent::timeout_message;
 
 static DISPATCH_WAKE: Mutex<Option<std::sync::mpsc::SyncSender<()>>> = Mutex::new(None);
 pub fn wake() {
@@ -231,6 +179,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                         let Ok(mut s) = state.lock() else {
                             break 'supervisor;
                         };
+                        crate::providers::accounts::refresh(&mut s.runtime);
                         // Reconcile before projecting: callbacks can admit new
                         // work even when there was no queued run on entry.
                         if crate::history::emit(&mut s, storage::save).is_err() {
@@ -547,7 +496,7 @@ fn commit(
                     id,
                     generation,
                     checkpoint,
-                    crate::watches::delivery::live(s),
+                    crate::watches::delivery::live(&s.watches),
                 )
             });
         match candidate {
@@ -611,6 +560,10 @@ fn commit(
     } else {
         None
     };
+    // A usage limit cools the attempt's account: new attempts on it wait; none moves to another.
+    if attempt.cause == Some(control_agent::Cause::UsageLimit) {
+        crate::providers::accounts::cool(&mut s.runtime, attempt.backend, &attempt.account);
+    }
     let r = &mut s.runtime.runs[run_index];
     if let Err((status, _)) = &outcome
         && *status != "waiting"
@@ -864,7 +817,7 @@ fn checkpoint_prepared(
         .attempts
         .last()
         .and_then(|a| a.github_source.clone())
-        .or_else(|| crate::github::inherit(state, parent.as_deref()));
+        .or_else(|| crate::github::inherit(&state.runtime.runs, parent.as_deref()));
     let continuity_index = state.chats.iter().position(|c| {
         Some(&c.id) == state.runtime.runs[index].chat_id.as_ref() && c.continuity.is_none() && captured.is_some()
     });
@@ -921,7 +874,7 @@ fn checkpoint_prepared(
     let mut attempt = crate::usage::Attempt::new();
     attempt.explicit_timeout_seconds = crate::config::configured_worker_deadline().map(|d| d.as_secs());
     attempt.bot_timeout_seconds = crate::config::bot_turn_deadline();
-    if run.backend == crate::backend::Backend::Local {
+    if run.target.backend.runs_control_loop() {
         attempt.local_timeout_seconds = crate::config::local_turn_deadline();
     }
     attempt.context_trace = captured.map(Box::new);
@@ -931,14 +884,15 @@ fn checkpoint_prepared(
     attempt.project = project.as_ref().and_then(|p| p.grant.clone());
     attempt.project_parent = project_parent;
     attempt.project_base = project_base;
-    attempt.backend = run.backend;
-    attempt.provider = run.backend.label().into();
-    attempt.image = run.backend.image();
+    attempt.backend = run.target.backend;
+    attempt.account = run.target.account.clone();
+    attempt.provider = run.target.backend.label().into();
+    attempt.image = run.target.backend.image();
     attempt.node_id = crate::config::node_id().ok();
     attempt.parent_artifact = parent;
     attempt.workspace_id = Some(format!("{}-attempt-{}", run.id, run.attempts.len() + 1));
     attempt.omitted_history = omitted_history;
-    attempt.model = run.model.clone().unwrap_or_else(|| run.backend.default_model());
+    attempt.model = run.target.model_or_default();
     run.attempts.push(attempt);
     let chat_id = run.chat_id.clone();
     let previous_revision = state
@@ -1282,16 +1236,6 @@ fn project_operation<T>(
     result
 }
 
-/// How long a provider may keep running after its handoff was accepted, so it
-/// can end the turn itself and report the turn's usage (Codex reports usage
-/// only when a turn completes; stopping it at once lost it for nearly every
-/// persistent-agent turn). Tools are fenced after the handoff, so the turn can
-/// only finish its reply; it is stopped at this bound otherwise.
-pub(crate) const HANDOFF_GRACE: Duration = Duration::from_secs(20);
-/// Whether a turn whose handoff was accepted at `accepted` should be stopped.
-pub(crate) fn handoff_grace_over(accepted: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(accepted) >= HANDOFF_GRACE
-}
 pub(crate) fn interrupt_unfinished_tools(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: &str) {
     let Some((shared, id)) = bridge else { return };
     let Ok(mut state) = shared.lock() else { return };
@@ -1344,7 +1288,9 @@ fn execute(
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let scope = identity::authorize(actor, action).map_err(blocked)?;
-    let captured = if attempt.backend.agent().own_prompt() {
+    let agent = attempt.backend.agent();
+    let own_prompt = agent.own_prompt(objective, attempt.review_only);
+    let captured = if own_prompt.is_some() {
         None
     } else {
         crate::turn_context::input(attempt).map_err(|e| failed(&e.to_string()))?
@@ -1366,12 +1312,14 @@ fn execute(
             "Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution.",
         ));
     }
-    // Check Codex sign-in before any restore, so a missing login fails fast and leaves nothing behind.
+    // A login checked before any restore fails fast and leaves nothing behind.
     // Local endpoints use no provider login; no account file is located or mounted.
-    let auth = if attempt.backend != crate::backend::Backend::Codex {
-        None
-    } else {
-        Some(crate::codex::Credentials::locate().map_err(blocked)?)
+    let early = match agent.login() {
+        Some(control_agent::Login {
+            checked: control_agent::Checked::BeforeWorkspace,
+            ..
+        }) => Some(crate::logins::locate(attempt.backend, &attempt.account).map_err(|e| blocked(&e.to_string()))?),
+        _ => None,
     };
     let workspace = runtime::workspace(id).map_err(blocked)?;
     let baseline = workspace.parent().unwrap().join("baseline");
@@ -1401,7 +1349,10 @@ fn execute(
         })?;
     }
     if let Some((state, run)) = bridge {
-        let packages = crate::packages::planned(state, run).map_err(|e| failed(&e.to_string()))?;
+        let packages = state
+            .lock()
+            .map(|s| crate::packages::planned(&s.runtime.runs, &s.packages, run))
+            .map_err(|_| failed("State unavailable"))?;
         if !packages.is_empty() {
             project_operation(bridge, id, "tool-packages", "Copying tool packages", || {
                 crate::packages::copy_into(&crate::packages::store()?, &packages, &workspace)
@@ -1410,8 +1361,12 @@ fn execute(
         }
     }
     let absolute = fs::canonicalize(&workspace).map_err(|_| failed("Could not resolve worker workspace."))?;
-    let (output, outputs) = match attempt.backend {
-        crate::backend::Backend::Local | crate::backend::Backend::Grok | crate::backend::Backend::Antigravity => {
+    let prompt = match own_prompt {
+        // Its own prompt unless the attempt captured its turn context.
+        Some(own) => crate::turn_context::input(attempt)
+            .map_err(|e| failed(&e.to_string()))?
+            .unwrap_or(own),
+        None => captured.unwrap_or_else(|| {
             let room = bridge.and_then(|(state, run_id)| {
                 let s = state.lock().ok()?;
                 let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
@@ -1422,44 +1377,41 @@ fn execute(
                     .clone()
                     .filter(|r| crate::rooms::valid(r))
             });
-            // The loop ends every model request with the declared observation,
-            // after the cache-stable prefix and outside the step transcript.
-            let prompt = captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some()));
-            match attempt.backend {
-                crate::backend::Backend::Grok => (
-                    crate::grok::execute(isolation, id, prompt, attempt, bridge, &absolute, &image, &node)?,
-                    "Grok outputs",
-                ),
-                crate::backend::Backend::Antigravity => (
-                    crate::antigravity::execute(isolation, id, prompt, attempt, bridge, &absolute, &image, &node)?,
-                    "Antigravity outputs",
-                ),
-                _ => (
-                    crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?,
-                    "Local agent outputs",
-                ),
-            }
-        }
-        crate::backend::Backend::Claude => (
-            crate::claude::execute(isolation, id, objective, attempt, bridge, &absolute, &image, &node)?,
-            "Claude outputs",
-        ),
-        crate::backend::Backend::Codex => {
-            let auth = auth.ok_or_else(|| blocked("Codex credentials were not checked."))?;
-            let turn = crate::codex::Turn {
-                id,
-                objective,
-                scope,
-                captured,
-                bridge,
-                workspace: &workspace,
-                absolute: &absolute,
-                image: &image,
-                node: &node,
-                auth,
-                isolation,
+            render_prompt(objective, scope, room.as_deref(), bridge.is_some())
+        }),
+    };
+    let output = match agent.runs() {
+        // The loop ends every model request with the declared observation,
+        // after the cache-stable prefix and outside the step transcript.
+        control_agent::Runs::Control => crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?,
+        control_agent::Runs::Cli(cli) => {
+            let login = match early {
+                Some(granted) => Ok(granted),
+                None => crate::logins::locate(attempt.backend, &attempt.account),
             };
-            (crate::codex::execute(turn, attempt)?, "Worker outputs")
+            let model = attempt.model.clone();
+            let turn = control_agent::Turn {
+                id,
+                isolation,
+                node: &node,
+                image: &image,
+                model: &model,
+                workspace: &absolute,
+                prompt,
+                review_only: attempt.review_only,
+                started_unix: attempt.started_unix,
+                tools: bridge.is_some(),
+                login,
+            };
+            let mut host = crate::agent_host::Attempted {
+                id,
+                isolation,
+                bridge,
+                attempt,
+                workspace: &absolute,
+            };
+            let outcome = cli.turn(turn, &mut host);
+            crate::agent_host::finish(outcome, attempt, bridge, id)?
         }
     };
     if let Some((state, run)) = bridge {
@@ -1468,34 +1420,22 @@ fn execute(
     if !attempt.review_only {
         publish_workspace(attempt, &workspace, id, bridge).map_err(|e| {
             failed(&format!(
-                "{outputs} could not be published: {e} The previous checkpoint is unchanged."
+                "{} could not be published: {e} The previous checkpoint is unchanged.",
+                outputs(attempt.backend)
             ))
         })?;
     }
     Ok(output)
 }
-
-pub(crate) fn read_report(path: &Path) -> std::io::Result<String> {
-    use std::{io::Read, os::unix::fs::OpenOptionsExt};
-    // The container has exited: reject agent-created symlinks before any host read.
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("Worker report must be a regular file."));
-    }
-    let mut output = Vec::new();
-    file.take(64001).read_to_end(&mut output)?;
-    let truncated = output.len() > 64000;
-    output.truncate(64000);
-    match std::str::from_utf8(&output) {
-        Ok(text) => Ok(text.to_owned()),
-        Err(error) if truncated && error.error_len().is_none() => {
-            output.truncate(error.valid_up_to());
-            String::from_utf8(output).map_err(std::io::Error::other)
+/// What a failed publication calls the turn's files. Wording difference: Codex's
+/// predates the other backends (docs/CRATE-BOUNDARIES.md).
+fn outputs(backend: crate::backend::Backend) -> String {
+    match backend {
+        crate::backend::Backend::Codex => "Worker outputs".into(),
+        crate::backend::Backend::Local => "Local agent outputs".into(),
+        crate::backend::Backend::Claude | crate::backend::Backend::Grok | crate::backend::Backend::Antigravity => {
+            format!("{} outputs", backend.agent().name())
         }
-        Err(error) => Err(std::io::Error::other(error)),
     }
 }
 
@@ -1518,7 +1458,7 @@ pub fn check() -> std::io::Result<()> {
     let marker = runtime::workspace(&id)
         .map_err(std::io::Error::other)?
         .join("connection-check");
-    if read_report(&marker)?.trim() != "control-account-check-ok" {
+    if control_codex::read_report(&marker)?.trim() != "control-account-check-ok" {
         return Err(std::io::Error::other(
             "Codex returned without the expected sandbox execution artifact.",
         ));

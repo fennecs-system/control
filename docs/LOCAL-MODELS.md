@@ -14,7 +14,7 @@ accelerated backend.
 ## Selecting a model for a chat
 
 In chat and the TUI, `/model` lists the configured agent models (text-only local
-models are listed separately, with how to enable them), `/model PROVIDER:ID`
+models are listed separately, with how to enable them), `/model BACKEND:ID` (or `BACKEND+ACCOUNT:ID`, below)
 selects the model for future turns, and `/model default` returns to the node
 default. The selection is chat metadata: it starts no model traffic, does not
 interrupt an active attempt and is excluded from model history. Add models in
@@ -26,6 +26,79 @@ captured provider and model; an explicit selection is captured with the child an
 keeps its tool permissions and role. Invalid selections are rejected before any
 effect, and changing a retried request's selection is a conflict. There is never
 a silent fallback to another provider.
+
+## Accounts
+
+A backend can have several accounts (sign-ins or keys), chosen in the same
+selection, for example to run two subscriptions of one backend side by side:
+
+| Selection | Runs on |
+| --- | --- |
+| `codex:gpt-6.1-sol` | the backend's default account, on this node (unchanged) |
+| `codex+second:gpt-6.1-sol` | the account named `second` |
+| `codex+*:gpt-6.1-sol` | any enabled account, the least busy one when the work is admitted |
+| `codex:gpt-6.1-sol@fen` or `…@fen:example.org` | another node: reserved, refused until federation routes work |
+
+The first `@` starts the node address and model IDs cannot contain `@`; a
+second `@` is refused. The first `:` ends the backend, so model IDs may contain
+`:` (`codex:a:b` is model `a:b`). Account names are `[a-z0-9-]`, at most 32
+characters. There is no automatic failover: a pool is chosen explicitly. Work
+captures its concrete account when it is admitted, so changing a default never
+moves queued or running work, and a child that names no model inherits its
+parent's account. `/model` shows `+ACCOUNT` only for an account other than the
+default, so selections without accounts look and are saved exactly as before.
+
+Without `<config>/accounts.json` every backend has one implicit account,
+`default`: its sign-in where it is kept today (including the
+`CONTROL_*_AUTH_FILE` overrides), so nothing changes until an account is added.
+
+To run a second subscription of one backend beside the first:
+
+```sh
+control accounts add codex second          # or: claude, grok, antigravity
+control codex login --account second       # device-code sign-in in the pinned image
+control codex check                        # each account: kind, signed in or why not
+```
+
+then select it in a chat with `/model codex+second:gpt-6.1-sol` (or give that
+selection to a spawn's `model`). Each named account's login lives in its own
+private directory, `<config>/accounts/BACKEND/NAME/`, holding the same file the
+backend's default location holds (`auth.json`, `.credentials.json`, or
+Antigravity's files). The host locates and checks it and mounts only that file,
+read-only, into the account's turns; a backend is never told which account it
+was handed, and no turn sees another account's login. The Codex default
+account stays your own `~/.codex` sign-in (`codex login` on the host).
+
+`control accounts list` shows each account with its kind, default, cap and
+whether it is signed in; `control accounts default codex second` makes it the
+backend's default (`… default codex default` restores the implicit one) and
+`control accounts remove codex second` removes it (its login directory is
+kept). A running Control picks changes up by itself. The file they write:
+
+```json
+{
+  "defaults": {"codex": "second"},
+  "accounts": [
+    {"backend": "codex", "name": "second", "kind": "subscription", "cap": 2, "label": "Work plan"},
+    {"backend": "claude", "name": "spare", "kind": "subscription", "enabled": false}
+  ]
+}
+```
+
+`kind` is `subscription`, `api_key` or `cloud` (API-key accounts are signed in
+by a later change); `cap`, `enabled` (default true) and `label` are optional,
+`default` cannot be redefined, and `defaults` names an enabled account.
+
+**Caps and cooldowns.** An account at its `cap` holds its next turn in the queue
+with a notice; other accounts and conversations are not held. Codex rewrites its
+own sign-in when it refreshes it, and two attempts refreshing one sign-in at once
+can invalidate it, so a named Codex account runs one attempt at a time unless its
+`cap` says more (Control mounts the file read-only, so a refreshed token is not
+kept; sign in again if Codex reports the login expired). When a turn reports a
+usage limit, its account cools down: new turns on it wait, with a notice, until
+it is cleared on **Manage → Models & providers** (no retry time is read from the
+provider). Nothing moves to another account automatically; a `+*` pool picks an
+enabled account that is not cooling down when the work is admitted.
 
 ## Configure local models
 

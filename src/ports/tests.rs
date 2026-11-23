@@ -314,7 +314,7 @@ fn service_commands_start_collapsed_during_and_after_their_run() {
 fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     let (mut state, parent, parent_chat) = fixture();
     let node: NodeId = "node-a".to_owned().try_into().unwrap();
-    let grants = crate::services::grants(&state, &state.runtime.runs[0]);
+    let grants = crate::services::grants(crate::services::ServiceAuthority::of(&state), &state.runtime.runs[0]);
     let child_chat = crate::chat::create(&mut state);
     let mut child = state.runtime.runs[0].clone();
     child.id = "child-run".into();
@@ -343,11 +343,16 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
     .unwrap();
     assert_eq!(state.ports[0].chat, parent_chat);
     assert_eq!(state.ports[0].origin_run, "child-run");
-    assert!(accessible(&state, &state.ports[0], &state.runtime.runs[0], &node));
+    assert!(accessible(
+        PortAuthority::of(&state),
+        &state.ports[0],
+        &state.runtime.runs[0],
+        &node
+    ));
     assert!(crate::services::enqueue_test_command(&mut state, "child-run", "exec", "svc-a", "echo probe", 60).is_ok());
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert!(accessible(
-        &restored,
+        PortAuthority::of(&restored),
         &restored.ports[0],
         &restored.runtime.runs[1],
         &node
@@ -366,7 +371,12 @@ fn captured_resource_handoff_is_exact_and_does_not_reown_ports() {
         &restored.runtime.runs[1]
     ));
     state.services[0].resource.generation = Generation::INITIAL.checked_next().unwrap();
-    assert!(!accessible(&state, &state.ports[0], &state.runtime.runs[1], &node));
+    assert!(!accessible(
+        PortAuthority::of(&state),
+        &state.ports[0],
+        &state.runtime.runs[1],
+        &node
+    ));
     assert!(!crate::services::direct(
         &state.services[0],
         &node,

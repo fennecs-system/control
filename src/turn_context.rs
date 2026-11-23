@@ -385,9 +385,9 @@ pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
         .filter(|id| crate::chat::valid_id(id))
         .ok_or_else(|| io::Error::other("Missing attempt identity"))?;
     let objective = crate::chat::prompt(state, &run.id).unwrap_or_else(|| run.objective.to_string());
-    let text = match run.backend.agent().own_prompt() {
-        true => crate::claude::render_prompt(&objective, attempt.review_only),
-        false => {
+    let text = match run.target.backend.agent().own_prompt(&objective, attempt.review_only) {
+        Some(own) => own,
+        None => {
             let scope = crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
             let room = state
                 .chats
@@ -493,10 +493,15 @@ fn project_with(
         .position(id)
         .ok_or_else(|| io::Error::other("Run has no conversation entry"))?;
     let scope = crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
-    let prefix = match run.backend.agent().own_prompt() {
+    let prefix = match run
+        .target
+        .backend
+        .agent()
+        .own_prompt("", crate::delegation::is_judge(run))
+    {
+        Some(own) => own,
         // Every other backend receives the same Control-owned policy text.
-        false => crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, true),
-        true => crate::claude::render_prompt("", crate::delegation::is_judge(run)),
+        None => crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, true),
     };
     let policy = format!(
         "{}{}\n{}\n",
@@ -654,8 +659,11 @@ fn project_with(
             section: SectionKind::Request,
         }),
     });
-    if let Some(capacity) = crate::providers::capacity(&state.runtime, run.backend, run.model.as_deref().unwrap_or(""))
-    {
+    if let Some(capacity) = crate::providers::capacity(
+        &state.runtime,
+        run.target.backend,
+        run.target.model.as_deref().unwrap_or(""),
+    ) {
         control_context::turn_context::fit(&prefix, &sections, capacity).map_err(io::Error::other)
     } else {
         compose(&prefix, &sections, MAX_REQUIRED_BYTES).map_err(io::Error::other)
@@ -728,7 +736,7 @@ pub(crate) fn view(
                     && r.actor == viewer.actor
                     && r.chat_id
                         .as_deref()
-                        .is_some_and(|id| crate::chat::within(state, id, chat))
+                        .is_some_and(|id| crate::chat::Lineage::of(&state.chats).within(id, chat))
             })
         })
         .ok_or_else(|| io::Error::other("Context trace is outside this conversation"))?;

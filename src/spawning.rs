@@ -56,8 +56,9 @@ struct Seed {
     resource_grants: Vec<crate::services::Grant>,
     actor: identity::Actor,
     action: identity::Action,
-    backend: crate::backend::Backend,
-    model: Option<String>,
+    /// Every child's target, admitted once for the batch.
+    #[serde(flatten)]
+    target: crate::providers::Target,
     context: Option<control_context::Resolved>,
     lenses: Option<Vec<String>>,
     lineage: Persona,
@@ -271,7 +272,7 @@ pub fn request(
     nonce: &str,
     mut input: Input,
     save: impl FnOnce(&State) -> std::io::Result<()>,
-) -> Result<Value, &'static str> {
+) -> Result<Value, std::borrow::Cow<'static, str>> {
     if input.objectives.is_empty()
         || input
             .objectives
@@ -287,13 +288,14 @@ pub fn request(
         || nonce.len() > 128
     {
         return Err(
-            "Expected objectives within the configured team budget, 1–2000 characters each, 24000 total bytes, and a valid request identity.",
+            "Expected objectives within the configured team budget, 1–2000 characters each, 24000 total bytes, and a valid request identity."
+                .into(),
         );
     }
     // A persona is captured once per batch; its standing decides the role.
     let bundle = match input.persona.as_deref() {
         Some(persona) => Some(
-            crate::personas::capture(state, persona)
+            crate::personas::capture(&state.personas, &state.documents, persona)
                 .map_err(|_| "Unknown persona, or its SOUL.md cannot be captured; control.personas.list names them.")?,
         ),
         None => None,
@@ -305,12 +307,14 @@ pub fn request(
             Role::Worker
         };
         if input.role.is_some_and(|given| given != role) {
-            return Err("The persona's standing decides the role: read-only personas are judges, others workers.");
+            return Err(
+                "The persona's standing decides the role: read-only personas are judges, others workers.".into(),
+            );
         }
         input.role = Some(role);
     }
     if input.lenses.as_ref().is_some_and(|lenses| lenses.len() > 32) {
-        return Err("Select at most 32 genes.");
+        return Err("Select at most 32 genes.".into());
     }
     let index = state
         .runtime
@@ -326,7 +330,7 @@ pub fn request(
         .filter(|a| a.workspace_id.as_deref() == Some(generation))
         .ok_or("Spawn request belongs to an inactive attempt.")?;
     if delegation::is_judge(run) || delegation::pausing(run) || run.question.as_ref().is_some_and(|q| q.pending()) {
-        return Err("Read-only or pausing attempts cannot spawn agents.");
+        return Err("Read-only or pausing attempts cannot spawn agents.".into());
     }
     if let Some(batch) = run
         .spawns
@@ -338,12 +342,12 @@ pub fn request(
             value["batch"] = json!(batch.id(id));
             Ok(value)
         } else {
-            Err("Spawn request identity already has different objectives.")
+            Err("Spawn request identity already has different objectives.".into())
         };
     }
     if input.role() == Role::Judge {
         if input.objectives.len() != 1 {
-            return Err("A judge batch starts exactly one read-only advisor candidate.");
+            return Err("A judge batch starts exactly one read-only advisor candidate.".into());
         }
         advisor_allowance(state, run)?;
         // Each observer keeps its own opt-in gene gate: a persona's DNA names
@@ -355,11 +359,11 @@ pub fn request(
                 |bundle| bundle.standing.sees == Sees::Node,
             );
             if node && !crate::bots::antibody_offered_for(state, chat) {
-                return Err(crate::bots::ANTIBODY_OFF);
+                return Err(crate::bots::ANTIBODY_OFF.into());
             }
             let (tool, off) = crate::bots::team_gene(state, bundle.as_ref().map_or(&[][..], |bundle| &bundle.lenses));
             if !node && !crate::bots::offered_for(state, chat, tool) {
-                return Err(off);
+                return Err(off.into());
             }
         }
     }
@@ -368,7 +372,7 @@ pub fn request(
     // judge review nor the team's worker budget or spawn rate.
     if input.role() == Role::Judge {
         if delegation::lineage(run).depth >= delegation::MAX_DEPTH {
-            return Err("Delegation depth limit reached (2).");
+            return Err("Delegation depth limit reached (2).".into());
         }
     } else {
         delegation::budget_for(state, run, Role::Worker, input.objectives.len(), false)?;
@@ -381,7 +385,7 @@ pub fn request(
         .map(Batch::pending)
         .sum::<usize>();
     if pending.saturating_add(input.objectives.len()) > state.runtime.execution.max_pending_agent_intents {
-        return Err("Node pending-agent intent budget is full; wait for backlog or cancel a batch.");
+        return Err("Node pending-agent intent budget is full; wait for backlog or cancel a batch.".into());
     }
     let parent = state
         .chats
@@ -396,10 +400,12 @@ pub fn request(
     if project.as_ref().and_then(|p| p.grant.as_ref()) != attempt.project.as_ref()
         || project.as_ref().and_then(|p| p.head.as_ref()) != attempt.project_base.as_ref()
     {
-        return Err("Project changed during this attempt; start a new turn before spawning.");
+        return Err("Project changed during this attempt; start a new turn before spawning.".into());
     }
     if run.action == identity::Action::Improve && attempt.parent_artifact.is_none() {
-        return Err("No immutable Improve baseline yet. Delegate after checkpointing, or finish this turn first.");
+        return Err(
+            "No immutable Improve baseline yet. Delegate after checkpointing, or finish this turn first.".into(),
+        );
     }
     // Clone only captured inputs needed by children, never attempts/history.
     let actor = run.actor.clone();
@@ -407,17 +413,14 @@ pub fn request(
     // with blocking delegation.
     let judge = input.role() == Role::Judge;
     let action = if judge { identity::Action::Task } else { run.action };
-    let selected = crate::providers::selection::resolve(
+    let target = crate::providers::selection::resolve(
         &state.runtime,
-        run.backend,
-        &run.model.clone().unwrap_or_else(|| run.backend.default_model()),
+        &run.target,
         input
             .model
             .as_deref()
             .or(bundle.as_ref().map(|b| b.model.as_str()).filter(|m| !m.is_empty())),
     )?;
-    let backend = selected.backend;
-    let model = Some(selected.model);
     // Explicit genes, else the persona's DNA, else the parent's captured context.
     let (context, lenses) = match input
         .lenses
@@ -426,7 +429,7 @@ pub fn request(
     {
         Some(genes) => (
             Some(
-                crate::lens_library::resolve(state, &genes)
+                crate::lens_library::resolve(crate::lens_library::Sources::of(state), &genes)
                     .map_err(|_| "Selected genes cannot be resolved; check the persona's DNA or the lenses given.")?,
             ),
             Some(genes),
@@ -454,12 +457,11 @@ pub fn request(
         resource_grants: if judge {
             Vec::new()
         } else {
-            crate::services::grants(state, run)
+            crate::services::grants(crate::services::ServiceAuthority::of(state), run)
         },
         actor,
         action,
-        backend,
-        model,
+        target,
         context,
         lenses,
         lineage,
@@ -504,7 +506,7 @@ pub fn request(
             state.bots = bots;
         }
     }
-    result
+    result.map_err(Into::into)
 }
 
 fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<(), &'static str> {
@@ -543,10 +545,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         let child = state.chats.last_mut().unwrap();
         child.actor = seed.actor.clone();
         child.parent_chat = Some(seed.parent_chat.clone());
-        child.model = seed
-            .model
-            .as_ref()
-            .map(|model| crate::providers::Model::captured(seed.backend, model.clone()));
+        child.model = seed.target.model.is_some().then(|| seed.target.choice());
         child.lenses = seed.lenses.clone();
         child.lens = seed.lenses.as_ref().filter(|l| l.len() == 1).map(|l| l[0].clone());
         child.room = room.clone();
@@ -569,8 +568,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         let run = state.runtime.runs.last_mut().unwrap();
         run.chat_id = Some(child_id.clone());
         run.resource_grants = seed.resource_grants.clone();
-        run.backend = seed.backend;
-        run.model = seed.model.clone();
+        run.target = seed.target.clone();
         *run.context = seed.context.clone();
         run.lenses = seed.lenses.clone();
         run.persona = Some(Persona {

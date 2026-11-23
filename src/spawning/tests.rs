@@ -19,8 +19,8 @@ pub(super) fn active() -> (State, String) {
     let run = s.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(chat);
     run.status = "running".into();
-    run.backend = Backend::Codex;
-    run.model = Some("captured-model".into());
+    run.target.backend = Backend::Codex;
+    run.target.model = Some("captured-model".into());
     run.attempts.push(Attempt {
         workspace_id: Some("parent-attempt".into()),
         parent_artifact: Some("immutable-baseline".into()),
@@ -51,7 +51,7 @@ fn configured_override_is_captured_for_the_batch_and_bad_override_creates_nothin
     assert!(
         state.runtime.runs[1..]
             .iter()
-            .all(|run| run.backend == Backend::Claude && run.model.as_deref() == Some("reviewer"))
+            .all(|run| run.target.backend == Backend::Claude && run.target.model.as_deref() == Some("reviewer"))
     );
     assert!(
         state.chats[1..]
@@ -87,8 +87,8 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
     assert_eq!(s.chats.len(), 4);
     for child in &s.runtime.runs[1..] {
         assert_eq!(child.status, "queued");
-        assert_eq!(child.model.as_deref(), Some("captured-model"));
-        assert_eq!(child.backend, Backend::Codex);
+        assert_eq!(child.target.model.as_deref(), Some("captured-model"));
+        assert_eq!(child.target.backend, Backend::Codex);
         assert_eq!(child.persona.as_ref().unwrap().parent.as_deref(), Some(id.as_str()));
         let chat = s.chats.iter().find(|c| Some(&c.id) == child.chat_id.as_ref()).unwrap();
         assert_eq!(chat.workspace.as_deref(), Some("immutable-baseline"));
@@ -214,7 +214,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
     for child in &mut s.runtime.runs[1..11] {
         child.status = "completed".into();
     }
-    s.runtime.runs[0].model = Some("new live model must not leak".into());
+    s.runtime.runs[0].target.model = Some("new live model must not leak".into());
     let before = serde_json::to_vec(&s).unwrap();
     assert!(reconcile(&mut s, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert_eq!(serde_json::to_vec(&s).unwrap(), before);
@@ -222,7 +222,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
     assert_eq!(s.runtime.runs.len(), 42);
     assert_eq!(s.runtime.runs[0].spawns[0].pending(), 9);
     for child in &s.runtime.runs[32..] {
-        assert_eq!(child.model.as_deref(), Some("captured-model"));
+        assert_eq!(child.target.model.as_deref(), Some("captured-model"));
         let chat = s.chats.iter().find(|c| Some(&c.id) == child.chat_id.as_ref()).unwrap();
         assert_eq!(chat.workspace.as_deref(), Some("immutable-baseline"));
     }
@@ -369,8 +369,11 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
         },
         nonce: "judge".into(),
         generation: "old-attempt".into(),
-        backend: next.backend,
-        model: "captured-model".into(),
+        target: crate::providers::Target {
+            backend: next.target.backend,
+            model: Some("captured-model".into()),
+            ..Default::default()
+        },
         child: Some("completed-review".into()),
         continuation: Some(next.id.clone()),
     });

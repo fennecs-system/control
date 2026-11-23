@@ -1069,27 +1069,33 @@ impl crate::backend::Agent for Local {
     fn name(&self) -> &'static str {
         "Local"
     }
-    fn default_model(&self) -> String {
-        String::new()
+    fn default_model(&self) -> &'static str {
+        ""
     }
     fn default_capable(&self) -> bool {
         false
     }
     /// The Codex worker image, used only for credential-free workspace commands.
-    fn image(&self) -> Option<String> {
-        crate::runtime::worker_image()
+    fn image(&self) -> control_agent::ImagePin {
+        control_agent::WORKER_IMAGE
     }
     fn image_hint(&self) -> &'static str {
         NO_IMAGE
     }
-    fn credentials_ready(&self) -> Result<(), String> {
-        Ok(())
+    fn login(&self) -> Option<control_agent::Login> {
+        None
     }
-    fn probe(&self, _: &dyn control_isolation::Isolation, _image: &str) -> Result<(), String> {
+    fn probe(
+        &self,
+        _: &dyn control_agent::Node,
+        _: &dyn control_isolation::Isolation,
+        _image: &str,
+    ) -> Result<(), String> {
         Err(NO_IMAGE.to_owned())
     }
     fn text_run(
         &self,
+        _: &dyn control_agent::Node,
         _: &dyn control_isolation::Isolation,
         _call: &crate::backend::TextCall<'_>,
     ) -> std::io::Result<control_isolation::RunSpec> {
@@ -1105,6 +1111,9 @@ impl crate::backend::Agent for Local {
     }
     fn host_shell(&self) -> bool {
         true
+    }
+    fn runs(&self) -> control_agent::Runs<'_> {
+        control_agent::Runs::Control
     }
 }
 const NO_IMAGE: &str = "local endpoints run no worker image";

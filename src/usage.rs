@@ -2,7 +2,6 @@ use crate::{escape, identity::Actor, runtime::Runtime};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    io::Read,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -39,6 +38,10 @@ pub struct Attempt {
     pub project_base: Option<String>,
     pub project_checkpoint: Option<String>,
     pub backend: crate::backend::Backend,
+    /// The account its run captured at admission, kept with its usage so it
+    /// can be accounted per account. Absent: the implicit `default` account.
+    #[serde(skip_serializing_if = "crate::accounts::AccountName::is_implicit")]
+    pub account: crate::accounts::AccountName,
     pub image: Option<String>,
     pub node_id: Option<String>,
     pub parent_artifact: Option<String>,
@@ -70,6 +73,10 @@ pub struct Attempt {
     /// host checkpoint the worker builds next. Never saved with the attempt.
     #[serde(skip)]
     pub interrupted_reasoning: Option<String>,
+    /// The provider failure the backend classified, for the host to act on
+    /// (a usage limit cools the account down). Never saved with the attempt.
+    #[serde(skip)]
+    pub cause: Option<control_agent::Cause>,
 }
 impl Attempt {
     /// Records what the provider reported, whatever the attempt's outcome.
@@ -132,16 +139,10 @@ pub fn default_model() -> String {
 
 /// Keep numeric accounting and a bounded selection of command/activity fields.
 #[cfg(test)]
-pub fn capture(reader: impl Read) -> Option<Tokens> {
-    capture_with(reader, |_| {}).tokens
-}
-pub fn capture_with(reader: impl Read, mut update: impl FnMut(Activity)) -> control_ai::Usage {
-    control_ai::json_lines_usage(reader, control_ai::codex::Codex::default(), |event| {
-        if let control_ai::Event::Activity(activity) = event {
-            update(activity);
-        }
-    })
-    .1
+pub fn capture(reader: impl std::io::Read) -> Option<Tokens> {
+    control_ai::json_lines_usage(reader, control_ai::codex::Codex::default(), |_| {})
+        .1
+        .tokens
 }
 
 #[derive(Default)]

@@ -12,7 +12,7 @@ fn run(id: &str, chat: &str, status: &str, kind: RunKind) -> Run {
         actor: Actor::LocalOperator,
         action: Action::Task,
     }
-    .into_run(id.into(), 1, Default::default(), None);
+    .into_run(id.into(), 1, Default::default());
     run.chat_id = Some(chat.into());
     run.status = status.into();
     run

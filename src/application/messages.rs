@@ -522,8 +522,7 @@ pub(crate) fn plan(
             .max()
             .unwrap_or(0)
             .saturating_add(1),
-        from.backend,
-        from.model.clone(),
+        from.target.clone(),
     );
     queued.chat_id = Some(call.chat_id.clone());
     queued.context = from.context.clone();

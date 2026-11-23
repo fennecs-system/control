@@ -6,10 +6,15 @@ use crate::{
 };
 use control_context::commands::{self, Kind};
 use serde_json::{Value, json};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    borrow::Cow,
+    time::{SystemTime, UNIX_EPOCH},
+};
 mod activity;
+mod lineage;
 pub(crate) use activity::changed as activity_changed;
 use activity::{agent_activity, command_html};
+pub(crate) use lineage::Lineage;
 
 pub use crate::application::conversations::{Message, Session};
 pub fn selected_lenses(session: &Session) -> Vec<String> {
@@ -139,47 +144,6 @@ pub fn rejected(page: &str, error: &str, draft: &str) -> String {
     format!("{}{}{}", &page[..start], escape(draft), &page[end..])
 }
 pub use crate::application::valid_id;
-/// Whether `chat` is `ancestor` or was spawned from it, directly or through children.
-pub(crate) fn within(state: &State, chat: &str, ancestor: &str) -> bool {
-    lineage(state, chat).any(|id| id == ancestor)
-}
-/// Every chat under the top-level chat that `chat` was spawned from, itself included.
-pub(crate) fn tree<'a>(state: &'a State, chat: &'a str) -> std::collections::HashSet<&'a str> {
-    let parents = state
-        .chats
-        .iter()
-        .map(|session| (session.id.as_str(), session.parent_chat.as_deref()))
-        .collect::<std::collections::HashMap<_, _>>();
-    let top = |id: &'a str| {
-        std::iter::successors(Some(id), |id| parents.get(id).copied().flatten())
-            .take(64)
-            .last()
-            .unwrap_or(id)
-    };
-    let root = top(chat);
-    std::iter::once(chat)
-        .chain(parents.keys().copied().filter(|id| top(id) == root))
-        .collect()
-}
-fn lineage<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a str> {
-    std::iter::successors(Some(chat), |id| {
-        state
-            .chats
-            .iter()
-            .find(|session| session.id == *id)
-            .and_then(|session| session.parent_chat.as_deref())
-    })
-    .take(64)
-}
-/// The top-level chat of `chat`'s task tree: itself when it has no lead.
-pub(crate) fn team_root<'a>(state: &'a State, chat: &'a str) -> &'a str {
-    lineage(state, chat).last().unwrap_or(chat)
-}
-/// Every chat in `chat`'s task tree: its top-level chat and all chats spawned
-/// beneath it.
-pub(crate) fn team<'a>(state: &'a State, chat: &'a str) -> std::collections::HashSet<&'a str> {
-    subtree(state, [team_root(state, chat)])
-}
 /// Latest task in scheduler order. Design answers are appended later but keep
 /// the interrupted task's queue position; append order is not continuation order.
 pub(crate) fn latest_task(state: &State, chat: &str, actor: &Actor) -> Option<usize> {
@@ -217,7 +181,7 @@ pub(crate) fn continuation(
     if objective.is_empty() || control_context::limits::message_too_long(&objective) {
         return Err(ContinuationError::Rejected);
     }
-    let grants = crate::services::grants(state, latest);
+    let grants = crate::services::grants(crate::services::ServiceAuthority::of(state), latest);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -242,13 +206,12 @@ pub(crate) fn continuation(
 }
 /// The settings a host-queued follow-up turn (a bot wake, a room or agent
 /// digest, background agent results) carries from a run of its chat, normally
-/// the chat's latest task: who it runs as, its backend, model, context and
+/// the chat's latest task: who it runs as, its target (backend, account, model), context and
 /// lenses, its persona lineage and the services that run may use.
 pub(crate) struct FollowUp {
     pub(crate) actor: Actor,
     pub(crate) action: Action,
-    pub(crate) backend: crate::backend::Backend,
-    pub(crate) model: Option<String>,
+    pub(crate) target: crate::providers::Target,
     pub(crate) context: crate::history::Spilled<Option<control_context::Resolved>>,
     pub(crate) lenses: Option<Vec<String>>,
     pub(crate) persona: crate::delegation::Persona,
@@ -259,12 +222,11 @@ impl FollowUp {
         Self {
             actor: run.actor.clone(),
             action: run.action,
-            backend: run.backend,
-            model: run.model.clone(),
+            target: run.target.clone(),
             context: run.context.clone(),
             lenses: run.lenses.clone(),
             persona: crate::delegation::lineage(run),
-            grants: crate::services::grants(state, run),
+            grants: crate::services::grants(crate::services::ServiceAuthority::of(state), run),
         }
     }
     /// Adds grants not already carried, keeping their order.
@@ -289,8 +251,7 @@ impl FollowUp {
             .enqueue_for(objective, kind, source, self.actor, self.action)?;
         let run = state.runtime.runs.last_mut().unwrap();
         run.chat_id = Some(chat.to_owned());
-        run.backend = self.backend;
-        run.model = self.model;
+        run.target = self.target;
         run.context = self.context;
         run.lenses = self.lenses;
         run.persona = Some(self.persona);
@@ -403,12 +364,20 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     } else {
         incoming.objective.clone()
     };
-    send(state, &id, &text, &format!("discord:{}", incoming.message_id))
+    send(state, &id, &text, &format!("discord:{}", incoming.message_id)).map_err(fixed)
+}
+/// A send refusal as fixed text, for callers that only carry fixed text (the
+/// Discord inbox). Only a refused model selection is generated text.
+pub(crate) fn fixed(error: Cow<'static, str>) -> &'static str {
+    match error {
+        Cow::Borrowed(reason) => reason,
+        Cow::Owned(_) => "That model selection was refused. Send /model to list the choices and forms.",
+    }
 }
 
 /// Explicit user-created child work. Only immutable ordinary-task checkpoints
 /// are inherited; execution restores a separate writable copy for the child.
-pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -> Result<String, &'static str> {
+pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -> Result<String, Cow<'static, str>> {
     let parent = state
         .chats
         .iter()
@@ -419,7 +388,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     identity::authorize(&parent.actor, Action::Task)?;
     let objective = objective.trim();
     if objective.is_empty() || control_context::limits::message_too_long(objective) {
-        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
+        return Err(control_context::limits::CHAT_MESSAGE_ERROR.into());
     }
     crate::scheduler::admit(&state.runtime)?;
     let conversation = crate::conversation::Conversation::of(state, &parent);
@@ -447,15 +416,12 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     }
     if let Some(from) = from {
         let previous = &state.runtime.runs[from];
-        let backend = parent.model.as_ref().map_or(previous.backend, |m| m.backend);
-        let model = parent
-            .model
-            .as_ref()
-            .map(|m| m.model.clone())
-            .or_else(|| previous.model.clone());
+        // A chosen model was admitted when the task was queued; otherwise the
+        // child runs on what the parent's latest task captured.
+        let target = parent.model.is_none().then(|| previous.target.clone());
         let context = previous.context.clone();
         let lenses = previous.lenses.clone();
-        let resources = crate::services::grants(state, previous);
+        let resources = crate::services::grants(crate::services::ServiceAuthority::of(state), previous);
         if let Some(lenses) = &lenses {
             let session = state.chats.last_mut().unwrap();
             session.lenses = Some(lenses.clone());
@@ -471,9 +437,10 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
             .last_mut()
             .filter(|r| r.chat_id.as_deref() == Some(&child))
         {
-            run.backend = backend;
+            if let Some(target) = target {
+                run.target = target;
+            }
             run.resource_grants = resources;
-            run.model = model;
             run.context = context;
             run.lenses = lenses;
         }
@@ -481,13 +448,13 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     Ok(child)
 }
 
-pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), Cow<'static, str>> {
     if control_context::limits::message_too_long(text) {
-        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
+        return Err(control_context::limits::CHAT_MESSAGE_ERROR.into());
     }
     // A turn started now would run without the approved folder and cancel its import.
     if !text.trim().starts_with('/') && crate::projects::importing(id).is_some() {
-        return Err("A folder is still importing into this chat. Send again once it opens.");
+        return Err("A folder is still importing into this chat. Send again once it opens.".into());
     }
     send_command(state, id, text, source)?;
     touch(state, id);
@@ -526,7 +493,7 @@ fn attach_room(state: &mut State, id: &str, option: &str) -> Result<String, &'st
         }
         "off" => None,
         name if crate::rooms::valid(name) => {
-            Some(crate::rooms::for_task(name, lineage(state, id).last().unwrap_or(id))?)
+            Some(crate::rooms::for_task(name, Lineage::of(&state.chats).team_root(id))?)
         }
         _ => return Err("Use /room general, /room engineering, /room research or /room off."),
     };
@@ -561,12 +528,13 @@ pub fn rename(state: &mut State, id: &str, name: &str) -> Result<String, &'stati
     session.revision = session.revision.saturating_add(1);
     Ok(name)
 }
-fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), Cow<'static, str>> {
     if crate::shutdown::requested() {
-        return Err("Control is stopping; try again after restart.");
+        return Err("Control is stopping; try again after restart.".into());
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Model) {
         let State { chats, runtime, .. } = state;
+        crate::providers::accounts::refresh(runtime);
         let session = chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
         let reply = crate::providers::selection::command(session, runtime, option)?;
         session.messages.push(Message {
@@ -634,10 +602,10 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         let enabled = match option.trim() {
             "" | "on" => true,
             "off" => false,
-            _ => return Err("Use /listen or /listen off."),
+            _ => return Err("Use /listen or /listen off.".into()),
         };
         if crate::bots::defined(state, id) {
-            return Err("This chat runs a bot, which owns its room inbox. Use /bot off first.");
+            return Err("This chat runs a bot, which owns its room inbox. Use /bot off first.".into());
         }
         let reply = crate::rooms::listen(state, id, enabled)?;
         let session = state.chats.iter_mut().find(|session| session.id == id).unwrap();
@@ -688,7 +656,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             crate::projects::request_named(state, id, &path, Some(name), crate::projects::Requester::Operator)?;
         } else {
             match crate::projects::paths(path, home.as_deref()).as_slice() {
-                [] => return Err("Use /open followed by an absolute path on the Control node."),
+                [] => return Err("Use /open followed by an absolute path on the Control node.".into()),
                 [path] => {
                     crate::projects::request(state, id, path, crate::projects::Requester::Operator)?;
                 }
@@ -725,17 +693,21 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             .trim()
             .split_once(char::is_whitespace)
             .ok_or("Use /answer QUESTION_ID followed by an option number or your direction.")?;
-        return crate::design::answer(state, id, Some(question), answer.trim(), source);
+        return crate::design::answer(state, id, Some(question), answer.trim(), source).map_err(Into::into);
     }
     if !text.trim().starts_with('/') && crate::design::waiting(state, id).is_some() {
-        return crate::design::answer(state, id, None, text, source);
+        return crate::design::answer(state, id, None, text, source).map_err(Into::into);
     }
     if let Some(target) = commands::tail(text.trim(), Kind::Cancel) {
         let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
         let actor = session.actor.clone();
         let target = target.trim();
         if target == "all" {
-            let chats = subtree(state, [id]).into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let chats = Lineage::of(&state.chats)
+                .subtree([id])
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             let runs = state
                 .runtime
                 .runs
@@ -792,7 +764,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     }
     if let Some(question) = commands::tail(text.trim(), Kind::Btw) {
         if question.trim().is_empty() {
-            return Err("Use /btw followed by a side question.");
+            return Err("Use /btw followed by a side question.".into());
         }
         let child = fork(state, id, question.trim(), source)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
@@ -820,11 +792,11 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
     send_inner(state, id, text, source, false)
 }
 
-fn enqueue_text(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), &'static str> {
+fn enqueue_text(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), Cow<'static, str>> {
     send_inner(state, id, text, source, true)
 }
 
-fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bool) -> Result<(), &'static str> {
+fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bool) -> Result<(), Cow<'static, str>> {
     let index = state.chats.iter().position(|s| s.id == id).ok_or("Chat not found.")?;
     let actor = state.chats[index].actor.clone();
     let mode_command = match if literal { "" } else { text.trim() } {
@@ -856,10 +828,10 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         commands::tail(text.trim(), Kind::Steer)
     };
     if steering.is_some_and(|s| s.trim().is_empty()) {
-        return Err("Use /steer followed by a direction for the next turn.");
+        return Err("Use /steer followed by a direction for the next turn.".into());
     }
     if control_context::limits::message_too_long(text) {
-        return Err(control_context::limits::CHAT_MESSAGE_ERROR);
+        return Err(control_context::limits::CHAT_MESSAGE_ERROR.into());
     }
     let (requested, objective) = if literal {
         (Action::Task, text)
@@ -875,8 +847,11 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     };
     // Web and TUI continuations retain the session's original identity, including Discord user limits.
     identity::authorize(&actor, action)?;
-    let context = crate::lens_library::resolve(state, &selected_lenses(&state.chats[index]))
-        .map_err(|_| "Selected context cannot be resolved. Check its DNA before sending.")?;
+    let context = crate::lens_library::resolve(
+        crate::lens_library::Sources::of(state),
+        &selected_lenses(&state.chats[index]),
+    )
+    .map_err(|_| "Selected context cannot be resolved. Check its DNA before sending.")?;
     let native = if requested == Action::Task && !literal && steering.is_none() {
         discord::native_reply(&actor, objective)
     } else {
@@ -884,8 +859,16 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     };
     let run_id = if native.is_none() {
         let resources = latest_task(state, id, &state.chats[index].actor)
-            .map(|from| crate::services::grants(state, &state.runtime.runs[from]))
+            .map(|from| {
+                crate::services::grants(crate::services::ServiceAuthority::of(state), &state.runtime.runs[from])
+            })
             .unwrap_or_default();
+        // The chat's choice is admitted to one concrete account before anything is queued.
+        let target = state.chats[index]
+            .model
+            .as_ref()
+            .map(|model| crate::providers::selection::admit(&state.runtime, model))
+            .transpose()?;
         state.runtime.enqueue_for(
             objective.into(),
             if action == Action::Improve {
@@ -898,9 +881,8 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             action,
         )?;
         let run = state.runtime.runs.last_mut().unwrap();
-        if let Some(model) = &state.chats[index].model {
-            run.backend = model.backend;
-            run.model = Some(model.model.clone());
+        if let Some(target) = target {
+            run.target = target;
         }
         if steering.is_some() {
             run.kind = RunKind::Steering;
@@ -1011,7 +993,7 @@ pub(crate) fn prompt_prefix(run: &crate::runtime::Run, session: &Session) -> Str
         "Use control_agent_spawn for independent or background work, including bots. Spawn returns immediately; continue other useful work in this session, and yield when genuinely waiting. Control queues completion updates automatically; do not poll in a loop or block merely to wait. Persistent services keep running between turns. Use control_agent_spawn_blocking only when this turn must await a bounded dependency or an isolated read-only judge review. Blocking spawn reserves this conversation until the child returns; stop after its acknowledgement.\n"
     };
     let folders=session.project.as_ref().filter(|p|p.grant.is_some()&&run.action==Action::Task).map(|p|{
-        let root=if crate::delegation::is_judge(run)&&run.backend.agent().review_mount() {"/review"}else{"/workspace"};
+        let root=if crate::delegation::is_judge(run)&&run.target.backend.agent().review_mount() {"/review"}else{"/workspace"};
         if p.named {format!("Approved isolated folders: {}. Each folder has independent Git metadata; run project commands inside its directory. Host folders are unchanged.\n",p.mounts.iter().map(|m|format!("{root}/{}",m.name)).collect::<Vec<_>>().join(", "))}else{format!("Approved isolated project: {root}.\n")}
     }).unwrap_or_default();
     let coordination = session
@@ -1099,13 +1081,13 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     .map(|mut value: Value| {
         value["pending_ports"]=json!(crate::ports::pending_json(state,id));
         value["pending_bots"]=crate::bots::pending_json(state,id);
-        value["pending_knowledge"]=json!(crate::knowledge_tools::pending_json(state,id));
+        value["pending_knowledge"]=json!(crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id));
         value["bot_revision"]=json!(crate::bots::decision_revision(state));
         value["port_revision"]=json!(crate::ports::decision_revision(&state.ports));
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
         value["bot"]=crate::bots::status(state,id).map_or(Value::Null,Value::from);
-        value["compaction"]=crate::compaction::status(state,id);
+        value["compaction"]=crate::compaction::status(&state.runtime,&state.chats,id);
         if let Some(messages)=value["messages"].as_array_mut() {
             for message in messages {
                 if let Some(run)=message["run_id"].as_str() {
@@ -1165,7 +1147,7 @@ fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
 /// Folder (`/open`) requests awaiting the operator in `root`'s same-actor
 /// tree. Each is approved or dismissed in its own chat.
 fn pending_folders(state: &State, root: &str, actor: &Actor) -> Vec<Value> {
-    let tree = subtree(state, [root]);
+    let tree = Lineage::of(&state.chats).subtree([root]);
     state
         .chats
         .iter()
@@ -1197,11 +1179,11 @@ pub fn pending_requests(state: &State) -> Value {
         .chain(crate::bots::pending_chats(state))
         .chain(crate::ports::pending_chats(&state.ports))
         .chain(crate::intel::pending_chats(state))
-        .chain(crate::knowledge_tools::pending_chats(state))
+        .chain(crate::knowledge_tools::pending_chats(&state.collective.proposals))
         .chain(folders);
     let mut roots = Vec::new();
     for chat in chats {
-        let root = lineage(state, chat).last().unwrap_or(chat);
+        let root = Lineage::of(&state.chats).team_root(chat);
         if !roots.contains(&root) {
             roots.push(root);
         }
@@ -1211,7 +1193,7 @@ pub fn pending_requests(state: &State) -> Value {
     json!(roots.into_iter().filter_map(|id| {
         let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
         authorize(&session.actor, Action::Task).ok()?;
-        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id,now),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id),"pending_folders":pending_folders(state,id,&session.actor),"pending_knowledge":crate::knowledge_tools::pending_json(state,id)});
+        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id,now),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id),"pending_folders":pending_folders(state,id,&session.actor),"pending_knowledge":crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id)});
         ["pending_questions","pending_bots","pending_ports","pending_notices","pending_folders","pending_knowledge"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
     }).collect::<Vec<_>>())
 }
@@ -1310,8 +1292,13 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         } else {
             format!("<span class='message-status' role='status'>{status}</span>")
         };
-        let status = match state.runtime.paused.as_deref().filter(|_| run_status == "queued") {
-            Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(reason)),
+        // Why a queued turn waits: dispatch is paused, or its account is at its cap or cooling down.
+        let held = run.filter(|_| run_status == "queued").and_then(|run| {
+            crate::providers::accounts::hold(&state.runtime, run)
+                .map(|hold| crate::providers::accounts::held(&hold, run))
+        });
+        let status = match state.runtime.paused.clone().filter(|_| run_status == "queued").or(held) {
+            Some(reason) => format!("{status}<p class='message-status'>{}</p>", escape(&reason)),
             None => status,
         };
         let folder_request = message.run_id.is_none() && commands::tail(message.text.trim(), Kind::Open).is_some();
@@ -1373,7 +1360,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
                     }
                     .to_owned()
                 } else {
-                    crate::projects::panel(state, id)
+                    crate::projects::panel(&state.chats, id)
                 }
             )
         } else {
@@ -1518,7 +1505,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             .as_ref()
             .is_some_and(|p| !p.pending && p.grant.is_some())
     {
-        html.push_str(&crate::projects::panel(state, id));
+        html.push_str(&crate::projects::panel(&state.chats, id));
     }
     html.push_str("<div id='latest'></div></body></html>");
     Ok(html)
@@ -1534,11 +1521,11 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
         .iter()
         .filter(|c| {
             c.actor == session.actor
-                && within(state, &c.id, id)
+                && Lineage::of(&state.chats).within(&c.id, id)
                 && c.project.as_ref().is_some_and(|p| p.pending || p.grant.is_none())
         })
         .collect::<Vec<_>>();
-    let knowledge = crate::knowledge_tools::pending_json(state, id);
+    let knowledge = crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id);
     let count = questions.len()
         + folders.len()
         + crate::ports::pending_for_chat(state, id).len()
@@ -1551,7 +1538,7 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
         html.push_str("<p class='message-status'>No pending requests</p>");
     }
     for folder in folders {
-        html.push_str(&crate::projects::panel(state, &folder.id));
+        html.push_str(&crate::projects::panel(&state.chats, &folder.id));
     }
     let now = crate::design::UnixSeconds::now();
     for run in questions {
@@ -1569,20 +1556,30 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
     Ok(html)
 }
 
-pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
-    let id = || {
-        arguments["id"]
-            .as_str()
-            .filter(|s| valid_id(s))
-            .ok_or("Invalid chat ID.")
-    };
+/// The operator's chat tools. A send can refuse a model selection with
+/// generated text (the accounts that exist); every other refusal is fixed.
+pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, Cow<'static, str>> {
+    match name {
+        "control.chat.send" => send_tool(state, arguments),
+        _ => fixed_tool(state, name, arguments).map_err(Into::into),
+    }
+}
+fn chat_id(arguments: &Value) -> Result<&str, &'static str> {
+    arguments["id"]
+        .as_str()
+        .filter(|s| valid_id(s))
+        .ok_or("Invalid chat ID.")
+}
+fn fixed_tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
+    let id = || chat_id(arguments);
     match name {
         "control.chats.list" => Ok(list(state)),
         "control.requests.list" => Ok(pending_requests(state)),
         "control.chat.read" => detail(state, id()?),
         "control.run.scores" => crate::scores::read(state, id()?),
         "control.services.list" => {
-            crate::services::operator::list(state, id()?, arguments["team"] == true).map_err(|_| "Chat not found.")
+            crate::services::operator::list(&state.services, &state.chats, id()?, arguments["team"] == true)
+                .map_err(|_| "Chat not found.")
         }
         "control.services.stop" => {
             let service = match arguments.get("service_id") {
@@ -1615,7 +1612,8 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 return Err("Specify a list of lenses, including an empty list to clear them.");
             }
             let lenses = parse_lenses(arguments, state)?;
-            crate::lens_library::resolve(state, &lenses).map_err(|_| "Selected context cannot be resolved.")?;
+            crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
+                .map_err(|_| "Selected context cannot be resolved.")?;
             let session = state.chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
             identity::authorize(&session.actor, Action::Task)?;
             session.lens = if lenses.len() == 1 {
@@ -1647,7 +1645,8 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 _ => return Err("Unknown room."),
             };
             let lenses = parse_lenses(arguments, state)?;
-            crate::lens_library::resolve(state, &lenses).map_err(|_| "Selected context cannot be resolved.")?;
+            crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
+                .map_err(|_| "Selected context cannot be resolved.")?;
             let id = create(state);
             state.chats.last_mut().unwrap().improve_mode = improve;
             state.chats.last_mut().unwrap().lens = if lenses.len() == 1 {
@@ -1663,42 +1662,42 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
             state.chats.last_mut().unwrap().design_context = design_context;
             detail(state, &id)
         }
-        "control.chat.send" => {
-            let id = id()?;
-            let text = arguments["message"].as_str().ok_or("Missing message.")?;
-            let index = state.chats.iter().position(|c| c.id == id).ok_or("Chat not found.")?;
-            let previous = (
-                state.chats[index].lens.clone(),
-                state.chats[index].lenses.clone(),
-                state.chats[index].improve_mode,
-            );
-            let improve = parse_mode(arguments.get("mode"), previous.2)?;
-            identity::authorize(
-                &state.chats[index].actor,
-                if improve { Action::Improve } else { Action::Task },
-            )?;
-            if arguments.get("lenses").is_some() {
-                let lenses = parse_lenses(arguments, state)?;
-                state.chats[index].lens = if lenses.len() == 1 {
-                    Some(lenses[0].clone())
-                } else {
-                    None
-                };
-                state.chats[index].lenses = Some(lenses);
-            }
-            state.chats[index].improve_mode = improve;
-            if let Err(error) = send(state, id, text, "session-chat") {
-                (
-                    state.chats[index].lens,
-                    state.chats[index].lenses,
-                    state.chats[index].improve_mode,
-                ) = previous;
-                return Err(error);
-            }
-            detail(state, id)
-        }
         _ => Err("Unknown tool."),
     }
+}
+fn send_tool(state: &mut State, arguments: &Value) -> Result<Value, Cow<'static, str>> {
+    let id = chat_id(arguments)?;
+    let text = arguments["message"].as_str().ok_or("Missing message.")?;
+    let index = state.chats.iter().position(|c| c.id == id).ok_or("Chat not found.")?;
+    let previous = (
+        state.chats[index].lens.clone(),
+        state.chats[index].lenses.clone(),
+        state.chats[index].improve_mode,
+    );
+    let improve = parse_mode(arguments.get("mode"), previous.2)?;
+    identity::authorize(
+        &state.chats[index].actor,
+        if improve { Action::Improve } else { Action::Task },
+    )?;
+    if arguments.get("lenses").is_some() {
+        let lenses = parse_lenses(arguments, state)?;
+        state.chats[index].lens = if lenses.len() == 1 {
+            Some(lenses[0].clone())
+        } else {
+            None
+        };
+        state.chats[index].lenses = Some(lenses);
+    }
+    state.chats[index].improve_mode = improve;
+    if let Err(error) = send(state, id, text, "session-chat") {
+        (
+            state.chats[index].lens,
+            state.chats[index].lenses,
+            state.chats[index].improve_mode,
+        ) = previous;
+        return Err(error);
+    }
+    Ok(detail(state, id)?)
 }
 
 /// The given chats and every chat spawned from them, at any depth.
@@ -1717,27 +1716,6 @@ pub(crate) fn cancelled_after(state: &State, run: &crate::runtime::Run) -> bool 
         .and_then(|chat| state.chats.iter().find(|session| session.id == chat))
         .and_then(|session| session.cancelled_through)
         .is_some_and(|through| run.queue_order <= through)
-}
-pub(crate) fn subtree<'a>(
-    state: &'a State,
-    roots: impl IntoIterator<Item = &'a str>,
-) -> std::collections::HashSet<&'a str> {
-    let mut chats = roots.into_iter().collect::<std::collections::HashSet<_>>();
-    loop {
-        let before = chats.len();
-        for session in &state.chats {
-            if session
-                .parent_chat
-                .as_deref()
-                .is_some_and(|parent| chats.contains(parent))
-            {
-                chats.insert(session.id.as_str());
-            }
-        }
-        if chats.len() == before {
-            return chats;
-        }
-    }
 }
 /// Everything a chat command may change, restored together when the command or
 /// its save fails, whichever transport delivered it.
@@ -1767,7 +1745,7 @@ impl Checkpoint {
                 .collect(),
             runs: state.runtime.runs.len(),
             pending: {
-                let chats = subtree(state, targets.iter().copied());
+                let chats = Lineage::of(&state.chats).subtree(targets.iter().copied());
                 crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| {
                     run.chat_id.as_deref().is_some_and(|chat| chats.contains(chat))
                 })
@@ -1791,7 +1769,7 @@ impl Checkpoint {
                 })
                 .collect(),
             cancelled: {
-                let chats = subtree(state, targets.iter().copied());
+                let chats = Lineage::of(&state.chats).subtree(targets.iter().copied());
                 state
                     .chats
                     .iter()

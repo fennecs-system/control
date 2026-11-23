@@ -1,6 +1,7 @@
 mod access;
+mod accounts;
+mod agent_host;
 mod agent_message;
-mod antigravity;
 mod application;
 mod approvals;
 mod artifacts;
@@ -14,9 +15,6 @@ mod build_environment;
 mod callsigns;
 mod channel_settings;
 mod chat;
-mod child;
-mod claude;
-mod codex;
 mod collective;
 mod command_jobs;
 mod conversation;
@@ -24,9 +22,9 @@ mod conversations;
 mod delegated_results;
 mod delegation;
 mod design;
-mod grok;
 mod history;
 mod history_view;
+mod host_shell;
 mod observe;
 mod pagination;
 mod turn_context;
@@ -34,6 +32,7 @@ mod turn_context;
 #[allow(dead_code)]
 mod watch_frame;
 mod watches;
+use control_agent::child;
 use control_config as config;
 use control_discord::bridge as discord_bridge;
 use control_identity as identity;
@@ -57,7 +56,7 @@ mod lens_ui;
 mod lifecycle;
 mod live_updates;
 mod local_agent;
-mod mailbox_wake;
+mod logins;
 mod mcp_chat;
 mod mcp_http;
 mod mcp_stdio;
@@ -210,7 +209,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         "editor" | "knowledge" => knowledge::render(&state.documents,&state.collective,if view=="editor"{"scratchpad"}else{""},None),
         "knowledge-page" => channel.to_owned(),
         "rooms" => rooms::render(state,channel),
-        "lenses" => lens_library::render(state,if lens=="none"{"engineering"}else{lens},None,None,false),
+        "lenses" => lens_library::render(lens_library::Sources::of(state),if lens=="none"{"engineering"}else{lens},None,None,false),
         "lens-page" => channel.to_owned(),
         "persona-page" => channel.to_owned(),
         "personas" => personas::render(state, "lead", None, None),
@@ -607,7 +606,13 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         }
         if method == "POST" && path == "/providers" {
             let f = fields(&String::from_utf8_lossy(&data[header_end..header_end + length]));
-            let result = providers::save_with(&mut state.runtime, &f, providers::save_settings);
+            // Clearing a cooldown changes node state, saved like any run change.
+            let result = if f.get("action").is_some_and(|a| a == "account-clear") {
+                providers::clear_account(&mut state.runtime, &f)
+                    .and_then(|()| storage::save(state).map_err(|_| "Could not save the cleared account"))
+            } else {
+                providers::save_with(&mut state.runtime, &f, providers::save_settings)
+            };
             let (status, extra, body) = match result {
                 Ok(()) => ("303 See Other", "Location: /?view=providers#saved\r\n", String::new()),
                 Err(message) => ("400 Bad Request", "", message.to_owned()),
@@ -818,17 +823,26 @@ fn main() -> std::process::ExitCode {
 }
 fn run() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "accounts") {
+        return providers::accounts::command(&args[2..]);
+    }
     if args.get(1).is_some_and(|s| s == "models") {
         return model_calls::command(&args[2..]);
     }
-    if args.get(1).is_some_and(|s| s == "claude") {
-        return claude::command(&args[2..]);
-    }
-    if args.get(1).is_some_and(|s| s == "antigravity") {
-        return antigravity::command(&args[2..]);
-    }
-    if args.get(1).is_some_and(|s| s == "grok") {
-        return grok::command(&args[2..]);
+    // `control codex|claude|grok|antigravity login|check [--account NAME]`.
+    let backend_command = [
+        (
+            backend::Backend::Codex,
+            control_codex::command as fn(control_agent::Command<'_>) -> std::io::Result<()>,
+        ),
+        (backend::Backend::Claude, control_claude::command),
+        (backend::Backend::Antigravity, control_antigravity::command),
+        (backend::Backend::Grok, control_grok::command),
+    ]
+    .into_iter()
+    .find(|(backend, _)| args.get(1).is_some_and(|s| s == backend.id()));
+    if let Some((backend, command)) = backend_command {
+        return logins::command(backend, &args[2..], command);
     }
     if args.get(1).is_some_and(|s| s == "--version") {
         if args.get(2).is_some_and(|s| s == "--json") {
@@ -878,7 +892,7 @@ fn run() -> std::io::Result<()> {
             "control [serve | tui | mcp | discord | doctor | config | open | browser | federation | package]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\nmcp --chat: drive chats as the local operator from an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\npackage import | revoke | list | show: admit and inspect reusable tool packages\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification"
         );
         println!(
-            "claude login | check: container login or offline tool isolation check\ngrok login | check: the same for Grok Build\nantigravity login | check: the same for the Antigravity CLI\nconfig init [--provider codex|claude|grok|antigravity] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally"
+            "codex login --account NAME | check: container device login for a named Codex account, or the offline isolation check and each account's sign-in\nclaude login | check [--account NAME]: container login or offline tool isolation check\ngrok login | check [--account NAME]: the same for Grok Build\nantigravity login | check [--account NAME]: the same for the Antigravity CLI\naccounts list | add BACKEND NAME [--kind K] [--cap N] [--label TEXT] [--disabled] | remove BACKEND NAME | default BACKEND NAME: a backend's named accounts (accounts.json)\nconfig init [--provider codex|claude|grok|antigravity] [--source-root PATH]: initialize private configuration without replacing saved choices\nconfig path: show the node configuration directory\n--bind-discord LABEL ID: bind a configured principal locally"
         );
         println!("open --link: print a one-use local browser sign-in link");
         println!("github configure: bind improvement PR publication to a repository and private credential reference");

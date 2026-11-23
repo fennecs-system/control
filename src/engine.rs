@@ -28,6 +28,6 @@ pub(crate) fn scrubbed() -> std::process::Command {
 #[cfg(test)]
 pub(crate) mod fake;
 #[cfg(test)]
-pub(crate) mod golden;
+pub(crate) use control_isolation::golden;
 #[cfg(test)]
 mod tests;

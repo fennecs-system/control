@@ -121,7 +121,7 @@ fn carry_preserves_omitted_assignment_and_archived_observations_for_both_provide
     let run = state.runtime.runs[39].id.clone();
     state.runtime.runs[39].kind = crate::runtime::RunKind::BotWake;
     for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
-        state.runtime.runs[39].backend = backend;
+        state.runtime.runs[39].target.backend = backend;
         let prompt = crate::chat::prompt(&state, &run).unwrap();
         assert!(prompt.contains("Earlier task and user inputs") && prompt.contains("turn 0 "));
         assert!(

@@ -109,8 +109,11 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
                     },
                     nonce: "n".into(),
                     generation: "g".into(),
-                    backend: crate::backend::Backend::Codex,
-                    model: "test".into(),
+                    target: crate::providers::Target {
+                        backend: crate::backend::Backend::Codex,
+                        model: Some("test".into()),
+                        ..Default::default()
+                    },
                     child: None,
                     continuation: None,
                 });

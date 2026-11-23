@@ -1,23 +1,25 @@
-//! The Codex CLI backend: credential isolation, its container, the offline
-//! sandbox probe, the event stream and one agent turn.
-use crate::State;
-use crate::identity::Workspace;
-use crate::worker::{
-    SANDBOX_PROBE_WAIT, UNKNOWN_FAILURE, handoff_grace_over, interrupt_unfinished_tools, observe_workspace_diff,
-    read_report, record_activity_for, render_prompt, timeout_message, worker_failure,
+//! The Codex CLI backend: its container, the offline sandbox probe, the event
+//! stream and one agent turn. Codex runs its own sandboxed shell, so its turn
+//! container mounts the workspace itself.
+use control_agent::{
+    Agent, Cancelled, Cause, Checked, Control, Failure, Granted, Host, ImagePin, Login, Node, Outcome, Runs,
+    SANDBOX_PROBE_WAIT, Stop, TextCall, Turn, Turns, WORKER_IMAGE, cli::handoff_grace_over, mailbox_wake::MailboxWake,
 };
 use control_effect::sync::Recv;
 use control_isolation::{Access, Input, Isolation, Limits, Proc, RunSpec, Size, Stream, Streams, Tmpfs, User};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
-pub(crate) struct Codex;
-impl crate::backend::Agent for Codex {
+pub struct Codex;
+impl Agent for Codex {
     fn id(&self) -> &'static str {
         "codex"
     }
@@ -27,23 +29,29 @@ impl crate::backend::Agent for Codex {
     fn name(&self) -> &'static str {
         "Codex"
     }
-    fn default_model(&self) -> String {
-        crate::usage::default_model()
+    fn default_model(&self) -> &'static str {
+        "gpt-6.1-sol"
     }
-    fn image(&self) -> Option<String> {
-        crate::runtime::worker_image()
+    fn model_variable(&self) -> Option<&'static str> {
+        Some("CONTROL_CODEX_MODEL")
+    }
+    fn image(&self) -> ImagePin {
+        WORKER_IMAGE
     }
     fn image_hint(&self) -> &'static str {
         "set worker-image-id in the configuration directory to the Nix image digest"
     }
-    fn credentials_ready(&self) -> Result<(), String> {
-        credentials_ready().map_err(str::to_owned)
+    fn login(&self) -> Option<Login> {
+        Some(Login {
+            checked: Checked::BeforeWorkspace,
+            hint: None,
+        })
     }
-    fn probe(&self, isolation: &dyn Isolation, image: &str) -> Result<(), String> {
-        offline_probe(isolation, image)
+    fn probe(&self, node: &dyn Node, isolation: &dyn Isolation, image: &str) -> Result<(), String> {
+        offline_probe(node, isolation, image)
     }
-    fn text_run(&self, isolation: &dyn Isolation, call: &crate::backend::TextCall<'_>) -> std::io::Result<RunSpec> {
-        text_run(isolation, call.image, call.name, call.workspace, call.node, call.model).map_err(std::io::Error::other)
+    fn text_run(&self, node: &dyn Node, isolation: &dyn Isolation, call: &TextCall<'_>) -> std::io::Result<RunSpec> {
+        text_run(node, isolation, call).map_err(std::io::Error::other)
     }
     fn text(
         &self,
@@ -53,15 +61,21 @@ impl crate::backend::Agent for Codex {
     ) -> std::io::Result<control_ai::Output> {
         control_ai::json_lines(reader, control_ai::codex::Text::new(max), emit)
     }
+    fn runs(&self) -> Runs<'_> {
+        Runs::Cli(self)
+    }
     fn private_names(&self) -> &'static [&'static str] {
         &[".codex"]
     }
     fn review_mount(&self) -> bool {
         true
     }
+    fn own_web_search(&self) -> bool {
+        true
+    }
 }
 
-pub(crate) const PERMISSIONS: [&str; 6] = [
+pub const PERMISSIONS: [&str; 6] = [
     "default_permissions=\"control\"",
     "permissions.control.extends=\":workspace\"",
     "permissions.control.filesystem={\"/home/agent/.codex\"=\"deny\",\"/sys\"=\"deny\"}",
@@ -69,87 +83,57 @@ pub(crate) const PERMISSIONS: [&str; 6] = [
     "approval_policy=\"never\"",
     "cli_auth_credentials_store=\"file\"",
 ];
+/// The embedded seccomp profile every Codex container runs under.
+const SECCOMP: &[u8] = include_bytes!("../../../hosting/worker-seccomp.json");
+/// The fixed message when nothing in Codex's diagnostics is recognised.
+pub const UNKNOWN_FAILURE: &str = "Codex container exited unsuccessfully. Check host account authentication and the pinned worker configuration. No host fallback was attempted.";
 
-pub(crate) struct Credentials {
-    pub(crate) path: PathBuf,
-    pub(crate) uid: u32,
-    pub(crate) gid: u32,
+/// The credential file a container mounts and its owner: the granted login,
+/// or an empty canary for a probe.
+pub struct Credentials {
+    pub path: PathBuf,
+    pub uid: u32,
+    pub gid: u32,
 }
-impl Credentials {
-    pub(crate) fn locate() -> Result<Self, &'static str> {
-        Self::validate(&Self::path()?)
-    }
-
-    /// Tests resolve only an explicit credential path or one under the test
-    /// node directory, never the operator's `CODEX_HOME`/`~/.codex`.
-    #[cfg(test)]
-    pub(crate) fn path() -> Result<PathBuf, &'static str> {
-        Ok(std::env::var_os("CONTROL_CODEX_AUTH_FILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| crate::config::test_root().join("codex/auth.json")))
-    }
-
-    #[cfg(not(test))]
-    pub(crate) fn path() -> Result<PathBuf, &'static str> {
-        std::env::var_os("CONTROL_CODEX_AUTH_FILE")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("CODEX_HOME").map(|p| PathBuf::from(p).join("auth.json")))
-            .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".codex/auth.json")))
-            .ok_or("Cannot locate Codex auth.json. Sign in with codex login on the host.")
-    }
-
-    // Inspect metadata only. Only Codex inside the worker consumes credential contents.
-    pub(crate) fn validate(path: &Path) -> Result<Self, &'static str> {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = fs::symlink_metadata(path)
-            .map_err(|_| "Codex auth.json is missing. Run codex login on the host with file credential storage.")?;
-        if !metadata.is_file() || metadata.mode() & 0o077 != 0 || metadata.uid() == 0 {
-            return Err(
-                "Codex auth.json must be a private regular file owned by a non-root user (mode 0600). Symlink credentials are not accepted.",
-            );
+impl From<&Granted> for Credentials {
+    fn from(granted: &Granted) -> Self {
+        let User { uid, gid } = granted.owner();
+        Self {
+            path: granted.path().to_path_buf(),
+            uid,
+            gid,
         }
-        let path = fs::canonicalize(path).map_err(|_| "Cannot resolve Codex auth.json.")?;
-        mount_path(&path)?;
-        Ok(Self {
-            path,
-            uid: metadata.uid(),
-            gid: metadata.gid(),
-        })
     }
 }
 
 /// The pre-run sandbox probe for `control doctor`: an empty canary stands in for
 /// auth.json, so no account is mounted and no model is called.
-pub(crate) fn offline_probe(isolation: &dyn Isolation, image: &str) -> Result<(), String> {
+pub fn offline_probe(node: &dyn Node, isolation: &dyn Isolation, image: &str) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
-    let node = crate::config::node_id()?;
-    let root = crate::config::state("codex-check")?;
+    let node_id = node.id()?;
+    let root = node.check_root("codex-check")?;
     fs::create_dir_all(&root).map_err(|_| "Cannot prepare sandbox verification.")?;
     let root = fs::canonicalize(&root).map_err(|_| "Cannot prepare sandbox verification.")?;
     let _ = fs::remove_dir_all(root.join("sandbox-probe"));
     let owner = fs::metadata(&root).map_err(|_| "Cannot prepare sandbox verification.")?;
     let policy = root.join("worker-seccomp.json");
-    fs::write(&policy, include_bytes!("../hosting/worker-seccomp.json"))
-        .map_err(|_| "Could not prepare embedded worker security profile.")?;
+    fs::write(&policy, SECCOMP).map_err(|_| "Could not prepare embedded worker security profile.")?;
     let canary = Credentials {
         path: root.join("unused"),
         uid: owner.uid(),
         gid: owner.gid(),
     };
     let name = format!("control-auth-check-doctor-{}-probe", std::process::id());
-    sandbox_probe(isolation, image, &root, &canary, &name, &policy, &node)
-}
-pub(crate) fn credentials_ready() -> Result<(), &'static str> {
-    Credentials::locate().map(|_| ())
+    sandbox_probe(node, isolation, image, &root, &canary, &name, &policy, &node_id)
 }
 
-pub(crate) fn mount_path(path: &Path) -> Result<&str, &'static str> {
+pub fn mount_path(path: &Path) -> Result<&str, &'static str> {
     path.to_str()
         .filter(|p| path.is_absolute() && !p.contains([',', '\n', '\r']))
         .ok_or("Container mount paths must be absolute UTF-8 paths without commas or newlines.")
 }
 
-pub(crate) fn container_spec(
+pub fn container_spec(
     image: &str,
     name: &str,
     workspace: &Path,
@@ -159,7 +143,7 @@ pub(crate) fn container_spec(
 ) -> Result<RunSpec, &'static str> {
     container_spec_scoped(image, name, workspace, auth, policy, node, None)
 }
-pub(crate) fn container_spec_scoped(
+pub fn container_spec_scoped(
     image: &str,
     name: &str,
     workspace: &Path,
@@ -197,7 +181,7 @@ pub(crate) fn container_spec_scoped(
     }
     .label("dev.control.node", node)
     .label("dev.control.attempt", name);
-    let spec = crate::lifecycle::label_purpose(
+    let spec = control_agent::cli::label_purpose(
         spec,
         name.starts_with("control-auth-check-") || name.starts_with("control-summary-"),
     )
@@ -219,34 +203,36 @@ pub(crate) fn container_spec_scoped(
     })
 }
 
-pub(crate) fn permissions(spec: RunSpec) -> RunSpec {
+pub fn permissions(spec: RunSpec) -> RunSpec {
     spec.args(PERMISSIONS.iter().flat_map(|setting| ["-c", setting]))
 }
 
 /// A bounded text request reuses the worker's credential isolation, without
 /// workspace tools, MCP, project files or resumable provider state.
-pub(crate) fn text_run(
-    isolation: &dyn Isolation,
-    image: &str,
-    name: &str,
-    workspace: &Path,
-    node: &str,
-    model: &str,
-) -> Result<RunSpec, String> {
-    let auth = Credentials::locate()?;
-    let root = workspace.parent().ok_or("Invalid summary workspace")?;
+fn text_run(node: &dyn Node, isolation: &dyn Isolation, call: &TextCall<'_>) -> Result<RunSpec, String> {
+    let auth = Credentials::from(call.granted().map_err(|e| e.to_string())?);
+    let root = call.workspace.parent().ok_or("Invalid summary workspace")?;
     let policy = root.join("worker-seccomp.json");
-    fs::write(&policy, include_bytes!("../hosting/worker-seccomp.json")).map_err(|_| "Cannot prepare text sandbox")?;
+    fs::write(&policy, SECCOMP).map_err(|_| "Cannot prepare text sandbox")?;
     sandbox_probe(
+        node,
         isolation,
-        image,
+        call.image,
         root,
         &auth,
-        &format!("control-auth-check-{name}"),
+        &format!("control-auth-check-{}", call.name),
         &policy,
-        node,
+        call.node,
     )?;
-    Ok(text_container(image, name, workspace, &auth, &policy, node, model)?)
+    Ok(text_container(
+        call.image,
+        call.name,
+        call.workspace,
+        &auth,
+        &policy,
+        call.node,
+        call.model,
+    )?)
 }
 fn text_container(
     image: &str,
@@ -298,14 +284,16 @@ fn text_container(
         ]))
 }
 
-pub(crate) fn sandbox_probe(
+#[allow(clippy::too_many_arguments)]
+pub fn sandbox_probe(
+    node: &dyn Node,
     isolation: &dyn Isolation,
     image: &str,
     root: &Path,
     auth: &Credentials,
     name: &str,
     policy: &Path,
-    node: &str,
+    node_id: &str,
 ) -> Result<(), String> {
     let probe = root.join("sandbox-probe");
     let workspace = probe.join("workspace");
@@ -323,18 +311,18 @@ pub(crate) fn sandbox_probe(
     // stale entry for a name an earlier container created and the host then deleted,
     // so recreating that name failed with ENOENT on alternate probes.
     let result = format!("probe-result-{}", probe_nonce()?);
-    let spec = probe_container(image, name, &workspace, &fake, policy, node, &result)?;
+    let spec = probe_container(image, name, &workspace, &fake, policy, node_id, &result)?;
     let mut child = isolation
         .spawn(&spec, Streams::new(Stream::Null, Stream::Null, Stream::Piped))
         .map_err(|_| "Cannot start sandbox verification.")?;
     let stderr = tail_reader(child.stderr.take());
-    let child = crate::child::watch(child).map_err(|_| "Cannot observe sandbox verification.")?;
-    let outcome = child.wait(Some(Instant::now() + SANDBOX_PROBE_WAIT), &crate::shutdown::token());
+    let child = control_agent::child::watch(child).map_err(|_| "Cannot observe sandbox verification.")?;
+    let outcome = child.wait(Some(Instant::now() + SANDBOX_PROBE_WAIT), &node.stop_token());
     if !matches!(outcome, Recv::Item(Ok(_))) {
         if !matches!(outcome, Recv::Item(_)) {
             child.kill();
         }
-        crate::lifecycle::stop_resource(isolation, name, node, image, &workspace)?;
+        node.stop_container(isolation, name, node_id, image, &workspace)?;
     }
     let status = match &outcome {
         Recv::Item(Ok(status)) => Some(*status),
@@ -361,14 +349,14 @@ fn probe_container(
 ) -> Result<RunSpec, &'static str> {
     Ok(permissions(container_spec(image, name, workspace, fake, policy, node)?.args(["codex", "sandbox", "-P", "control"])).args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > \"/workspace/$1\"", "probe", result]))
 }
-pub(crate) fn probe_nonce() -> Result<String, &'static str> {
+pub fn probe_nonce() -> Result<String, &'static str> {
     let mut nonce = [0u8; 8];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
         .map_err(|_| "Cannot prepare sandbox verification.")?;
     Ok(nonce.iter().map(|b| format!("{b:02x}")).collect())
 }
 /// The last bytes a probe wrote to stderr, delivered once the stream closes.
-pub(crate) fn tail_reader(stream: Option<impl std::io::Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+pub fn tail_reader(stream: Option<impl Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
     const KEEP: usize = 4096;
     let (sender, receiver) = std::sync::mpsc::channel();
     if let Some(mut stream) = stream {
@@ -387,7 +375,7 @@ pub(crate) fn tail_reader(stream: Option<impl std::io::Read + Send + 'static>) -
 }
 /// Diagnostics for a failed probe: its exit, result file and stderr tail. Only
 /// an empty canary is mounted, so the stream carries no account material.
-pub(crate) fn probe_detail(status: Option<std::process::ExitStatus>, written: Option<&[u8]>, stderr: &[u8]) -> String {
+pub fn probe_detail(status: Option<std::process::ExitStatus>, written: Option<&[u8]>, stderr: &[u8]) -> String {
     use std::os::unix::process::ExitStatusExt;
     const TAIL: usize = 400;
     let exit = match status.map(|s| (s.code(), s.signal())) {
@@ -416,9 +404,9 @@ pub(crate) fn probe_detail(status: Option<std::process::ExitStatus>, written: Op
     format!("({exit}; {result}; stderr tail: {tail})")
 }
 
-pub(crate) const SANDBOX_PROBE_TIMED_OUT: &str = "Sandbox verification timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
+pub const SANDBOX_PROBE_TIMED_OUT: &str = "Sandbox verification timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.";
 /// The probe's result: a timeout is reported apart from a failed isolation check.
-pub(crate) fn sandbox_verdict(
+pub fn sandbox_verdict(
     outcome: Recv<std::io::Result<std::process::ExitStatus>>,
     verified: impl FnOnce() -> bool,
 ) -> Result<(), &'static str> {
@@ -438,9 +426,17 @@ pub(crate) fn sandbox_verdict(
     }
 }
 
-pub(crate) fn capture_diagnostics(
-    mut reader: impl std::io::Read + Send + 'static,
-) -> std::thread::JoinHandle<&'static str> {
+/// A recognised failure in Codex's bounded diagnostics, or its fixed message.
+pub fn diagnose(bytes: &[u8]) -> Failure {
+    failure(control_agent::classify(bytes))
+}
+fn failure(cause: Option<Cause>) -> Failure {
+    cause
+        .map(|cause| Failure::Provider { agent: "Codex", cause })
+        .unwrap_or(Failure::Unclassified(UNKNOWN_FAILURE))
+}
+
+fn capture_diagnostics(mut reader: impl Read + Send + 'static) -> std::thread::JoinHandle<Option<Cause>> {
     std::thread::spawn(move || {
         let mut captured = Vec::new();
         let mut chunk = [0; 4096];
@@ -451,17 +447,17 @@ pub(crate) fn capture_diagnostics(
             let keep = length.min(64000usize.saturating_sub(captured.len()));
             captured.extend_from_slice(&chunk[..keep]);
         }
-        worker_failure(&captured)
+        control_agent::classify(&captured)
     })
 }
 
 /// Keeps the end of the provider's event stream so its own error events can
 /// be classified: Codex reports a usage limit only there, not on stderr.
-pub(crate) struct Tail<R> {
+struct Tail<R> {
     inner: R,
     kept: Vec<u8>,
 }
-impl<R: std::io::Read> std::io::Read for &mut Tail<R> {
+impl<R: Read> Read for &mut Tail<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let length = self.inner.read(buffer)?;
         self.kept.extend_from_slice(&buffer[..length]);
@@ -472,9 +468,9 @@ impl<R: std::io::Read> std::io::Read for &mut Tail<R> {
         Ok(length)
     }
 }
-/// The fixed message for the provider's `error` and `turn.failed` events in
-/// `stream`, if they name a known failure. Raw text is never returned.
-pub(crate) fn reported_failure(stream: &[u8]) -> Option<&'static str> {
+/// The provider's `error` and `turn.failed` events in `stream`, if they name
+/// a known failure. Raw text is never returned.
+pub fn reported_failure(stream: &[u8]) -> Option<Cause> {
     let errors = stream
         .split(|byte| *byte == b'\n')
         .filter(|line| {
@@ -484,171 +480,176 @@ pub(crate) fn reported_failure(stream: &[u8]) -> Option<&'static str> {
         })
         .collect::<Vec<_>>()
         .join(&b'\n');
-    Some(worker_failure(&errors)).filter(|message| !errors.is_empty() && *message != UNKNOWN_FAILURE)
+    Some(&errors)
+        .filter(|errors| !errors.is_empty())
+        .and_then(|errors| control_agent::classify(errors))
 }
-pub(crate) fn capture_codex(
-    reader: impl std::io::Read,
-    mut update: impl FnMut(crate::usage::Activity),
-) -> (control_ai::Usage, bool, Option<&'static str>) {
+/// The usage, whether a Control tool call was still unfinished, and the
+/// failure the stream itself reported.
+pub fn capture_codex(
+    reader: impl Read,
+    mut update: impl FnMut(control_ai::Activity),
+) -> (control_ai::Usage, bool, Option<Cause>) {
     let mut reader = Tail {
         inner: reader,
         kept: Vec::new(),
     };
     // Completion is adapter state, independent of the bounded UI activity tail.
     let mut pending = std::collections::HashSet::new();
-    let usage = crate::usage::capture_with(&mut reader, |event| {
-        if event.kind == "mcp_tool_call" {
-            if matches!(event.status.as_str(), "in_progress" | "running") {
-                pending.insert(event.id.clone());
-            } else {
-                pending.remove(&event.id);
+    let usage = control_ai::json_lines_usage(&mut reader, control_ai::codex::Codex::default(), |event| {
+        if let control_ai::Event::Activity(event) = event {
+            if event.kind == "mcp_tool_call" {
+                if matches!(event.status.as_str(), "in_progress" | "running") {
+                    pending.insert(event.id.clone());
+                } else {
+                    pending.remove(&event.id);
+                }
             }
+            update(event);
         }
-        update(event);
-    });
+    })
+    .1;
     (usage, !pending.is_empty(), reported_failure(&reader.kept))
 }
 
 /// A successful CLI exit is not a completed tool exchange. Check after the
 /// stdout reader joins, so a buffered completion cannot be mistaken for loss.
 /// No timeout or automatic retry: a host effect may already have happened.
-pub(crate) fn finish_codex_tools(
-    attempt: &mut crate::usage::Attempt,
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
-    generation: &str,
-    host_finished: bool,
-    unfinished: bool,
-) -> Result<(), (&'static str, String)> {
+pub fn finish_codex_tools(host_finished: bool, unfinished: bool) -> Result<(), Failure> {
     if host_finished || !unfinished {
         return Ok(());
     }
-    interrupt_unfinished_tools(bridge, generation);
-    attempt.termination = Some(crate::attempt_control::Termination::ProviderError);
-    Err(("interrupted", "The provider ended with an unfinished MCP tool call. Inspect pending requests and service status before retrying: the tool's outcome is unconfirmed. The published checkpoint is unchanged; check recovery evidence for unpublished work.".into()))
+    Err(Failure::UnfinishedTool)
 }
 
-/// One Codex turn's inputs from the generic worker.
-pub(crate) struct Turn<'a> {
-    pub id: &'a str,
-    pub objective: &'a str,
-    pub scope: Workspace,
-    /// The captured turn context, when the attempt has one.
-    pub captured: Option<String>,
-    pub bridge: Option<(&'a Arc<Mutex<State>>, &'a str)>,
-    pub workspace: &'a Path,
-    pub absolute: &'a Path,
-    pub image: &'a str,
-    pub node: &'a str,
-    pub auth: Credentials,
-    pub isolation: &'a dyn Isolation,
+/// Reads the turn's bounded final report without following a link the agent made.
+pub fn read_report(path: &Path) -> std::io::Result<String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    // The container has exited: reject agent-created symlinks before any host read.
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("Worker report must be a regular file."));
+    }
+    let mut output = Vec::new();
+    file.take(64001).read_to_end(&mut output)?;
+    let truncated = output.len() > 64000;
+    output.truncate(64000);
+    match std::str::from_utf8(&output) {
+        Ok(text) => Ok(text.to_owned()),
+        Err(error) if truncated && error.error_len().is_none() => {
+            output.truncate(error.valid_up_to());
+            String::from_utf8(output).map_err(std::io::Error::other)
+        }
+        Err(error) => Err(std::io::Error::other(error)),
+    }
 }
-pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Result<String, (&'static str, String)> {
+
+impl Turns for Codex {
+    fn turn(&self, turn: Turn<'_>, host: &mut dyn Host) -> Outcome {
+        execute(turn, host)
+    }
+}
+fn launched(result: Result<String, Failure>, usage: Option<control_ai::Usage>) -> Outcome {
+    Outcome::Launched { result, usage }
+}
+fn execute(turn: Turn<'_>, host: &mut dyn Host) -> Outcome {
     let Turn {
         id,
-        objective,
-        scope,
-        captured,
-        bridge,
-        workspace,
-        absolute,
-        image,
+        isolation,
         node,
-        auth,
-        isolation,
+        image,
+        model,
+        workspace: absolute,
+        prompt,
+        review_only,
+        started_unix,
+        tools,
+        login,
     } = turn;
-    let blocked = |m: &str| ("blocked", m.to_owned());
-    let failed = |m: &str| ("failed", m.to_owned());
-    let policy = absolute.parent().unwrap().join("worker-seccomp.json");
-    fs::write(&policy, include_bytes!("../hosting/worker-seccomp.json"))
-        .map_err(|_| failed("Could not prepare embedded worker security profile."))?;
+    let blocked = |m: &str| Failure::Blocked(m.to_owned());
+    let failed = |m: &str| Failure::Failed(m.to_owned());
+    let auth = match login {
+        Ok(granted) => Credentials::from(&granted),
+        Err(error) => return blocked(&error.to_string()).into(),
+    };
+    let root = absolute.parent().unwrap();
+    let policy = root.join("worker-seccomp.json");
+    if fs::write(&policy, SECCOMP).is_err() {
+        return failed("Could not prepare embedded worker security profile.").into();
+    }
     // Verify each attempt before mounting real credentials; successes are not cached.
-    sandbox_probe(
+    if let Err(reason) = sandbox_probe(
+        host.node(),
         isolation,
         image,
-        absolute.parent().unwrap(),
+        root,
         &auth,
         &format!("control-{id}-probe"),
         &policy,
         node,
-    )
-    .map_err(|reason| blocked(&reason))?;
+    ) {
+        return blocked(&reason).into();
+    }
     let container = format!("control-{id}");
     // Codex transport and final report need writable scratch. Its review source
     // is a distinct immutable mount, never the writable mailbox at /workspace.
-    let review_source = absolute.parent().unwrap().join("review-source");
-    if attempt.review_only {
-        fs::rename(absolute, &review_source).map_err(|_| failed("Could not isolate judge source."))?;
-        fs::create_dir(absolute).map_err(|_| failed("Could not prepare judge scratch."))?;
+    let review_source = root.join("review-source");
+    if review_only {
+        if fs::rename(absolute, &review_source).is_err() {
+            return failed("Could not isolate judge source.").into();
+        }
+        if fs::create_dir(absolute).is_err() {
+            return failed("Could not prepare judge scratch.").into();
+        }
     }
-    let spec = turn_container(
+    let spec = match turn_container(
         image,
         &container,
         absolute,
         &auth,
         &policy,
         node,
-        attempt.review_only.then_some(review_source.as_path()),
-        &attempt.model,
-        bridge.is_some(),
-    )
-    .map_err(blocked)?;
-    let room = bridge.and_then(|(state, run_id)| {
-        let s = state.lock().ok()?;
-        let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
-        s.chats
-            .iter()
-            .find(|c| Some(&c.id) == run.chat_id.as_ref())?
-            .room
-            .clone()
-            .filter(|r| crate::rooms::valid(r))
-    });
-    if crate::lifecycle::cancelled(bridge) {
-        return Err(("cancelled", "Cancelled before launch.".into()));
+        review_only.then_some(review_source.as_path()),
+        model,
+        tools,
+    ) {
+        Ok(spec) => spec,
+        Err(message) => return blocked(message).into(),
+    };
+    if host.cancelled() {
+        return Failure::Cancelled(Cancelled::BeforeLaunch(None)).into();
     }
-    let mut child = isolation
-        .spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))
-        .map_err(|_| failed("Could not start the container worker."))?;
+    let Ok(mut child) = isolation.spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped)) else {
+        return failed("Could not start the container worker.").into();
+    };
     let diagnostics = capture_diagnostics(child.stderr.take().unwrap());
     let stdout = child.stdout.take().unwrap();
-    let live = bridge.map(|(state, run)| (Arc::clone(state), run.to_owned()));
-    let generation = id.to_owned();
-    let diff_workspace = absolute.to_path_buf();
-    let review_only = attempt.review_only;
-    let acted = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let events = host.events();
+    let acted = Arc::new(AtomicU64::new(0));
     let acting = Arc::clone(&acted);
-    attempt.accounting = crate::usage::Accounting::Unknown;
     let accounting = std::thread::spawn(move || {
         capture_codex(stdout, |event| {
             if matches!(event.kind.as_str(), "command_execution" | "file_change") {
-                acting.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                acting.fetch_add(1, Ordering::Relaxed);
             }
-            let Some((state, id)) = &live else {
-                return;
-            };
             if event.kind == "file_change" {
-                if review_only {
-                    return;
-                }
-                if !["running", "in_progress"].contains(&event.status.as_str()) {
-                    observe_workspace_diff(state, id, &generation, &diff_workspace, "observed");
+                if !review_only && !["running", "in_progress"].contains(&event.status.as_str()) {
+                    events.changed();
                 }
                 return;
             }
             if !review_only && event.kind == "command_execution" && event.status == "completed" {
-                observe_workspace_diff(state, id, &generation, &diff_workspace, "observed");
+                events.changed();
             }
-            let Ok(mut state) = state.lock() else {
-                return;
-            };
             // Progress is disposable; lifecycle/result checkpoints persist the
             // accumulated activity. Never fsync the entire history per event.
-            record_activity_for(&mut state, id, &generation, event);
+            events.activity(event);
         })
     });
-    let prompt = crate::observe::append(
-        bridge,
-        captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some())),
-    );
+    let prompt = host.observed(prompt);
     if child
         .stdin
         .take()
@@ -656,132 +657,109 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
     {
         let _ = child.kill();
         let _ = child.wait();
-        crate::lifecycle::stop_attempt(isolation, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
-        return Err(failed("Could not deliver the objective."));
+        let failure = match host.stop(Stop::Admitted) {
+            Err(message) => Failure::Interrupted(message),
+            Ok(()) => failed("Could not deliver the objective."),
+        };
+        return launched(Err(failure), None);
     }
     let started = Instant::now();
-    let admitted = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .saturating_sub(attempt.started_unix);
-    let mailbox_wake = crate::mailbox_wake::MailboxWake::new(absolute);
+    let admitted = control_agent::admitted(started_unix);
+    let wake = MailboxWake::new(absolute);
     let mut timed_out = None;
     let mut handoff = None;
     // When the handoff was first seen accepted, and the shell/file actions started by then.
     let mut accepted: Option<(Instant, u64)> = None;
-    let result = loop {
-        if crate::design::requested(bridge) {
-            break Err(std::io::Error::other("Design decision requested"));
+    let stopped = |host: &mut dyn Host| host.stop(Stop::Live).map_err(Failure::Interrupted);
+    let result: Result<bool, ()> = loop {
+        if host.design_requested() || host.cancelled() || host.unavailable() {
+            break Err(());
         }
-        if let Some((state, run)) = bridge {
-            if crate::lifecycle::cancelled(bridge) {
-                break Err(std::io::Error::other("Cancellation requested"));
-            }
-            if state.is_poisoned() {
-                break Err(std::io::Error::other("Control state unavailable"));
-            }
-            crate::worker_tools::pump(state, run, absolute, attempt.context_trace.is_some());
+        host.pump(absolute);
+        if host.design_requested() || host.cancelled() {
+            break Err(());
         }
-        if crate::design::requested(bridge) {
-            break Err(std::io::Error::other("Design decision requested"));
-        }
-        if crate::lifecycle::cancelled(bridge) {
-            break Err(std::io::Error::other("Cancellation requested"));
-        }
-        match crate::attempt_control::poll(bridge, attempt, started.elapsed() + Duration::from_secs(admitted)) {
-            crate::attempt_control::Decision::Finish(summary) => {
+        match host.poll(started.elapsed() + Duration::from_secs(admitted)) {
+            Control::Finish(summary) => {
                 // Let the turn end itself and report its usage, unless it
                 // keeps working (shell or file changes after its handoff) or
                 // outlasts the grace.
-                let acted_now = acted.load(std::sync::atomic::Ordering::Relaxed);
+                let acted_now = acted.load(Ordering::Relaxed);
                 let (at, before) = *accepted.get_or_insert((Instant::now(), acted_now));
                 handoff = Some(summary);
                 if acted_now > before || handoff_grace_over(at, Instant::now()) {
                     let _ = child.kill();
                     let _ = child.wait();
-                    crate::attempt_control::stop(isolation, bridge, attempt)
-                        .map_err(|m| ("interrupted", m.to_owned()))?;
+                    if let Err(failure) = stopped(host) {
+                        return launched(Err(failure), None);
+                    }
                     break Ok(true);
                 }
             }
-            crate::attempt_control::Decision::TimedOut(seconds) => {
-                attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
-                timed_out = Some(Duration::from_secs(seconds));
-                break Err(std::io::Error::other("Worker deadline reached"));
+            Control::TimedOut(limit) => {
+                timed_out = Some(limit);
+                break Err(());
             }
-            crate::attempt_control::Decision::Continue => {}
+            Control::Continue => {}
         }
         match child.try_wait() {
             // An accepted handoff is the result however the turn then ended.
             Ok(Some(_)) if handoff.is_some() => {
-                crate::attempt_control::stop(isolation, bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+                if let Err(failure) = stopped(host) {
+                    return launched(Err(failure), None);
+                }
                 break Ok(true);
             }
             Ok(Some(status)) => break Ok(status.success()),
-            Err(e) => break Err(e),
+            Err(_) => break Err(()),
             _ => {}
         }
-        mailbox_wake.wait(Duration::from_millis(250));
+        wake.wait(Duration::from_millis(250));
     };
     // Killing the CLI alone may leave the daemon-owned container running.
-    if result.is_err() {
+    let Ok(success) = result else {
         let _ = child.kill();
         let _ = child.wait();
-        if let Err(message) = crate::attempt_control::stop(isolation, bridge, attempt) {
-            return Err(("interrupted", message.into()));
+        if let Err(failure) = stopped(host) {
+            return launched(Err(failure), None);
         }
-        if let Ok((usage, _, _)) = accounting.join() {
-            attempt.record_usage(usage);
-        }
-        return Err(if crate::lifecycle::cancelled(bridge) {
-            (
-                "cancelled",
-                "Cancelled. The previous published workspace is unchanged.".into(),
-            )
-        } else if crate::design::requested(bridge) {
-            ("waiting", "Waiting for a design decision.".into())
+        let usage = accounting.join().ok().map(|(usage, _, _)| usage);
+        let failure = if host.cancelled() {
+            Failure::Cancelled(Cancelled::Running)
+        } else if host.design_requested() {
+            Failure::Waiting
         } else if let Some(limit) = timed_out {
-            ("failed", timeout_message(limit))
+            Failure::TimedOut(limit)
         } else {
             failed("Worker stopped after its deadline or a process error.")
-        });
-    }
-    let (usage, unfinished, reported) = accounting
-        .join()
-        .map_err(|_| failed("Could not read the provider's final tool results."))?;
-    attempt.record_usage(usage);
-    if !result.unwrap_or(false) {
-        let stderr = diagnostics.join().unwrap_or(UNKNOWN_FAILURE);
-        return Err(failed(if stderr == UNKNOWN_FAILURE {
-            reported.unwrap_or(stderr)
-        } else {
-            stderr
-        }));
+        };
+        return launched(Err(failure), usage);
+    };
+    let Ok((usage, unfinished, reported)) = accounting.join() else {
+        return launched(Err(failed("Could not read the provider's final tool results.")), None);
+    };
+    let usage = Some(usage);
+    if !success {
+        let stderr = diagnostics.join().unwrap_or(None);
+        return launched(Err(failure(stderr.or(reported))), usage);
     }
     let _ = diagnostics.join();
-    finish_codex_tools(attempt, bridge, id, handoff.is_some(), unfinished)?;
-    let report = || read_report(&workspace.join(".control-result"));
-    let requested = bridge.is_some_and(|(state, run)| {
-        state.lock().is_ok_and(|s| {
-            s.runtime
-                .runs
-                .iter()
-                .any(|r| r.id == run && crate::attempt_control::requested(r))
-        })
-    });
+    if let Err(failure) = finish_codex_tools(handoff.is_some(), unfinished) {
+        return launched(Err(failure), usage);
+    }
+    let report = || read_report(&absolute.join(".control-result"));
     // A requested turn that ended itself replies with its full last message,
     // not the handoff's clipped one.
     let output = match handoff {
-        Some(reply) if requested => report().ok().filter(|text| !text.trim().is_empty()).unwrap_or(reply),
+        Some(reply) if host.requested() => report().ok().filter(|text| !text.trim().is_empty()).unwrap_or(reply),
         handoff => handoff
             .or_else(|| report().ok())
             .unwrap_or_else(|| "Worker finished without a safe final report.".into()),
     };
     let summary: String = output.chars().take(16000).collect();
-    Ok(summary)
+    launched(Ok(summary), usage)
 }
-/// One turn's container and Codex arguments; `bridge` adds the room tools.
+/// One turn's container and Codex arguments; `tools` adds Control's room tools.
 #[allow(clippy::too_many_arguments)]
 fn turn_container(
     image: &str,
@@ -792,7 +770,7 @@ fn turn_container(
     node: &str,
     review: Option<&Path>,
     model: &str,
-    bridge: bool,
+    tools: bool,
 ) -> Result<RunSpec, &'static str> {
     let spec = container_spec_scoped(image, container, absolute, auth, policy, node, review)?.args([
         "codex",
@@ -809,19 +787,19 @@ fn turn_container(
         "/workspace/.control-result",
     ]);
     let spec = permissions(spec);
-    let tools = control_context::worker_mcp_names();
-    let rooms = bridge.then(|| {
+    let names = control_context::worker_mcp_names();
+    let rooms = tools.then(|| {
         [
             "mcp_servers.control_rooms.command=\"/bin/control-room-mcp\"".to_owned(),
             "mcp_servers.control_rooms.required=true".to_owned(),
             format!(
                 "mcp_servers.control_rooms.enabled_tools={}",
-                serde_json::to_string(&tools).unwrap()
+                serde_json::to_string(&names).unwrap()
             ),
         ]
         .into_iter()
         .chain(
-            tools
+            names
                 .iter()
                 .map(|tool| format!("mcp_servers.control_rooms.tools.{tool}.approval_mode=\"approve\"")),
         )
@@ -839,3 +817,90 @@ fn turn_container(
 
 #[cfg(test)]
 mod tests;
+
+/// `control codex login | check` for the account the host chose: `login`
+/// signs in with a device code inside the pinned worker image and keeps the
+/// sign-in as a file in the account's directory; `check` runs the offline
+/// sandbox probe. The host refuses `login` for an account whose login this
+/// directory cannot hold (the operator's own `~/.codex`).
+pub fn command(command: control_agent::Command<'_>) -> std::io::Result<()> {
+    const USAGE: &str = "Use control codex login --account NAME | check";
+    let fail = |message: &str| std::io::Error::other(message.to_owned());
+    let control_agent::Command {
+        args,
+        node,
+        isolation,
+        image,
+        directory,
+        ..
+    } = command;
+    let [action] = args else { return Err(fail(USAGE)) };
+    let image = || {
+        image
+            .clone()
+            .ok_or_else(|| fail("Build and pin the Codex worker image first: nix run .#setup"))
+    };
+    match action.as_str() {
+        "--help" | "-h" | "help" => {
+            println!(
+                "control codex login --account NAME: sign a named account in with a device code inside the pinned worker image\ncontrol codex check: offline sandbox check; no credentials or model calls"
+            );
+            Ok(())
+        }
+        "login" => {
+            use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+            fs::DirBuilder::new().recursive(true).mode(0o700).create(&directory)?;
+            let meta = fs::symlink_metadata(&directory)?;
+            if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() == 0 {
+                return Err(fail(
+                    "Codex login directory must be private and owned by a non-root user",
+                ));
+            }
+            let spec = login_container(
+                &format!("control-codex-login-{}", std::process::id()),
+                &node.id().map_err(|e| fail(&e))?,
+                User {
+                    uid: meta.uid(),
+                    gid: meta.gid(),
+                },
+                &directory,
+                &image()?,
+            )?;
+            if !isolation.spawn(&spec, Streams::INHERIT)?.wait()?.success() {
+                return Err(fail("Codex login did not complete"));
+            }
+            fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
+        }
+        "check" => {
+            offline_probe(node, isolation, &image()?).map_err(|e| fail(&e))?;
+            println!("Codex offline sandbox verified. No account credentials were mounted or model called.");
+            Ok(())
+        }
+        _ => Err(fail(USAGE)),
+    }
+}
+/// The device login: Codex's home is the account directory, writable, and
+/// the sign-in is kept as a file there (`cli_auth_credentials_store`), not in
+/// a keyring the container does not have.
+fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> std::io::Result<RunSpec> {
+    Ok(RunSpec {
+        image: image.into(),
+        input: Input::Terminal,
+        ..control_agent::cli::base(name, node, owner)
+    }
+    .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
+    .secret(
+        "codex/login",
+        control_agent::cli::checked(directory)?,
+        "/home/agent/.codex",
+        Access::ReadWrite,
+    )
+    .env("CODEX_HOME", "/home/agent/.codex")
+    .args([
+        "codex",
+        "login",
+        "--device-auth",
+        "-c",
+        "cli_auth_credentials_store=\"file\"",
+    ]))
+}

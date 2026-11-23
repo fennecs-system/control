@@ -10,14 +10,14 @@ fn gene_editor_shows_its_own_selections_and_resolves_composed_guidance() {
         instructions: "Keep <shared> assets intact".into(),
         ..Default::default()
     });
-    let html = render(&state, "local", None, None, false);
+    let html = render(Sources::of(&state), "local", None, None, false);
     assert!(
         html.contains("name='include_investigation' checked") && !html.contains("Effective instructions"),
         "the form is the view; no merged preview"
     );
     assert!(html.contains("Keep &lt;shared&gt; assets intact"));
     assert!(html.contains("not an execution allowlist"));
-    let mut resolved = resolve(&state, &["local".into()]).unwrap();
+    let mut resolved = resolve(Sources::of(&state), &["local".into()]).unwrap();
     resolved.documents.push(DocumentInput {
         id: "note".into(),
         title: "Observation".into(),
@@ -35,7 +35,7 @@ fn gene_editor_shows_its_own_selections_and_resolves_composed_guidance() {
 #[test]
 fn prompts_scope_lenses_by_role_and_inline_only_where_marked() {
     let state = State::default();
-    let resolved = resolve(&state, &["swarm".into(), "advisor".into()]).unwrap();
+    let resolved = resolve(Sources::of(&state), &["swarm".into(), "advisor".into()]).unwrap();
     let [lead, member, advisor] = Audience::ALL.map(|role| prompt(&resolved, role));
     let procedure = "you are a read-only judge woken only by a team member's question";
     assert!(!member.contains("advisor:") && !member.contains(procedure), "{member}");
@@ -57,7 +57,7 @@ fn prompts_scope_lenses_by_role_and_inline_only_where_marked() {
 fn lens_form_round_trips_summary_and_roles() {
     let mut state = State::default();
     let advisor = state.lens_library.get("advisor").unwrap().clone();
-    let html = render(&state, "advisor", None, None, false);
+    let html = render(Sources::of(&state), "advisor", None, None, false);
     assert!(html.contains("name='role_lead' checked") && html.contains("name='inline_advisor' checked"));
     assert!(!html.contains("name='role_member' checked"));
     let fields: HashMap<String, String> = [
@@ -125,7 +125,7 @@ fn dna_page_lists_genes_compactly_and_keeps_every_editor_capability() {
         .find(|d| d.id == "gene-0003")
         .unwrap()
         .documents = vec!["castle".into()];
-    let html = render(&state, "gene-0003", None, None, false);
+    let html = render(Sources::of(&state), "gene-0003", None, None, false);
     let genes = state.lens_library.current().len();
     assert_eq!(
         html.matches("class='dna-gene'").count(),
@@ -177,7 +177,7 @@ fn dna_page_lists_genes_compactly_and_keeps_every_editor_capability() {
         !html.contains("name='include_gene-0003'"),
         "a gene cannot include itself"
     );
-    let new = render(&state, "", None, None, false);
+    let new = render(Sources::of(&state), "", None, None, false);
     assert!(new.contains("<h3>New gene</h3>") && !new.contains("readonly") && !new.contains("aria-current"));
 }
 

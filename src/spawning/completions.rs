@@ -121,15 +121,17 @@ pub(super) fn reconcile(
         .unwrap_or(parent);
     // The parent's authority, lineage and grants; the chat's latest model settings.
     let mut follow_up = chat::FollowUp::from(state, parent);
-    follow_up.backend = latest.backend;
-    follow_up.model = latest.model.clone();
+    follow_up.target = latest.target.clone();
     follow_up.context = latest.context.clone();
     follow_up.lenses = latest.lenses.clone();
     let mut summaries = Vec::new();
     let mut ids = Vec::new();
     for child in children {
         let leaf = delegation::leaf(state, &child.id)?;
-        follow_up.grant(crate::services::grants(state, leaf));
+        follow_up.grant(crate::services::grants(
+            crate::services::ServiceAuthority::of(state),
+            leaf,
+        ));
         summaries.push(format!(
             "{} · {} · /dm/{}\n{}",
             child.id,

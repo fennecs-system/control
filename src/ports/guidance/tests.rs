@@ -55,7 +55,8 @@ fn a_pending_request_says_how_to_wait_and_how_it_will_be_used() {
 fn a_dns_failure_for_a_pending_host_says_to_wait_and_only_for_that_host() {
     let (state, run, _, id) = requested();
     let hint = egress_hint(
-        &state,
+        &state.runtime.runs,
+        &state.ports,
         &run,
         r#"{"command":"curl -fsSLO https://files.example/a.jar"}"#,
         DNS,
@@ -71,24 +72,44 @@ fn a_dns_failure_for_a_pending_host_says_to_wait_and_only_for_that_host() {
     // Another host, a success, or another chat's run get no hint.
     assert!(
         egress_hint(
-            &state,
+            &state.runtime.runs,
+            &state.ports,
             &run,
             "curl https://other.example/",
             "curl: (6) Could not resolve host: other.example"
         )
         .is_none()
     );
-    assert!(egress_hint(&state, &run, "curl https://files.example/", "downloaded 3 MB").is_none());
+    assert!(
+        egress_hint(
+            &state.runtime.runs,
+            &state.ports,
+            &run,
+            "curl https://files.example/",
+            "downloaded 3 MB"
+        )
+        .is_none()
+    );
     let mut state = state;
     let (owner, origin) = (state.ports[0].chat.clone(), state.ports[0].origin_run.clone());
     state.ports[0].chat = "someone-else".into();
     state.ports[0].origin_run = "their-run".into();
-    assert!(egress_hint(&state, &run, "curl https://files.example/", DNS).is_none());
+    assert!(
+        egress_hint(
+            &state.runtime.runs,
+            &state.ports,
+            &run,
+            "curl https://files.example/",
+            DNS
+        )
+        .is_none()
+    );
     (state.ports[0].chat, state.ports[0].origin_run) = (owner, origin);
     // The host may appear only in the command (connection refused, no name).
     assert!(
         egress_hint(
-            &state,
+            &state.runtime.runs,
+            &state.ports,
             &run,
             "curl https://files.example/",
             "curl: (7) Connection refused"
@@ -102,7 +123,14 @@ fn a_failure_for_an_approved_host_names_the_relay_line() {
     let (mut state, run, chat, id) = requested();
     state.ports[0].status = Status::Approved;
     state.ports[0].decision = Some(decisions::Receipt::pending(true));
-    let hint = egress_hint(&state, &run, "curl -fsSLO https://files.example/a.jar", DNS).unwrap();
+    let hint = egress_hint(
+        &state.runtime.runs,
+        &state.ports,
+        &run,
+        "curl -fsSLO https://files.example/a.jar",
+        DNS,
+    )
+    .unwrap();
     assert!(
         hint.contains(&format!(
             "approved as port {id}, but this process did not use its proxy"
@@ -115,7 +143,8 @@ fn a_failure_for_an_approved_host_names_the_relay_line() {
     );
     // Already using the relay: point at its readiness instead.
     let relayed = egress_hint(
-        &state,
+        &state.runtime.runs,
+        &state.ports,
         &run,
         "curl --connect-to files.example:443:127.0.0.1:3128 https://files.example/a.jar",
         "curl: (7) Failed to connect to 127.0.0.1 port 3128",
@@ -130,15 +159,21 @@ fn a_failure_for_an_approved_host_names_the_relay_line() {
         "only a pending request is waited on"
     );
     assert!(
-        matches!(wait_topic(&state, &chat, &id), Err((true, message)) if message.contains("already approved") && message.contains("HTTPS_PROXY"))
+        matches!(wait_topic(Requests::of(&state), &chat, &id), Err((true, message)) if message.contains("already approved") && message.contains("HTTPS_PROXY"))
     );
 }
 
 #[test]
 fn a_port_wait_resolves_only_for_the_requesting_chat() {
     let (mut state, _, chat, id) = requested();
-    assert_eq!(wait_topic(&state, &chat, &id), Ok(()));
-    assert!(matches!(wait_topic(&state, &chat, "missing"), Err((false, _))));
+    assert_eq!(wait_topic(Requests::of(&state), &chat, &id), Ok(()));
+    assert!(matches!(
+        wait_topic(Requests::of(&state), &chat, "missing"),
+        Err((false, _))
+    ));
     let stranger = crate::chat::create(&mut state);
-    assert!(matches!(wait_topic(&state, &stranger, &id), Err((false, _))));
+    assert!(matches!(
+        wait_topic(Requests::of(&state), &stranger, &id),
+        Err((false, _))
+    ));
 }

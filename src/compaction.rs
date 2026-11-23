@@ -212,14 +212,14 @@ pub(crate) fn compactor_for<'a>(
     state: &'a State,
     session: &crate::chat::Session,
 ) -> Option<&'a crate::model_calls::Endpoint> {
-    policy(state, session).0
+    policy(&state.runtime, session).0
 }
 /// The compactor serving a chat and why (see `compactor_for`).
 pub(crate) fn policy<'a>(
-    state: &'a State,
+    runtime: &'a crate::runtime::Runtime,
     session: &crate::chat::Session,
 ) -> (Option<&'a crate::model_calls::Endpoint>, &'static str) {
-    let memory = &state.runtime.compaction;
+    let memory = &runtime.compaction;
     if memory.settings.opted_out.contains(&session.id) {
         return (None, "opted out");
     }
@@ -237,25 +237,32 @@ pub(crate) fn policy<'a>(
             },
         );
     }
-    match local_endpoint(state, session) {
+    match local_endpoint(runtime, session) {
         Some(model) => (Some(model), "local chat model default"),
         None => (None, "off"),
     }
 }
 /// The local endpoint a chat's selected agent model runs on, if any.
-fn local_endpoint<'a>(state: &'a State, session: &crate::chat::Session) -> Option<&'a crate::model_calls::Endpoint> {
+fn local_endpoint<'a>(
+    runtime: &'a crate::runtime::Runtime,
+    session: &crate::chat::Session,
+) -> Option<&'a crate::model_calls::Endpoint> {
     // A chat without its own selection runs on the node default, which may be local.
     let (backend, name) = match &session.model {
         Some(model) => (model.backend, model.model.clone()),
-        None => (state.runtime.backend, state.runtime.configured_model()),
+        None => (runtime.backend, runtime.configured_model()),
     };
-    (backend == crate::backend::Backend::Local)
-        .then(|| crate::providers::endpoint(&state.runtime, &name))
+    backend
+        .runs_control_loop()
+        .then(|| crate::providers::endpoint(runtime, &name))
         .flatten()
 }
-fn identity(state: &State, session: &crate::chat::Session) -> Option<(String, crate::model_calls::Endpoint)> {
-    let memory = &state.runtime.compaction;
-    let model = compactor_for(state, session)?;
+fn identity(
+    runtime: &crate::runtime::Runtime,
+    session: &crate::chat::Session,
+) -> Option<(String, crate::model_calls::Endpoint)> {
+    let memory = &runtime.compaction;
+    let model = policy(runtime, session).0?;
     let bytes = serde_json::to_vec(&(2u32, &session.id, &session.actor, &memory.settings, model, SYSTEM)).ok()?;
     Some((hash(&bytes), model.clone()))
 }
@@ -272,7 +279,7 @@ fn prepare(state: &State) -> Option<Job> {
         {
             continue;
         }
-        let Some((identity, model)) = identity(state, session) else {
+        let Some((identity, model)) = identity(&state.runtime, session) else {
             continue;
         };
         if memory.attempted.get(&session.id) == Some(&(session.revision, identity.clone())) {
@@ -575,7 +582,7 @@ fn allowed(state: &State, job: &Job) -> bool {
         && !job.cancel.load(std::sync::atomic::Ordering::Acquire)
         && state.chats.iter().find(|c| c.id == job.chat).is_some_and(|c| {
             crate::identity::authorize(&c.actor, crate::identity::Action::Task).is_ok()
-                && identity(state, c).is_some_and(|(id, _)| id == job.identity)
+                && identity(&state.runtime, c).is_some_and(|(id, _)| id == job.identity)
                 && crate::bots::background_allowed(state, &c.id)
         })
 }
@@ -657,7 +664,7 @@ impl Selector<'_> {
             return fallback();
         }
         let covered = view.count;
-        if identity(state, session).is_none_or(|(id, _)| id != view.identity)
+        if identity(&state.runtime, session).is_none_or(|(id, _)| id != view.identity)
             || !sources_match(conversation, &view.source_hash, covered)
         {
             return fallback();
@@ -744,18 +751,18 @@ fn recent_bytes(conversation: &Conversation<'_>, current: usize, budget: usize) 
     }
 }
 
-pub fn status(state: &State, chat: &str) -> serde_json::Value {
-    let memory = &state.runtime.compaction;
+pub fn status(runtime: &crate::runtime::Runtime, chats: &[crate::chat::Session], chat: &str) -> serde_json::Value {
+    let memory = &runtime.compaction;
     let view = memory.views.get(chat);
-    let session = state.chats.iter().find(|c| c.id == chat);
-    let (model, policy) = session.map_or((None, "off"), |s| policy(state, s));
-    serde_json::json!({"summary":session.map(|s|command::summary(state,s)),"settings":memory.settings,"enabled_for_chat":model.is_some(),
+    let session = chats.iter().find(|c| c.id == chat);
+    let (model, policy) = session.map_or((None, "off"), |s| policy(runtime, s));
+    serde_json::json!({"summary":session.map(|s|command::summary(runtime,s)),"settings":memory.settings,"enabled_for_chat":model.is_some(),
         "policy":policy,
         "model":model,
         "pending":memory.pending.as_ref().is_some_and(|(id,_,_,_)|id==chat),
         "source_entries":view.map(|v|v.count),"source_revision":view.map(|v|v.revision),
-        "current_entries":state.chats.iter().find(|c|c.id==chat).map(|c|c.messages.len()),"error":memory.errors.get(chat),
-        "turn_trees":session.map(|s|turn::listing(state,chat,&s.actor)),
+        "current_entries":chats.iter().find(|c|c.id==chat).map(|c|c.messages.len()),"error":memory.errors.get(chat),
+        "turn_trees":session.map(|s|turn::listing(memory,chat,&s.actor)),
         "nodes":view.map(|v|v.nodes.iter().map(|n|serde_json::json!({"start":n.start,"end":n.start+(1u64<<n.level),"level":n.level,
             "input_bytes":n.input_bytes,"summary_bytes":n.response.text.len(),"tokens":n.response.tokens,"key":n.key,"created_unix":n.created_unix})).collect::<Vec<_>>()).unwrap_or_default(),
         "limits":{"source_page_bytes":source::PAGE_BYTES,"source_page_entries":64,"resident_views":MAX_VIEWS},
@@ -772,7 +779,8 @@ pub fn status(state: &State, chat: &str) -> serde_json::Value {
 pub fn render(state: &State, id: &str, query: &str) -> Result<String, &'static str> {
     let session = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found")?;
     crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
-    let metadata = serde_json::to_string_pretty(&status(state, id)).map_err(|_| "Cannot render compaction metadata")?;
+    let metadata = serde_json::to_string_pretty(&status(&state.runtime, &state.chats, id))
+        .map_err(|_| "Cannot render compaction metadata")?;
     Ok(tree::overview(state, session, &crate::fields(query), &metadata))
 }
 

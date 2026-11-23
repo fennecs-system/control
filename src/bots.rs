@@ -1341,8 +1341,8 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     };
     let mut follow_up = crate::chat::FollowUp::from(state, latest);
     if let Some(selected) = &session.model {
-        follow_up.backend = selected.backend;
-        follow_up.model = Some(selected.model.clone());
+        follow_up.target = crate::providers::selection::admit(&state.runtime, selected)
+            .map_err(|_| "This bot's account is no longer available; choose another with /model.")?;
     }
     let recovery = (latest.kind.prompt_role() == control_context::agent_policy::PromptRole::Wake
         && latest.status == "completed"
@@ -1819,7 +1819,12 @@ fn reconcile_with_wake_at(
                             .iter()
                             .filter(|service| grant.matches(service))
                             .all(|service| {
-                                crate::services::accessible(state, service, &service.resource.owner.node, published)
+                                crate::services::accessible(
+                                    crate::chat::Lineage::of(&state.chats),
+                                    service,
+                                    &service.resource.owner.node,
+                                    published,
+                                )
                             })
                     })
                 })
@@ -2563,7 +2568,7 @@ fn facts<'a>(state: &'a State, approval: &Approval) -> Option<crate::auto_approv
     let session = state.chats.iter().find(|session| session.id == approval.requester)?;
     let top = root(state, &approval.requester)?;
     let lead = state.chats.iter().find(|session| session.id == top)?;
-    let tree = crate::chat::tree(state, top);
+    let tree = crate::chat::Lineage::of(&state.chats).tree(top);
     let bots = active(state);
     Some(crate::auto_approval::BotFacts {
         actor: &session.actor,
@@ -2717,7 +2722,7 @@ fn visible(state: &State, approval: &Approval, chat: &str) -> bool {
         .chats
         .iter()
         .any(|requester| requester.id == approval.requester && requester.actor == viewer.actor)
-        && (approval.chat == chat || crate::chat::within(state, &approval.requester, chat))
+        && (approval.chat == chat || crate::chat::Lineage::of(&state.chats).within(&approval.requester, chat))
 }
 fn pending<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a Approval> {
     state

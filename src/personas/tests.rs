@@ -24,8 +24,8 @@ fn active() -> (State, String, String) {
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(chat.clone());
     run.status = "running".into();
-    run.backend = Backend::Codex;
-    run.model = Some("captured-model".into());
+    run.target.backend = Backend::Codex;
+    run.target.model = Some("captured-model".into());
     run.attempts.push(Attempt {
         workspace_id: Some("parent-attempt".into()),
         parent_artifact: Some("baseline".into()),
@@ -34,7 +34,7 @@ fn active() -> (State, String, String) {
     let id = run.id.clone();
     (state, chat, id)
 }
-fn spawn(state: &mut State, id: &str, nonce: &str, input: Value) -> Result<Value, &'static str> {
+fn spawn(state: &mut State, id: &str, nonce: &str, input: Value) -> Result<Value, std::borrow::Cow<'static, str>> {
     crate::spawning::request(
         state,
         id,
@@ -89,7 +89,7 @@ fn spawn_by_persona_captures_dna_standing_and_body_and_edits_never_change_it() {
         "genes resolved and captured"
     );
     assert_eq!(
-        (child.backend, child.model.as_deref()),
+        (child.target.backend, child.target.model.as_deref()),
         (Backend::Claude, Some("worker-model")),
         "the persona's body"
     );
@@ -145,7 +145,7 @@ fn explicit_genes_and_model_override_the_persona_and_roles_must_agree() {
     .unwrap();
     let child = state.runtime.runs.last().unwrap();
     assert_eq!(child.lenses.as_deref(), Some(&["research".to_owned()][..]));
-    assert_eq!(child.model.as_deref(), Some("reviewer"));
+    assert_eq!(child.target.model.as_deref(), Some("reviewer"));
     assert_eq!(
         bundle(child).lenses,
         ["swarm"],
@@ -177,7 +177,7 @@ fn explicit_genes_and_model_override_the_persona_and_roles_must_agree() {
     spawn(&mut state, &id, "plain", json!({"objectives":["x"]})).unwrap();
     let plain = state.runtime.runs.last().unwrap();
     assert!(plain.persona.as_ref().unwrap().bundle.is_none());
-    assert_eq!(plain.model.as_deref(), Some("captured-model"));
+    assert_eq!(plain.target.model.as_deref(), Some("captured-model"));
 }
 
 #[test]
@@ -389,7 +389,7 @@ fn soul_documents_become_the_first_instruction() {
     });
     let document = state.documents.last().cloned().unwrap();
     let saved = edit(&mut state, "worker", |d| d.soul = document.id.clone());
-    let captured = capture(&state, "worker").unwrap();
+    let captured = capture(&state.personas, &state.documents, "worker").unwrap();
     assert_eq!(captured.soul, Some((document.id.clone(), document.revision)));
     assert_eq!(saved.revision, 2);
     assert!(captured.prompt().starts_with(&format!(

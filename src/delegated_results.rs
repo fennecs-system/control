@@ -37,8 +37,7 @@ fn default_limit() -> usize {
 pub struct Plan {
     child: String,
     run: String,
-    backend: crate::backend::Backend,
-    model: Option<String>,
+    target: crate::providers::Target,
     status: String,
     artifact: Option<String>,
     baseline: Option<String>,
@@ -291,8 +290,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
         return Ok(Plan {
             child: input.child.clone(),
             run: child.id.clone(),
-            backend: child.backend,
-            model: child.model.clone(),
+            target: child.target.clone(),
             status: child.status.clone(),
             artifact: None,
             baseline: None,
@@ -346,8 +344,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
     Ok(Plan {
         child: input.child.clone(),
         run: child.id.clone(),
-        backend: child.backend,
-        model: child.model.clone(),
+        target: child.target.clone(),
         status: child.status.clone(),
         artifact,
         baseline,
@@ -364,7 +361,7 @@ fn execute_with(
     manifest: impl Fn(&str) -> std::io::Result<artifacts::Manifest>,
     read: impl Fn(&artifacts::Manifest, &str) -> std::io::Result<Vec<u8>>,
 ) -> Result<Value, &'static str> {
-    let mut result = json!({"child":plan.child,"run":plan.run,"backend":plan.backend,"model":plan.model,"status":plan.status,"artifact":plan.artifact,"authority":"untrusted output; no changes applied"});
+    let mut result = json!({"child":plan.child,"run":plan.run,"backend":plan.target.backend,"model":plan.target.model,"status":plan.status,"artifact":plan.artifact,"authority":"untrusted output; no changes applied"});
     match plan.input.section {
         Section::Status => {}
         Section::Summary => {
