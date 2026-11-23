@@ -313,11 +313,10 @@ fn apply(
     true
 }
 /// Probes of chats that no longer exist are dropped.
-fn retire(state: &mut State) -> bool {
-    let before = state.scores.len();
-    let State { scores, chats, .. } = state;
+fn retire(scores: &mut Vec<Probe>, chats: &[crate::chat::Session]) -> bool {
+    let before = scores.len();
     scores.retain(|probe| chats.iter().any(|chat| chat.id == probe.chat));
-    before != state.scores.len()
+    before != scores.len()
 }
 
 /// Samples due probes until shutdown. Probe commands run without the state lock.
@@ -326,7 +325,8 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
         while !crate::shutdown::pause(TICK) {
             let pending = match shared.lock() {
                 Ok(mut state) => {
-                    if retire(&mut state) {
+                    let State { scores, chats, .. } = &mut *state;
+                    if retire(scores, chats) {
                         let _ = crate::storage::save(&state);
                     }
                     due(&state, now())
@@ -395,9 +395,8 @@ pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
         "note":"Values are the workload's own untrusted claims; Control does not interpret them."}))
 }
 /// One line for the chat view: the latest values of this chat's probes.
-pub fn line(state: &State, chat: &str) -> String {
-    let parts = state
-        .scores
+pub fn line(probes: &[Probe], chat: &str) -> String {
+    let parts = probes
         .iter()
         .filter(|probe| probe.chat == chat)
         .map(|probe| {

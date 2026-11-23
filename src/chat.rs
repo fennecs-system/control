@@ -1246,7 +1246,7 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         "<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/dm/{id}/artifacts'>Artifacts ↗</a></span>{}<details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/dm/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/dm/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/dm/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",
         crate::navigation::conversation_button(state, id),
         escape(&crate::callsigns::name_or_id(&state.chats, id)),
-        crate::scores::line(state, id),
+        crate::scores::line(&state.scores, id),
         command_menu(&session.actor),
         crate::lens_library::choices(&state.lens_library, &lenses, "session-message")
     ))
@@ -1270,8 +1270,12 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let runs = crate::conversation::Conversation::of(state, session);
     let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
     let project_message = crate::projects::message_index(session);
-    html.push_str(&crate::previews::links(state, id));
-    html.push_str(&crate::github::panel(state, id));
+    html.push_str(&crate::previews::links(&state.previews, id));
+    html.push_str(&crate::github::panel(
+        &state.github_publications,
+        &state.runtime.runs,
+        id,
+    ));
     if let Some(listener) = crate::rooms::listener_status(state, id) {
         html.push_str(&format!(
             "<p class='message-status'>Room #{} · {}</p>",

@@ -545,13 +545,9 @@ pub fn stop(shared: &Arc<Mutex<State>>, chat: &str, id: &str) -> io::Result<()> 
     }
     crate::storage::save(&state)
 }
-pub fn links(state: &State, chat: &str) -> String {
+pub fn links(previews: &[Preview], chat: &str) -> String {
     let mut html = String::new();
-    for preview in state
-        .previews
-        .iter()
-        .filter(|p| p.chat == chat && p.status != "stopped")
-    {
+    for preview in previews.iter().filter(|p| p.chat == chat && p.status != "stopped") {
         let link = preview
             .url
             .as_ref()
