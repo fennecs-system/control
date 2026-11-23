@@ -267,7 +267,7 @@ pub fn compact(state: &State) -> io::Result<()> {
 
 fn interrupt_active(state: &mut State) -> bool {
     let mut changed = false;
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
         if run.status.occupies_slot() {
             changed = true;
             run.status = RunStatus::Interrupted;

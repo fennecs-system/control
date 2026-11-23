@@ -82,8 +82,8 @@ pub(super) fn call(state: &mut State, run_id: &str, name: &str, args: &Value) ->
     let index = state
         .runtime
         .runs
-        .iter()
-        .position(|run| run.id == run_id && run.status == RunStatus::Running)
+        .position(run_id)
+        .filter(|&index| state.runtime.runs[index].status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     let run = &state.runtime.runs[index];
     identity::authorize(&run.actor, run.action)?;
@@ -125,7 +125,7 @@ pub(super) fn call(state: &mut State, run_id: &str, name: &str, args: &Value) ->
         // Retried arming is idempotent; disabling never restores its budget.
         let already = existing.is_some_and(|i| {
             state.collective.room_watches[i].wake.as_ref().is_some_and(|wake| {
-                wake.origin == run.id
+                run.id() == wake.origin
                     && run.attempts.last().and_then(|attempt| attempt.workspace_id.as_deref()) == Some(&wake.generation)
             })
         });
@@ -319,7 +319,7 @@ pub(crate) fn start_at_edge(state: &mut State, chat: &str) -> Result<(), &'stati
     // A late link is a new callback source for the current agent too. Keep the
     // admission mailbox and durable session origin consistent, without
     // replacing its provider session or its already delivered receipts.
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
         if run.chat_id.as_deref() == Some(chat)
             && run.status == RunStatus::Running
             && let Some(mailbox) = run.attempts.last_mut().and_then(|a| a.turn_mailbox.as_mut())

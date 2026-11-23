@@ -156,7 +156,7 @@ pub(crate) fn settle(
             state
                 .agent_messages
                 .iter()
-                .any(|sent| sent.run == run.id && sent.services.is_empty())
+                .any(|sent| run.id() == sent.run && sent.services.is_empty())
         })
         .filter_map(|(index, run)| {
             let chat = run.chat_id.as_deref()?;
@@ -164,7 +164,7 @@ pub(crate) fn settle(
             let cursor = session
                 .messages
                 .iter()
-                .position(|message| message.run_id.as_deref() == Some(run.id.as_str()))?
+                .position(|message| message.run_id.as_deref() == Some(run.id().as_str()))?
                 as u64
                 + 1;
             crate::application::messages::delivered(&state.runtime.runs, &state.chats, chat, cursor).then_some(index)
@@ -238,7 +238,12 @@ pub(crate) fn deliver(state: &mut State, now_ms: u64) -> usize {
             )
         };
         let mut follow_up = crate::chat::FollowUp::from(state, latest);
-        for run in state.runtime.runs.iter().filter(|run| carried.contains(&run.id)) {
+        for run in state
+            .runtime
+            .runs
+            .iter()
+            .filter(|run| carried.iter().any(|sent| run.id() == sent))
+        {
             follow_up.grant(run.resource_grants.iter().cloned());
         }
         let Ok(run) = follow_up.enqueue(
@@ -250,7 +255,7 @@ pub(crate) fn deliver(state: &mut State, now_ms: u64) -> usize {
         ) else {
             continue;
         };
-        let id = run.id.clone();
+        let id = run.id().to_string();
         let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
         session.messages.push(crate::chat::Message {
             speaker: Default::default(),

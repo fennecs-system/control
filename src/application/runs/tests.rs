@@ -15,7 +15,7 @@ fn request(objective: &str) -> Submission {
 fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
     for model in [None, Some("captured-model".to_owned())] {
         let mut origin = request("original").into_run(
-            "origin".into(),
+            "origin",
             4,
             crate::providers::Target {
                 backend: crate::backend::Backend::Claude,
@@ -49,7 +49,7 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
         }))
         .unwrap();
         origin.resource_grants = vec![stale];
-        let run = request("continue").into_continuation(&origin, "chat", "next".into(), 9, vec![current.clone()]);
+        let run = request("continue").into_continuation(&origin, "chat", "next", 9, vec![current.clone()]);
         assert_eq!(run.target.model, model);
         assert_eq!(run.target.backend, origin.target.backend);
         assert_eq!(*run.context, *origin.context);
@@ -73,8 +73,8 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
 
 #[test]
 fn continuations_establish_lineage_when_the_origin_has_no_persona() {
-    let origin = request("original").into_run("origin".into(), 1, Default::default());
-    let run = request("continue").into_continuation(&origin, "chat", "next".into(), 2, Vec::new());
+    let origin = request("original").into_run("origin", 1, Default::default());
+    let run = request("continue").into_continuation(&origin, "chat", "next", 2, Vec::new());
     let persona = run.persona.clone().unwrap();
     assert_eq!(persona.root, "origin");
     assert_eq!(persona.depth, 0);
@@ -183,4 +183,41 @@ fn run_status_predicates_keep_their_sets() {
         set(RunStatus::is_unstopped),
         ["queued", "running", "waiting", "completed", "continued"]
     );
+}
+
+#[test]
+fn the_run_ledger_finds_runs_by_id_through_every_reshaping_edit() {
+    let run = |id: &str| request(id).into_run(id, 1, Default::default());
+    let mut runs: Runs = ["a", "b", "c"].into_iter().map(run).collect();
+    let found = |runs: &Runs, id: &str| runs.get(id).map(|run| run.objective.to_string());
+    assert_eq!(runs.position("b"), Some(1));
+    assert_eq!(found(&runs, "c").as_deref(), Some("c"));
+    // Rolling back a failed save truncates; the dropped ids are gone and the
+    // kept ones still resolve, including ids pushed again afterwards.
+    runs.push(run("d"));
+    runs.truncate(2);
+    assert_eq!((runs.get("c").is_none(), runs.get("d").is_none()), (true, true));
+    assert_eq!(runs.position("b"), Some(1));
+    runs.push(run("d"));
+    assert_eq!(runs.position("d"), Some(2));
+    assert_eq!(runs.pop().map(|run| run.id().to_string()).as_deref(), Some("d"));
+    assert!(runs.get("d").is_none());
+    // A duplicate id resolves to its first run, as the linear search did.
+    let mut twin = run("a");
+    *twin.objective = "second a".into();
+    runs.push(twin);
+    assert_eq!(runs.position("a"), Some(0));
+    runs.get_mut("a").unwrap().status = RunStatus::Completed;
+    assert_eq!(runs[0].status, RunStatus::Completed);
+    // Saved as the plain array it was; loading rebuilds the index.
+    let saved = serde_json::to_string(&runs).unwrap();
+    let plain: Vec<Record> = runs.iter().map(|run| (**run).clone()).collect();
+    assert_eq!(saved, serde_json::to_string(&plain).unwrap());
+    let loaded: Runs = serde_json::from_str(&saved).unwrap();
+    assert_eq!(
+        ["a", "b"].map(|id| loaded.position(id)),
+        [Some(0), Some(1)],
+        "index rebuilt on load"
+    );
+    assert_eq!(loaded.len(), 3);
 }

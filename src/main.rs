@@ -674,14 +674,17 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         let mut policy = control_http::Policy::Page;
         let (status, mime, body, extra) = if method == "POST" {
             let f = fields(&String::from_utf8_lossy(&data[header_end..header_end + length]));
-            let cancellation = (path == "/cancel-run")
-                .then(|| runtime::RunStatusCheckpoint::capture(&state.runtime, |run| Some(&run.id) == f.get("id")));
+            let cancellation = (path == "/cancel-run").then(|| {
+                runtime::RunStatusCheckpoint::capture(&state.runtime, |run| {
+                    f.get("id").is_some_and(|id| run.id() == id)
+                })
+            });
             let cancel_chat = if path == "/cancel-run" {
                 state
                     .runtime
                     .runs
                     .iter()
-                    .find(|run| Some(&run.id) == f.get("id"))
+                    .find(|run| f.get("id").is_some_and(|id| run.id() == id))
                     .and_then(|run| run.chat_id.as_ref())
                     .and_then(|id| state.chats.iter().position(|chat| &chat.id == id))
                     .map(|index| (index, state.chats[index].revision))

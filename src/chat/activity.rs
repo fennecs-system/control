@@ -65,9 +65,9 @@ pub(super) fn agent_activity<'a>(state: &'a State, id: &str) -> Vec<AgentActivit
                             .filter(|event| event.kind == "message")
                             .take(1)
                             .cloned()
-                            .chain(crate::services::command_activity(state, &run.id).rev().take(1))
+                            .chain(crate::services::command_activity(state, run.id()).rev().take(1))
                             .map(move |mut activity| {
-                                activity.id = format!("{}-{}", run.id, activity.id);
+                                activity.id = format!("{}-{}", run.id(), activity.id);
                                 AgentActivity { chat: child, activity }
                             }),
                     );

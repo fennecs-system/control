@@ -298,12 +298,12 @@ fn browser_fixture(long_messages_only: bool) {
     let (ports, _, port_chat) = crate::ports::tests::pending_fixture();
     initial.services.extend(ports.services);
     initial.ports.extend(ports.ports);
-    initial.runtime.runs.extend(ports.runtime.runs);
+    initial.runtime.runs.extend(ports.runtime.runs.into_vec());
     initial.chats.extend(ports.chats);
     // Retained asynchronous service output uses a different path from
     // provider Activity events. Exercise both through the real WASM poller.
     let mut service = serde_json::to_value(&initial.services[0]).unwrap();
-    service["executions"] = json!([{"id":"browser-command","digest":"fixture","run":initial.runtime.runs[0].id,"attempt":"fixture","command":"printf service-output","display_command":"printf service-output","timeout_seconds":120,"status":"running","output":"Service streaming alpha","truncated":false,"exit_code":null,"diagnostic":""}]);
+    service["executions"] = json!([{"id":"browser-command","digest":"fixture","run":initial.runtime.runs[0].id(),"attempt":"fixture","command":"printf service-output","display_command":"printf service-output","timeout_seconds":120,"status":"running","output":"Service streaming alpha","truncated":false,"exit_code":null,"diagnostic":""}]);
     initial.services[0] = serde_json::from_value(service).unwrap();
     // In-memory mutations have no storage checkpoint. Publish the same hint
     // when the fixture's write guard drops; HTTP reads use the inner mutex.
@@ -420,7 +420,7 @@ fn browser_fixture(long_messages_only: bool) {
                         Ok(())
                     }
                 });
-                for run in &mut state.runtime.runs {
+                for run in state.runtime.runs.iter_mut() {
                     if run.chat_id.as_deref() == Some(id) && run.status == RunStatus::Queued {
                         run.status = RunStatus::Completed;
                         *run.result=format!("{}\n\n{}",run.objective.replace("Prompt","Response"),"A retained paragraph exercises a longer conversation, including **formatted text**, `code`, and evidence without navigating the composer.\n\n".repeat(32));

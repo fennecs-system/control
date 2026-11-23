@@ -87,7 +87,7 @@ fn bot_wake_turns_do_not_supersede_approvals() {
     let (mut state, chat) = approved();
     state.runtime.runs[0].status = RunStatus::Completed;
     let mut wake = state.runtime.runs[0].clone();
-    wake.id = "bot-wake".into();
+    wake = wake.with_id("bot-wake");
     wake.kind = crate::runtime::RunKind::BotWake;
     state.runtime.runs.push(wake);
     let count = state.runtime.runs.len();
@@ -117,7 +117,7 @@ fn newer_human_instruction_suppresses_delayed_approval_wake() {
 fn request_from_answered_design_continuation_wakes_the_original_conversation() {
     let (mut state, chat) = approved();
     let mut continuation = state.runtime.runs[0].clone();
-    continuation.id = "after-design".into();
+    continuation = continuation.with_id("after-design");
     continuation.status = RunStatus::Completed;
     continuation.kind = RunKind::DesignAnswer;
     continuation.persona = Some(crate::delegation::lineage(&state.runtime.runs[0]));
@@ -135,9 +135,9 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
             answer: "Relay".into(),
             asked_at: None,
         },
-        continuation: Some(continuation.id.clone()),
+        continuation: Some(continuation.id().to_string()),
     });
-    state.ports[0].origin_run = continuation.id.clone();
+    state.ports[0].origin_run = continuation.id().to_string();
     state.runtime.runs.push(continuation);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
@@ -157,7 +157,7 @@ fn requests_from_a_resumed_turn_wake_the_conversation_again() {
     });
     let mut second = state.ports[0].clone();
     second.id = "port-second".to_owned().try_into().unwrap();
-    second.origin_run = state.runtime.runs[resumed].id.clone();
+    second.origin_run = state.runtime.runs[resumed].id().to_string();
     second.origin_attempt = "attempt-b".into();
     second.decision = Some(Receipt::pending(true));
     state.ports.push(second);
@@ -178,9 +178,9 @@ fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
     let (mut state, lead) = approved();
     state.runtime.runs[0].status = RunStatus::Completed;
     state.ports[0].decision = None;
-    let root = state.runtime.runs[0].id.clone();
+    let root = state.runtime.runs[0].id().to_string();
     let mut later = state.runtime.runs[0].clone();
-    later.id = "later".into();
+    later = later.with_id("later");
     later.kind = crate::runtime::RunKind::AgentCompletion;
     state.runtime.runs.push(later);
     let mut parent = "later".to_owned();
@@ -189,7 +189,7 @@ fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
         let child = crate::chat::create(&mut state);
         state.chats.iter_mut().find(|s| s.id == child).unwrap().parent_chat = Some(chat.clone());
         let mut run = state.runtime.runs[0].clone();
-        run.id = id.into();
+        run = run.with_id(id);
         run.kind = crate::runtime::RunKind::Spawned;
         run.chat_id = Some(child.clone());
         run.persona = Some(crate::delegation::Persona {
@@ -231,7 +231,7 @@ fn waiting_chat_does_not_starve_an_independent_ready_callback() {
     let (mut other, chat) = approved();
     other.runtime.runs[0].status = RunStatus::Completed;
     state.chats.extend(other.chats);
-    state.runtime.runs.extend(other.runtime.runs);
+    state.runtime.runs.extend(other.runtime.runs.into_vec());
     state.ports.extend(other.ports);
     state.services.extend(other.services);
     advance(&mut state, |_| Ok(())).unwrap();

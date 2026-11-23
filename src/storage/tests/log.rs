@@ -432,7 +432,11 @@ fn cached_runs_are_reencoded_after_any_mutable_access() {
         },
         &|s| *s.runtime.runs[1].result = "spilled text".into(),
         &|s| drop(crate::history::archive_run(&mut s.runtime.runs[1]).unwrap()),
-        &|s| s.runtime.runs.retain(|run| run.status != RunStatus::Completed),
+        &|s| {
+            s.runtime
+                .runs
+                .rebuild(|runs| runs.retain(|run| run.status != RunStatus::Completed))
+        },
     ];
     for change in changes {
         change(&mut state);
@@ -506,8 +510,8 @@ fn archived_runs_leave_the_state_and_are_found_by_id_after_restart() {
     let before = runs_json(&state);
     let restored = scratch.restart();
     assert_eq!(runs_json(&restored), before, "every run, in creation order");
-    let id = &state.runtime.runs[10].id;
-    assert!(restored.runtime.runs.iter().any(|run| &run.id == id && run.archived()));
+    let id = &state.runtime.runs[10].id();
+    assert!(restored.runtime.runs.get(id).is_some_and(|run| run.archived()));
     assert!(same(&restored, &state));
 }
 
@@ -589,7 +593,7 @@ fn referenced_blocks(scratch: &Scratch) -> Vec<String> {
     names
 }
 fn ids(state: &State) -> Vec<String> {
-    state.runtime.runs.iter().map(|run| run.id.clone()).collect()
+    state.runtime.runs.iter().map(|run| run.id().to_string()).collect()
 }
 
 /// A clean stop compacts and a restart loads (hydrating journal text); neither
@@ -643,7 +647,7 @@ fn archived_runs_stay_out_of_the_snapshot_across_shutdowns_and_restarts() {
         assert_eq!(referenced_blocks(&scratch), blocks(&scratch));
         last = restored;
     }
-    let found = last.runtime.runs.iter().find(|run| run.id == all[10]).unwrap();
+    let found = last.runtime.runs.iter().find(|run| run.id() == all[10]).unwrap();
     assert!(found.archived() && *found.result == "result 10");
 }
 
@@ -660,7 +664,7 @@ fn a_snapshot_holding_archived_runs_recovers_without_losing_or_duplicating_runs(
     let old_blocks = blocks(&scratch);
     let every = runs_json(&state);
     let all = ids(&state);
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
         let _ = &mut **run; // what the old load did to every run
     }
     scratch.compact(&state);

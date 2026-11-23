@@ -317,9 +317,8 @@ pub fn definition() -> Value {
 pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
     bridge.is_some_and(|(state, id)| {
         state.lock().is_ok_and(|s| {
-            s.runtime.runs.iter().any(|r| {
-                r.id == id
-                    && r.status == RunStatus::Running
+            s.runtime.runs.get(id).is_some_and(|r| {
+                r.status == RunStatus::Running
                     && (crate::delegation::pausing(r)
                         || r.question.as_ref().is_some_and(|q| {
                             q.pending()
@@ -348,8 +347,8 @@ fn ask_with_save(
     let index = state
         .runtime
         .runs
-        .iter()
-        .position(|r| r.id == id && r.status == RunStatus::Running)
+        .position(id)
+        .filter(|&index| state.runtime.runs[index].status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     let run = &state.runtime.runs[index];
     identity::authorize(&run.actor, run.action)?;
@@ -577,7 +576,7 @@ pub fn withdraw(
     let held = run.question.clone().ok_or(Refusal::NotPending.message())?;
     let authority = Authority::check(&held, &Asker::of(run), caller, operator).map_err(Refusal::message)?;
     let withdrawn = held.withdraw(authority, reason, at).map_err(Refusal::message)?;
-    let (run_id, chat_id) = (run.id.clone(), run.chat_id.clone());
+    let (run_id, chat_id) = (run.id().to_string(), run.chat_id.clone());
     crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &identity::Actor::LocalOperator)?;
     let note = outcome(&withdrawn).unwrap_or_default();
     let run = &mut state.runtime.runs[index];
@@ -625,7 +624,7 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
         .iter()
         .filter(|run| run.chat_id.as_deref() == Some(chat_id) && run.actor == chat.actor)
     {
-        visible.insert(run.id.as_str());
+        visible.insert(run.id().as_str());
         if let Ok((_, children)) = crate::delegated_results::scope(state, run) {
             visible.extend(children);
         }
@@ -635,7 +634,7 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
         .runs
         .iter()
         .filter(|run| {
-            (visible.contains(run.id.as_str())
+            (visible.contains(run.id().as_str())
                 || run
                     .chat_id
                     .as_deref()
@@ -654,7 +653,7 @@ pub fn pending_json(state: &State, chat_id: &str, now: UnixSeconds) -> Vec<Value
         .into_iter()
         .map(|run| {
             let question = run.question.as_ref().unwrap();
-            json!({"run_id":run.id,"chat_id":run.chat_id,"question":question,"summary":summary(question),
+            json!({"run_id":run.id(),"chat_id":run.chat_id,"question":question,"summary":summary(question),
                 "age":question.asked_at().map(|at| now.0.saturating_sub(at.0))})
         })
         .collect()
@@ -666,7 +665,7 @@ pub fn decision_revision(state: &State) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for run in state.runtime.runs.iter().filter(|run| run.question.is_some()) {
-        (&run.id, &run.status, &run.question.as_ref().unwrap().status).hash(&mut hash);
+        (&run.id(), &run.status, &run.question.as_ref().unwrap().status).hash(&mut hash);
     }
     state.collective.proposals.iter().for_each(|p| p.status.hash(&mut hash));
     hash.finish()
@@ -760,7 +759,7 @@ pub fn answer(
     let answered = question.clone().answered(answer.clone()).map_err(Refusal::message)?;
     if asked(run) {
         // Nothing resumes from an operator-side question; the answer stays in the DM.
-        let index = state.runtime.runs.iter().position(|r| r.id == run.id).unwrap();
+        let index = state.runtime.runs.position(run.id()).unwrap();
         let run = &mut state.runtime.runs[index];
         run.question = Some(answered);
         run.status = RunStatus::Completed;
@@ -810,7 +809,7 @@ pub fn answer(
     if current != baseline {
         return Err("The conversation workspace changed; cancel this question before continuing.");
     }
-    let index = state.runtime.runs.iter().position(|r| r.id == run.id).unwrap();
+    let index = state.runtime.runs.position(run.id()).unwrap();
     // Capture continuation inputs, not diagnostic histories or previous attempts.
     let actor = run.actor.clone();
     let action = run.action;
@@ -852,7 +851,7 @@ pub fn answer(
     next.chat_id = Some(chat_id.into());
     next.queue_order = queue_order;
     *next.continuation = Some(continuation);
-    let next_id = next.id.clone();
+    let next_id = next.id().to_string();
     state.runtime.runs[index].question = Some(Question {
         continuation: Some(next_id.clone()),
         ..answered

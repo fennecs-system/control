@@ -838,10 +838,10 @@ pub(crate) fn operator(shared: &Arc<Mutex<State>>, name: &str, args: &Value) -> 
 
 /// Worker discovery covers only the versions the run captured.
 pub struct Tools;
-fn captured(runs: &[crate::runtime::Run], packages: &[Manifest], run: &str) -> io::Result<Vec<Manifest>> {
+fn captured(runs: &crate::runtime::Runs, packages: &[Manifest], run: &str) -> io::Result<Vec<Manifest>> {
     let run = runs
-        .iter()
-        .find(|r| r.id == run && r.status == RunStatus::Running)
+        .get(run)
+        .filter(|r| r.status == RunStatus::Running)
         .ok_or_else(|| io::Error::other("Run is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     Ok(run
@@ -919,9 +919,8 @@ impl AttemptTools for Tools {
 
 /// The run's captured versions that are still admitted. Revoked versions are
 /// skipped, so an attempt that starts after revocation does not receive them.
-pub(crate) fn planned(runs: &[crate::runtime::Run], packages: &[Manifest], run: &str) -> Vec<(String, u64)> {
-    runs.iter()
-        .find(|r| r.id == run)
+pub(crate) fn planned(runs: &crate::runtime::Runs, packages: &[Manifest], run: &str) -> Vec<(String, u64)> {
+    runs.get(run)
         .and_then(|run| run.context.as_ref())
         .map(|c| {
             c.packages

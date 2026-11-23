@@ -153,7 +153,7 @@ pub(crate) fn steered(state: &State, chat: &str) -> usize {
         .copied()
         .filter(|member| crate::bots::continuation_enabled(state, member))
         .collect::<HashSet<_>>();
-    for run in &state.runtime.runs {
+    for run in state.runtime.runs.iter() {
         if let Some(member) = run.chat_id.as_deref().filter(|member| members.contains(member))
             && run.status.is_active()
         {
@@ -169,8 +169,8 @@ pub(crate) fn notes(state: &mut State, run_id: &str, tool: &str, now: u64) -> Ve
     let Some(index) = state
         .runtime
         .runs
-        .iter()
-        .position(|run| run.id == run_id && run.status == RunStatus::Running)
+        .position(run_id)
+        .filter(|&index| state.runtime.runs[index].status == RunStatus::Running)
     else {
         return Vec::new();
     };

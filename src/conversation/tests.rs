@@ -33,7 +33,7 @@ fn continuity_profile() {
     use std::{hint::black_box, time::Instant};
     for turns in [15, 150] {
         let (mut state, id) = chat(turns, 900);
-        for run in &mut state.runtime.runs {
+        for run in state.runtime.runs.iter_mut() {
             let mut attempt = crate::usage::Attempt::new();
             attempt.activity = (0..16)
                 .map(|i| crate::usage::Activity {
@@ -46,7 +46,7 @@ fn continuity_profile() {
                 .collect();
             run.attempts.push(attempt);
         }
-        let run = state.runtime.runs.last().unwrap().id.clone();
+        let run = state.runtime.runs.last().unwrap().id().to_string();
         for run in state.runtime.runs.iter_mut().skip(1) {
             run.kind = crate::runtime::RunKind::BotWake;
         }
@@ -119,7 +119,7 @@ fn carry_preserves_omitted_assignment_and_archived_observations_for_both_provide
     ];
     previous.attempts.push(attempt);
     crate::history::archive_run(previous).unwrap();
-    let run = state.runtime.runs[39].id.clone();
+    let run = state.runtime.runs[39].id().to_string();
     state.runtime.runs[39].kind = crate::runtime::RunKind::BotWake;
     for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         state.runtime.runs[39].target.backend = backend;
@@ -186,7 +186,7 @@ fn large_observation_profile() {
         .collect();
     run.attempts.push(attempt);
     crate::history::archive_run(run).unwrap();
-    let id = state.runtime.runs[14].id.clone();
+    let id = state.runtime.runs[14].id().to_string();
     let mut samples = Vec::new();
     for _ in 0..9 {
         let start = Instant::now();

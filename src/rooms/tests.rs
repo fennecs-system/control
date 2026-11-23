@@ -7,10 +7,10 @@ fn active(state: &mut State, parent: Option<&str>) -> (String, String) {
     let run = &mut **state.runtime.runs.last_mut().unwrap();
     run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
-        workspace_id: Some(format!("attempt-{}", run.id)),
+        workspace_id: Some(format!("attempt-{}", run.id())),
         ..Default::default()
     });
-    (chat, run.id.clone())
+    (chat, run.id().to_string())
 }
 fn room_call(state: &mut State, run: &str, tool: &str, args: Value, nonce: &str) -> Value {
     let response = checkpoint(
@@ -101,7 +101,7 @@ fn task_threads_isolate_history_participants_and_inboxes_without_timers() {
     assert!(page.contains("name='lens' value='none'"), "thread IDs are not lens IDs");
     // Isolate room-triggered wakes from the separate enable-bot bootstrap
     // for an attempt with an unpublished handoff.
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
         run.status = RunStatus::Completed;
         run.attempts.clear();
     }
@@ -169,7 +169,7 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
         room: "research".into(),
         text: "An update <script>".into(),
         chat: Some(active.clone()),
-        run: Some(state.runtime.runs[0].id.clone()),
+        run: Some(state.runtime.runs[0].id().to_string()),
         key: String::new(),
         delivery: Default::default(),
     });
@@ -198,7 +198,7 @@ fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
     state.chats[0].room = Some("research".into());
     crate::chat::send(&mut state, &id, "Investigate a source", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let req = json!({"nonce":"123-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"engineering","actor":"architect","message":"<shared>"}}}});
     assert_eq!(worker_rpc(&mut state, &run, &req)["result"]["isError"], false);
     worker_rpc(&mut state, &run, &req);
@@ -294,7 +294,7 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Coordinate", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let call = |name: &str, args: Value, nonce: &str| json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
     let text = |response: Value| {
         serde_json::from_str::<Value>(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
@@ -392,7 +392,7 @@ fn a_bot_whose_chat_links_by_posting_hears_that_room() {
     crate::chat::send(&mut state, &id, "Keep watch", "test").unwrap();
     crate::bots::command(&mut state, &id, "on every 10").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let post = json!({"nonce":"2-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"research","message":"here"}}}});
     let failed = checkpoint(&mut state, &run, &post, |_| Err(std::io::Error::other("disk")));
     assert!(crate::toolbox::failure_text(&failed).is_some(), "{failed}");
@@ -610,7 +610,7 @@ fn an_advisor_does_not_post_through_its_inherited_team_room() {
     crate::chat::send(&mut state, &lead, "Lead the team", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Completed;
     let (advisor, run) = active(&mut state, Some(&lead));
-    let session = state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap();
+    let session = state.runtime.runs.get_mut(&run).unwrap();
     session.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
         root: "root".into(),

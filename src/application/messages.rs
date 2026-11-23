@@ -84,14 +84,14 @@ impl From<&Sent> for MessageResult {
 }
 
 pub(crate) struct View<'a> {
-    pub runs: &'a [Run],
+    pub runs: &'a crate::runtime::Runs,
     pub chats: &'a [Session],
     pub services: &'a [Service],
     pub sent: &'a [Sent],
     pub bots: &'a Bots,
 }
 pub(crate) struct Edit<'a> {
-    pub runs: &'a mut Vec<Run>,
+    pub runs: &'a mut crate::application::runs::Runs,
     pub notice: &'a mut String,
     pub chats: &'a mut [Session],
     pub sent: &'a mut Vec<Sent>,
@@ -197,11 +197,11 @@ pub(crate) fn record(run: &Run) -> bool {
 }
 /// A digest receipt its recipient has not taken yet: no later turn of that
 /// chat exists and no published handoff processed it.
-pub(crate) fn awaiting(runs: &[Run], chats: &[Session], sent: &Sent) -> bool {
+pub(crate) fn awaiting(runs: &crate::runtime::Runs, chats: &[Session], sent: &Sent) -> bool {
     let (Some(cursor), true) = (sent.peer_cursor, sent.digest) else {
         return false;
     };
-    let Some(index) = runs.iter().position(|run| run.id == sent.run) else {
+    let Some(index) = runs.position(&sent.run) else {
         return false;
     };
     !delivered(runs, chats, &sent.chat, cursor)
@@ -213,7 +213,7 @@ pub(crate) fn awaiting(runs: &[Run], chats: &[Session], sent: &Sent) -> bool {
 /// a published handoff processed it, or an attempt was delivered it (its
 /// inbox or a `control_turn_context` read). Saved state only, so a restart
 /// decides the same way.
-pub(crate) fn delivered(runs: &[Run], chats: &[Session], chat: &str, cursor: u64) -> bool {
+pub(crate) fn delivered(runs: &crate::runtime::Runs, chats: &[Session], chat: &str, cursor: u64) -> bool {
     use control_context::turn_mailbox::Range;
     let covers = |range: &Range, through_only: bool| match range {
         Range::Conversation {
@@ -251,16 +251,15 @@ fn ancestry<'a>(chats: &'a [Session], mut session: &'a Session, ancestor: &str) 
     }
     None
 }
-pub(crate) fn active<'a>(runs: &'a [Run], attempt: &AttemptRef<'_>) -> Result<&'a Run, &'static str> {
-    runs.iter()
-        .find(|run| {
-            run.id == attempt.run
-                && run.status == RunStatus::Running
+pub(crate) fn active<'a>(runs: &'a crate::runtime::Runs, attempt: &AttemptRef<'_>) -> Result<&'a Run, &'static str> {
+    runs.get(attempt.run)
+        .filter(|run| {
+            run.status == RunStatus::Running
                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or("Attempt is not active")
 }
-fn latest<'a>(runs: &'a [Run], chat: &str, actor: &Actor) -> Option<&'a Run> {
+fn latest<'a>(runs: &'a crate::runtime::Runs, chat: &str, actor: &Actor) -> Option<&'a Run> {
     runs.iter()
         .enumerate()
         .filter(|(_, run)| run.chat_id.as_deref() == Some(chat) && &run.actor == actor)
@@ -456,9 +455,8 @@ pub(crate) fn plan(
             .any(|sent| {
                 state
                     .runs
-                    .iter()
-                    .rev()
-                    .any(|run| run.id == sent.run && run.objective.as_str() == objective)
+                    .get(&sent.run)
+                    .is_some_and(|run| run.objective.as_str() == objective)
             })
     {
         return Err("This note was already delivered; send only changed evidence");
@@ -481,8 +479,8 @@ pub(crate) fn plan(
             .filter(|sent| {
                 state
                     .runs
-                    .iter()
-                    .any(|run| run.id == sent.origin && run.status == RunStatus::Running)
+                    .get(&sent.origin)
+                    .is_some_and(|run| run.status == RunStatus::Running)
                     || heads.get(sent.chat.as_str()) == Some(&sent.key.as_str())
                     || awaiting(state.runs, state.chats, sent)
             })

@@ -199,10 +199,9 @@ impl AttemptTools for Tools {
             let run = state
                 .runtime
                 .runs
-                .iter()
-                .find(|run| {
-                    run.id == cx.attempt.run
-                        && run.status == RunStatus::Running
+                .get(cx.attempt.run)
+                .filter(|run| {
+                    run.status == RunStatus::Running
                         && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(cx.attempt.generation)
                 })
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;

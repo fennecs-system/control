@@ -824,12 +824,7 @@ impl Host for Live<'_> {
     }
     fn continues(&mut self) -> bool {
         let Ok(state) = self.shared.lock() else { return true };
-        let chat = state
-            .runtime
-            .runs
-            .iter()
-            .find(|run| run.id == self.run)
-            .and_then(|run| run.chat_id.as_deref());
+        let chat = state.runtime.runs.get(self.run).and_then(|run| run.chat_id.as_deref());
         chat.is_some_and(|chat| crate::bots::continuation_enabled(&state, chat))
     }
     fn inbox(&mut self) -> Option<String> {
@@ -911,7 +906,7 @@ pub(crate) fn execute(
                 control_agent::Status::Blocked,
                 "The selected local endpoint is no longer configured; no fallback was used.".to_owned(),
             ))?;
-        let current = state.runtime.runs.iter().find(|r| r.id == run);
+        let current = state.runtime.runs.get(run);
         let session = current
             .and_then(|r| r.chat_id.as_ref())
             .and_then(|chat| state.chats.iter().find(|c| &c.id == chat));

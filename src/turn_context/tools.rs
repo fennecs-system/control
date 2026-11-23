@@ -359,8 +359,8 @@ pub(crate) fn inbox(state: &mut State, id: &str, save: impl FnOnce(&State) -> io
     let index = state
         .runtime
         .runs
-        .iter()
-        .position(|r| r.id == id && r.status == RunStatus::Running)?;
+        .position(id)
+        .filter(|&index| state.runtime.runs[index].status == RunStatus::Running)?;
     let run = &state.runtime.runs[index];
     let attempt = run.attempts.last()?;
     let generation = attempt.workspace_id.as_deref()?;
@@ -753,10 +753,9 @@ fn reject(state: &mut State, attempt: &AttemptRef<'_>, error: &str) {
     let Some(chat) = state
         .runtime
         .runs
-        .iter()
-        .find(|r| {
-            r.id == attempt.run
-                && r.status == RunStatus::Running
+        .get(attempt.run)
+        .filter(|r| {
+            r.status == RunStatus::Running
                 && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .and_then(|r| r.chat_id.clone())
@@ -789,11 +788,14 @@ fn respond(
     let index = state
         .runtime
         .runs
-        .iter()
-        .position(|r| {
-            r.id == attempt.run
-                && r.status == RunStatus::Running
-                && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
+        .position(attempt.run)
+        .filter(|&index| {
+            state.runtime.runs[index].status == RunStatus::Running
+                && state.runtime.runs[index]
+                    .attempts
+                    .last()
+                    .and_then(|a| a.workspace_id.as_deref())
+                    == Some(attempt.generation)
         })
         .ok_or_else(|| err(format!("Attempt is not active: this turn has ended. {OPERATOR_FIX}")))?;
     let run = &state.runtime.runs[index];

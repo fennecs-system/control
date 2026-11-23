@@ -16,7 +16,7 @@ fn fixture(messages: usize, unrelated: usize) -> State {
     let template = state.runtime.runs.pop().unwrap();
     for index in 0..messages + unrelated {
         let mut run = template.clone();
-        run.id = format!("run-{index}");
+        run = run.with_id(format!("run-{index}"));
         run.chat_id = Some(
             if index < messages {
                 "benchmark-chat"
@@ -63,13 +63,13 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             state.chats[0].messages.push(chat::Message {
                 speaker: Default::default(),
                 text: format!("Question {index}: <&> λ"),
-                run_id: Some(run.id.clone()),
+                run_id: Some(run.id().to_string()),
                 reply: String::new(),
             });
         }
         state.runtime.runs.push(run);
     }
-    state.runtime.runs.rotate_right(unrelated);
+    state.runtime.runs.rebuild(|runs| runs.rotate_right(unrelated));
     state
 }
 fn fingerprint(text: &str) -> String {
@@ -172,11 +172,12 @@ fn history_reads() {
 #[ignore = "explicit release-mode identity snapshot timing; no credentials or container calls"]
 fn ownership_snapshots() {
     let mut state = fixture(500, 0);
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
+        let id = run.id().to_string();
         let run = &mut **run;
         run.attempts[0].command_jobs.push(crate::command_jobs::Job {
-            id: run.id.clone(),
-            generation: format!("{}-attempt-1", run.id),
+            generation: format!("{id}-attempt-1"),
+            id,
             image: format!("sha256:{}", "a".repeat(64)),
             node: "synthetic-node".into(),
             command: "command ".repeat(500),
@@ -369,7 +370,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
         chat.activity_order = index as u64 + 2;
         state.chats.push(chat);
         let mut turn = run.clone();
-        turn.id = format!("run-{index}");
+        turn = turn.with_id(format!("run-{index}"));
         turn.chat_id = Some(id(index));
         turn.status = [
             RunStatus::Completed,
@@ -398,7 +399,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
         chat.parent_chat = Some(root.clone());
         state.chats.push(chat);
         let mut turn = run.clone();
-        turn.id = format!("run-live-bot-{index}");
+        turn = turn.with_id(format!("run-live-bot-{index}"));
         turn.chat_id = Some(format!("c-live-bot-{index}"));
         turn.status = RunStatus::Completed;
         state.runtime.runs.push(turn);
@@ -409,7 +410,7 @@ pub(crate) fn dead_bots(live: usize, dead: usize) -> State {
     agent.parent_chat = Some(root);
     state.chats.push(agent);
     let mut live = run.clone();
-    live.id = "run-live".into();
+    live = live.with_id("run-live");
     live.chat_id = Some("c-live-agent".into());
     live.status = RunStatus::Running;
     state.runtime.runs.push(live);
@@ -484,7 +485,10 @@ pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
     }
     for index in 0..turns {
         let mut turn = run.clone();
-        turn.id = format!("{:x}-{index}", 0x1790_0000_0000_0000_u64 + index as u64 * 1_000_000_000);
+        turn = turn.with_id(format!(
+            "{:x}-{index}",
+            0x1790_0000_0000_0000_u64 + index as u64 * 1_000_000_000
+        ));
         turn.chat_id = Some(id(index % dms));
         turn.kind = [RunKind::Chat, RunKind::BotWake, RunKind::PortDecision][index % 3];
         turn.status = if index % 20 == 0 {

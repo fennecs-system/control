@@ -164,7 +164,9 @@ pub struct Record {
     pub actor: Actor,
     #[serde(default)]
     pub action: Action,
-    pub id: String,
+    // Private: the run ledger (`Runs`) indexes runs by id, so no `&mut Run`
+    // may change it. Read it with `id()`.
+    id: RunId,
     pub objective: crate::history::Spilled<String>,
     pub kind: RunKind,
     pub status: RunStatus,
@@ -188,7 +190,7 @@ impl Submission {
         self,
         origin: &Run,
         chat: &str,
-        id: String,
+        id: impl Into<RunId>,
         queue_order: u64,
         grants: Vec<crate::services::Grant>,
     ) -> Run {
@@ -201,7 +203,7 @@ impl Submission {
         run
     }
 
-    pub(crate) fn into_run(self, id: String, queue_order: u64, target: crate::providers::Target) -> Run {
+    pub(crate) fn into_run(self, id: impl Into<RunId>, queue_order: u64, target: crate::providers::Target) -> Run {
         Record {
             bot_turn: None,
             resource_grants: Vec::new(),
@@ -220,7 +222,7 @@ impl Submission {
             attempts: Vec::new(),
             actor: self.actor,
             action: self.action,
-            id,
+            id: id.into(),
             objective: self.objective.into(),
             kind: self.kind,
             source: self.source,
@@ -259,3 +261,86 @@ impl Record {
 }
 /// The result prefix of a queued turn that an active run processed instead.
 const ABSORBED: &str = "Processed in active run ";
+mod ledger;
+pub(crate) use ledger::Runs;
+
+/// A run's identifier: `<creation stamp in hex>-<sequence>`, saved as a string.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct RunId(String);
+impl RunId {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl std::ops::Deref for RunId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+impl std::borrow::Borrow<str> for RunId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+impl AsRef<str> for RunId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+impl std::fmt::Display for RunId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl From<String> for RunId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+impl From<&str> for RunId {
+    fn from(id: &str) -> Self {
+        Self(id.to_owned())
+    }
+}
+impl From<RunId> for String {
+    fn from(id: RunId) -> Self {
+        id.0
+    }
+}
+impl PartialEq<str> for RunId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+impl PartialEq<&str> for RunId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+impl PartialEq<String> for RunId {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}
+impl Record {
+    pub(crate) fn id(&self) -> &RunId {
+        &self.id
+    }
+}
+#[cfg(test)]
+impl Run {
+    /// The same run under another id, for fixtures, before it joins a ledger;
+    /// a run inside `Runs` cannot be renamed.
+    pub(crate) fn with_id(mut self, id: impl Into<RunId>) -> Self {
+        self.id = id.into();
+        self
+    }
+}
+// Comparisons as they read at call sites: `run.id() == chat.run_id` and the like.
+impl PartialEq<String> for &RunId {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}

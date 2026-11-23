@@ -288,7 +288,7 @@ fn an_active_lead_gets_one_callback_hint_per_note() {
         turn_mailbox: Some(Box::new(mailbox)).into(),
         ..Default::default()
     });
-    let target = target.id.clone();
+    let target = target.id().to_string();
     assert!(!crate::turn_context::callback_notice(&mut state, &target, true));
     note(
         &mut state,
@@ -351,7 +351,7 @@ fn a_member_asks_its_teams_advisor_and_the_question_wakes_it() {
     );
     // Once its current turn settles, the question wakes the advisor at once,
     // though it was not sent urgent: a question is the advisor's only wake.
-    state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap().status = RunStatus::Completed;
+    state.runtime.runs.get_mut(&run).unwrap().status = RunStatus::Completed;
     crate::bots::reconcile_after_cooldown(&mut state).unwrap();
     let woken = state
         .runtime
@@ -401,7 +401,7 @@ fn a_spawn_rate_refusal_sends_members_to_their_approved_advisor() {
 fn an_acceptance_check_notes_a_member_of_its_team_and_takes_no_questions() {
     let (mut state, lead, builder, check, run) = team();
     state.chats[0].lenses = Some(vec!["acceptance".into()]);
-    let index = state.runtime.runs.iter().position(|r| r.id == run).unwrap();
+    let index = state.runtime.runs.position(&run).unwrap();
     let captured =
         control_context::persona::Captured::of(&control_context::persona::builtin("acceptance").unwrap(), &[]).unwrap();
     state.runtime.runs[index].persona.as_mut().unwrap().bundle = Some(Box::new(captured));
@@ -458,7 +458,7 @@ fn an_acceptance_check_notes_a_member_of_its_team_and_takes_no_questions() {
 fn a_monitor_notes_its_team_and_takes_no_questions() {
     let (mut state, _, builder, monitor, run) = team();
     state.chats[0].lenses = Some(vec!["monitor".into()]);
-    let index = state.runtime.runs.iter().position(|r| r.id == run).unwrap();
+    let index = state.runtime.runs.position(&run).unwrap();
     let captured =
         control_context::persona::Captured::of(&control_context::persona::builtin("monitor").unwrap(), &[]).unwrap();
     state.runtime.runs[index].persona.as_mut().unwrap().bundle = Some(Box::new(captured));

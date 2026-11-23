@@ -9,7 +9,7 @@ use std::{
 };
 
 pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<(), &'static str> {
-    let run = runtime.runs.iter_mut().find(|r| r.id == id).ok_or("Run not found.")?;
+    let run = runtime.runs.get_mut(id).ok_or("Run not found.")?;
     if actor != &Actor::LocalOperator && actor != &run.actor {
         return Err("Cannot cancel another actor's run.");
     }
@@ -43,7 +43,7 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
         .runs
         .iter()
         .filter(|r| r.persona.as_ref().is_some_and(|p| p.parent.as_deref() == Some(id)) && r.status.is_active())
-        .map(|r| r.id.clone())
+        .map(|r| r.id().to_string())
         .collect();
     for child in children {
         request_cancel(runtime, &child, actor)?;
@@ -55,10 +55,7 @@ pub fn cancelled(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
     crate::shutdown::requested()
         || bridge.is_some_and(|(state, id)| {
             state.lock().map_or(true, |s| {
-                !s.runtime
-                    .runs
-                    .iter()
-                    .any(|r| r.id == id && r.status == RunStatus::Running)
+                !s.runtime.runs.get(id).is_some_and(|r| r.status == RunStatus::Running)
             })
         })
 }

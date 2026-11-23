@@ -13,7 +13,7 @@ fn run(id: &str, chat: &str, status: &str, kind: RunKind) -> Run {
         actor: Actor::LocalOperator,
         action: Action::Task,
     }
-    .into_run(id.into(), 1, Default::default());
+    .into_run(id, 1, Default::default());
     run.chat_id = Some(chat.into());
     run.status = RunStatus::named(status);
     run
@@ -109,7 +109,7 @@ fn missing_requests_and_unsuccessful_latest_turns_are_not_resumed() {
 
 #[test]
 fn recording_uses_only_supplied_records_and_preserves_unrelated_chats() {
-    let mut runs = vec![run("origin", "chat", "completed", RunKind::Task)];
+    let mut runs: crate::runtime::Runs = vec![run("origin", "chat", "completed", RunKind::Task)].into();
     let mut notice = "unchanged".to_owned();
     let session = |id, revision| {
         serde_json::from_value::<Session>(
@@ -150,7 +150,7 @@ fn recording_uses_only_supplied_records_and_preserves_unrelated_chats() {
         ),
         Outcome::Resumed("resumed".into())
     );
-    assert_eq!(runs.last().unwrap().id, "resumed");
+    assert_eq!(runs.last().unwrap().id(), "resumed");
     assert_eq!(chats[0].messages[1].run_id.as_deref(), Some("resumed"));
     assert_eq!(notice, "Run queued.");
     assert_eq!(serde_json::to_vec(&chats[1]).unwrap(), other);

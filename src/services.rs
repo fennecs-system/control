@@ -157,7 +157,7 @@ impl Grant {
 #[derive(Clone, Copy)]
 pub(crate) struct ServiceAuthority<'a> {
     services: &'a [Service],
-    runs: &'a [crate::runtime::Run],
+    runs: &'a crate::runtime::Runs,
     lineage: Lineage<'a>,
 }
 impl<'a> ServiceAuthority<'a> {
@@ -340,20 +340,15 @@ impl Service {
             map.insert("workspace".into(), json!("/workspace (retained volume)"));
         }
         // The caller's chat's executions, from this turn or earlier ones.
-        let chat = state
-            .runtime
-            .runs
-            .iter()
-            .find(|r| r.id == run)
-            .and_then(|r| r.chat_id.as_deref());
+        let chat = state.runtime.runs.get(run).and_then(|r| r.chat_id.as_deref());
         let mine = |id: &str| {
             id == run
                 || chat.is_some_and(|chat| {
                     state
                         .runtime
                         .runs
-                        .iter()
-                        .any(|r| r.id == id && r.chat_id.as_deref() == Some(chat))
+                        .get(id)
+                        .is_some_and(|r| r.chat_id.as_deref() == Some(chat))
                 })
         };
         let own = self.executions.iter().filter(|e| mine(e.run())).collect::<Vec<_>>();
@@ -387,13 +382,13 @@ fn default_lease() -> i64 {
     -1
 }
 fn caller<'a>(
-    runs: &'a [crate::runtime::Run],
+    runs: &'a crate::runtime::Runs,
     run: &str,
     generation: &str,
 ) -> io::Result<(&'a crate::runtime::Run, &'a str)> {
     let run = runs
-        .iter()
-        .find(|r| r.id == run && r.status == RunStatus::Running)
+        .get(run)
+        .filter(|r| r.status == RunStatus::Running)
         .ok_or_else(|| fail("Run is not active"))?;
     identity::authorize(&run.actor, run.action).map_err(fail)?;
     if crate::delegation::is_judge(run)
@@ -594,7 +589,7 @@ fn admit_profile(
     }
     let digest = ring::digest::digest(
         &ring::digest::SHA256,
-        format!("{}\0{chat}\0{}\0{generation}\0{nonce}", node.as_str(), run.id).as_bytes(),
+        format!("{}\0{chat}\0{}\0{generation}\0{nonce}", node.as_str(), run.id()).as_bytes(),
     );
     let id: ResourceId = format!(
         "svc-{}",
@@ -636,7 +631,7 @@ fn admit_profile(
     compute::admit_within(&s.services, limits, capacity)?;
     let actor = run.actor.clone();
     let origin = Origin {
-        run: run.id.clone().try_into().map_err(fail)?,
+        run: run.id().to_string().try_into().map_err(fail)?,
         attempt: generation.to_owned().try_into().map_err(fail)?,
     };
     let image = run
@@ -687,9 +682,8 @@ fn admit_profile(
                 .iter()
                 .position(|service| {
                     matches!(service.resource.phase, Phase::Stopped(_))
-                        && !s.runtime.runs.iter().any(|run| {
-                            run.id == service.origin.run.as_str()
-                                && run.status == RunStatus::Running
+                        && !s.runtime.runs.get(service.origin.run.as_str()).is_some_and(|run| {
+                            run.status == RunStatus::Running
                                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref())
                                     == Some(service.origin.attempt.as_str())
                         })

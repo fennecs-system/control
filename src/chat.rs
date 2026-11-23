@@ -705,7 +705,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
                 .filter(|run| run.chat_id.as_ref().is_some_and(|chat| chats.contains(chat)))
                 .filter(|run| run.status.is_proceeding())
                 .filter(|run| actor == crate::identity::Actor::LocalOperator || run.actor == actor)
-                .map(|run| run.id.clone())
+                .map(|run| run.id().to_string())
                 .collect::<Vec<_>>();
             for run in &runs {
                 crate::lifecycle::request_cancel(&mut state.runtime, run, &actor)?;
@@ -726,17 +726,17 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             .iter()
             .filter(|run| run.chat_id.as_deref() == Some(id))
             .filter(|run| run.status.is_active())
-            .filter(|run| target.is_empty() || run.id == target)
+            .filter(|run| target.is_empty() || run.id() == target)
             .min_by_key(|run| (run.status == RunStatus::Queued, run.queue_order))
             .ok_or("No matching pending run in this chat.")?;
-        let run_id = run.id.clone();
+        let run_id = run.id().to_string();
         crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &actor)?;
         mark_cancelled(state, &[id.to_owned()]);
         let stopping = state
             .runtime
             .runs
-            .iter()
-            .any(|run| run.id == run_id && run.status == RunStatus::Cancelling);
+            .get(&run_id)
+            .is_some_and(|run| run.status == RunStatus::Cancelling);
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
         session.messages.push(Message {
             speaker: Default::default(),
@@ -886,7 +886,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             state.runtime.runs.pop();
             return Err(error);
         }
-        Some(state.runtime.runs[queued].id.clone())
+        Some(state.runtime.runs[queued].id().to_string())
     } else {
         None
     };
@@ -906,7 +906,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
 }
 
 pub fn prompt(state: &State, run_id: &str) -> Option<String> {
-    let run = state.runtime.runs.iter().find(|r| r.id == run_id)?;
+    let run = state.runtime.runs.get(run_id)?;
     let session = state.chats.iter().find(|s| Some(&s.id) == run.chat_id.as_ref())?;
     let conversation = crate::conversation::Conversation::of(state, session);
     let current = conversation.position(run_id)?;
@@ -920,7 +920,7 @@ pub fn prompt(state: &State, run_id: &str) -> Option<String> {
     // Chat-stable text first (framing, retained instructions, history), then
     // what changes every turn, so consecutive turns share a cacheable prefix.
     let retained = crate::conversation::handoff(&carry.instructions, None, &[]);
-    let mut observed = crate::conversation::handoff(&[], carry.previous.map(|run| run.id.as_str()), events);
+    let mut observed = crate::conversation::handoff(&[], carry.previous.map(|run| run.id().as_str()), events);
     if let Some(Err(error)) = activity {
         observed.push_str(&format!("{error}\n"));
     }
@@ -1123,8 +1123,8 @@ fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
     };
     let mut active: std::collections::HashMap<&str, &RunStatus> = std::collections::HashMap::new();
     let mut by_run = std::collections::HashMap::new();
-    for run in &state.runtime.runs {
-        by_run.insert(run.id.as_str(), &run.status);
+    for run in state.runtime.runs.iter() {
+        by_run.insert(run.id().as_str(), &run.status);
         if let (Some(chat), Some(r)) = (run.chat_id.as_deref(), rank(&run.status)) {
             let current = active.entry(chat).or_insert(&run.status);
             if rank(current) < Some(r) {
@@ -1408,7 +1408,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
         if let Some(child) = run
             .and_then(|r| r.delegation.as_ref())
             .and_then(|d| d.child.as_deref())
-            .and_then(|run_id| state.runtime.runs.iter().find(|r| r.id == run_id))
+            .and_then(|run_id| state.runtime.runs.get(run_id))
             .and_then(|r| r.chat_id.as_deref())
             .filter(|child| valid_id(child))
         {
@@ -1421,7 +1421,7 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
             for (index, attempt) in attempts.iter().enumerate() {
                 // One compact line per attempt; titles carry the full wording.
                 let parts = attempt.status(index);
-                let input=run.filter(|_|attempt.context_trace.is_some()).map(|run|format!("<a target='_top' href='/dm/{}/context?run={}&amp;attempt={}' title='Control input for attempt {}'>input ↗</a>",escape(id),escape(&run.id),index+1,index+1));
+                let input=run.filter(|_|attempt.context_trace.is_some()).map(|run|format!("<a target='_top' href='/dm/{}/context?run={}&amp;attempt={}' title='Control input for attempt {}'>input ↗</a>",escape(id),escape(run.id()),index+1,index+1));
                 if parts.len() > 1 || input.is_some() {
                     let mut line = parts
                         .iter()

@@ -13,7 +13,7 @@ fn missing_activity_is_reported_in_chat_views_and_prompt_without_changing_state(
         ..Default::default()
     });
     crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
-    let next = state.runtime.runs[1].id.clone();
+    let next = state.runtime.runs[1].id().to_string();
     let before = persisting(|| serde_json::to_vec(&state)).unwrap();
     let detail = crate::chat::detail(&state, &chat).unwrap();
     let attempt = &detail["messages"][0]["attempts"][0];
@@ -332,7 +332,7 @@ fn finished_attempts_move_to_journals_and_read_back_unchanged() {
     let entry: serde_json::Value = serde_json::from_str(line.lines().last().unwrap()).unwrap();
     assert_eq!(
         (entry["run"].as_str(), entry["attempt"].as_u64()),
-        (Some(state.runtime.runs[0].id.as_str()), Some(0)),
+        (Some(state.runtime.runs[0].id().as_str()), Some(0)),
         "inspectable JSON lines"
     );
 }

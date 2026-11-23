@@ -31,7 +31,7 @@ fn fail_queued(state: &mut State, chat: &str, rejection: Option<&str>) -> bool {
     }) else {
         return false;
     };
-    let generation = format!("{}-attempt", state.runtime.runs[index].id);
+    let generation = format!("{}-attempt", state.runtime.runs[index].id());
     let run = &mut state.runtime.runs[index];
     run.status = RunStatus::Completed;
     *run.result = "Re-attached, re-checked health and started a new watch".into();
@@ -77,7 +77,7 @@ fn publish(state: &mut State, chat: &str, revision: u64, processed: Vec<Range>) 
         .rposition(|run| run.chat_id.as_deref() == Some(chat))
         .unwrap();
     state.runtime.runs[index].status = RunStatus::Completed;
-    let run = state.runtime.runs[index].id.clone();
+    let run = state.runtime.runs[index].id().to_string();
     state
         .chats
         .iter_mut()
@@ -178,7 +178,7 @@ fn a_turn_without_any_handoff_waits_instead_of_continuing() {
     assert_eq!(turn.reasons, [Reason::Timer]);
     assert_eq!(
         turn.recovery.as_deref(),
-        Some(runs[0].id.as_str()),
+        Some(runs[0].id().as_str()),
         "the report remains recovery evidence"
     );
     assert!(runs[1].objective.contains("ended without calling control_turn_handoff"));
@@ -451,7 +451,7 @@ fn finished_watches_are_collected_once_processed_without_redelivery() {
         "the next publication retires its watermark"
     );
     // Nothing can read it again, so nothing can be redelivered.
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     state.runtime.runs[0].status = RunStatus::Running;
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         workspace_id: Some("later".into()),
@@ -524,8 +524,7 @@ fn unfinished_or_unprocessed_watches_are_kept() {
     state.watches[0].stopped = true;
     reconcile_at(&mut state, 1_000, ok).unwrap();
     publish(&mut state, &chat, 1, vec![processed("w-stopped", 1)]);
-    state.runtime.runs.push(state.runtime.runs[0].clone());
-    state.runtime.runs.last_mut().unwrap().id = "active".into();
+    state.runtime.runs.push(state.runtime.runs[0].clone().with_id("active"));
     state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
     reconcile_at(&mut state, 40_000, ok).unwrap();
     assert_eq!(state.watches.len(), 1, "an active attempt may hold a receipt");

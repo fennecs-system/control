@@ -555,10 +555,9 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|run| {
-                run.id == attempt.run
-                    && run.status == RunStatus::Running
+            .get(attempt.run)
+            .filter(|run| {
+                run.status == RunStatus::Running
                     && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
             })
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;

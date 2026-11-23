@@ -56,7 +56,7 @@ fn worker_cannot_approve_destinations_and_bad_capture_fails_before_docker() {
     crate::chat::send(&mut state, &chat, "Build a page", "test").unwrap();
     let run = &mut state.runtime.runs[0];
     run.status = RunStatus::Running;
-    let id = run.id.clone();
+    let id = run.id().to_string();
     let shared = Arc::new(Mutex::new(state));
     let error = worker(&shared, &id, &json!({"url":"https://example.invalid/"})).unwrap_err();
     assert!(error.to_string().contains("Origin not approved"));

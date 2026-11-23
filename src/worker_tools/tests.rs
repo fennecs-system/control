@@ -22,7 +22,7 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         image: Some(image.clone()),
         ..Default::default()
     });
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let workspace = crate::runtime::workspace("attempt-a").unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.canonicalize().unwrap();
@@ -224,7 +224,7 @@ fn ordinary_agents_receive_the_shared_continuity_mcp_without_bot_authority() {
         state.runtime.runs[0].target.backend = backend;
         crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
         assert!(!crate::bots::defined(&state, &chat));
-        let id = state.runtime.runs[0].id.clone();
+        let id = state.runtime.runs[0].id().to_string();
         let attempt = &state.runtime.runs[0].attempts[0];
         assert!(attempt.turn_mailbox.is_some() && attempt.context_trace.is_some());
         let shared = Arc::new(Mutex::new(state));
@@ -253,7 +253,7 @@ fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuit
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Work", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     let shared = Arc::new(Mutex::new(state));
     let list = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}});
     let legacy = rpc_at(&shared, &id, &list, None);
@@ -337,7 +337,7 @@ fn design_transport_envelope() -> Value {
 #[test]
 fn design_rpc_reports_fields_without_blaming_transport_and_retains_pause_fences() {
     let (mut state, _) = crate::design::tests::fixture();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     let envelope = design_transport_envelope();
     let input = crate::design::parse_input(envelope["request"]["params"]["arguments"].clone()).unwrap();
     let admitted =
@@ -418,7 +418,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
     let chat = crate::chat::create(&mut s);
     crate::chat::send(&mut s, &chat, "Review this", "test").unwrap();
     let run = &mut s.runtime.runs[0];
-    let id = run.id.clone();
+    let id = run.id().to_string();
     run.status = RunStatus::Running;
     run.target.backend = crate::backend::Backend::Claude;
     run.persona = Some(crate::delegation::Persona {
@@ -492,7 +492,7 @@ fn an_approved_advisor_judge_gains_only_evidence_notes() {
     (session.parent_chat, session.room) = (Some(lead.clone()), Some("general".into()));
     crate::chat::send(&mut s, &chat, "Advise the team", "test").unwrap();
     let run = s.runtime.runs.last_mut().unwrap();
-    let id = run.id.clone();
+    let id = run.id().to_string();
     run.status = RunStatus::Running;
     run.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
@@ -567,7 +567,7 @@ fn every_advertised_worker_tool_has_ui_registration() {
             let run = &mut state.runtime.runs[0];
             run.status = RunStatus::Running;
             run.target.backend = backend;
-            let id = run.id.clone();
+            let id = run.id().to_string();
             let shared = Arc::new(Mutex::new(state));
             let response = rpc_at(
                 &shared,
@@ -611,7 +611,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
         child: None,
         continuation: None,
     });
-    let id = run.id.clone();
+    let id = run.id().to_string();
     let shared = Arc::new(Mutex::new(state));
     for (name, args) in [
         ("control_workspace_start", json!({"command":"true"})),
@@ -652,7 +652,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
 fn design_pause_blocks_further_tool_effects_until_user_answers() {
     let (mut state, _) = crate::design::tests::paused();
     state.runtime.runs[0].status = RunStatus::Running;
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     let state = Arc::new(Mutex::new(state));
     assert!(crate::design::requested(Some((&state, &id))));
     let response = rpc(
@@ -701,7 +701,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Tool error shapes", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let shared = Arc::new(Mutex::new(state));
     let call = |id: Value, name: &str, arguments: Value| {
         rpc(
@@ -778,7 +778,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Carry out the assigned work", "test").unwrap();
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let managed = state.runtime.runs[0].id.clone();
+    let managed = state.runtime.runs[0].id().to_string();
     crate::chat::send(&mut state, &chat, "/steer Keep the public API", "test").unwrap();
     let managed_state = Arc::new(Mutex::new(state));
     let failed = rpc(
@@ -817,7 +817,7 @@ fn successful_results_leave_the_boundary_compact_and_identical_in_both_forms() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Compact results", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let shared = Arc::new(Mutex::new(state));
     let call = |nonce: &str, name: &str, arguments: Value| {
         let response = rpc(
@@ -874,7 +874,7 @@ fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
     state.runtime.enqueue("task".into(), RunKind::Task, "test");
     let run = &mut state.runtime.runs[0];
     run.status = RunStatus::Running;
-    let id = run.id.clone();
+    let id = run.id().to_string();
     let mut attempt = crate::usage::Attempt::new();
     attempt.workspace_id = Some("current-attempt".into());
     run.attempts.push(attempt);
@@ -910,7 +910,7 @@ fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
     let mut state = State::default();
     state.runtime.enqueue("Test".into(), RunKind::Task, "test");
     state.runtime.runs[0].status = RunStatus::Running;
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     let state = Arc::new(Mutex::new(state));
     let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_workspace_run","arguments":{"command":"true"}}}});
     assert!(crate::toolbox::failure_text(&rpc(&state, &id, &request)).is_some());
@@ -936,7 +936,7 @@ fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
 fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
     let mut state = State::default();
     state.runtime.enqueue("Test tools".into(), RunKind::Task, "test");
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     state.runtime.runs[0].status = RunStatus::Running;
     let state = Arc::new(Mutex::new(state));
     let callable = callable(&state, &run);
@@ -1008,7 +1008,7 @@ fn live_mailbox_survives_sustained_wake_driven_traffic() {
         image: Some(image.clone()),
         ..Default::default()
     });
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let workspace = crate::runtime::workspace("attempt-stress").unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.canonicalize().unwrap();
@@ -1229,7 +1229,7 @@ fn tool_results_carry_the_observation_for_text_and_structured_clients() {
         workspace_id: Some("attempt-a".into()),
         ..Default::default()
     });
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     state.watches.push(serde_json::from_value(json!({
         "id":"w-1","name":"game","chat":chat,"service":"svc-game","generation":1,"permanent":true,"command":"run","stopped":false,
         "recent":[],"notifications":{"pending":0,"through":1,"recent":["hp=20"]}
@@ -1338,7 +1338,7 @@ fn an_approved_antibody_reads_every_team_notes_other_leads_and_notifies_the_oper
     (session.parent_chat, session.room) = (Some(observer.clone()), Some("general".into()));
     crate::chat::send(&mut s, &chat, "Tag pathologies", "test").unwrap();
     let run = s.runtime.runs.last_mut().unwrap();
-    let id = run.id.clone();
+    let id = run.id().to_string();
     run.status = RunStatus::Running;
     run.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
@@ -1438,7 +1438,7 @@ fn a_cli_agent_gets_new_conversation_once_on_its_next_tool_result() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Carry out the assigned work", "test").unwrap();
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     crate::chat::send(&mut state, &chat, "/steer Use the north gate", "test").unwrap();
     let shared = Arc::new(Mutex::new(state));
     let call = |nonce: &str| {
@@ -1508,7 +1508,7 @@ fn worker_envelopes_are_pinned() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Envelope shapes", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let shared = Arc::new(Mutex::new(state));
     assert_eq!(
         dispatch_raw(

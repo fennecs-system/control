@@ -350,7 +350,7 @@ fn running(runtime: &Runtime) -> String {
         let _ = write!(
             rows,
             "<tr><td>{}</td><td>{} · {}{served}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            escape(&run.id),
+            escape(run.id()),
             escape(&attempt.provider),
             escape(&attempt.model),
             cell(attempt.tokens.map(|t| t.input_tokens)),
@@ -382,7 +382,7 @@ pub fn render(state: &crate::State) -> String {
     let mut days = BTreeMap::<String, Summary>::new();
     let mut daily = BTreeMap::<u64, u64>::new();
     let mut legacy = 0;
-    for run in &runtime.runs {
+    for run in runtime.runs.iter() {
         if run.attempts.is_empty() && !matches!(run.status, RunStatus::Queued | RunStatus::Running) {
             legacy += 1;
         }

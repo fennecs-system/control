@@ -8,7 +8,7 @@ fn child_chat_messages_are_collapsed_scoped_and_refresh_ancestors() {
     state.chats[1].parent_chat = Some(parent.clone());
     crate::chat::send(&mut state, &child, "Check inventory", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    let run_id = run.id.clone();
+    let run_id = run.id().to_string();
     run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("generation".into()),

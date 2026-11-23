@@ -285,7 +285,7 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
         team.requests.2 += crate::ports::pending_for_chat(state, &chat.id).len();
     }
     let mut activity: HashMap<&str, Member<'_>> = HashMap::new();
-    for run in &state.runtime.runs {
+    for run in state.runtime.runs.iter() {
         let Some(chat) = run.chat_id.as_deref() else { continue };
         let Some(&index) = slot.get(tree.root(chat)) else {
             continue;
@@ -717,10 +717,9 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, name: &str, args: &Va
     let run = state
         .runtime
         .runs
-        .iter()
-        .find(|run| {
-            run.id == attempt.run
-                && run.status == RunStatus::Running
+        .get(attempt.run)
+        .filter(|run| {
+            run.status == RunStatus::Running
                 && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
         })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;

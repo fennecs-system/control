@@ -290,7 +290,7 @@ fn prepare(state: &State) -> Option<Job> {
             .runs
             .iter()
             .enumerate()
-            .map(|(i, run)| (run.id.as_str(), i))
+            .map(|(i, run)| (run.id().as_str(), i))
             .collect();
         let indices: Vec<_> = session
             .messages
@@ -606,8 +606,8 @@ fn source_page(state: &State, job: &Job, start: usize, count: usize) -> io::Resu
             .get(position)
             .copied()
             .flatten()
-            .and_then(|at| state.runtime.runs.get(at));
-        if run.map(|r| r.id.as_str()) != message.run_id.as_deref() || run.is_some_and(|r| !r.status.is_finished()) {
+            .and_then(|at| state.runtime.runs[..].get(at));
+        if run.map(|r| r.id().as_str()) != message.run_id.as_deref() || run.is_some_and(|r| !r.status.is_finished()) {
             return Err(io::Error::other("Source generation changed"));
         }
         let text = job.edits.source_text(

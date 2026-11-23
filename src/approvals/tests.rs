@@ -7,7 +7,7 @@ fn requested() -> (State, String, String) {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Run the server", "test").unwrap();
     state.runtime.runs[0].target.model = Some("captured-model".into());
-    let origin = state.runtime.runs[0].id.clone();
+    let origin = state.runtime.runs[0].id().to_string();
     (state, chat, origin)
 }
 fn decide(state: &mut State, chat: &str, origin: &str) -> Outcome {
@@ -42,7 +42,7 @@ fn decisions_wait_for_the_turn_then_resume_with_its_context() {
     let run = state.runtime.runs.last().unwrap();
     assert_eq!(
         (
-            run.id.as_str(),
+            run.id().as_str(),
             run.kind,
             run.chat_id.as_deref(),
             run.target.model.as_deref()
@@ -84,7 +84,7 @@ fn human_turns_after_the_request_get_a_note_and_design_answers_do_not_count() {
     let (mut state, chat, origin) = requested();
     state.runtime.runs[0].status = RunStatus::Completed;
     let mut answer = state.runtime.runs[0].clone();
-    answer.id = "answer".into();
+    answer = answer.with_id("answer");
     answer.kind = RunKind::DesignAnswer;
     state.runtime.runs.push(answer);
     assert!(
@@ -133,7 +133,7 @@ fn noted() -> (State, String, String) {
     let (mut state, chat, origin) = requested();
     state.runtime.runs[0].status = RunStatus::Completed;
     let mut wake = state.runtime.runs[0].clone();
-    wake.id = "wake".into();
+    wake = wake.with_id("wake");
     wake.kind = RunKind::BotWake;
     wake.status = RunStatus::Failed;
     state.runtime.runs.push(wake);

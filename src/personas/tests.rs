@@ -32,7 +32,7 @@ fn active() -> (State, String, String) {
         parent_artifact: Some("baseline".into()),
         ..Default::default()
     });
-    let id = run.id.clone();
+    let id = run.id().to_string();
     (state, chat, id)
 }
 fn spawn(state: &mut State, id: &str, nonce: &str, input: Value) -> Result<Value, std::borrow::Cow<'static, str>> {
@@ -107,7 +107,7 @@ fn spawn_by_persona_captures_dna_standing_and_body_and_edits_never_change_it() {
         }
     );
     // The prompt's first instruction is the persona.
-    let prompt = crate::chat::prompt(&state, &child.id).unwrap();
+    let prompt = crate::chat::prompt(&state, child.id()).unwrap();
     assert!(
         prompt.starts_with("Persona worker@2 (Worker): Complete the work you claimed."),
         "{}",
@@ -116,10 +116,7 @@ fn spawn_by_persona_captures_dna_standing_and_body_and_edits_never_change_it() {
     // Editing the persona appends a revision; the running child keeps its capture.
     edit(&mut state, "worker", |d| d.purpose = "Changed purpose.".into());
     assert_eq!(state.personas.get("worker").unwrap().revision, 3);
-    assert_eq!(
-        bundle(state.runtime.runs.iter().find(|r| r.id == child.id).unwrap()).revision,
-        2
-    );
+    assert_eq!(bundle(state.runtime.runs.get(child.id()).unwrap()).revision, 2);
     assert_eq!(
         state.personas.revision("worker", 2).unwrap().purpose,
         captured.purpose,
@@ -281,7 +278,7 @@ fn behaviours_apply_on_spawn_through_existing_primitives() {
         .expect("a pending bot request");
     assert_eq!(request["every_minutes"], 30);
     // Service-bound behaviours are standing orders naming the existing tools.
-    let prompt = crate::chat::prompt(&state, &child.id).unwrap();
+    let prompt = crate::chat::prompt(&state, child.id()).unwrap();
     assert!(
         prompt.contains("control_observe_set {command:\"cat stock.json\"}"),
         "{prompt}"
@@ -348,7 +345,7 @@ fn a_deny_list_hides_and_refuses_tools() {
 #[test]
 fn a_root_dm_selects_a_persona_and_each_message_captures_it() {
     let (mut state, chat, _) = active();
-    state.runtime.runs.clear();
+    state.runtime.runs = Default::default();
     select(&mut state, &chat, Some("lead")).unwrap();
     let session = state.chats.iter().find(|c| c.id == chat).unwrap();
     assert_eq!(
@@ -360,7 +357,7 @@ fn a_root_dm_selects_a_persona_and_each_message_captures_it() {
     let lineage = run.persona.as_ref().unwrap();
     assert_eq!(
         (lineage.depth, lineage.parent.as_deref(), lineage.root.as_str()),
-        (0, None, run.id.as_str()),
+        (0, None, run.id().as_str()),
         "still the root"
     );
     assert_eq!(bundle(run).id, "lead");

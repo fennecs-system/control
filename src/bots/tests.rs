@@ -205,7 +205,7 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
     };
     let (mut state, chat) = fixture();
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     state.runtime.runs[0].status = RunStatus::Running;
     state.agent_messages.push(serde_json::from_value(json!({"key":"peer-receipt","origin":"peer-run","chat":chat,"run":"peer-evidence","peer_cursor":2,"urgent":true})).unwrap());
     assert!(
@@ -259,7 +259,7 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
             "origin":{"run":"peer-run","attempt":"peer-attempt"},"actor":{"type":"local_operator"},"command":"true","uid":502,"gid":20
         })).unwrap());
     let mut evidence = scoped.runtime.runs[0].clone();
-    evidence.id = "peer-evidence".into();
+    evidence = evidence.with_id("peer-evidence");
     evidence.kind = RunKind::AgentMessage;
     evidence.source = "peer-message".into();
     evidence.queue_order += 1;
@@ -327,7 +327,7 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
     post(&mut state, Some("peer"), "A relevant callback");
     reconcile_at(&mut state, 1000, |_| Ok(())).unwrap();
     let index = state.runtime.runs.len() - 1;
-    let id = state.runtime.runs[index].id.clone();
+    let id = state.runtime.runs[index].id().to_string();
     let generation = format!("{id}-attempt-1");
     let run = &mut state.runtime.runs[index];
     run.status = RunStatus::Completed;
@@ -417,7 +417,7 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
     let mut direct: State = serde_json::from_slice(&before).unwrap();
     direct.chats[0].continuity.as_mut().unwrap().working = Some(control_context::turn_mailbox::WorkingState {
         revision: 1,
-        run: direct.runtime.runs[0].id.clone(),
+        run: direct.runtime.runs[0].id().to_string(),
         generation: "earlier".into(),
         checkpoint: "published".into(),
         payload: control_context::working_state::Payload {
@@ -460,7 +460,7 @@ fn committed_idle_wait_does_not_turn_telemetry_into_constant_restarts() {
     };
     let (mut state, chat) = fixture();
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     state.chats[0].workspace = Some("published".into());
     state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed {
         working: Some(WorkingState {
@@ -497,7 +497,7 @@ fn committed_runnable_work_resumes_once_and_failed_saves_retain_the_intent() {
     };
     let (mut state, chat) = fixture();
     command(&mut state, &chat, "on").unwrap();
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     state.chats[0].workspace = Some("published".into());
     state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed {
         working: Some(WorkingState {
@@ -678,7 +678,7 @@ fn failed_saves_roll_back_and_full_queues_keep_the_request() {
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
     assert!(bot_runs(&state).is_empty());
     assert_eq!(state.bots.requests.len(), 1, "the requested turn waits for queue space");
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
         if run.source == "test" {
             run.status = RunStatus::Completed;
         }
@@ -735,7 +735,7 @@ fn requested_turns_survive_a_restart_and_are_queued_once() {
     reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
     assert_eq!(state.bots.requests.len(), 1);
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    for run in &mut restored.runtime.runs {
+    for run in restored.runtime.runs.iter_mut() {
         if run.source == "test" {
             run.status = RunStatus::Completed;
         }
@@ -841,7 +841,7 @@ fn spawned(state: &mut State, parent: &str, title: &str) -> String {
     child
 }
 fn ask(state: &mut State, nonce: &str, chat: &str, every_minutes: Option<u64>) -> io::Result<Value> {
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let attempt = AttemptRef {
         run: &run,
         generation: "attempt-a",
@@ -882,7 +882,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
         workspace_id: Some("child-attempt".into()),
         ..Default::default()
     });
-    let run = state.runtime.runs[index].id.clone();
+    let run = state.runtime.runs[index].id().to_string();
     let before = decision_revision(&state);
     let value = handle(
         &mut state,
@@ -1049,7 +1049,7 @@ fn a_leads_helper_may_request_bots_for_controllers_another_helper_spawned() {
         workspace_id: Some("attempt-h".into()),
         ..Default::default()
     });
-    let id = run.id.clone();
+    let id = run.id().to_string();
     let mut call = |chat: &str, nonce: &str| {
         handle(
             &mut state,
@@ -1208,8 +1208,7 @@ fn earlier_continued_runs_do_not_block_resuming_the_requester() {
     let index = state.runtime.runs.len();
     crate::chat::send(&mut state, &parent, "Earlier delegated work", "test").unwrap();
     state.runtime.runs[index].status = RunStatus::Continued;
-    let requesting = state.runtime.runs.remove(0);
-    state.runtime.runs.push(requesting);
+    state.runtime.runs.rebuild(|runs| runs.rotate_left(1));
     let id = ask_last(&mut state, "n1", &child).unwrap()["request_id"]
         .as_str()
         .unwrap()
@@ -1220,7 +1219,7 @@ fn earlier_continued_runs_do_not_block_resuming_the_requester() {
     assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
 }
 fn ask_last(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
-    let run = state.runtime.runs.last().unwrap().id.clone();
+    let run = state.runtime.runs.last().unwrap().id().to_string();
     let attempt = AttemptRef {
         run: &run,
         generation: "attempt-a",
@@ -1271,7 +1270,7 @@ fn a_one_shot_callback_can_request_the_next_stage_and_pause_is_durable() {
     let mut attempt = crate::usage::Attempt::new();
     attempt.workspace_id = Some("pause-attempt".into());
     run.attempts.push(attempt);
-    let run = run.id.clone();
+    let run = run.id().to_string();
     let attempt = AttemptRef {
         run: &run,
         generation: "pause-attempt",
@@ -1369,7 +1368,7 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
         state.watches[0].notification_channel = notifications;
         command_at(&mut state, &chat, "on", Now(0)).unwrap();
         state.runtime.runs[0].status = RunStatus::Running;
-        let id = state.runtime.runs[0].id.clone();
+        let id = state.runtime.runs[0].id().to_string();
         state.runtime.runs[0].attempts.push(crate::usage::Attempt {
             workspace_id: Some("attempt".into()),
             turn_mailbox: Some(Box::new(Mailbox::default())).into(),
@@ -1590,7 +1589,7 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
     state.watches[0].observe_for_test(1, None);
     state.watches[0].observe_for_test(2, None);
     state.runtime.runs[0].status = RunStatus::Running;
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt".into()),
         turn_mailbox: Some(Box::new(Mailbox::default())).into(),
@@ -2079,7 +2078,7 @@ fn waiting_on(state: &mut State, topics: Vec<String>) {
         turn_mailbox::{Disposition, WorkingState},
         working_state::Payload,
     };
-    let id = state.runtime.runs[0].id.clone();
+    let id = state.runtime.runs[0].id().to_string();
     state.chats[0].workspace = Some("published".into());
     state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed {
         working: Some(WorkingState {

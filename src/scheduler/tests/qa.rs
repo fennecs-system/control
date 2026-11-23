@@ -66,7 +66,7 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
         runtime.paused = (draw() % 5 == 0).then(|| "paused".into());
         for index in 0..draw() % 65 {
             let mut run = template.clone();
-            run.id = format!("fixture-{index}");
+            run = run.with_id(format!("fixture-{index}"));
             run.status = serde_json::from_value(states[(draw() % states.len() as u64) as usize].into()).unwrap();
             run.chat_id = (draw() % 4 != 0).then(|| format!("chat-{}", draw() % 4));
             run.queue_order = draw() % 8;
@@ -143,7 +143,7 @@ fn scheduling_profile() {
         let mut runtime = Runtime::default();
         for index in 0..5032 {
             let mut run = template.clone();
-            run.id = format!("r-{index}");
+            run = run.with_id(format!("r-{index}"));
             run.chat_id = Some(format!("chat-{}", index % 8));
             run.queue_order = index as u64;
             run.status = if index >= 5000 {
@@ -157,21 +157,21 @@ fn scheduling_profile() {
             runtime.paused = Some("paused".into());
         }
         if workload == "slots-full" {
-            for run in &mut runtime.runs[..2] {
+            for run in runtime.runs.iter_mut().take(2) {
                 run.status = RunStatus::Running;
             }
         }
         if workload == "admission-full" {
-            runtime.runs.rotate_right(32);
+            runtime.runs.rebuild(|runs| runs.rotate_right(32));
         }
         if workload == "small-open" {
-            runtime.runs.drain(..5000);
+            runtime.runs.rebuild(|runs| drop(runs.drain(..5000)));
         }
         if workload == "occupied" {
             runtime.runs[0].status = RunStatus::Running;
         }
         if workload == "waiting" {
-            for run in &mut runtime.runs[..8] {
+            for run in runtime.runs.iter_mut().take(8) {
                 run.status = RunStatus::Waiting;
                 run.question = Some(crate::design::Question {
                     id: "q".into(),

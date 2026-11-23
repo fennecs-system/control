@@ -558,7 +558,7 @@ fn agent_status_omits_node_capacity_and_other_chats_executions() {
     }
     // An earlier turn of the same chat counts as the caller's own.
     let mut earlier = state.runtime.runs[0].clone();
-    earlier.id = "earlier-run".into();
+    earlier = earlier.with_id("earlier-run");
     state.runtime.runs.push(earlier);
     state.services[0].executions[4].run = "earlier-run".into();
     let generation = state.services[0].resource.generation.get();

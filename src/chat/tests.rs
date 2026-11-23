@@ -11,7 +11,7 @@ fn enqueue_continuation(
     source: &str,
 ) -> Result<String, ContinuationError> {
     let run = continuation(state, chat, from, objective, kind, source)?;
-    let id = run.id.clone();
+    let id = run.id().to_string();
     state.runtime.runs.push(run);
     state.runtime.notice = "Run queued.".into();
     crate::worker::wake();
@@ -40,7 +40,7 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
     origin.status = RunStatus::Completed;
     origin.target.model = Some("model-a".into());
     origin.lenses = Some(vec!["lens-a".into()]);
-    let origin_id = origin.id.clone();
+    let origin_id = origin.id().to_string();
     let grant = |id: &str| {
         serde_json::from_value::<crate::services::Grant>(
             json!({"id":id,"owner":{"node":"node-a","chat":chat},"generation":1}),
@@ -110,7 +110,7 @@ fn profile_continuation_admission() {
         state.runtime.runs = (0..retained)
             .map(|index| {
                 let mut run = origin.clone();
-                run.id = format!("run-{index}");
+                run = run.with_id(format!("run-{index}"));
                 run.queue_order = index as u64;
                 run
             })
@@ -153,7 +153,7 @@ fn long_unicode_messages_reach_runs_and_reject_overflow_without_changes() {
     assert_eq!(state.runtime.runs[0].objective.as_str(), text);
     for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         state.runtime.runs[0].target.backend = backend;
-        assert!(prompt(&state, &state.runtime.runs[0].id).unwrap().contains(&text));
+        assert!(prompt(&state, state.runtime.runs[0].id()).unwrap().contains(&text));
     }
     let before = serde_json::to_vec(&state).unwrap();
     for invalid in [format!("{text}x"), format!("/spawn {text}"), format!("/btw {text}")] {
@@ -264,7 +264,7 @@ fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
     send(&mut state, &parent, "Add tests", "test").unwrap();
     let other = create(&mut state);
     send(&mut state, &other, "Other task", "test").unwrap();
-    let other_run = state.runtime.runs[2].id.clone();
+    let other_run = state.runtime.runs[2].id().to_string();
     assert!(send(&mut state, &parent, &format!("/cancel {other_run}"), "test").is_err());
     let revision = state.chats[0].revision;
     send(&mut state, &parent, "/cancel", "test").unwrap();
@@ -274,7 +274,7 @@ fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
     assert!(state.chats[0].revision > revision);
     let html = transcript(&state, &parent).unwrap();
     assert!(html.contains("Stopping…") && !html.contains("http-equiv='refresh'"));
-    let queued = state.runtime.runs[1].id.clone();
+    let queued = state.runtime.runs[1].id().to_string();
     send(&mut state, &parent, &format!("/cancel {queued}"), "test").unwrap();
     assert_eq!(state.runtime.runs[1].status, RunStatus::Cancelled);
     assert!(transcript(&state, &parent).unwrap().contains("Cancelled"));
@@ -419,7 +419,7 @@ fn steering_is_durable_ordered_and_never_mutates_an_active_request() {
     assert!(transcript(&restored, &id).unwrap().contains("Queued · next turn"));
     restored.runtime.runs[0].status = RunStatus::Completed;
     restored.runtime.runs[0].result = "Parser complete".into();
-    let steering = restored.runtime.runs[2].id.clone();
+    let steering = restored.runtime.runs[2].id().to_string();
     assert!(prompt(&restored, &steering).unwrap().contains("Parser complete"));
     assert!(send(&mut restored, &id, "/steer", "test").is_err());
     assert_eq!(restored.runtime.runs.len(), 3);
@@ -437,7 +437,7 @@ fn improve_mode_persists_discussion_and_can_exit_without_changing_queued_authori
     assert!(state.chats[0].improve_mode);
     send(&mut state, &id, "Could this design be simpler?", "test").unwrap();
     assert_eq!(state.runtime.runs[0].action, Action::Improve);
-    let first = state.runtime.runs[0].id.clone();
+    let first = state.runtime.runs[0].id().to_string();
     assert!(
         prompt(&state, &first)
             .unwrap()
@@ -470,7 +470,7 @@ fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html()
         reply: String::new(),
     });
     send(&mut state, &id, "Check the build", "test").unwrap();
-    let run_id = state.runtime.runs[0].id.clone();
+    let run_id = state.runtime.runs[0].id().to_string();
     assert_eq!(omitted_history(&state, &run_id), 1);
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         omitted_history: 1,
@@ -497,7 +497,7 @@ fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html()
     assert!(!html.contains("<script>"));
     assert_eq!(stored.chats[0].messages[0].text.len(), 21000);
     assert!(
-        !prompt(&stored, &stored.runtime.runs[0].id)
+        !prompt(&stored, stored.runtime.runs[0].id())
             .unwrap()
             .contains(&"x".repeat(21000))
     );
@@ -519,7 +519,7 @@ fn runs_pin_nested_definitions_and_document_contents() {
     let chat = tool(&mut state, "control.chat.create", &json!({"lenses":["engineering"]})).unwrap();
     let id = chat["id"].as_str().unwrap();
     send(&mut state, id, "Check the architecture", "test").unwrap();
-    let first = state.runtime.runs[0].id.clone();
+    let first = state.runtime.runs[0].id().to_string();
     state.documents[0].body = "Changed document body".into();
     state.documents[0].revision = 2;
     definition.revision = 3;
@@ -531,7 +531,7 @@ fn runs_pin_nested_definitions_and_document_contents() {
     assert!(!old.contains("Changed document body"));
     assert!(!old.contains("New guidance"));
     assert_eq!(state.runtime.runs[0].context.as_ref().unwrap().documents[0].revision, 1);
-    let new = prompt(&state, &state.runtime.runs[1].id).unwrap();
+    let new = prompt(&state, state.runtime.runs[1].id()).unwrap();
     assert!(new.contains("Changed document body"));
     assert!(new.contains("New guidance"));
     let stored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
@@ -601,12 +601,12 @@ fn composing_and_changing_lenses_preserves_each_runs_selection() {
     let id = chat["id"].as_str().unwrap();
     assert_eq!(chat["lenses"], json!(["engineering", "research"]));
     send(&mut state, id, "Review this design", "test").unwrap();
-    let first = state.runtime.runs[0].id.clone();
+    let first = state.runtime.runs[0].id().to_string();
     tool(&mut state, "control.chat.lenses", &json!({"id":id,"lenses":[]})).unwrap();
     send(&mut state, id, "Continue without lenses", "test").unwrap();
     assert!(prompt(&state, &first).unwrap().contains("Engineering + Research"));
     assert!(
-        !prompt(&state, &state.runtime.runs[1].id)
+        !prompt(&state, state.runtime.runs[1].id())
             .unwrap()
             .contains("Selected context lenses:")
     );
@@ -644,9 +644,9 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     .unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
     send(&mut state, &id, "Investigate this blocked task", "test").unwrap();
-    let parent = state.runtime.runs[0].id.clone();
+    let parent = state.runtime.runs[0].id().to_string();
     fork(&mut state, &id, "Inspect an independent hypothesis", "test").unwrap();
-    let child = state.runtime.runs[1].id.clone();
+    let child = state.runtime.runs[1].id().to_string();
     let mut revised = state.lens_library.get("investigation").unwrap().clone();
     revised.revision += 1;
     revised.instructions = "Future investigation guidance only".into();
@@ -684,7 +684,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     // On-demand guidance: the prompt carries index lines and control_guidance
     // returns the captured revision's text, never the edited library.
     let guidance = |state: &State, run: &str, topic: &str| {
-        let run = state.runtime.runs.iter().find(|r| r.id == run).unwrap();
+        let run = state.runtime.runs.get(run).unwrap();
         crate::guidance::answer(run, &json!({"topic":topic})).unwrap()["text"]
             .as_str()
             .unwrap()
@@ -702,7 +702,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
         assert!(!text.contains("Future investigation guidance only"));
     }
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
-    let last = state.runtime.runs.last().unwrap().id.clone();
+    let last = state.runtime.runs.last().unwrap().id().to_string();
     let next = prompt(&state, &last).unwrap();
     assert!(next.contains("investigation@5") && next.contains("coordination@19") && next.contains("planning@10"));
     assert_eq!(
@@ -716,7 +716,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     assert_eq!(guidance(&state, &last, "planning"), "Future planning guidance only");
     tool(&mut state, "control.chat.lenses", &json!({"id":id,"lenses":[]})).unwrap();
     send(&mut state, &id, "Continue without optional guidance", "test").unwrap();
-    let plain = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
+    let plain = prompt(&state, state.runtime.runs.last().unwrap().id()).unwrap();
     assert!(!plain.contains("Captured lens guidance") && !plain.contains("three distinct tries"));
     assert!(!plain.contains("Future coordination guidance only"));
 }
@@ -730,7 +730,7 @@ fn chat_context_is_captured_and_does_not_follow_browser_defaults() {
     assert!(page.contains("value='research' form='session-message' checked"));
     assert_eq!(detail(&state, id).unwrap()["lens"], "research");
     assert!(
-        prompt(&state, &state.runtime.runs[0].id)
+        prompt(&state, state.runtime.runs[0].id())
             .unwrap()
             .contains("Selected context lenses: Research")
     );
@@ -752,7 +752,7 @@ fn chats_keep_context_separate_and_keep_original_identity() {
     state.runtime.runs[0].result = "Cedar recorded".into();
     send(&mut state, &second, "Other chat", "test").unwrap();
     send(&mut state, &first, "What tree?", "test").unwrap();
-    let context = prompt(&state, &state.runtime.runs[2].id).unwrap();
+    let context = prompt(&state, state.runtime.runs[2].id()).unwrap();
     assert!(context.contains("Cedar recorded"));
     assert!(!context.contains("Other chat"));
     state.chats[0].actor = Actor::Unknown;

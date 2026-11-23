@@ -99,8 +99,7 @@ pub fn capture(
             let live = state
                 .runtime
                 .runs
-                .iter()
-                .find(|r| r.id == id)
+                .get(id)
                 .and_then(|r| r.attempts.last())
                 .filter(|a| a.workspace_id == attempt.workspace_id)
                 .ok_or_else(|| io::Error::other("Recovery generation changed"))?;
@@ -142,7 +141,8 @@ pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mute
             })
             .filter_map(|r| {
                 let a = r.attempts.last()?;
-                (a.termination.is_some() && a.recovery.is_none() && !a.review_only).then(|| (r.id.clone(), a.clone()))
+                (a.termination.is_some() && a.recovery.is_none() && !a.review_only)
+                    .then(|| (r.id().to_string(), a.clone()))
             })
             .collect()
     };
@@ -152,13 +152,12 @@ pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mute
         let Some(live) = state
             .runtime
             .runs
-            .iter_mut()
-            .find(|r| {
-                r.id == id
-                    && matches!(
-                        r.status,
-                        RunStatus::Failed | RunStatus::Interrupted | RunStatus::Cancelled
-                    )
+            .get_mut(&id)
+            .filter(|r| {
+                matches!(
+                    r.status,
+                    RunStatus::Failed | RunStatus::Interrupted | RunStatus::Cancelled
+                )
             })
             .and_then(|r| r.attempts.last_mut())
             .filter(|a| a.workspace_id == attempt.workspace_id)
@@ -171,8 +170,7 @@ pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mute
             state
                 .runtime
                 .runs
-                .iter_mut()
-                .find(|r| r.id == id)
+                .get_mut(&id)
                 .unwrap()
                 .attempts
                 .last_mut()
@@ -268,8 +266,8 @@ impl AttemptTools for Tools {
             let run = state
                 .runtime
                 .runs
-                .iter()
-                .find(|r| r.id == cx.attempt.run && r.status == RunStatus::Running)
+                .get(cx.attempt.run)
+                .filter(|r| r.status == RunStatus::Running)
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;
             crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
             if run.chat_id.is_none() {

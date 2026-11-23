@@ -14,7 +14,7 @@ pub(super) fn observer(state: &mut State) -> (String, String) {
     state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     state.chats.iter_mut().find(|chat| chat.id == root).unwrap().lenses = Some(vec!["antibody".into()]);
     let judge = spawned(state, &root, "Antibody");
-    let lead = state.runtime.runs[0].id.clone();
+    let lead = state.runtime.runs[0].id().to_string();
     let run = state.runtime.runs.last_mut().unwrap();
     run.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
@@ -142,7 +142,7 @@ fn an_antibody_hears_pathologies_of_every_team_but_not_ordinary_coordination() {
     assert!(node_facts(&state, &judge).is_empty());
 
     // The same command failing again and again is a repetition loop.
-    let run = state.runtime.runs[active].id.clone();
+    let run = state.runtime.runs[active].id().to_string();
     service(
         &mut state,
         &worker,

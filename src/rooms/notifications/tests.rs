@@ -63,7 +63,7 @@ pub(super) fn fixture() -> (State, String) {
         workspace_id: Some("attempt-one".into()),
         ..Default::default()
     });
-    let id = run.id.clone();
+    let id = run.id().to_string();
     (state, id)
 }
 fn watch(state: &mut State, run: &str, wake: bool) {
@@ -211,7 +211,7 @@ fn one_shot_retains_grants_received_after_arming() {
         crate::chat::continuation(&state, &chat, 0, "Service ready".into(), RunKind::AgentMessage, "test").unwrap();
     state.runtime.runs.push(continuation);
     state.runtime.runs[1].resource_grants.push(grant);
-    for run in &mut state.runtime.runs {
+    for run in state.runtime.runs.iter_mut() {
         run.status = RunStatus::Completed;
     }
     post(&mut state, "research", "New evidence", None);
@@ -315,7 +315,7 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         workspace_id: Some("notification-attempt".into()),
         ..Default::default()
     });
-    let notification = restored.runtime.runs[1].id.clone();
+    let notification = restored.runtime.runs[1].id().to_string();
     assert!(
         call(
             &mut restored,
@@ -509,7 +509,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     let resumed = state.runtime.runs.len() - 1;
     reconcile(&mut state, |_| panic!("parent continuation is queued")).unwrap();
     running_attempt(&mut state, resumed, "resume-one");
-    let resumed_id = state.runtime.runs[resumed].id.clone();
+    let resumed_id = state.runtime.runs[resumed].id().to_string();
     assert!(
         call(
             &mut state,
@@ -559,7 +559,7 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
             3 => state.runtime.runs[leaf].chat_id = Some("sibling-chat".into()),
             4 => state.runtime.runs[leaf].target.model = Some("different-model".into()),
             5 => {
-                let target = state.runtime.runs[first].id.clone();
+                let target = state.runtime.runs[first].id().to_string();
                 state.runtime.runs[leaf].status = RunStatus::Continued;
                 state.runtime.runs[leaf].question = Some(crate::design::Question {
                     id: "cycle".into(),
@@ -592,7 +592,7 @@ fn nonblocking_spawn_does_not_delay_the_idle_leads_room_wake() {
     watch(&mut state, &root, true);
     let child_chat = crate::chat::create(&mut state);
     let mut child = state.runtime.runs[0].clone();
-    child.id = "independent-child".into();
+    child = child.with_id("independent-child");
     child.chat_id = Some(child_chat);
     child.kind = RunKind::Spawned;
     child.persona = Some(crate::delegation::Persona {
@@ -665,7 +665,7 @@ fn profile_room_publication() {
         let template = state.runtime.runs[0].clone();
         for index in 1..retained {
             let mut run = template.clone();
-            run.id = format!("retained-{index}");
+            run = run.with_id(format!("retained-{index}"));
             run.kind = RunKind::Task;
             run.queue_order = index as u64;
             state.runtime.runs.push(run);
@@ -710,7 +710,7 @@ fn profile_idle_and_waiting_room_reconciliation() {
     let template = state.runtime.runs[0].clone();
     for i in 0..20_000 {
         let mut old = template.clone();
-        old.id = format!("retained-{i}");
+        old = old.with_id(format!("retained-{i}"));
         old.status = RunStatus::Completed;
         old.kind = RunKind::Task;
         state.runtime.runs.push(old);

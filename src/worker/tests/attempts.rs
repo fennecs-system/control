@@ -230,7 +230,12 @@ fn attempt_as(
         .map(|id| format!("{id}-{}-{next}", backend.id()));
     let mut attempt = attempt.clone();
     let run = &state.runtime.runs[0];
-    let (id, objective, actor, action) = (run.id.clone(), run.objective.to_string(), run.actor.clone(), run.action);
+    let (id, objective, actor, action) = (
+        run.id().to_string(),
+        run.objective.to_string(),
+        run.actor.clone(),
+        run.action,
+    );
     let generation = attempt.workspace_id.clone().unwrap();
     let shared = Arc::new(Mutex::new(state));
     let engine = Scripted::new(|call: &Call| match call {

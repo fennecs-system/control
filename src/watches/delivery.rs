@@ -13,13 +13,13 @@ pub(crate) struct Read {
     request: String,
     managed: bool,
 }
-fn index(runs: &[crate::runtime::Run], attempt: &AttemptRef<'_>) -> io::Result<usize> {
+fn index(runs: &crate::runtime::Runs, attempt: &AttemptRef<'_>) -> io::Result<usize> {
     let index = runs
-        .iter()
-        .position(|r| {
-            r.id == attempt.run
-                && r.status == RunStatus::Running
-                && r.attempts
+        .position(attempt.run)
+        .filter(|&index| {
+            runs[index].status == RunStatus::Running
+                && runs[index]
+                    .attempts
                     .last()
                     .is_some_and(|a| a.workspace_id.as_deref() == Some(attempt.generation))
         })

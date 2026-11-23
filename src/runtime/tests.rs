@@ -44,8 +44,8 @@ fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
         state.runtime.runs[0].status = RunStatus::named(status);
         state.runtime.runs[0].result = "Existing progress".into();
         state.runtime.notice = "Before cancellation".into();
-        let id = state.runtime.runs[0].id.clone();
-        let checkpoint = RunStatusCheckpoint::capture(&state.runtime, |run| run.id == id);
+        let id = state.runtime.runs[0].id().to_string();
+        let checkpoint = RunStatusCheckpoint::capture(&state.runtime, |run| run.id() == id);
         let before = serde_json::to_vec(&state).unwrap();
         state.runtime.action("/cancel-run", &HashMap::from([("id".into(), id)]));
         assert!(
@@ -67,7 +67,7 @@ fn workers_require_content_addressed_images() {
 fn retry_does_not_repeat_completed_work() {
     let mut rt = Runtime::default();
     rt.enqueue("Improve review".into(), RunKind::SelfImprovement, "website");
-    let id = rt.runs[0].id.clone();
+    let id = rt.runs[0].id().to_string();
     rt.runs[0].status = RunStatus::Completed;
     rt.action("/retry-run", &HashMap::from([("id".into(), id)]));
     assert_eq!(rt.runs[0].status, RunStatus::Completed);

@@ -15,7 +15,7 @@ fn running(timeout: Option<u64>) -> (State, String, String) {
     let attempt = run.attempts.last_mut().unwrap();
     assert!(attempt.turn_mailbox.is_some());
     (attempt.started_unix, attempt.explicit_timeout_seconds) = (1000, timeout);
-    let id = run.id.clone();
+    let id = run.id().to_string();
     (state, chat, id)
 }
 /// A member chat spawned from `parent`, with its latest turn in `status`.

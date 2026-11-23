@@ -217,8 +217,8 @@ pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Resu
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == run_id && r.status == RunStatus::Running)
+            .get(run_id)
+            .filter(|r| r.status == RunStatus::Running)
             .ok_or_else(|| fail("Run is inactive"))?
             .clone();
         crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
@@ -310,9 +310,8 @@ fn checkpoint_launch(
     stopping: bool,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> io::Result<()> {
-    let active = state.runtime.runs.iter().any(|r| {
-        r.id == run_id
-            && r.status == RunStatus::Running
+    let active = state.runtime.runs.get(run_id).is_some_and(|r| {
+        r.status == RunStatus::Running
             && r.attempts
                 .last()
                 .is_some_and(|a| a.workspace_id == preview.attempt.workspace_id)

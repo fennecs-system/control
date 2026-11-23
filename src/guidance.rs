@@ -86,8 +86,8 @@ impl AttemptTools for Tools {
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == cx.attempt.run && r.status == RunStatus::Running)
+            .get(cx.attempt.run)
+            .filter(|r| r.status == RunStatus::Running)
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;
         answer(run, args)
     }

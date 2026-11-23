@@ -553,7 +553,7 @@ fn published<'a>(state: &'a crate::State, id: &str) -> Result<Vec<&'a str>, &'st
         .messages
         .iter()
         .filter_map(|message| message.run_id.as_ref())
-        .filter_map(|id| state.runtime.runs.iter().find(|r| &r.id == id && r.actor == chat.actor))
+        .filter_map(|id| state.runtime.runs.get(id).filter(|r| r.actor == chat.actor))
         .flat_map(|r| &r.attempts)
         .filter_map(|a| a.artifact.as_deref())
         .collect())

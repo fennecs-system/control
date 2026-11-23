@@ -33,7 +33,7 @@ fn future_human_and_agent_posts_wake_repeatedly_without_self_echoes() {
         assert_eq!(run.source, "room-listener");
         assert_eq!(run.chat_id.as_deref(), Some(chat.as_str()));
         assert_eq!(run.target.model.as_deref(), Some("captured-model"));
-        assert_eq!(run.persona.as_ref().unwrap().root, state.runtime.runs[0].id);
+        assert_eq!(run.persona.as_ref().unwrap().root, state.runtime.runs[0].id().as_str());
         // An active turn cannot receive a second queued listener response.
         tick(&mut state, now + 1);
         assert_eq!(state.runtime.runs.len(), before + 1);
@@ -137,7 +137,7 @@ fn owner_can_stop_a_queued_followup_and_models_cannot_replace_intent() {
     post(&mut state, "research", "hello", None);
     tick(&mut state, 100);
     state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
-    let run = state.runtime.runs.last().unwrap().id.clone();
+    let run = state.runtime.runs.last().unwrap().id().to_string();
     for args in [json!({"enabled":false}), json!({"enabled":true,"wake":true})] {
         assert!(super::super::call(&mut state, &run, "control_room_watch", &args).is_err());
     }
@@ -197,7 +197,7 @@ fn acknowledged_posts_during_cooldown_do_not_trigger_redundant_turns() {
     tick(&mut state, 100);
     let run = state.runtime.runs.last_mut().unwrap();
     run.status = RunStatus::Running;
-    let id = run.id.clone();
+    let id = run.id().to_string();
     post(
         &mut state,
         "research",
@@ -243,8 +243,11 @@ fn all_ready_chats_progress_in_one_pass_without_retaining_origin_runs() {
             1
         );
     }
-    state.runtime.runs.retain(|run| run.source == "room-listener");
-    for run in &mut state.runtime.runs {
+    state
+        .runtime
+        .runs
+        .rebuild(|runs| runs.retain(|run| run.source == "room-listener"));
+    for run in state.runtime.runs.iter_mut() {
         run.status = RunStatus::Completed;
     }
     post(&mut state, "research", "another assignment", Some("teammate".into()));
@@ -261,7 +264,7 @@ fn profile_listener_reconciliation() {
     let template = state.runtime.runs[0].clone();
     for index in 0..20_000 {
         let mut old = template.clone();
-        old.id = format!("old-{index}");
+        old = old.with_id(format!("old-{index}"));
         old.chat_id = None;
         state.runtime.runs.push(old);
     }

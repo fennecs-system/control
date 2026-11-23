@@ -404,8 +404,8 @@ pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Res
         let run = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == run_id && r.status == RunStatus::Running)
+            .get(run_id)
+            .filter(|r| r.status == RunStatus::Running)
             .ok_or_else(|| io::Error::other("Run is not active"))?;
         (
             run.chat_id
@@ -417,9 +417,8 @@ pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Res
     };
     let authorize = |url: &Url| {
         let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        if !state.runtime.runs.iter().any(|r| {
-            r.id == run_id
-                && r.status == RunStatus::Running
+        if !state.runtime.runs.get(run_id).is_some_and(|r| {
+            r.status == RunStatus::Running
                 && r.actor == actor
                 && r.attempts.last().and_then(|a| a.workspace_id.as_ref()) == generation.as_ref()
         }) {

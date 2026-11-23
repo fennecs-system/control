@@ -17,7 +17,7 @@ fn profile_approval_resume() {
         state.runtime.runs = (0..retained)
             .map(|index| {
                 let mut run = template.clone();
-                run.id = format!("run-{index}");
+                run = run.with_id(format!("run-{index}"));
                 run.queue_order = index as u64;
                 run.kind = if index == 0 { RunKind::Task } else { RunKind::BotWake };
                 run

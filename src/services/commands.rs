@@ -138,8 +138,7 @@ impl Execution {
         let owner = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == self.run)
+            .get(&self.run)
             .and_then(|r| r.chat_id.as_deref())
             .map_or_else(|| format!("run {}", self.run), |chat| format!("chat {chat}"));
         let command = if self.display_command.is_empty() {
@@ -262,11 +261,9 @@ impl Receipt {
         value
     }
 }
-pub(super) fn live_attempt(runs: &[crate::runtime::Run], run: &str, attempt: &str) -> bool {
-    runs.iter().any(|r| {
-        r.id == run
-            && r.status == RunStatus::Running
-            && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt)
+pub(super) fn live_attempt(runs: &crate::runtime::Runs, run: &str, attempt: &str) -> bool {
+    runs.get(run).is_some_and(|r| {
+        r.status == RunStatus::Running && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt)
     })
 }
 #[derive(Deserialize)]
@@ -580,7 +577,7 @@ fn still_running(service_id: &str, execution_id: &str) -> String {
 }
 /// When the caller's attempt must have its reply, as a local instant.
 fn turn_end(state: &State, run: &str) -> Option<Instant> {
-    let run = state.runtime.runs.iter().find(|r| r.id == run)?;
+    let run = state.runtime.runs.get(run)?;
     let attempt = run.attempts.last()?;
     let limit = crate::attempt_control::deadline(state, run, attempt)?;
     let end = attempt
@@ -1138,12 +1135,7 @@ fn update(
         return Err(error);
     }
     if changed {
-        let chat = state
-            .runtime
-            .runs
-            .iter()
-            .find(|r| r.id == run)
-            .and_then(|r| r.chat_id.clone());
+        let chat = state.runtime.runs.get(&run).and_then(|r| r.chat_id.clone());
         if let Some(chat) = chat {
             crate::chat::activity_changed(&mut state, &chat);
         }

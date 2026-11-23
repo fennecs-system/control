@@ -289,7 +289,7 @@ fn fixture() -> (State, String, String) {
     crate::chat::send(&mut state, &chat, "Keep building toward the goal", "test").unwrap();
     let run = &mut state.runtime.runs[0];
     run.status = RunStatus::Running;
-    let id = run.id.clone();
+    let id = run.id().to_string();
     let generation = format!("{id}-attempt-1");
     let mut mailbox = Mailbox::default();
     mailbox.baseline.push(Range::Conversation {

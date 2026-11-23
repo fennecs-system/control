@@ -27,7 +27,7 @@ pub(super) fn active() -> (State, String) {
         parent_artifact: Some("immutable-baseline".into()),
         ..Default::default()
     });
-    let id = run.id.clone();
+    let id = run.id().to_string();
     (s, id)
 }
 pub(super) fn input(n: usize) -> Input {
@@ -95,7 +95,7 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
         assert_eq!(chat.workspace.as_deref(), Some("immutable-baseline"));
         assert_eq!(chat.parent_chat, s.runtime.runs[0].chat_id);
         let status = crate::delegated_results::execute(
-            crate::delegated_results::prepare(&s, &id, json!({"child":child.id,"section":"status"})).unwrap(),
+            crate::delegated_results::prepare(&s, &id, json!({"child":child.id(),"section":"status"})).unwrap(),
         )
         .unwrap();
         assert_eq!(status["status"], "queued");
@@ -126,12 +126,12 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
     let next = restored.runtime.runs.last_mut().unwrap();
     next.chat_id = parent_chat;
     next.status = RunStatus::Running;
-    let next_id = next.id.clone();
+    let next_id = next.id().to_string();
     assert!(
         crate::delegated_results::prepare(
             &restored,
             &next_id,
-            json!({"child":restored.runtime.runs[1].id,"section":"status"})
+            json!({"child":restored.runtime.runs[1].id(),"section":"status"})
         )
         .is_ok()
     );
@@ -139,8 +139,8 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
     assert!(
         crate::delegated_results::prepare(
             &restored,
-            &restored.runtime.runs[1].id,
-            json!({"child":restored.runtime.runs[2].id,"section":"status"})
+            restored.runtime.runs[1].id(),
+            json!({"child":restored.runtime.runs[2].id(),"section":"status"})
         )
         .is_err()
     );
@@ -212,7 +212,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
         accepted
     );
     let mut s: State = serde_json::from_slice(&snapshot).unwrap();
-    for child in &mut s.runtime.runs[1..11] {
+    for child in s.runtime.runs.iter_mut().take(11).skip(1) {
         child.status = RunStatus::Completed;
     }
     s.runtime.runs[0].target.model = Some("new live model must not leak".into());
@@ -227,7 +227,7 @@ fn fifty_agents_reserve_once_and_materialize_gradually_after_restart() {
         let chat = s.chats.iter().find(|c| Some(&c.id) == child.chat_id.as_ref()).unwrap();
         assert_eq!(chat.workspace.as_deref(), Some("immutable-baseline"));
     }
-    for run in &mut s.runtime.runs {
+    for run in s.runtime.runs.iter_mut() {
         run.status = RunStatus::Completed;
     }
     reconcile(&mut s, |_| Ok(())).unwrap();
@@ -257,7 +257,7 @@ fn later_originating_turn_pages_and_cancels_backlog_atomically() {
     let caller = s.runtime.runs.last_mut().unwrap();
     caller.status = RunStatus::Running;
     caller.chat_id = originating;
-    let caller = caller.id.clone();
+    let caller = caller.id().to_string();
     let args = json!({"batch":batch,"offset":10,"limit":20});
     let page = manage(&mut s, &caller, "control_agent_spawn_status", &args, |_| {
         panic!("Read cannot save")
@@ -342,7 +342,7 @@ fn node_backlog_budget_is_shared_across_independent_roots() {
         workspace_id: Some("other-attempt".into()),
         ..Default::default()
     });
-    let root = root.id.clone();
+    let root = root.id().to_string();
     assert!(
         request(&mut s, &root, "other-attempt", "two", input(2), |_| panic!(
             "Node backlog must apply across roots"
@@ -357,7 +357,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
     let (mut s, id) = active();
     let root = request(&mut s, &id, "parent-attempt", "root-batch", input(1), |_| Ok(())).unwrap();
     let mut next = s.runtime.runs[1].clone();
-    next.id = "continued-child".into();
+    next = next.with_id("continued-child");
     next.kind = RunKind::DelegationResult;
     next.status = RunStatus::Running;
     next.attempts.push(crate::usage::Attempt {
@@ -380,7 +380,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
             ..Default::default()
         },
         child: Some("completed-review".into()),
-        continuation: Some(next.id.clone()),
+        continuation: Some(next.id().to_string()),
     });
     s.runtime.runs.push(next);
     request(
@@ -415,13 +415,13 @@ fn configured_team_above_legacy_graph_limit_remains_inspectable() {
     s.runtime.execution.max_pending_agent_intents = 1100;
     request(&mut s, &id, "parent-attempt", "large-team", input(1030), |_| Ok(())).unwrap();
     while s.runtime.runs[0].spawns[0].pending() > 0 {
-        for child in &mut s.runtime.runs[1..] {
+        for child in s.runtime.runs.iter_mut().skip(1) {
             child.status = RunStatus::Completed;
         }
         reconcile(&mut s, |_| Ok(())).unwrap();
     }
     assert_eq!(s.runtime.runs.len(), 1031);
-    let last = s.runtime.runs.last().unwrap().id.clone();
+    let last = s.runtime.runs.last().unwrap().id().to_string();
     let plan = crate::delegated_results::prepare(&s, &id, json!({"child":last,"section":"status"})).unwrap();
     assert_eq!(crate::delegated_results::execute(plan).unwrap()["status"], "queued");
 }
@@ -433,7 +433,7 @@ fn profile_idle_backlog_reconciliation() {
     let template = s.runtime.runs[0].clone();
     for index in 0..20000 {
         let mut run = template.clone();
-        run.id = format!("history-{index}");
+        run = run.with_id(format!("history-{index}"));
         s.runtime.runs.push(run);
     }
     let start = std::time::Instant::now();
@@ -497,7 +497,7 @@ fn a_judge_batch_starts_one_advisor_within_its_own_allowance_beside_the_review_j
     .unwrap_err();
     assert!(error.contains("max_advisors_per_root"), "{error}");
     // The advisor does not consume the root's one blocking judge review.
-    let parent = s.runtime.runs.iter().find(|run| run.id == id).unwrap();
+    let parent = s.runtime.runs.get(&id).unwrap();
     assert!(delegation::budget_for(&s, parent, Role::Judge, 1, false).is_ok());
     // The cap is configuration: raise it for another, or 0 disables them.
     s.runtime.execution.max_advisors_per_root = 4;
@@ -552,10 +552,7 @@ fn an_advisor_never_uses_the_teams_member_capacity() {
     request(&mut s, &id, "parent-attempt", "advisor", judge(1), |_| Ok(())).unwrap();
     assert!(delegation::is_judge(s.runtime.runs.last().unwrap()));
     // Spawning it returned at once: the lead's turn keeps running.
-    assert_eq!(
-        s.runtime.runs.iter().find(|run| run.id == id).unwrap().status,
-        RunStatus::Running
-    );
+    assert_eq!(s.runtime.runs.get(&id).unwrap().status, RunStatus::Running);
 }
 #[test]
 fn spawned_workers_join_the_team_room_within_one_actor_and_tree() {
@@ -595,7 +592,7 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
     let (mut s, id) = active();
     s.chats[0].lenses = Some(vec!["advisor".into()]);
     request(&mut s, &id, "parent-attempt", "workers", input(2), |_| Ok(())).unwrap();
-    let worker = s.runtime.runs.last().unwrap().id.clone();
+    let worker = s.runtime.runs.last().unwrap().id().to_string();
     let status = |s: &State, child: &str| {
         crate::delegated_results::prepare(s, &id, json!({"child":child,"section":"status"}))
             .and_then(crate::delegated_results::execute)
@@ -607,7 +604,7 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
         ..input(1)
     };
     request(&mut s, &id, "parent-attempt", "advisor", judge, |_| Ok(())).unwrap();
-    let advisor = s.runtime.runs.last().unwrap().id.clone();
+    let advisor = s.runtime.runs.last().unwrap().id().to_string();
     assert!(delegation::is_judge(s.runtime.runs.last().unwrap()));
     assert_eq!(status(&s, &worker).unwrap(), "queued");
     // The advisor's receipt is checked under its own batch's role, but an
@@ -630,7 +627,7 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
     }
     assert!(s.runtime.runs.iter().any(|run| run.kind == RunKind::AgentCompletion));
     // Once the workers are announced the scan reaches the advisor's batch.
-    for run in &mut s.runtime.runs {
+    for run in s.runtime.runs.iter_mut() {
         run.status = RunStatus::Completed;
     }
     reconcile(&mut s, |_| Ok(())).unwrap();

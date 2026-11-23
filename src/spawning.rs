@@ -156,7 +156,7 @@ impl Batch {
         self.page(state, 0, 10)
     }
     fn page(&self, state: &State, offset: usize, limit: usize) -> Value {
-        json!({"status":if self.cancelled {"cancelled"} else if self.pending()>0 {"accepted"} else {"spawned"},"requested":self.reserved(),"pending":self.pending(),"materialized":self.children.len(),"source":"captured baseline; live edits excluded","children":self.children.iter().skip(offset).take(limit).filter_map(|id|state.runtime.runs.iter().find(|run|run.id==*id)).map(|run|json!({"run_id":run.id,"chat_id":run.chat_id,"status":run.status})).collect::<Vec<_>>(),"next_offset":(offset.saturating_add(limit)<self.children.len()).then_some(offset.saturating_add(limit))})
+        json!({"status":if self.cancelled {"cancelled"} else if self.pending()>0 {"accepted"} else {"spawned"},"requested":self.reserved(),"pending":self.pending(),"materialized":self.children.len(),"source":"captured baseline; live edits excluded","children":self.children.iter().skip(offset).take(limit).filter_map(|id|state.runtime.runs.iter().find(|run|run.id()==*id)).map(|run|json!({"run_id":run.id(),"chat_id":run.chat_id,"status":run.status})).collect::<Vec<_>>(),"next_offset":(offset.saturating_add(limit)<self.children.len()).then_some(offset.saturating_add(limit))})
     }
 }
 pub fn definition() -> Value {
@@ -320,8 +320,8 @@ pub fn request(
     let index = state
         .runtime
         .runs
-        .iter()
-        .position(|r| r.id == id && r.status == RunStatus::Running)
+        .position(id)
+        .filter(|&index| state.runtime.runs[index].status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     let run = &state.runtime.runs[index];
     identity::authorize(&run.actor, run.action)?;
@@ -511,7 +511,7 @@ pub fn request(
 }
 
 fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<(), &'static str> {
-    let parent_id = state.runtime.runs[index].id.clone();
+    let parent_id = state.runtime.runs[index].id().to_string();
     let batch = &state.runtime.runs[index].spawns[batch_index];
     if batch.cancelled || batch.pending() == 0 {
         return Ok(());
@@ -579,7 +579,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
             parent: Some(parent_id.clone()),
             bundle: seed.persona.clone(),
         });
-        let child_run = run.id.clone();
+        let child_run = run.id().to_string();
         // Wake behaviours become an ordinary pending bot request.
         if let Some(bundle) = seed.persona.as_deref() {
             crate::bots::persona_request(state, &seed.parent_chat, &parent_id, &child_id, &bundle.behaviours);
@@ -639,15 +639,15 @@ fn fenced(state: &State, index: usize, batch_index: usize, authorized: bool) -> 
         let Some(ancestor) = state
             .runtime
             .runs
-            .iter()
-            .find(|run| &run.id == ancestor_id && run.actor == parent.actor && run.action == parent.action)
+            .get(ancestor_id)
+            .filter(|run| run.actor == parent.actor && run.action == parent.action)
         else {
             return true;
         };
         if ancestor
             .spawns
             .iter()
-            .any(|batch| batch.cancelled && batch.children.contains(&current.id))
+            .any(|batch| batch.cancelled && batch.children.iter().any(|child| current.id() == child))
         {
             return true;
         }
@@ -670,8 +670,8 @@ fn owned_ids(state: &State, index: usize, batch_index: usize) -> std::collection
         .collect::<std::collections::HashSet<_>>();
     loop {
         let before = selected.len();
-        for run in &state.runtime.runs {
-            if selected.contains(&run.id) && run.actor == actor && run.action == action {
+        for run in state.runtime.runs.iter() {
+            if selected.contains(run.id().as_str()) && run.actor == actor && run.action == action {
                 for next in [
                     run.delegation.as_ref().and_then(|d| d.continuation.as_ref()),
                     run.question.as_ref().and_then(|q| q.continuation.as_ref()),
@@ -679,11 +679,8 @@ fn owned_ids(state: &State, index: usize, batch_index: usize) -> std::collection
                 .into_iter()
                 .flatten()
                 {
-                    if state.runtime.runs.iter().any(|candidate| {
-                        candidate.id == *next
-                            && candidate.actor == actor
-                            && candidate.action == action
-                            && candidate.chat_id == run.chat_id
+                    if state.runtime.runs.get(next).is_some_and(|candidate| {
+                        candidate.actor == actor && candidate.action == action && candidate.chat_id == run.chat_id
                     }) {
                         selected.insert(next.clone());
                     }
@@ -697,7 +694,7 @@ fn owned_ids(state: &State, index: usize, batch_index: usize) -> std::collection
                     .and_then(|p| p.parent.as_ref())
                     .is_some_and(|parent| selected.contains(parent))
             {
-                selected.insert(run.id.clone());
+                selected.insert(run.id().to_string());
             }
         }
         if selected.len() == before {
@@ -709,8 +706,8 @@ fn owned_ids(state: &State, index: usize, batch_index: usize) -> std::collection
 fn cancel_owned(state: &mut State, index: usize, batch_index: usize, selected: &std::collections::HashSet<String>) {
     let actor = state.runtime.runs[index].actor.clone();
     let action = state.runtime.runs[index].action;
-    for run in &mut state.runtime.runs {
-        if run.actor == actor && run.action == action && selected.contains(&run.id) {
+    for run in state.runtime.runs.iter_mut() {
+        if run.actor == actor && run.action == action && selected.contains(run.id().as_str()) {
             for batch in &mut run.spawns {
                 batch.cancelled = true;
             }
@@ -753,7 +750,7 @@ fn transact_batch(
             .runs
             .iter()
             .enumerate()
-            .filter(|(_, run)| ids.contains(&run.id))
+            .filter(|(_, run)| ids.contains(run.id().as_str()))
             .flat_map(|(run_index, run)| {
                 run.spawns
                     .iter()
@@ -764,7 +761,8 @@ fn transact_batch(
     } else {
         Vec::new()
     };
-    let statuses = cancel.then(|| runtime::RunStatusCheckpoint::capture(&state.runtime, |run| ids.contains(&run.id)));
+    let statuses =
+        cancel.then(|| runtime::RunStatusCheckpoint::capture(&state.runtime, |run| ids.contains(run.id().as_str())));
     let result = if cancel {
         cancel_owned(state, index, batch_index, &ids);
         Ok(())
@@ -837,8 +835,8 @@ pub fn manage(
     let current = state
         .runtime
         .runs
-        .iter()
-        .find(|run| run.id == caller && run.status == RunStatus::Running)
+        .get(caller)
+        .filter(|run| run.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     identity::authorize(&current.actor, current.action)?;
     if delegation::is_judge(current) {
@@ -859,7 +857,7 @@ pub fn manage(
             run.spawns
                 .iter()
                 .enumerate()
-                .find(|(_, batch)| batch.id(&run.id) == input.batch)
+                .find(|(_, batch)| batch.id(run.id()) == input.batch)
                 .map(|(batch_index, _)| (index, batch_index))
         })
         .ok_or("Spawn batch not found in this originating chat.")?;
@@ -904,14 +902,13 @@ pub fn children<'a>(state: &'a State, parent: &'a runtime::Run) -> Result<Vec<&'
             state
                 .runtime
                 .runs
-                .iter()
-                .find(|run| {
-                    run.id == *id
-                        && run.kind == RunKind::Spawned
+                .get(id)
+                .filter(|run| {
+                    run.kind == RunKind::Spawned
                         && run.actor == parent.actor
                         && run.action == action
                         && run.persona.as_ref().is_some_and(|p| {
-                            p.parent.as_deref() == Some(&parent.id)
+                            p.parent.as_deref() == Some(parent.id())
                                 && p.root == lineage.root
                                 && p.depth == lineage.depth + 1
                                 && p.role == role

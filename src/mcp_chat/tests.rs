@@ -750,21 +750,14 @@ fn design_ask_in_a_named_chat_never_pauses_a_turn() {
         .iter()
         .find(|r| crate::design::asked(r))
         .unwrap()
-        .id
-        .clone();
+        .id()
+        .to_string();
     remote
         .state
         .runtime
         .action("/retry-run", &[("id".to_owned(), run_id.clone())].into());
     assert_eq!(
-        remote
-            .state
-            .runtime
-            .runs
-            .iter()
-            .find(|r| r.id == run_id)
-            .unwrap()
-            .status,
+        remote.state.runtime.runs.get(&run_id).unwrap().status,
         RunStatus::Cancelled
     );
 }

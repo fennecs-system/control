@@ -12,7 +12,7 @@ fn fixture(peer: bool) -> (State, String, String, &'static str) {
         let origin = tests::activate(&mut state, &child);
         (state, origin, target, "peer-attempt")
     } else {
-        let origin = state.runtime.runs[0].id.clone();
+        let origin = state.runtime.runs[0].id().to_string();
         (state, origin, child, "attempt-a")
     }
 }
@@ -178,13 +178,7 @@ fn dropping_a_suspended_driver_rolls_back_before_a_waiting_writer_can_cancel_the
         let writer = tokio::spawn(async move {
             let mut state = writer_state.lock().await;
             assert_eq!(serde_json::to_vec(&*state).unwrap(), before);
-            state
-                .runtime
-                .runs
-                .iter_mut()
-                .find(|run| run.id == cancelled_origin)
-                .unwrap()
-                .status = RunStatus::Cancelled;
+            state.runtime.runs.get_mut(&cancelled_origin).unwrap().status = RunStatus::Cancelled;
         });
         tokio::task::yield_now().await;
         assert!(
@@ -267,8 +261,7 @@ fn planning_is_read_only_and_deterministic_with_explicit_ids_and_rejects_stale_a
     state
         .runtime
         .runs
-        .iter_mut()
-        .find(|run| run.id == origin)
+        .get_mut(&origin)
         .unwrap()
         .attempts
         .last_mut()

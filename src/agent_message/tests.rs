@@ -28,7 +28,7 @@ pub(super) fn spawned(state: &mut State, parent: &str) -> String {
     chat
 }
 fn send(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     handle(
         state,
         &AttemptRef {
@@ -119,7 +119,7 @@ pub(super) fn activate(state: &mut State, chat: &str) -> String {
         workspace_id: Some("peer-attempt".into()),
         ..Default::default()
     });
-    run.id.clone()
+    run.id().to_string()
 }
 
 #[test]
@@ -341,8 +341,7 @@ fn peer_messages_share_only_explicitly_selected_accessible_service_generations()
     state
         .runtime
         .runs
-        .iter_mut()
-        .find(|run| run.id == alice_run)
+        .get_mut(&alice_run)
         .unwrap()
         .attempts
         .last_mut()
@@ -434,7 +433,7 @@ fn peer_archive_failure_rolls_back_message_receipt_and_grants_before_save() {
 fn failed_saves_leave_nothing_queued() {
     let (mut state, _, child, _) = family();
     let before = serde_json::to_vec(&state).unwrap();
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let result = handle(
         &mut state,
         &AttemptRef {
@@ -457,7 +456,7 @@ fn failed_saves_leave_nothing_queued() {
 #[test]
 fn receipts_of_running_attempts_are_never_evicted() {
     let (mut state, _, child, _) = family();
-    let active = state.runtime.runs[0].id.clone();
+    let active = state.runtime.runs[0].id().to_string();
     let first = send(&mut state, "n0", &child).unwrap();
     state.agent_messages.extend((1..MAX_SENT).map(|index| Sent {
         key: format!("other/{index}"),
@@ -495,7 +494,7 @@ fn late_service(state: &mut State, owner: &str) -> ResourceId {
             "resource":{"id":id,"owner":{"node":"node-a","chat":owner},"generation":1,
                 "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},
                 "lease":[1,u64::MAX],"phase":"Requested"},
-            "origin":{"run":state.runtime.runs[0].id,"attempt":"attempt-a"},
+            "origin":{"run":state.runtime.runs[0].id(),"attempt":"attempt-a"},
             "actor":{"type":"local_operator"},"command":"sleep 60","uid":502,"gid":20
         }))
         .unwrap(),
@@ -521,7 +520,7 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
         !crate::services::direct(&state.services[0], &node, state.runtime.runs.last().unwrap()),
         "ordinary messages do not grant access"
     );
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let call = || MessageCall {
         chat_id: child.clone(),
         text: "The new service is ready".into(),
@@ -587,8 +586,8 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
         workspace_id: Some("child-attempt".into()),
         ..Default::default()
     });
-    let old_id = run.id.clone();
-    let lead_run = state.runtime.runs[0].id.clone();
+    let old_id = run.id().to_string();
+    let lead_run = state.runtime.runs[0].id().to_string();
     handle(
         &mut state,
         &AttemptRef {
@@ -677,7 +676,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
 fn late_grants_reject_foreign_services_and_roll_back_atomically() {
     let (mut state, lead, child, grandchild) = family();
     let service = late_service(&mut state, &grandchild);
-    let run = state.runtime.runs[0].id.clone();
+    let run = state.runtime.runs[0].id().to_string();
     let call = || MessageCall {
         chat_id: child.clone(),
         text: "Continue".into(),

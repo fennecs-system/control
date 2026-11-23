@@ -23,7 +23,7 @@ fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
             ..Default::default()
         };
         run.attempts.push(attempt.clone());
-        let run_id = run.id.clone();
+        let run_id = run.id().to_string();
         let preview = Preview {
             id: "preview".into(),
             chat: chat.clone(),
@@ -87,7 +87,7 @@ fn previews_require_an_active_captured_project_and_reject_forged_mounts() {
     let run = &mut locked.runtime.runs[0];
     run.status = RunStatus::Running;
     run.attempts.push(Attempt::default());
-    let id = run.id.clone();
+    let id = run.id().to_string();
     drop(locked);
     assert!(
         start(
@@ -139,7 +139,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
         project: Some("fixture-approved".into()),
         ..Default::default()
     });
-    let run_id = run.id.clone();
+    let run_id = run.id().to_string();
     let state = Arc::new(Mutex::new(state));
     struct Cleanup(Arc<Mutex<State>>);
     impl Drop for Cleanup {

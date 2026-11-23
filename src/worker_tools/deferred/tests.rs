@@ -340,7 +340,7 @@ fn member_state() -> (String, Value) {
         bundle: None,
     });
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[index].id.clone();
+    let id = state.runtime.runs[index].id().to_string();
     assert_eq!(state.runtime.runs[index].status, RunStatus::Running);
     (id, serde_json::to_value(&state).unwrap())
 }
@@ -365,7 +365,7 @@ fn every_callable_tool_answers_identically_through_control_call() {
     let shared = fresh(&snapshot);
     let facts = {
         let state = shared.lock().unwrap();
-        let run = state.runtime.runs.iter().find(|r| r.id == run).unwrap();
+        let run = state.runtime.runs.get(&run).unwrap();
         Facts::of(&state, run, true)
     };
     assert_eq!(facts.role, Audience::Member);

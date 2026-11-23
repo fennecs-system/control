@@ -223,7 +223,7 @@ fn regenerating_with_emphasis_adds_a_selectable_revision_the_next_turn_uses() {
     // The next turn's projection (managed context and legacy prompt) uses it.
     crate::chat::send(&mut state, &chat, "Continue the build", "test").unwrap();
     let index = state.runtime.runs.len() - 1;
-    let id = state.runtime.runs[index].id.clone();
+    let id = state.runtime.runs[index].id().to_string();
     let trace = crate::turn_context::PlannedContext::prepare(&state, index)
         .unwrap()
         .persist()
@@ -414,7 +414,7 @@ fn dropped_ranges_leave_the_agent_view_and_summaries_until_restored() {
     // the original assignment.
     crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
     let index = state.runtime.runs.len() - 1;
-    let id = state.runtime.runs[index].id.clone();
+    let id = state.runtime.runs[index].id().to_string();
     let trace = crate::turn_context::PlannedContext::prepare(&state, index)
         .unwrap()
         .persist()

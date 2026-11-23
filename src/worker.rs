@@ -254,7 +254,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                         };
                         let run = &s.runtime.runs[index];
                         (
-                            run.id.clone(),
+                            run.id().to_string(),
                             // Managed adapters read the already durable exact
                             // input. Do not rebuild the old history/handoff as
                             // an unused second projection under the state lock.
@@ -265,7 +265,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                             {
                                 run.objective.to_string()
                             } else {
-                                crate::chat::prompt(&s, &run.id).unwrap_or_else(|| run.objective.to_string())
+                                crate::chat::prompt(&s, run.id()).unwrap_or_else(|| run.objective.to_string())
                             },
                             run.actor.clone(),
                             run.action,
@@ -286,7 +286,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                         Err(_) => {
                             workers.failed.store(true, std::sync::atomic::Ordering::Relaxed);
                             if let Ok(mut s) = state.lock() {
-                                if let Some(run) = s.runtime.runs.iter_mut().find(|r| r.id == run) {
+                                if let Some(run) = s.runtime.runs.get_mut(&run) {
                                     run.status = RunStatus::Blocked;
                                     run.result =
                                         "Could not start execution thread; restart Control after checking resources."
@@ -426,7 +426,7 @@ fn commit(
     stopping: bool,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<(), ()> {
-    let Some(run) = s.runtime.runs.iter().find(|r| r.id == id) else {
+    let Some(run) = s.runtime.runs.get(id) else {
         return Ok(());
     };
     if !crate::lifecycle::current(run, &attempt) {
@@ -440,7 +440,7 @@ fn commit(
             "Cancelled. The previous published workspace is unchanged.".into(),
         ));
     }
-    let run_index = s.runtime.runs.iter().position(|r| r.id == id).unwrap();
+    let run_index = s.runtime.runs.position(id).unwrap();
     let chat_id = run.chat_id.clone();
     let chat_index = s.chats.iter().position(|c| Some(&c.id) == chat_id.as_ref());
     if outcome.is_ok()
@@ -547,7 +547,7 @@ fn commit(
                 && r.chat_id == chat_id
                 && r.actor == run.actor
                 && r.action == action
-                && consumed.contains(r.id.as_str())
+                && consumed.contains(r.id().as_str())
         })
         .map(|(index, r)| (index, r.status.clone(), r.result.clone()))
         .collect::<Vec<_>>();
@@ -722,7 +722,7 @@ fn checkpoint_prepared(
     if crate::turn_context::managed(state, &state.runtime.runs[index]) && captured.is_none() {
         return None;
     }
-    let omitted_history = crate::chat::omitted_history(state, &state.runtime.runs[index].id);
+    let omitted_history = crate::chat::omitted_history(state, state.runtime.runs[index].id());
     let parent = {
         if let Some(previous) = state.runtime.runs[index].attempts.last() {
             previous.parent_artifact.clone()
@@ -852,7 +852,7 @@ fn checkpoint_prepared(
         let run = &state.runtime.runs[index];
         let mut mailbox = control_context::turn_mailbox::Mailbox::default();
         if let Some(chat) = state.chats.iter().find(|c| Some(&c.id) == run.chat_id.as_ref())
-            && let Some(position) = crate::conversation::Conversation::of(state, chat).position(&run.id)
+            && let Some(position) = crate::conversation::Conversation::of(state, chat).position(run.id())
         {
             mailbox.baseline.extend(
                 chat.continuity
@@ -897,7 +897,7 @@ fn checkpoint_prepared(
     attempt.image = run.target.backend.image();
     attempt.node_id = crate::config::node_id().ok();
     attempt.parent_artifact = parent;
-    attempt.workspace_id = Some(format!("{}-attempt-{}", run.id, run.attempts.len() + 1));
+    attempt.workspace_id = Some(format!("{}-attempt-{}", run.id(), run.attempts.len() + 1));
     attempt.omitted_history = omitted_history;
     attempt.model = run.target.model_or_default();
     run.attempts.push(attempt);
@@ -1064,8 +1064,7 @@ fn record_activity(state: &mut State, id: &str, event: crate::usage::Activity) -
     let generation = state
         .runtime
         .runs
-        .iter()
-        .find(|r| r.id == id)
+        .get(id)
         .and_then(|r| r.attempts.last())
         .and_then(|a| a.workspace_id.clone());
     let Some(generation) = generation else {
@@ -1079,7 +1078,7 @@ pub(crate) fn record_activity_for(
     generation: &str,
     mut event: crate::usage::Activity,
 ) -> bool {
-    let Some(run) = state.runtime.runs.iter_mut().find(|r| r.id == id) else {
+    let Some(run) = state.runtime.runs.get_mut(id) else {
         return false;
     };
     let run = &mut **run;
@@ -1137,8 +1136,8 @@ pub(crate) fn record_usage_for(state: &mut State, id: &str, generation: &str, us
     let Some(run) = state
         .runtime
         .runs
-        .iter_mut()
-        .find(|r| r.id == id && r.status == RunStatus::Running)
+        .get_mut(id)
+        .filter(|r| r.status == RunStatus::Running)
     else {
         return false;
     };
@@ -1167,11 +1166,7 @@ pub(crate) fn observe_workspace_diff(
     // Judge /workspace may be scratch transport, not the read-only source.
     // Never present its scratch files as a patch to the reviewed project.
     if state.lock().map_or(true, |s| {
-        s.runtime
-            .runs
-            .iter()
-            .find(|r| r.id == run)
-            .is_none_or(crate::delegation::is_judge)
+        s.runtime.runs.get(run).is_none_or(crate::delegation::is_judge)
     }) {
         return;
     }
@@ -1249,8 +1244,7 @@ pub(crate) fn interrupt_unfinished_tools(bridge: Option<(&Arc<Mutex<State>>, &st
     let Some(attempt) = state
         .runtime
         .runs
-        .iter_mut()
-        .find(|r| r.id == id)
+        .get_mut(id)
         .and_then(|r| r.attempts.last_mut())
         .filter(|a| a.workspace_id.as_deref() == Some(generation))
     else {
@@ -1376,7 +1370,7 @@ fn execute(
         None => captured.unwrap_or_else(|| {
             let room = bridge.and_then(|(state, run_id)| {
                 let s = state.lock().ok()?;
-                let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
+                let run = s.runtime.runs.get(run_id)?;
                 s.chats
                     .iter()
                     .find(|c| Some(&c.id) == run.chat_id.as_ref())?

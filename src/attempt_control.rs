@@ -85,7 +85,7 @@ pub fn poll(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt, elaps
     let Ok(state) = shared.lock() else {
         return Decision::Continue;
     };
-    let Some(run) = state.runtime.runs.iter().find(|r| r.id == id) else {
+    let Some(run) = state.runtime.runs.get(id) else {
         return Decision::Continue;
     };
     let handoff = run
@@ -128,8 +128,7 @@ pub fn stop(
         let live = state
             .runtime
             .runs
-            .iter()
-            .find(|r| r.id == id)
+            .get(id)
             .and_then(|r| r.attempts.last())
             .filter(|a| a.workspace_id == attempt.workspace_id)
             .ok_or("Attempt generation changed while stopping")?;

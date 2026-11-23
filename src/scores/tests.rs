@@ -113,7 +113,8 @@ fn milestones_count_completed_turns_and_done_claims_across_the_team() {
         run("r2", &member, "completed"),
         run("r3", &member, "failed"),
         run("r4", &outsider, "completed"),
-    ];
+    ]
+    .into();
     state.collective.claims = vec![
         claim(&member, "done"),
         claim(&root, "working"),

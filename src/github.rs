@@ -170,7 +170,7 @@ pub fn cli(args: &[String]) -> io::Result<()> {
     );
     Ok(())
 }
-pub fn inherit(runs: &[crate::runtime::Run], parent: Option<&str>) -> Option<Source> {
+pub fn inherit(runs: &crate::runtime::Runs, parent: Option<&str>) -> Option<Source> {
     let parent = parent?;
     runs.iter()
         .filter(|r| r.action == Action::Improve)
@@ -350,7 +350,7 @@ fn validate_input(input: &Input) -> io::Result<()> {
 }
 fn selected(
     chats: &[crate::chat::Session],
-    runs: &[crate::runtime::Run],
+    runs: &crate::runtime::Runs,
     chat: &str,
     input: &Input,
 ) -> io::Result<(Attempt, Actor)> {
@@ -361,10 +361,9 @@ fn selected(
         .ok_or_else(|| io::Error::other("Chat not found"))?;
     crate::identity::authorize(&session.actor, Action::Improve).map_err(io::Error::other)?;
     let run = runs
-        .iter()
-        .find(|r| {
-            r.id == input.run_id
-                && r.chat_id.as_deref() == Some(chat)
+        .get(&input.run_id)
+        .filter(|r| {
+            r.chat_id.as_deref() == Some(chat)
                 && r.actor == session.actor
                 && r.action == Action::Improve
                 && r.status == RunStatus::Completed
@@ -830,11 +829,11 @@ pub fn refresh_availability() {
         std::sync::atomic::Ordering::Relaxed,
     );
 }
-pub fn panel(publications: &[Publication], runs: &[crate::runtime::Run], chat: &str) -> String {
+pub fn panel(publications: &[Publication], runs: &crate::runtime::Runs, chat: &str) -> String {
     let mut html = String::new();
     for publication in publications
         .iter()
-        .filter(|p| runs.iter().any(|r| r.id == p.run && r.chat_id.as_deref() == Some(chat)))
+        .filter(|p| runs.get(&p.run).is_some_and(|r| r.chat_id.as_deref() == Some(chat)))
     {
         if let Some(url) = &publication.url {
             html.push_str(&format!(
@@ -853,9 +852,9 @@ pub fn panel(publications: &[Publication], runs: &[crate::runtime::Run], chat: &
             && r.attempts
                 .last()
                 .is_some_and(|a| a.github_source.is_some() && a.artifact.is_some())
-    }) && !publications.iter().any(|p| p.run == run.id && p.url.is_some())
+    }) && !publications.iter().any(|p| run.id() == p.run && p.url.is_some())
     {
-        html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/dm/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(&run.id),crate::escape(&run.objective.chars().take(160).collect::<String>())));
+        html.push_str(&format!("<details class='project-picker' data-transcript-key='github-publication'><summary>Open pull request</summary><form method='post' target='_top' action='/dm/{chat}/github'><input type='hidden' name='run_id' value='{}'><label>Title<input name='title' value='{}' maxlength='200' required></label><label>Description<textarea name='body' maxlength='16000'></textarea></label><button>Open draft pull request</button></form></details>",crate::escape(run.id()),crate::escape(&run.objective.chars().take(160).collect::<String>())));
     }
     html
 }
@@ -877,8 +876,7 @@ pub(crate) fn mcp_open_pr(shared: &Arc<Mutex<State>>, request: &Value) -> Value 
                 .map_err(|_| io::Error::other("State unavailable"))?
                 .runtime
                 .runs
-                .iter()
-                .find(|r| r.id == input.run_id)
+                .get(&input.run_id)
                 .and_then(|r| r.chat_id.clone())
                 .ok_or_else(|| io::Error::other("Run not found"))?;
             open(shared, &chat, input)

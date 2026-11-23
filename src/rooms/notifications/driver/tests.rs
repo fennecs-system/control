@@ -161,7 +161,7 @@ fn dropping_a_suspended_transaction_preserves_only_confirmed_checkpoints() {
         drop(future);
         if committed {
             assert_ne!(snapshot(&state), before);
-            assert_eq!(state.runtime.runs.last().unwrap().id, "fixed-notification");
+            assert_eq!(state.runtime.runs.last().unwrap().id(), "fixed-notification");
             assert!(state.collective.room_watches[0].wake.is_none());
         } else {
             assert_eq!(snapshot(&state), before);
@@ -179,6 +179,6 @@ fn dropping_a_suspended_transaction_preserves_only_confirmed_checkpoints() {
         )))
         .is_err()
     );
-    assert_eq!(state.runtime.runs.last().unwrap().id, "fixed-notification");
+    assert_eq!(state.runtime.runs.last().unwrap().id(), "fixed-notification");
     assert!(state.collective.room_watches[0].wake.is_none());
 }
