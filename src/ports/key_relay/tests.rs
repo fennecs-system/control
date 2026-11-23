@@ -1,5 +1,5 @@
 use super::*;
-use crate::accounts::{AccountName, Entry};
+use crate::accounts::{AccountKind, AccountName, Entry};
 use control_agent::Form;
 use std::{fs, os::unix::fs::DirBuilderExt};
 

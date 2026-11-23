@@ -6,7 +6,7 @@
 use super::inject::{AttemptCap, AttemptId, InjectionRule, Limits, Token};
 use super::inject_edge::{AuditFile, Relay, Timing, Tls, Upstream};
 use super::inject_keys::{AccountKeys, KeyAccount};
-use crate::accounts::{AccountKind, Store};
+use crate::accounts::Store;
 use crate::backend::Backend;
 use control_agent::{Granted, KeyDelivery, Proxied};
 use control_isolation::{ExecSpec, Input, Isolation, Stream, Streams, User};
@@ -87,7 +87,9 @@ pub(crate) fn grant(
     attempt: &str,
 ) -> io::Result<(Granted, Option<KeyRelay>)> {
     let located = crate::logins::locate(account)?;
-    if account.kind != AccountKind::ApiKey {
+    // By what was found, not the account's kind: Antigravity's own folder may
+    // hold a key for its implicit account.
+    if located.form() != control_agent::Form::ApiKey {
         return Ok((located, None));
     }
     let rule = match decision(account.id.backend) {

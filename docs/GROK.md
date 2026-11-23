@@ -33,14 +33,19 @@ private credential file, which is mounted read-only. Repeat `login` when the
 session expires.
 
 An xAI API key instead (billed per use): `control accounts add grok NAME --kind
-api-key`, then `pbpaste | control grok key --account NAME`. Grok documents the
-`XAI_API_KEY` variable as its API-key path (docs/user-guide/02-authentication.md
-at the pinned revision), so the key is mounted read-only at
-`/home/agent/.control-key/xai-api-key` and the image's `control-grok` entrypoint
-exports it for Grok's process alone: it is never a variable of the container
-or in the launch description. Control's MCP server is started through
-`env -u XAI_API_KEY`, because Grok passes its environment to MCP servers. Not
-yet confirmed with a real key.
+api-key`, then `pbpaste | control grok key --account NAME`. The key stays on
+the host: Control's [key-injecting relay](PORTS.md#key-injecting-relay) adds it
+to Grok's requests. Grok documents the `XAI_API_KEY` variable as its API-key
+path (docs/user-guide/02-authentication.md at the pinned revision). The
+container therefore holds a per-attempt placeholder at
+`/home/agent/.control-key/xai-api-key`, which the image's `control-grok`
+entrypoint exports for Grok's process alone. The container has no network.
+`GROK_XAI_API_BASE_URL` points Grok at the relay, whose allow-list includes
+Grok's startup key probe (`GET /v1/api-key`). `GROK_DISABLE_AUTOUPDATER=1` and
+`GROK_TELEMETRY_ENABLED=0` turn off the updater and telemetry. Control's MCP
+server is started through `env -u XAI_API_KEY`, because Grok passes its
+environment to MCP servers. This follows Grok's source at the pinned revision.
+It has not yet run against a real Grok image or key.
 
 ## How a turn runs
 

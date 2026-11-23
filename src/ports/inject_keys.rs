@@ -3,7 +3,7 @@
 //! location table and checks as every other login (`crate::logins::locate`),
 //! once per request, and cleared when the edge's call returns.
 use super::inject_edge::SecretSource;
-use crate::accounts::{AccountId, AccountKind, KeyWriter, Store};
+use crate::accounts::{AccountId, KeyWriter, Store};
 use crate::backend::Backend;
 use std::{fmt, io};
 use zeroize::Zeroizing;
@@ -25,10 +25,10 @@ impl SecretSource<KeyAccount> for AccountKeys {
         let id = &account.0;
         let account = crate::logins::account(&self.0, id.backend, &id.name);
         let file = crate::accounts::Backend::key_file(id.backend).ok_or_else(none)?;
-        if account.kind != AccountKind::ApiKey {
+        let granted = crate::logins::locate(&account)?;
+        if granted.form() != control_agent::Form::ApiKey {
             return Err(none());
         }
-        let granted = crate::logins::locate(&account)?;
         // A key file is small; a CLI's sign-in file holding one is too.
         let bytes = Zeroizing::new(crate::config::read_regular(granted.path(), 64 * 1024, true)?);
         match file.writer {
@@ -54,7 +54,7 @@ impl SecretSource<KeyAccount> for AccountKeys {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounts::{AccountName, Entry};
+    use crate::accounts::{AccountKind, AccountName, Entry};
     use std::{fs, os::unix::fs::DirBuilderExt};
 
     #[test]
