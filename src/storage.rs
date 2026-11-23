@@ -2,6 +2,7 @@ pub(crate) mod archive;
 
 use crate::State;
 use crate::config::{STATE_LOG as LOG, state_schema as schema};
+use crate::runtime::RunStatus;
 use control_effect::sync::Changes;
 use control_journal::{
     FileJournal, Journal,
@@ -267,12 +268,12 @@ pub fn compact(state: &State) -> io::Result<()> {
 fn interrupt_active(state: &mut State) -> bool {
     let mut changed = false;
     for run in &mut state.runtime.runs {
-        if ["running", "cancelling"].contains(&run.status.as_str()) {
+        if run.status.occupies_slot() {
             changed = true;
-            run.status = "interrupted".into();
+            run.status = RunStatus::Interrupted;
             run.result = "The control plane stopped during this run. Inspect the container before retrying.".into();
             if let Some(attempt) = run.attempts.last_mut() {
-                attempt.status = "interrupted".into();
+                attempt.status = crate::usage::AttemptStatus::Interrupted;
                 attempt
                     .termination
                     .get_or_insert(crate::attempt_control::Termination::Restarted);

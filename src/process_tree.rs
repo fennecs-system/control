@@ -3,6 +3,7 @@
 //! drawn as tidy trees in server-rendered SVG that grow up from a shared
 //! baseline, roots at the bottom.
 use crate::State;
+use crate::runtime::RunStatus;
 
 const WIDTH: f64 = 160.0;
 const HEIGHT: f64 = 52.0;
@@ -215,17 +216,17 @@ impl Tree {
 
 /// The latest run status of every chat that has run, in one pass over runs,
 /// so the page costs O(chats + runs) rather than a run scan per chat.
-type Latest<'a> = std::collections::HashMap<&'a str, &'a str>;
+type Latest<'a> = std::collections::HashMap<&'a str, &'a RunStatus>;
 fn latest_statuses(state: &State) -> Latest<'_> {
     state
         .runtime
         .runs
         .iter()
-        .filter_map(|run| Some((run.chat_id.as_deref()?, run.status.as_str())))
+        .filter_map(|run| Some((run.chat_id.as_deref()?, &run.status)))
         .collect()
 }
-fn busy(status: Option<&str>) -> bool {
-    matches!(status, Some("queued" | "running" | "waiting" | "cancelling"))
+fn busy(status: Option<&RunStatus>) -> bool {
+    status.is_some_and(RunStatus::is_active)
 }
 
 /// Task trees with something to show: a bot, a live service or an active turn

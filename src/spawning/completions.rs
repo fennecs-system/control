@@ -44,7 +44,7 @@ fn ready<'a>(state: &'a State, parent: &runtime::Run, batch: &Batch) -> Result<V
         {
             return Err("Spawned completion scope changed.");
         }
-        if crate::application::runs::status::finished(&leaf.status) {
+        if leaf.status.is_finished() {
             ready.push(child);
             if ready.len() == WINDOW {
                 break;
@@ -80,9 +80,7 @@ pub(super) fn reconcile(
             // Coalesce completions while an earlier notification is queued or
             // running; users and other chats retain normal queue ordering.
             if state.runtime.runs.iter().any(|run| {
-                run.kind == RunKind::AgentCompletion
-                    && run.chat_id == parent.chat_id
-                    && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
+                run.kind == RunKind::AgentCompletion && run.chat_id == parent.chat_id && run.status.is_active()
             }) {
                 continue;
             }

@@ -1,3 +1,4 @@
+use crate::runtime::RunStatus;
 use crate::{escape, identity::Actor, runtime::Runtime};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -6,6 +7,61 @@ use std::{
 };
 
 pub use control_ai::{Accounting, Activity, StatusPart, Tokens, attempt_status};
+
+/// An attempt's lifecycle status, saved as its lowercase name. Unlike a run,
+/// an attempt is never queued, cancelling or continued.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttemptStatus {
+    /// No status recorded: saved as the empty string, as `String::default()` was.
+    #[default]
+    #[serde(rename = "")]
+    Unset,
+    Running,
+    Completed,
+    Waiting,
+    Blocked,
+    Failed,
+    Interrupted,
+    Cancelled,
+    /// A saved status no current code writes, kept verbatim so old state and
+    /// history still load and save unchanged.
+    #[serde(untagged)]
+    Unrecognised(String),
+}
+impl AttemptStatus {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Unset => "",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Waiting => "waiting",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+            Self::Cancelled => "cancelled",
+            Self::Unrecognised(status) => status,
+        }
+    }
+}
+impl std::fmt::Display for AttemptStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+/// A failed or paused turn's outcome becomes its attempt's status.
+impl From<control_agent::Status> for AttemptStatus {
+    fn from(status: control_agent::Status) -> Self {
+        use control_agent::Status;
+        match status {
+            Status::Blocked => Self::Blocked,
+            Status::Failed => Self::Failed,
+            Status::Cancelled => Self::Cancelled,
+            Status::Waiting => Self::Waiting,
+            Status::Interrupted => Self::Interrupted,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -57,7 +113,7 @@ pub struct Attempt {
     pub elapsed_ms: u64,
     pub provider: String,
     pub model: String,
-    pub status: String,
+    pub status: AttemptStatus,
     pub tokens: Option<Tokens>,
     /// How far `tokens` can be trusted. Absent on records from before it was kept.
     #[serde(skip_serializing_if = "Accounting::is_unrecorded")]
@@ -93,7 +149,7 @@ impl Attempt {
     }
     /// Still in progress: its tokens, if any, are the totals reported so far.
     pub fn running(&self) -> bool {
-        self.status == "running"
+        self.status == AttemptStatus::Running
     }
     /// The attempt's compact status line; see [`attempt_status`].
     pub fn status(&self, index: usize) -> Vec<StatusPart> {
@@ -119,7 +175,7 @@ impl Attempt {
                 .as_secs(),
             provider: "OpenAI / Codex".into(),
             model,
-            status: "running".into(),
+            status: AttemptStatus::Running,
             ..Self::default()
         }
     }
@@ -177,11 +233,16 @@ impl Summary {
         if attempt.accounting == Accounting::NotLaunched {
             self.no_call += 1;
         }
-        match attempt.status.as_str() {
-            "completed" => self.completed += 1,
-            "failed" => self.failed += 1,
-            "interrupted" => self.interrupted += 1,
-            _ => {}
+        match attempt.status {
+            AttemptStatus::Completed => self.completed += 1,
+            AttemptStatus::Failed => self.failed += 1,
+            AttemptStatus::Interrupted => self.interrupted += 1,
+            AttemptStatus::Unset
+            | AttemptStatus::Running
+            | AttemptStatus::Waiting
+            | AttemptStatus::Blocked
+            | AttemptStatus::Cancelled
+            | AttemptStatus::Unrecognised(_) => {}
         }
         if let Some(tokens) = attempt.tokens {
             self.measured += 1;
@@ -322,7 +383,7 @@ pub fn render(state: &crate::State) -> String {
     let mut daily = BTreeMap::<u64, u64>::new();
     let mut legacy = 0;
     for run in &runtime.runs {
-        if run.attempts.is_empty() && !["queued", "running"].contains(&run.status.as_str()) {
+        if run.attempts.is_empty() && !matches!(run.status, RunStatus::Queued | RunStatus::Running) {
             legacy += 1;
         }
         for attempt in &run.attempts {

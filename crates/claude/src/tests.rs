@@ -282,3 +282,56 @@ const LOGIN: &[&str] = &[
     "auth",
     "login",
 ];
+
+/// An API-key account's turn and text call: the key is one read-only secret
+/// mount, and the only flag that refers to it names the file, not the key.
+#[test]
+fn an_api_key_is_mounted_and_read_by_claudes_own_helper() {
+    let root = std::env::temp_dir().join(format!("control-claude-key-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let key = root.join(KEY_FILE);
+    cli::private_file(&key, "sk-ant-CANARY").unwrap();
+    let meta = fs::symlink_metadata(&key).unwrap();
+    let granted = Granted::located(
+        Form::ApiKey,
+        key.clone(),
+        User {
+            uid: meta.uid(),
+            gid: meta.gid(),
+        },
+    );
+    assert_eq!(KEY_SETTINGS, format!(r#"{{"apiKeyHelper":"cat {KEY}"}}"#));
+    let specs = [
+        turn_container("control-run-1", "node", &granted, &root, "sha256:img", "sonnet").unwrap(),
+        text_container("sha256:img", "control-summary-1", &root, "node", "sonnet", &granted).unwrap(),
+    ];
+    for spec in specs {
+        let [secret] = spec.secrets.as_slice() else {
+            panic!("one secret: {:?}", spec.secrets)
+        };
+        assert_eq!(
+            (
+                secret.name.as_str(),
+                secret.target.as_str(),
+                secret.access,
+                &secret.source
+            ),
+            ("claude/api-key", KEY, Access::ReadOnly, &key)
+        );
+        let at = spec.argv.iter().position(|word| word == "--settings").unwrap();
+        assert_eq!(spec.argv[at + 1], KEY_SETTINGS);
+        assert!(spec.argv.contains(&"--restricted".to_owned()));
+        let shown = format!("{:?}{:?}", spec.argv, spec.env);
+        assert!(
+            !shown.contains("CANARY") && !shown.contains("ANTHROPIC_API_KEY"),
+            "{shown}"
+        );
+    }
+    // A sign-in keeps its own file and no settings flag.
+    let session = Granted::located(Form::Session, key.clone(), granted.owner());
+    let spec = turn_container("control-run-1", "node", &session, &root, "sha256:img", "sonnet").unwrap();
+    assert_eq!(spec.secrets[0].target, "/home/agent/.claude/.credentials.json");
+    assert!(!spec.argv.contains(&"--settings".to_owned()));
+    assert!(Claude.private_names().contains(&KEY_FILE));
+    fs::remove_dir_all(root).unwrap();
+}

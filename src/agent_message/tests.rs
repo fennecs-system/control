@@ -1,11 +1,12 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 pub(super) fn family() -> (State, String, String, String) {
     let mut state = State::default();
     let lead = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &lead, "Lead the playtest", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-a".into()),
         ..Default::default()
@@ -23,7 +24,7 @@ pub(super) fn spawned(state: &mut State, parent: &str) -> String {
         .unwrap()
         .parent_chat = Some(parent.into());
     crate::chat::send(state, &chat, "Set up the bot", "test").unwrap();
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     chat
 }
 fn send(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
@@ -113,7 +114,7 @@ fn messages_reach_only_same_actor_task_scope_from_active_attempts() {
 pub(super) fn activate(state: &mut State, chat: &str) -> String {
     let index = crate::chat::latest_task(state, chat, &state.chats[0].actor).unwrap();
     let run = &mut state.runtime.runs[index];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("peer-attempt".into()),
         ..Default::default()
@@ -125,7 +126,7 @@ pub(super) fn activate(state: &mut State, chat: &str) -> String {
 fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_bot() {
     let (mut state, lead, alice, _) = family();
     let cass = spawned(&mut state, &lead);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let alice_run = activate(&mut state, &alice);
     let cass_index = crate::chat::latest_task(&state, &cass, &state.chats[0].actor).unwrap();
     state.runtime.runs[cass_index].target.model = Some("recipient-model".into());
@@ -151,13 +152,19 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
     );
     assert_eq!(queued.kind, RunKind::AgentMessage);
     assert_eq!(
-        queued.status, "completed",
+        queued.status,
+        RunStatus::Completed,
         "an unapproved peer receives evidence, not an unattended turn"
     );
     assert_eq!(first["queued"], false);
     assert_eq!(first["retained"], true);
     assert_eq!(
-        state.runtime.runs.iter().filter(|run| run.status == "queued").count(),
+        state
+            .runtime
+            .runs
+            .iter()
+            .filter(|run| run.status == RunStatus::Queued)
+            .count(),
         0
     );
     assert!(queued.objective.contains("not operator steering"));
@@ -283,13 +290,13 @@ fn peers_preserve_stops_action_scope_judges_and_atomic_delivery() {
         urgent: true,
     };
     for status in ["cancelled", "cancelling", "failed", "interrupted", "blocked"] {
-        state.runtime.runs[cass_index].status = status.into();
+        state.runtime.runs[cass_index].status = RunStatus::named(status);
         assert!(
             handle(&mut state, &attempt, call(), |_| panic!("stopped work must not save")).is_err(),
             "{status}"
         );
     }
-    state.runtime.runs[cass_index].status = "completed".into();
+    state.runtime.runs[cass_index].status = RunStatus::Completed;
     state.runtime.runs[cass_index].action = identity::Action::Improve;
     assert!(handle(&mut state, &attempt, call(), |_| panic!("action changes must not save")).is_err());
     state.runtime.runs[cass_index].action = identity::Action::Task;
@@ -413,7 +420,7 @@ fn peer_archive_failure_rolls_back_message_receipt_and_grants_before_save() {
             urgent: true,
         },
         |evidence| {
-            assert_eq!(evidence.status, "completed");
+            assert_eq!(evidence.status, RunStatus::Completed);
             assert_eq!(evidence.source, "peer-message");
             Err(io::Error::other("journal full"))
         },
@@ -575,7 +582,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
     let service = late_service(&mut state, &lead);
     let child_index = crate::chat::latest_task(&state, &child, &state.chats[0].actor).unwrap();
     let run = &mut state.runtime.runs[child_index];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("child-attempt".into()),
         ..Default::default()
@@ -601,8 +608,8 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
     let grant_index = state.runtime.runs.len() - 1;
     crate::design::tests::ask_without_io(&mut state, &old_id, "question", crate::design::tests::input()).unwrap();
     let old = &mut state.runtime.runs[child_index];
-    old.status = "waiting".into();
-    old.attempts[0].status = "waiting".into();
+    old.status = RunStatus::Waiting;
+    old.attempts[0].status = crate::usage::AttemptStatus::Waiting;
     old.attempts[0].artifact = Some("paused-workspace".into());
     crate::design::answer(&mut state, &child, None, "1", "test").unwrap();
     let answer_index = state.runtime.runs.len() - 1;
@@ -611,15 +618,15 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
         state.runtime.runs[answer_index].resource_grants.is_empty(),
         "the earlier continuation must not receive a future grant"
     );
-    state.runtime.runs[answer_index].status = "completed".into();
+    state.runtime.runs[answer_index].status = RunStatus::Completed;
     assert_eq!(crate::scheduler::next(&state.runtime), Some(grant_index));
-    state.runtime.runs[grant_index].status = "completed".into();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[grant_index].status = RunStatus::Completed;
+    state.runtime.runs[0].status = RunStatus::Completed;
     for source in ["agent", "human", "bot", "listener", "fork"] {
         let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         match source {
             "agent" => {
-                restored.runtime.runs[0].status = "running".into();
+                restored.runtime.runs[0].status = RunStatus::Running;
                 send(&mut restored, "next", &child).unwrap();
             }
             "human" => crate::chat::send(&mut restored, &child, "Continue", "test").unwrap(),

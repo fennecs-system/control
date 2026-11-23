@@ -1,4 +1,5 @@
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 /// Control's own work around a conversation, without model calls: send,
 /// record the run's reply, save durably, then load the transcript and page,
 /// for many 15-turn conversations in one growing state. Profile with perf.
@@ -65,7 +66,7 @@ fn fifteen_turn_conversations_workload() {
                 .rev()
                 .find(|run| run.chat_id.as_deref() == Some(id.as_str()))
                 .unwrap();
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
             *run.result = reply.clone();
             let mut attempt = crate::usage::Attempt::new();
             attempt.activity = (0..20)
@@ -284,7 +285,7 @@ fn browser_fixture(long_messages_only: bool) {
     };
     let (mut initial, chat) = crate::design::tests::paused();
     let question = initial.runtime.runs[0].question.take().unwrap();
-    initial.runtime.runs[0].status = "running".into();
+    initial.runtime.runs[0].status = RunStatus::Running;
     initial.runtime.runs[0].result.clear();
     crate::projects::request(
         &mut initial,
@@ -420,8 +421,8 @@ fn browser_fixture(long_messages_only: bool) {
                     }
                 });
                 for run in &mut state.runtime.runs {
-                    if run.chat_id.as_deref() == Some(id) && run.status == "queued" {
-                        run.status = "completed".into();
+                    if run.chat_id.as_deref() == Some(id) && run.status == RunStatus::Queued {
+                        run.status = RunStatus::Completed;
                         *run.result=format!("{}\n\n{}",run.objective.replace("Prompt","Response"),"A retained paragraph exercises a longer conversation, including **formatted text**, `code`, and evidence without navigating the composer.\n\n".repeat(32));
                     }
                 }
@@ -663,7 +664,7 @@ fn browser_fixture(long_messages_only: bool) {
                 .runtime
                 .enqueue(format!("History run {index}"), RunKind::Chat, "test");
             let run = state.runtime.runs.last_mut().unwrap();
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
             run.chat_id = Some(parent.clone());
         }
         let child = crate::chat::create(&mut state);
@@ -997,7 +998,7 @@ fn browser_fixture(long_messages_only: bool) {
     {
         let mut state = state.lock().unwrap();
         let run = &mut state.runtime.runs[0];
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         run.result = "Finished without another user message".into();
         run.attempts[0].activity.push(crate::usage::Activity {
             id: "workspace-diff".into(),
@@ -1033,7 +1034,7 @@ fn browser_fixture(long_messages_only: bool) {
     {
         let mut state = state.lock().unwrap();
         let run = &mut state.runtime.runs[0];
-        run.status = "waiting".into();
+        run.status = RunStatus::Waiting;
         run.question = Some(question);
     }
     b.wait("Decision requested");
@@ -1423,7 +1424,7 @@ fn failed_design_answer_checkpoint_restores_question_and_does_not_resume() {
         )
         .is_ok()
     );
-    assert_eq!(state.runtime.runs[0].status, "continued");
+    assert_eq!(state.runtime.runs[0].status, RunStatus::Continued);
     assert_eq!(state.runtime.runs.len(), 2);
 }
 #[test]
@@ -1451,7 +1452,7 @@ fn failed_cancel_checkpoint_restores_existing_run_and_conversation() {
         let mut state = State::default();
         let id = chat::create(&mut state);
         chat::send(&mut state, &id, "Keep my work", "test").unwrap();
-        state.runtime.runs[0].status = status.into();
+        state.runtime.runs[0].status = RunStatus::named(status);
         state.runtime.runs[0].result = "Existing progress".into();
         let before = serde_json::to_vec(&state).unwrap();
         assert!(

@@ -1,5 +1,6 @@
 //! History selection and context effects. Pure assembly/validation lives in control-context.
 mod tools;
+use crate::runtime::RunStatus;
 use crate::{State, usage::Attempt};
 #[cfg(test)]
 use control_context::turn_context::SectionTrace;
@@ -217,7 +218,7 @@ pub(crate) fn callback_notice(state: &mut State, id: &str, conversation_hint: bo
         .runtime
         .runs
         .iter()
-        .position(|r| r.id == id && r.status == "running")
+        .position(|r| r.id == id && r.status == RunStatus::Running)
     else {
         return false;
     };
@@ -598,7 +599,9 @@ fn project_with(
         .as_ref()
         .and_then(|turn| turn.recovery.as_ref())
         .and_then(|id| conversation.run(id))
-        .filter(|source| source.actor == run.actor && source.action == run.action && source.status == "completed")
+        .filter(|source| {
+            source.actor == run.actor && source.action == run.action && source.status == RunStatus::Completed
+        })
     {
         history.push((format!("Last published agent report from {} before a missing handoff (unverified claims; inspect the restored workspace and services before acting):\n{}\n",source.id,source.result),Some(source.id.clone())));
     }

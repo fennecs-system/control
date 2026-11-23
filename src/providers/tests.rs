@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 #[test]
 fn capacity_metadata_survives_selection_and_rolls_back_when_save_fails() {
     let mut state = crate::State::default();
@@ -252,7 +253,7 @@ fn backend_selection_is_captured_and_failed_settings_do_not_reroute_runs() {
     let mut restored: crate::State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.runtime.runs[1].target.backend, Backend::Claude);
     let id = restored.runtime.runs[1].id.clone();
-    restored.runtime.runs[1].status = "failed".into();
+    restored.runtime.runs[1].status = RunStatus::Failed;
     restored
         .runtime
         .action("/retry-run", &HashMap::from([("id".into(), id)]));
@@ -739,7 +740,7 @@ fn accounts_are_managed_by_command_and_listed_on_the_page() {
         Command::try_from(&args("default codex second")[..]),
         Ok(Command::Default(crate::backend::Backend::Codex, second.clone()))
     );
-    let Ok(Command::Add(entry)) = Command::try_from(&args("add claude second --kind api_key --cap 2 --disabled")[..])
+    let Ok(Command::Add(entry)) = Command::try_from(&args("add claude second --kind api-key --cap 2 --disabled")[..])
     else {
         panic!("an add")
     };
@@ -765,7 +766,11 @@ fn accounts_are_managed_by_command_and_listed_on_the_page() {
             .cool(crate::backend::Backend::Claude, &second, super::accounts::now(), None);
     let page = render(&runtime);
     assert!(page.contains("<code>claude+second</code>"), "{page}");
-    assert!(page.contains("control claude login --account second"), "{page}");
+    assert!(page.contains("control claude key --account second"), "{page}");
+    assert!(
+        page.contains("<td>api-key</td>") && page.contains("No key yet"),
+        "{page}"
+    );
     assert!(
         page.contains("<code>codex+default</code> <span class='model-default'>Default</span>"),
         "{page}"

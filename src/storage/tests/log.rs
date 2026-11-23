@@ -1,6 +1,7 @@
 //! The snapshot plus patch log: what a save writes, and what a restart reads
 //! back after clean stops, crashes, migrations and schema changes.
 use super::*;
+use crate::runtime::RunStatus;
 
 struct Scratch(PathBuf);
 impl Scratch {
@@ -259,7 +260,7 @@ fn a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it() {
     scratch.save(&state);
     let committed = scratch.log();
     let before = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     crate::chat::send(&mut state, &chat, "a reply and a receipt", "test").unwrap();
     state.runtime.notice = "receipt r-1 recorded".into();
     state.note = "edited".into();
@@ -422,7 +423,7 @@ fn cached_runs_are_reencoded_after_any_mutable_access() {
         |state: &State| crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(state).unwrap()));
     let mut previous = encode(&state, &Default::default()).unwrap().bytes().to_vec();
     let changes: [&dyn Fn(&mut State); 5] = [
-        &|s| s.runtime.runs[0].status = "completed".into(),
+        &|s| s.runtime.runs[0].status = RunStatus::Completed,
         &|s| {
             s.runtime
                 .runs
@@ -431,7 +432,7 @@ fn cached_runs_are_reencoded_after_any_mutable_access() {
         },
         &|s| *s.runtime.runs[1].result = "spilled text".into(),
         &|s| drop(crate::history::archive_run(&mut s.runtime.runs[1]).unwrap()),
-        &|s| s.runtime.runs.retain(|run| run.status != "completed"),
+        &|s| s.runtime.runs.retain(|run| run.status != RunStatus::Completed),
     ];
     for change in changes {
         change(&mut state);
@@ -451,7 +452,7 @@ fn with_history(count: usize) -> State {
             .runtime
             .enqueue(format!("finished task {i}"), crate::runtime::RunKind::Task, "test");
         let run = state.runtime.runs.last_mut().unwrap();
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         *run.result = format!("result {i}");
     }
     state
@@ -484,10 +485,10 @@ fn archived_runs_leave_the_state_and_are_found_by_id_after_restart() {
     let scratch = Scratch::new("archive");
     let mut state = with_history(archive::RECENT + 200);
     // An old resumable run, an old run a recent one points at, and a running one stay hot.
-    state.runtime.runs[3].status = "failed".into();
+    state.runtime.runs[3].status = RunStatus::Failed;
     let last = state.runtime.runs.len() - 1;
     state.runtime.runs[last].persona = Some(crate::delegation::lineage(&state.runtime.runs[5]));
-    state.runtime.runs[7].status = "running".into();
+    state.runtime.runs[7].status = RunStatus::Running;
     scratch.save(&state); // fills the saved bytes
     assert!(blocks(&scratch).is_empty());
     scratch.save(&state); // moves whole blocks of 64
@@ -520,13 +521,14 @@ fn changing_an_archived_run_unarchives_it() {
     scratch.save(&state);
     assert!(state.runtime.runs[0].archived());
     let hot = saved_runs(&scratch);
-    state.runtime.runs[0].status = "continued".into();
+    state.runtime.runs[0].status = RunStatus::Continued;
     assert!(!state.runtime.runs[0].archived(), "a mutable borrow un-archives");
     scratch.save(&state);
     assert_eq!(saved_runs(&scratch), hot + 1);
     let restored = scratch.restart();
     assert_eq!(
-        restored.runtime.runs[0].status, "continued",
+        restored.runtime.runs[0].status,
+        RunStatus::Continued,
         "the state's copy wins over the block's"
     );
     assert_eq!(runs_json(&restored), runs_json(&state));
@@ -545,7 +547,7 @@ fn blocks_merge_and_unreferenced_blocks_are_removed_at_load() {
         state
             .runtime
             .enqueue(format!("more {i}"), crate::runtime::RunKind::Task, "test");
-        state.runtime.runs.last_mut().unwrap().status = "completed".into();
+        state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     }
     scratch.save(&state);
     scratch.save(&state);

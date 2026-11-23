@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 
 fn setup() -> (State, String, String) {
     let mut state = State::default();
@@ -134,7 +135,7 @@ fn operators_release_only_abandoned_claims_at_the_shown_revision() {
         .runtime
         .runs
         .iter_mut()
-        .for_each(|run| run.status = "completed".into());
+        .for_each(|run| run.status = RunStatus::Completed);
     assert!(operator_release(&mut state, "general", "server", revision + 1).is_err());
     let released = operator_release(&mut state, "general", "server", revision)
         .unwrap()
@@ -258,7 +259,7 @@ fn owners_that_cannot_act_resolve_their_claims_once_as_abandoned() {
         .runtime
         .runs
         .iter_mut()
-        .for_each(|run| run.status = "failed".into());
+        .for_each(|run| run.status = RunStatus::Failed);
     let lost = observe_abandoned(&mut state);
     assert_eq!(lost.len(), 1);
     assert_eq!(lost[0].outcome, Outcome::Abandoned);
@@ -279,7 +280,7 @@ fn an_owner_idle_after_a_completed_turn_is_not_lost_but_a_stopped_one_is() {
         .runtime
         .runs
         .iter_mut()
-        .for_each(|run| run.status = "completed".into());
+        .for_each(|run| run.status = RunStatus::Completed);
     assert!(
         observe_abandoned(&mut state).is_empty(),
         "a steering chat between turns keeps its claims"

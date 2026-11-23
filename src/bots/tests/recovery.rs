@@ -1,6 +1,7 @@
 //! Bounded recovery of persistent bots whose turns end without an accepted
 //! handoff, and collection of finished, fully processed watch records.
 use super::*;
+use crate::runtime::RunStatus;
 use control_context::{
     turn_mailbox::{Disposition, Range, WorkingState},
     working_state::Payload,
@@ -25,17 +26,14 @@ fn chat_runs<'a>(state: &'a State, chat: &str) -> Vec<&'a crate::runtime::Run> {
 /// Completes the chat's queued bot turn as a published session without an
 /// accepted handoff; with `rejection`, the host refused its handoff.
 fn fail_queued(state: &mut State, chat: &str, rejection: Option<&str>) -> bool {
-    let Some(index) = state
-        .runtime
-        .runs
-        .iter()
-        .rposition(|run| run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some() && run.status == "queued")
-    else {
+    let Some(index) = state.runtime.runs.iter().rposition(|run| {
+        run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some() && run.status == RunStatus::Queued
+    }) else {
         return false;
     };
     let generation = format!("{}-attempt", state.runtime.runs[index].id);
     let run = &mut state.runtime.runs[index];
-    run.status = "completed".into();
+    run.status = RunStatus::Completed;
     *run.result = "Re-attached, re-checked health and started a new watch".into();
     run.attempts = vec![crate::usage::Attempt {
         context_trace: Some(Box::new(crate::turn_context::TraceRef {
@@ -78,7 +76,7 @@ fn publish(state: &mut State, chat: &str, revision: u64, processed: Vec<Range>) 
         .iter()
         .rposition(|run| run.chat_id.as_deref() == Some(chat))
         .unwrap();
-    state.runtime.runs[index].status = "completed".into();
+    state.runtime.runs[index].status = RunStatus::Completed;
     let run = state.runtime.runs[index].id.clone();
     state
         .chats
@@ -355,7 +353,7 @@ fn a_member_that_cannot_checkpoint_is_reported_to_the_advisor_once() {
             .iter_mut()
             .filter(|run| run.chat_id.as_deref() == Some(advisor.as_str()) && run.bot_turn.is_some())
         {
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
             run.attempts = vec![crate::usage::Attempt {
                 review_only: true,
                 ..Default::default()
@@ -454,7 +452,7 @@ fn finished_watches_are_collected_once_processed_without_redelivery() {
     );
     // Nothing can read it again, so nothing can be redelivered.
     let id = state.runtime.runs[0].id.clone();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         workspace_id: Some("later".into()),
         turn_mailbox: Some(Box::default()).into(),
@@ -528,10 +526,10 @@ fn unfinished_or_unprocessed_watches_are_kept() {
     publish(&mut state, &chat, 1, vec![processed("w-stopped", 1)]);
     state.runtime.runs.push(state.runtime.runs[0].clone());
     state.runtime.runs.last_mut().unwrap().id = "active".into();
-    state.runtime.runs.last_mut().unwrap().status = "running".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
     reconcile_at(&mut state, 40_000, ok).unwrap();
     assert_eq!(state.watches.len(), 1, "an active attempt may hold a receipt");
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     publish(&mut state, &chat, 2, vec![processed("w-stopped", 1)]);
     reconcile_at(&mut state, 80_000, ok).unwrap();
     assert!(state.watches.is_empty());
@@ -635,7 +633,7 @@ fn time_out_queued(state: &mut State, chat: &str) -> bool {
         .rposition(|run| run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some())
         .unwrap();
     let run = &mut state.runtime.runs[index];
-    run.status = "failed".into();
+    run.status = RunStatus::Failed;
     *run.result = crate::worker::timeout_message(std::time::Duration::from_secs(600));
     let attempt = run.attempts.last_mut().unwrap();
     attempt.termination = Some(crate::attempt_control::Termination::TimedOut);

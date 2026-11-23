@@ -1,10 +1,11 @@
 use super::*;
+use crate::runtime::RunStatus;
 fn active(state: &mut State, parent: Option<&str>) -> (String, String) {
     let chat = crate::chat::create(state);
     state.chats.last_mut().unwrap().parent_chat = parent.map(str::to_owned);
     crate::chat::send(state, &chat, "Work", "test").unwrap();
     let run = &mut **state.runtime.runs.last_mut().unwrap();
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some(format!("attempt-{}", run.id)),
         ..Default::default()
@@ -101,7 +102,7 @@ fn task_threads_isolate_history_participants_and_inboxes_without_timers() {
     // Isolate room-triggered wakes from the separate enable-bot bootstrap
     // for an attempt with an unpublished handoff.
     for run in &mut state.runtime.runs {
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         run.attempts.clear();
     }
     crate::bots::command(&mut state, &child, "on").unwrap();
@@ -158,7 +159,7 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
     state.chats[0].room = Some("research".into());
     crate::chat::send(&mut state, &active, "Investigate", "test").unwrap();
     state.chats[0].name = Some("Investigate <sources>".into());
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let idle = crate::chat::create(&mut state);
     state.chats[1].room = Some("research".into());
     state.chats[1].title = "Previous findings".into();
@@ -196,7 +197,7 @@ fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
     let id = crate::chat::create(&mut state);
     state.chats[0].room = Some("research".into());
     crate::chat::send(&mut state, &id, "Investigate a source", "test").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let run = state.runtime.runs[0].id.clone();
     let req = json!({"nonce":"123-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"engineering","actor":"architect","message":"<shared>"}}}});
     assert_eq!(worker_rpc(&mut state, &run, &req)["result"]["isError"], false);
@@ -221,7 +222,7 @@ fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
         "{denied}"
     );
     assert_eq!(denied["id"], 2);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(
         crate::toolbox::failure_text(&worker_rpc(&mut state, &run, &req)),
         Some("Run is not active.")
@@ -292,7 +293,7 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Coordinate", "test").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let run = state.runtime.runs[0].id.clone();
     let call = |name: &str, args: Value, nonce: &str| json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
     let text = |response: Value| {
@@ -390,7 +391,7 @@ fn a_bot_whose_chat_links_by_posting_hears_that_room() {
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Keep watch", "test").unwrap();
     crate::bots::command(&mut state, &id, "on every 10").unwrap();
-    state.runtime.runs[0].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Running;
     let run = state.runtime.runs[0].id.clone();
     let post = json!({"nonce":"2-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"research","message":"here"}}}});
     let failed = checkpoint(&mut state, &run, &post, |_| Err(std::io::Error::other("disk")));
@@ -607,7 +608,7 @@ fn an_advisor_does_not_post_through_its_inherited_team_room() {
     state.chats[0].lenses = Some(vec!["advisor".into()]);
     state.chats[0].room = Some(format!("general/{lead}"));
     crate::chat::send(&mut state, &lead, "Lead the team", "test").unwrap();
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let (advisor, run) = active(&mut state, Some(&lead));
     let session = state.runtime.runs.iter_mut().find(|r| r.id == run).unwrap();
     session.persona = Some(crate::delegation::Persona {

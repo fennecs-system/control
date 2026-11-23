@@ -298,9 +298,7 @@ fn prepare(state: &State) -> Option<Job> {
             .map(|message| (message, message.run_id.as_deref().and_then(|id| runs.get(id).copied())))
             .take_while(|(message, index)| {
                 let entry = crate::conversation::Entry::source(message, index.map(|i| &state.runtime.runs[i]));
-                !entry
-                    .run
-                    .is_some_and(|r| !crate::application::runs::status::finished(&r.status))
+                !entry.run.is_some_and(|r| !r.status.is_finished())
             })
             .map(|(_, index)| index)
             .collect();
@@ -609,9 +607,7 @@ fn source_page(state: &State, job: &Job, start: usize, count: usize) -> io::Resu
             .copied()
             .flatten()
             .and_then(|at| state.runtime.runs.get(at));
-        if run.map(|r| r.id.as_str()) != message.run_id.as_deref()
-            || run.is_some_and(|r| !crate::application::runs::status::finished(&r.status))
-        {
+        if run.map(|r| r.id.as_str()) != message.run_id.as_deref() || run.is_some_and(|r| !r.status.is_finished()) {
             return Err(io::Error::other("Source generation changed"));
         }
         let text = job.edits.source_text(

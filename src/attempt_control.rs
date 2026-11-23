@@ -1,5 +1,6 @@
 //! Attempt lifecycle projections. Providers interpret these decisions; workload
 //! health and progress remain tool/service concerns, not supervisor heuristics.
+use crate::runtime::RunStatus;
 use crate::{State, usage::Attempt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -24,7 +25,7 @@ pub enum Termination {
 /// at its time limit or model-step cap, or ended by a provider failure. Its host
 /// checkpoint lets the next turn resume.
 pub fn cut_off(run: &crate::runtime::Run) -> bool {
-    run.status == "failed"
+    run.status == RunStatus::Failed
         && run.attempts.last().is_some_and(|attempt| {
             matches!(
                 attempt.termination,

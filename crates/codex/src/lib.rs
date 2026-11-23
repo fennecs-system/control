@@ -6,7 +6,7 @@ use control_agent::{
     SANDBOX_PROBE_WAIT, Stop, TextCall, Turn, Turns, WORKER_IMAGE, cli::handoff_grace_over, mailbox_wake::MailboxWake,
 };
 use control_effect::sync::Recv;
-use control_isolation::{Access, Input, Isolation, Limits, Proc, RunSpec, Size, Stream, Streams, Tmpfs, User};
+use control_isolation::{Access, Input, Isolation, Limits, Network, Proc, RunSpec, Size, Stream, Streams, Tmpfs, User};
 use std::{
     fs,
     io::{Read, Write},
@@ -65,7 +65,7 @@ impl Agent for Codex {
         Runs::Cli(self)
     }
     fn private_names(&self) -> &'static [&'static str] {
-        &[".codex"]
+        &[".codex", "auth.json"]
     }
     fn review_mount(&self) -> bool {
         true
@@ -818,13 +818,14 @@ fn turn_container(
 #[cfg(test)]
 mod tests;
 
-/// `control codex login | check` for the account the host chose: `login`
-/// signs in with a device code inside the pinned worker image and keeps the
-/// sign-in as a file in the account's directory; `check` runs the offline
-/// sandbox probe. The host refuses `login` for an account whose login this
-/// directory cannot hold (the operator's own `~/.codex`).
+/// `control codex login | key | check` for the account the host chose:
+/// `login` signs in with a device code and `key` with the API key the host
+/// read, each inside the pinned worker image, keeping the sign-in as a file in
+/// the account's directory; `check` runs the offline sandbox probe. The host
+/// refuses `login` for an account whose login this directory cannot hold
+/// (the operator's own `~/.codex`).
 pub fn command(command: control_agent::Command<'_>) -> std::io::Result<()> {
-    const USAGE: &str = "Use control codex login --account NAME | check";
+    const USAGE: &str = "Use control codex login --account NAME | key --account NAME | check";
     let fail = |message: &str| std::io::Error::other(message.to_owned());
     let control_agent::Command {
         args,
@@ -832,6 +833,7 @@ pub fn command(command: control_agent::Command<'_>) -> std::io::Result<()> {
         isolation,
         image,
         directory,
+        key,
         ..
     } = command;
     let [action] = args else { return Err(fail(USAGE)) };
@@ -840,52 +842,90 @@ pub fn command(command: control_agent::Command<'_>) -> std::io::Result<()> {
             .clone()
             .ok_or_else(|| fail("Build and pin the Codex worker image first: nix run .#setup"))
     };
-    match action.as_str() {
-        "--help" | "-h" | "help" => {
+    let sign_in = match (action.as_str(), key) {
+        ("--help" | "-h" | "help", _) => {
             println!(
-                "control codex login --account NAME: sign a named account in with a device code inside the pinned worker image\ncontrol codex check: offline sandbox check; no credentials or model calls"
+                "control codex login --account NAME: sign a named account in with a device code inside the pinned worker image\ncontrol codex key --account NAME: save an API-key account's key from standard input with Codex's own offline API-key login\ncontrol codex check: offline sandbox check; no credentials or model calls"
             );
-            Ok(())
+            return Ok(());
         }
-        "login" => {
-            use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-            fs::DirBuilder::new().recursive(true).mode(0o700).create(&directory)?;
-            let meta = fs::symlink_metadata(&directory)?;
-            if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() == 0 {
-                return Err(fail(
-                    "Codex login directory must be private and owned by a non-root user",
-                ));
-            }
-            let spec = login_container(
-                &format!("control-codex-login-{}", std::process::id()),
-                &node.id().map_err(|e| fail(&e))?,
-                User {
-                    uid: meta.uid(),
-                    gid: meta.gid(),
-                },
-                &directory,
-                &image()?,
-            )?;
-            if !isolation.spawn(&spec, Streams::INHERIT)?.wait()?.success() {
-                return Err(fail("Codex login did not complete"));
-            }
-            fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
-        }
-        "check" => {
+        ("check", _) => {
             offline_probe(node, isolation, &image()?).map_err(|e| fail(&e))?;
             println!("Codex offline sandbox verified. No account credentials were mounted or model called.");
-            Ok(())
+            return Ok(());
         }
-        _ => Err(fail(USAGE)),
+        ("login", _) => SignIn::Device,
+        ("key", Some(key)) => SignIn::Key(key),
+        _ => return Err(fail(USAGE)),
+    };
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(&directory)?;
+    let meta = fs::symlink_metadata(&directory)?;
+    if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() == 0 {
+        return Err(fail(
+            "Codex login directory must be private and owned by a non-root user",
+        ));
     }
+    let spec = login_container(
+        &format!("control-codex-login-{}", std::process::id()),
+        &node.id().map_err(|e| fail(&e))?,
+        User {
+            uid: meta.uid(),
+            gid: meta.gid(),
+        },
+        &directory,
+        &image()?,
+        &sign_in,
+    )?;
+    let finished = match sign_in {
+        SignIn::Device => isolation.spawn(&spec, Streams::INHERIT)?.wait()?,
+        // The key goes to the CLI's standard input only; its own output is
+        // discarded and it never echoes the key.
+        SignIn::Key(key) => {
+            let mut child = isolation.spawn(&spec, Streams::new(Stream::Piped, Stream::Null, Stream::Inherit))?;
+            let written = child
+                .stdin
+                .take()
+                .ok_or_else(|| fail("Codex key login has no standard input"))
+                .and_then(|mut stdin| stdin.write_all(key.expose()));
+            let status = child.wait()?;
+            written?;
+            status
+        }
+    };
+    if !finished.success() {
+        return Err(fail("Codex login did not complete"));
+    }
+    fs::set_permissions(directory.join("auth.json"), fs::Permissions::from_mode(0o600))
 }
-/// The device login: Codex's home is the account directory, writable, and
-/// the sign-in is kept as a file there (`cli_auth_credentials_store`), not in
-/// a keyring the container does not have.
-fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> std::io::Result<RunSpec> {
+/// How `control codex` signs an account in.
+enum SignIn<'a> {
+    /// A device code the operator confirms in a browser.
+    Device,
+    /// `codex login --with-api-key`, which only writes the key into
+    /// auth.json (verified offline: "API key saved. Authentication is
+    /// checked when you send a request."), so it runs with no network.
+    Key(&'a control_agent::ApiKey),
+}
+/// The login: Codex's home is the account directory, writable, and the
+/// sign-in is kept as a file there (`cli_auth_credentials_store`), not in a
+/// keyring the container does not have.
+fn login_container(
+    name: &str,
+    node: &str,
+    owner: User,
+    directory: &Path,
+    image: &str,
+    sign_in: &SignIn<'_>,
+) -> std::io::Result<RunSpec> {
+    let (input, network, method) = match sign_in {
+        SignIn::Device => (Input::Terminal, Network::Engine, "--device-auth"),
+        SignIn::Key(_) => (Input::Attached, Network::None, "--with-api-key"),
+    };
     Ok(RunSpec {
         image: image.into(),
-        input: Input::Terminal,
+        input,
+        network,
         ..control_agent::cli::base(name, node, owner)
     }
     .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
@@ -896,11 +936,5 @@ fn login_container(name: &str, node: &str, owner: User, directory: &Path, image:
         Access::ReadWrite,
     )
     .env("CODEX_HOME", "/home/agent/.codex")
-    .args([
-        "codex",
-        "login",
-        "--device-auth",
-        "-c",
-        "cli_auth_credentials_store=\"file\"",
-    ]))
+    .args(["codex", "login", method, "-c", "cli_auth_credentials_store=\"file\""]))
 }

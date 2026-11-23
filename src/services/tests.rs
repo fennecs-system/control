@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::cell::Cell;
 // Only the uniquely owned QA workspace, removed after its test containers.
 struct WorkspaceCleanup(Option<String>);
@@ -19,7 +20,7 @@ pub(super) fn fixture() -> (State, String, String, u64) {
     let chat = crate::chat::create(&mut s);
     crate::chat::send(&mut s, &chat, "Run a persistent counter", "test").unwrap();
     let run = &mut s.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-a".into()),
         image: Some(format!("sha256:{}", "a".repeat(64))),
@@ -768,7 +769,7 @@ fn services_survive_turns_and_restoration_without_a_second_start() {
     }
     {
         let mut s = shared.lock().unwrap();
-        s.runtime.runs[0].status = "completed".into();
+        s.runtime.runs[0].status = RunStatus::Completed;
         s.runtime.runs[0].attempts.clear();
     }
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
@@ -1295,7 +1296,7 @@ fn live_service_survives_server_restart_and_expires_without_control() {
     assert!(value["service_id"].is_string());
     s.services[0].resource.image = image.try_into().unwrap();
     let _workspace = WorkspaceCleanup::of(&s.services[0]);
-    s.runtime.runs[0].status = "completed".into();
+    s.runtime.runs[0].status = RunStatus::Completed;
     fs::write(state_dir.join("state.json"), serde_json::to_vec(&s).unwrap()).unwrap();
     struct Server(std::process::Child);
     impl Server {

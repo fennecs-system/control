@@ -2,6 +2,7 @@
 //! every prompt. Prompts hold a short core and one index line per on-demand
 //! lens; this read-only tool returns the full text of the revision the run
 //! captured, never the current editable library, scoped to the run's role.
+use crate::runtime::RunStatus;
 use crate::tool_registry::{AttemptCall, AttemptTools};
 use control_context::{Audience, Resolved, agent_policy};
 use serde::Deserialize;
@@ -86,7 +87,7 @@ impl AttemptTools for Tools {
             .runtime
             .runs
             .iter()
-            .find(|r| r.id == cx.attempt.run && r.status == "running")
+            .find(|r| r.id == cx.attempt.run && r.status == RunStatus::Running)
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;
         answer(run, args)
     }

@@ -12,7 +12,7 @@
 //! pass over runs that adds up only the listed DMs' turns (a turn filter adds
 //! one more); only one page is formatted and every fragment is bounded. The
 //! benchmark is `performance::history_page` (docs/PERFORMANCE.md).
-use crate::application::runs::status;
+use crate::runtime::RunStatus;
 use crate::runtime::{Run, RunKind};
 use crate::{State, escape};
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -67,22 +67,25 @@ impl Outcome {
     }
     fn matches(self, run: &Run) -> bool {
         match self {
-            Self::Completed => matches!(run.status.as_str(), "completed" | "continued"),
+            Self::Completed => matches!(run.status, RunStatus::Completed | RunStatus::Continued),
             Self::Failed => failed(run),
             Self::TimedOut => cut_off(run) == Some(crate::attempt_control::Termination::TimedOut),
-            Self::Cancelled => run.status == "cancelled",
-            Self::Active => status::active(&run.status),
+            Self::Cancelled => run.status == RunStatus::Cancelled,
+            Self::Active => run.status.is_active(),
         }
     }
 }
 /// Finished without success and not by the operator's cancel.
 fn failed(run: &Run) -> bool {
-    matches!(run.status.as_str(), "failed" | "blocked" | "interrupted")
+    matches!(
+        run.status,
+        RunStatus::Failed | RunStatus::Blocked | RunStatus::Interrupted
+    )
 }
 /// How a failed turn was cut off, when its last attempt says.
 fn cut_off(run: &Run) -> Option<crate::attempt_control::Termination> {
     use crate::attempt_control::Termination;
-    matches!(run.status.as_str(), "failed" | "blocked")
+    matches!(run.status, RunStatus::Failed | RunStatus::Blocked)
         .then(|| run.attempts.last()?.termination)
         .flatten()
         .filter(|termination| matches!(termination, Termination::TimedOut | Termination::StepLimit))
@@ -92,16 +95,16 @@ fn status_label(run: &Run) -> &str {
     match cut_off(run) {
         Some(crate::attempt_control::Termination::TimedOut) => "timed out",
         Some(_) => "step limit",
-        None => &run.status,
+        None => run.status.as_str(),
     }
 }
 /// The colour group of a turn row.
 fn status_group(run: &Run) -> &'static str {
-    if status::active(&run.status) {
+    if run.status.is_active() {
         "active"
     } else if failed(run) {
         "failed"
-    } else if run.status == "cancelled" {
+    } else if run.status == RunStatus::Cancelled {
         "cancelled"
     } else {
         "completed"
@@ -397,7 +400,7 @@ fn summaries<'a>(state: &'a State, listed: &[&Row<'a>], recent: bool) -> ByDm<'a
 fn add<'a>(summary: &mut Summary<'a>, run: &'a Run) {
     summary.turns += 1;
     summary.failed += usize::from(failed(run));
-    summary.active += usize::from(status::active(&run.status));
+    summary.active += usize::from(run.status.is_active());
     if let Some(tokens) = tokens(run) {
         summary.tokens = summary.tokens.saturating_add(tokens);
         summary.measured = true;
@@ -756,10 +759,10 @@ fn turn_row(run: &Run) -> String {
         }
         links.push(format!("<a href='/dm/{}' title='Open DM'>DM ↗</a>", escape(chat)));
     }
-    if status::active(&run.status) && run.status != "cancelling" {
+    if run.status.is_active() && run.status != RunStatus::Cancelling {
         links.push(format!("<form method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>", escape(&run.id)));
     }
-    if status::resumable(&run.status) {
+    if run.status.is_resumable() {
         links.push(format!("<form method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button>Retry</button></form>", escape(&run.id)));
     }
     format!(

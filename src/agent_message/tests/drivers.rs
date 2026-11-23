@@ -1,6 +1,7 @@
 //! Conformance fixtures, not a production async runtime. Tokio only interprets
 //! fake archive/checkpoint effects; no credentials, model traffic or live state.
 use super::*;
+use crate::runtime::RunStatus;
 use operation::{Decision, Effect};
 use std::{cell::RefCell, sync::Arc};
 
@@ -183,7 +184,7 @@ fn dropping_a_suspended_driver_rolls_back_before_a_waiting_writer_can_cancel_the
                 .iter_mut()
                 .find(|run| run.id == cancelled_origin)
                 .unwrap()
-                .status = "cancelled".into();
+                .status = RunStatus::Cancelled;
         });
         tokio::task::yield_now().await;
         assert!(

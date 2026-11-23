@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use control_core::resources::{ChatId, ImageId, Lease, Owner, Resource, Scope};
 pub(crate) fn pending_fixture() -> (State, String, String) {
     let (mut state, run, chat) = fixture();
@@ -61,7 +62,7 @@ pub(crate) fn fixture() -> (State, String, String) {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Run a tool", "test").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-a".into()),
         ..Default::default()
@@ -305,7 +306,7 @@ fn service_commands_start_collapsed_during_and_after_their_run() {
         0,
         "Live commands start collapsed and remain available to expand"
     );
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     let done = crate::chat::transcript(&state, &chat).unwrap();
     assert!(!done.contains("-commands' open"));
     assert!(!done.contains("' open><summary><span>"));

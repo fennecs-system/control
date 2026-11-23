@@ -3,6 +3,7 @@
 //! runs until cancelled. A presentation thread re-renders on each change, as
 //! the browser does. No model, container, personal state or credential.
 use super::*;
+use crate::runtime::RunStatus;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 fn cpu() -> f64 {
@@ -22,7 +23,7 @@ fn execute(_: &dyn control_isolation::Isolation, state: Arc<Mutex<State>>, task:
         &task.0,
         task.3,
         task.4,
-        Err(("cancelled", "Cancelled.".into())),
+        Err((control_agent::Status::Cancelled, "Cancelled.".into())),
         false,
         storage::save,
     );
@@ -54,8 +55,8 @@ fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
             )
             .unwrap();
             let run = state.runtime.runs.last_mut().unwrap();
-            run.status = "completed".into();
-            run.emitted = Some("completed".into());
+            run.status = RunStatus::Completed;
+            run.emitted = Some(RunStatus::Completed);
             run.result = "done ".repeat(64).into();
         }
     }
@@ -71,8 +72,8 @@ fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
     }
     for chat in &chats[1..=tree] {
         crate::chat::send(&mut state, chat, "Join the game", "test").unwrap();
-        state.runtime.runs.last_mut().unwrap().status = "completed".into();
-        state.runtime.runs.last_mut().unwrap().emitted = Some("completed".into());
+        state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
+        state.runtime.runs.last_mut().unwrap().emitted = Some(RunStatus::Completed);
         crate::bots::command(&mut state, chat, "on").unwrap();
     }
     for chat in &chats[..=tree] {
@@ -107,13 +108,7 @@ fn live_cancel_all_profile() {
     let bytes = fs::metadata(crate::config::state("state.json").unwrap()).unwrap().len();
     let state = Arc::new(Mutex::new(initial));
     let threads = start_with(state.clone(), crate::engine::isolation(), execute);
-    let active = |s: &State| {
-        s.runtime
-            .runs
-            .iter()
-            .filter(|r| matches!(r.status.as_str(), "running" | "cancelling"))
-            .count()
-    };
+    let active = |s: &State| s.runtime.runs.iter().filter(|r| r.status.occupies_slot()).count();
     let started = Instant::now();
     while active(&state.lock().unwrap()) < 7 {
         assert!(started.elapsed() < Duration::from_secs(60), "turns did not start");
@@ -173,7 +168,7 @@ fn live_cancel_all_profile() {
     println!(
         "{}",
         serde_json::json!({"workload":"live_cancel_all","chats":s.chats.len(),"runs":s.runtime.runs.len(),
-        "state_bytes":bytes,"cancelled":s.runtime.runs.iter().filter(|r| r.status == "cancelled").count(),
+        "state_bytes":bytes,"cancelled":s.runtime.runs.iter().filter(|r| r.status == RunStatus::Cancelled).count(),
         "settled_ms":settled.as_millis(),"checkpoints":checkpoints,"renders":renders.load(Ordering::Relaxed),
         "cpu_s_including_3s_tail":(cpu_s * 1000.0).round() / 1000.0})
     );

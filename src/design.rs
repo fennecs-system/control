@@ -1,6 +1,7 @@
 //! Durable design decisions. Asking yields execution; answering queues a fresh
 //! attempt from an immutable checkpoint, never grants additional authority.
 use crate::runtime::RunKind;
+use crate::runtime::RunStatus;
 use crate::{State, chat, identity, runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -318,7 +319,7 @@ pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
         state.lock().is_ok_and(|s| {
             s.runtime.runs.iter().any(|r| {
                 r.id == id
-                    && r.status == "running"
+                    && r.status == RunStatus::Running
                     && (crate::delegation::pausing(r)
                         || r.question.as_ref().is_some_and(|q| {
                             q.pending()
@@ -348,7 +349,7 @@ fn ask_with_save(
         .runtime
         .runs
         .iter()
-        .position(|r| r.id == id && r.status == "running")
+        .position(|r| r.id == id && r.status == RunStatus::Running)
         .ok_or("Run is not active.")?;
     let run = &state.runtime.runs[index];
     identity::authorize(&run.actor, run.action)?;
@@ -432,7 +433,7 @@ pub fn ask_operator(
         .runtime
         .runs
         .iter()
-        .filter(|r| asked(r) && r.status == "waiting")
+        .filter(|r| asked(r) && r.status == RunStatus::Waiting)
         .count()
         >= MAX_ASKED
     {
@@ -449,7 +450,7 @@ pub fn ask_operator(
                 .runtime
                 .runs
                 .iter()
-                .any(|r| r.chat_id.as_deref() == Some(id) && crate::application::runs::status::active(&r.status))
+                .any(|r| r.chat_id.as_deref() == Some(id) && r.status.is_active())
             {
                 return Err("That chat has a turn in progress or waiting; ask without id to use the Decisions DM.");
             }
@@ -491,7 +492,7 @@ pub fn ask_operator(
     );
     let question = Question::ask(run_id.clone(), ASKED, input, at);
     let id = question.id.clone();
-    run.status = "waiting".into();
+    run.status = RunStatus::Waiting;
     run.chat_id = Some(chat_id.clone());
     *run.result = summary(&question);
     run.question = Some(question);
@@ -568,7 +569,9 @@ pub fn withdraw(
         .runtime
         .runs
         .iter()
-        .position(|r| r.status == "waiting" && r.question.as_ref().is_some_and(|q| q.id == *question && q.pending()))
+        .position(|r| {
+            r.status == RunStatus::Waiting && r.question.as_ref().is_some_and(|q| q.id == *question && q.pending())
+        })
         .ok_or(Refusal::NotPending.message())?;
     let run = &state.runtime.runs[index];
     let held = run.question.clone().ok_or(Refusal::NotPending.message())?;
@@ -598,7 +601,7 @@ pub fn withdraw(
 fn waiting_for<'a>(state: &'a State, chat_id: &str, question_id: Option<&str>) -> Option<&'a runtime::Run> {
     state.runtime.runs.iter().find(|r| {
         r.chat_id.as_deref() == Some(chat_id)
-            && r.status == "waiting"
+            && r.status == RunStatus::Waiting
             && r.question
                 .as_ref()
                 .is_some_and(|q| q.pending() && question_id.is_none_or(|id| q.id == *id))
@@ -638,7 +641,7 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
                     .as_deref()
                     .is_some_and(|chat| crate::chat::Lineage::of(&state.chats).within(chat, chat_id)))
                 && run.actor == chat.actor
-                && run.status == "waiting"
+                && run.status == RunStatus::Waiting
                 && run.question.as_ref().is_some_and(Question::pending)
         })
         .collect()
@@ -760,7 +763,7 @@ pub fn answer(
         let index = state.runtime.runs.iter().position(|r| r.id == run.id).unwrap();
         let run = &mut state.runtime.runs[index];
         run.question = Some(answered);
-        run.status = "completed".into();
+        run.status = RunStatus::Completed;
         *run.result = summary(run.question.as_ref().unwrap());
         let session = &mut state.chats[session_index];
         session.messages.push(chat::Message {
@@ -775,7 +778,9 @@ pub fn answer(
     let attempt = run
         .attempts
         .last()
-        .filter(|a| a.workspace_id.as_deref() == Some(&question.generation) && a.status == "waiting")
+        .filter(|a| {
+            a.workspace_id.as_deref() == Some(&question.generation) && a.status == crate::usage::AttemptStatus::Waiting
+        })
         .ok_or("Paused attempt is unavailable.")?;
     let checkpoint = attempt
         .project_checkpoint
@@ -828,13 +833,13 @@ pub fn answer(
         decision: question.input.clone(),
     };
     // Replacing the waiting run with its continuation keeps admission bounded.
-    state.runtime.runs[index].status = "continued".into();
+    state.runtime.runs[index].status = RunStatus::Continued;
     let notice = state.runtime.notice.clone();
     if let Err(error) = state
         .runtime
         .enqueue_for(answer.clone(), RunKind::DesignAnswer, source, actor, action)
     {
-        state.runtime.runs[index].status = "waiting".into();
+        state.runtime.runs[index].status = RunStatus::Waiting;
         state.runtime.notice = notice;
         return Err(error);
     }

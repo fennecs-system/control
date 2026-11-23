@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use crate::usage::{Attempt, Tokens};
 
 fn dm(state: &mut State, name: &str, title: &str) -> String {
@@ -12,7 +13,7 @@ fn turn<'a>(state: &'a mut State, chat: Option<&str>, kind: RunKind, status: &st
     state.runtime.enqueue(format!("{} turn", kind.as_str()), kind, "test");
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = chat.map(Into::into);
-    run.status = status.into();
+    run.status = RunStatus::named(status);
     run.target.model = Some(model.into());
     run
 }
@@ -404,4 +405,28 @@ fn preview_pages() {
         inline(page(&state, &filter("status=failed"))),
     )
     .unwrap();
+}
+
+#[test]
+fn every_run_status_keeps_its_row_label_and_colour_class() {
+    let mut state = State::default();
+    let table = [
+        ("queued", "queued", "active"),
+        ("running", "running", "active"),
+        ("cancelling", "cancelling", "active"),
+        ("waiting", "waiting", "active"),
+        ("completed", "completed", "completed"),
+        ("blocked", "blocked", "failed"),
+        ("failed", "failed", "failed"),
+        ("interrupted", "interrupted", "failed"),
+        ("cancelled", "cancelled", "cancelled"),
+        ("continued", "continued", "completed"),
+    ];
+    for (status, label, group) in table {
+        let run = turn(&mut state, None, RunKind::Chat, status, "m");
+        assert_eq!((status_label(run), status_group(run)), (label, group), "{status}");
+    }
+    let run = turn(&mut state, None, RunKind::Chat, "failed", "m");
+    run.status = RunStatus::Unrecognised("legacy".into());
+    assert_eq!((status_label(run), status_group(run)), ("legacy", "completed"));
 }

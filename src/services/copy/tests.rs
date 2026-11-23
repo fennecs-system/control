@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
 struct Scratch(PathBuf);
@@ -518,7 +519,7 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
         |_| Ok(()),
     )
     .unwrap();
-    shared.lock().unwrap().runtime.runs[0].status = "completed".into();
+    shared.lock().unwrap().runtime.runs[0].status = RunStatus::Completed;
     let service = shared.lock().unwrap().services[0].binding_snapshot();
     let error = Job::prepare(&shared, &service, &run, "attempt-a", &transfer("tool", "tool"))
         .err()

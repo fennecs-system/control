@@ -6,6 +6,7 @@
 //! or opens folders (it has `control_project_request` for that). Calls run the
 //! operator endpoint's functions in process, one state lock per call.
 use super::{Remote, call};
+use crate::runtime::RunStatus;
 use crate::{
     State,
     tool_registry::{AttemptCall, AttemptTools},
@@ -201,7 +202,7 @@ impl AttemptTools for Tools {
                 .iter()
                 .find(|run| {
                     run.id == cx.attempt.run
-                        && run.status == "running"
+                        && run.status == RunStatus::Running
                         && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(cx.attempt.generation)
                 })
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use std::process::Command;
 
 struct Temp(PathBuf);
@@ -78,7 +79,7 @@ fn running(state: &mut State, packages: Vec<control_context::PackageInput>) -> S
     let chat = crate::chat::create(state);
     crate::chat::send(state, &chat, "Build the castle", "test").unwrap();
     let run = &mut **state.runtime.runs.last_mut().unwrap();
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some(format!("{}-attempt", run.id)),
         ..Default::default()

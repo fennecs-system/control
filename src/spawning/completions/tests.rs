@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 fn spawned(n: usize) -> State {
     let (mut state, id) = super::super::tests::active();
     request(
@@ -17,8 +18,8 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
     let mut state = spawned(1);
     let parent_chat = state.chats[0].id.clone();
     let child = state.runtime.runs[1].id.clone();
-    state.runtime.runs[0].status = "completed".into();
-    state.runtime.runs[1].status = "running".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
+    state.runtime.runs[1].status = RunStatus::Running;
     chat::send(&mut state, &parent_chat, "How is the bot doing?", "test").unwrap();
     assert_eq!(
         crate::scheduler::next(&state.runtime),
@@ -26,7 +27,7 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
         "A running child must not reserve its parent's chat"
     );
     state.chats[0].workspace = Some("newer-human-workspace".into());
-    state.runtime.runs[1].status = "completed".into();
+    state.runtime.runs[1].status = RunStatus::Completed;
     state.runtime.runs[1].result = "Finished child work".into();
     let before = serde_json::to_vec(&state).unwrap();
     assert!(reconcile(&mut state, |_| Err(std::io::Error::other("disk full"))).is_err());
@@ -54,17 +55,17 @@ fn parent_chat_remains_available_and_completion_uses_current_workspace() {
 #[test]
 fn completions_are_coalesced_and_do_not_keep_enqueuing_while_a_callback_waits() {
     let mut state = spawned(3);
-    state.runtime.runs[0].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
     for child in &mut state.runtime.runs[1..3] {
-        child.status = "completed".into();
+        child.status = RunStatus::Completed;
         child.result = "verified".into();
     }
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 5);
     assert_eq!(state.runtime.runs[0].spawns[0].completions.len(), 2);
-    state.runtime.runs[3].status = "failed".into();
+    state.runtime.runs[3].status = RunStatus::Failed;
     reconcile(&mut state, |_| panic!("Coalesce behind pending callback")).unwrap();
-    state.runtime.runs[4].status = "completed".into();
+    state.runtime.runs[4].status = RunStatus::Completed;
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 6);
     assert!(state.runtime.runs[5].objective.contains("failed"));
@@ -74,10 +75,10 @@ fn completions_are_coalesced_and_do_not_keep_enqueuing_while_a_callback_waits() 
 fn cancellation_legacy_batches_and_revoked_actors_do_not_wake() {
     for mode in 0..4 {
         let mut state = spawned(1);
-        state.runtime.runs[1].status = "completed".into();
+        state.runtime.runs[1].status = RunStatus::Completed;
         match mode {
             0 => state.runtime.runs[0].spawns[0].cancelled = true,
-            1 => state.runtime.runs[0].status = "cancelled".into(),
+            1 => state.runtime.runs[0].status = RunStatus::Cancelled,
             2 => state.runtime.runs[0].spawns[0].notify = false,
             _ => state.runtime.runs[0].actor = identity::Actor::Unknown,
         }
@@ -88,8 +89,8 @@ fn cancellation_legacy_batches_and_revoked_actors_do_not_wake() {
 #[test]
 fn full_queue_defers_without_consuming_the_completion_receipt() {
     let mut state = spawned(1);
-    state.runtime.runs[0].status = "completed".into();
-    state.runtime.runs[1].status = "completed".into();
+    state.runtime.runs[0].status = RunStatus::Completed;
+    state.runtime.runs[1].status = RunStatus::Completed;
     for _ in 0..crate::scheduler::MAX_PENDING {
         state
             .runtime
@@ -104,7 +105,7 @@ fn full_queue_defers_without_consuming_the_completion_receipt() {
     }
     reconcile(&mut state, |_| panic!("Full queue must not write")).unwrap();
     assert!(state.runtime.runs[0].spawns[0].completions.is_empty());
-    state.runtime.runs.last_mut().unwrap().status = "completed".into();
+    state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     reconcile(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::AgentCompletion);
 }
@@ -125,9 +126,9 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
     let next = state.runtime.runs.last_mut().unwrap();
     next.chat_id = child.chat_id.clone();
     next.persona = child.persona.clone();
-    next.status = "running".into();
+    next.status = RunStatus::Running;
     let next_id = next.id.clone();
-    state.runtime.runs[1].status = "continued".into();
+    state.runtime.runs[1].status = RunStatus::Continued;
     state.runtime.runs[1].question = Some(crate::design::Question {
         id: "fixture-question".into(),
         generation: "fixture-generation".into(),
@@ -144,7 +145,7 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
         continuation: Some(next_id),
     });
     reconcile(&mut state, |_| panic!("Active continuation must not notify")).unwrap();
-    state.runtime.runs[2].status = "failed".into();
+    state.runtime.runs[2].status = RunStatus::Failed;
     state.runtime.runs[2].actor = identity::Actor::Unknown;
     assert!(reconcile(&mut state, |_| panic!("Mismatched scope must not notify")).is_err());
     assert!(state.runtime.runs[0].spawns[0].completions.is_empty());

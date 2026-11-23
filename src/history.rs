@@ -567,7 +567,7 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
     use control_delivery::{Change, DELIVERABLE, Delivery};
     let mut emitted = Vec::new();
     for (index, run) in state.runtime.runs.iter().enumerate() {
-        if !DELIVERABLE.contains(&run.status.as_str()) || run.emitted.as_deref() == Some(run.status.as_str()) {
+        if !DELIVERABLE.contains(&run.status.as_str()) || run.emitted.as_ref() == Some(&run.status) {
             continue;
         }
         let change = run
@@ -604,7 +604,7 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
             chat: run.chat_id.clone(),
             actor: run.actor.clone(),
             action: run.action,
-            status: run.status.clone(),
+            status: run.status.to_string(),
             report,
             question: serde_json::to_value(&run.question).unwrap_or_default(),
             change,

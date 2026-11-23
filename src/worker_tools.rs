@@ -1,4 +1,5 @@
 //! Credential-free worker tools are authorized against the active run on the host.
+use crate::runtime::RunStatus;
 use crate::{State, identity, rooms};
 use serde_json::{Value, json};
 use std::{
@@ -179,7 +180,7 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
         .runtime
         .runs
         .iter()
-        .find(|r| r.id == run_id && r.status == "running")
+        .find(|r| r.id == run_id && r.status == RunStatus::Running)
     else {
         return error("Run is not active");
     };

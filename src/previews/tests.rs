@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 #[test]
 fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
     for (active, stopping, save_ok, launched) in [
@@ -12,7 +13,11 @@ fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Preview", "test").unwrap();
         let run = &mut state.runtime.runs[0];
-        run.status = if active { "running" } else { "cancelling" }.into();
+        run.status = if active {
+            RunStatus::Running
+        } else {
+            RunStatus::Cancelling
+        };
         let attempt = Attempt {
             workspace_id: Some("generation".into()),
             ..Default::default()
@@ -80,7 +85,7 @@ fn previews_require_an_active_captured_project_and_reject_forged_mounts() {
     let chat = crate::chat::create(&mut locked);
     crate::chat::send(&mut locked, &chat, "test", "fixture").unwrap();
     let run = &mut locked.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(Attempt::default());
     let id = run.id.clone();
     drop(locked);
@@ -126,7 +131,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "preview fixture", "qa").unwrap();
     let run = &mut state.runtime.runs[0];
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.attempts.push(Attempt {
         image: Some(image),
         node_id: Some(crate::config::node_id().unwrap()),
@@ -217,7 +222,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     );
     {
         let mut locked = state.lock().unwrap();
-        locked.runtime.runs[0].status = "completed".into();
+        locked.runtime.runs[0].status = RunStatus::Completed;
     }
     crate::lifecycle::reconcile(
         crate::engine::isolation(),
@@ -263,7 +268,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     stop(&state, &chat, id).unwrap();
     stop(&state, &chat, id).unwrap();
     assert_eq!(state.lock().unwrap().previews[0].status, "stopped");
-    state.lock().unwrap().runtime.runs[0].status = "running".into();
+    state.lock().unwrap().runtime.runs[0].status = RunStatus::Running;
     let replacement = super::start(
         &state,
         &run_id,

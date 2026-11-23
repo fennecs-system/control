@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::RunStatus;
 use crate::{
     backend::Backend,
     identity::{Action, Actor},
@@ -27,7 +28,7 @@ fn active(action: Action) -> State {
         .unwrap();
     let run = &mut s.runtime.runs[0];
     run.chat_id = Some(id);
-    run.status = "running".into();
+    run.status = RunStatus::Running;
     run.target.backend = Backend::Codex;
     run.target.model = Some("dev-model".into());
     run.attempts.push(Attempt {
@@ -47,9 +48,9 @@ fn active(action: Action) -> State {
 fn pause(s: &mut State, role: Role) {
     let id = s.runtime.runs[0].id.clone();
     request_with_save(s, &id, "nonce", input(role), |_| Ok(())).unwrap();
-    s.runtime.runs[0].status = "waiting".into();
+    s.runtime.runs[0].status = RunStatus::Waiting;
     let a = &mut s.runtime.runs[0].attempts[0];
-    a.status = "waiting".into();
+    a.status = crate::usage::AttemptStatus::Waiting;
     a.artifact = Some("immutable-paused-source".into());
 }
 #[test]
@@ -60,7 +61,7 @@ fn delegated_feedback_reports_unavailable_diff_evidence() {
         .enqueue("Review changes".into(), crate::runtime::RunKind::Chat, "test");
     let child = &mut state.runtime.runs[0];
     child.chat_id = Some("c-test-delegation-history-error".into());
-    child.status = "completed".into();
+    child.status = RunStatus::Completed;
     child.attempts.push(crate::usage::Attempt {
         journal: Some(u64::MAX),
         ..Default::default()
@@ -129,11 +130,11 @@ fn worker_inherits_current_improve_snapshot_without_sharing_publication() {
     let models = s.runtime.models.clone();
     let mut s: State = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
     s.runtime.models = models;
-    s.runtime.runs[1].status = "interrupted".into();
+    s.runtime.runs[1].status = RunStatus::Interrupted;
     s.runtime.runs[1].result = "Engine restarted; inspect retained diagnostics".into();
     reconcile(&mut s, |_| Ok(())).unwrap();
     assert_eq!(s.runtime.runs.len(), 3);
-    assert_eq!(s.runtime.runs[0].status, "continued");
+    assert_eq!(s.runtime.runs[0].status, RunStatus::Continued);
     assert_eq!(s.runtime.runs[2].action, Action::Improve);
     let c = s.runtime.runs[2].continuation.as_ref().unwrap();
     assert_eq!(c.checkpoint, "immutable-paused-source");
@@ -191,10 +192,10 @@ fn all_children_keep_parent_selection_and_failures_resume_the_parent() {
             reconcile(&mut s, |_| Ok(())).unwrap();
             assert_eq!(s.runtime.runs[1].target.backend, backend);
             assert_eq!(s.runtime.runs[1].target.model.as_deref(), Some("captured-parent-model"));
-            s.runtime.runs[1].status = "failed".into();
+            s.runtime.runs[1].status = RunStatus::Failed;
             s.runtime.runs[1].result = "Synthetic authentication failure; refresh the parent provider login".into();
             reconcile(&mut s, |_| Ok(())).unwrap();
-            assert_eq!(s.runtime.runs[0].status, "continued");
+            assert_eq!(s.runtime.runs[0].status, RunStatus::Continued);
             let resumed = &s.runtime.runs[2];
             assert_eq!(resumed.target.backend, backend);
             assert_eq!(resumed.target.model.as_deref(), Some("captured-parent-model"));
@@ -269,10 +270,10 @@ fn request_and_transition_failures_rollback_without_duplicate_children() {
     assert_eq!(s.runtime.runs.len(), 1);
     assert!(s.runtime.runs[0].delegation.as_ref().unwrap().child.is_none());
     reconcile(&mut s, |_| Ok(())).unwrap();
-    s.runtime.runs[1].status = "failed".into();
+    s.runtime.runs[1].status = RunStatus::Failed;
     assert!(reconcile(&mut s, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert_eq!(s.runtime.runs.len(), 2);
-    assert_eq!(s.runtime.runs[0].status, "waiting");
+    assert_eq!(s.runtime.runs[0].status, RunStatus::Waiting);
     reconcile(&mut s, |_| Ok(())).unwrap();
     assert_eq!(s.runtime.runs.len(), 3);
 }
@@ -299,7 +300,7 @@ fn project_child_captures_full_checkpoint_and_cancellation_cascades() {
     let before = serde_json::to_vec(&s).unwrap();
     let rollback = runtime::RunStatusCheckpoint::capture(&s.runtime, |r| r.id == id);
     crate::lifecycle::request_cancel(&mut s.runtime, &id, &Actor::LocalOperator).unwrap();
-    assert_eq!(s.runtime.runs[1].status, "cancelled");
+    assert_eq!(s.runtime.runs[1].status, RunStatus::Cancelled);
     assert!(
         rollback
             .save(&mut s, |_| Err(std::io::Error::other("disk full")))
@@ -318,7 +319,7 @@ fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
     let parent_chat = state.runtime.runs[0].chat_id.clone().unwrap();
     let child_chat = state.runtime.runs[1].chat_id.clone().unwrap();
     let child = &mut state.runtime.runs[1];
-    child.status = "running".into();
+    child.status = RunStatus::Running;
     child.attempts.push(Attempt {
         workspace_id: Some("child-attempt".into()),
         parent_artifact: Some("immutable-paused-source".into()),
@@ -327,8 +328,8 @@ fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
     let child_id = child.id.clone();
     crate::design::tests::ask_without_io(&mut state, &child_id, "question", crate::design::tests::input()).unwrap();
     let child = &mut state.runtime.runs[1];
-    child.status = "waiting".into();
-    child.attempts[0].status = "waiting".into();
+    child.status = RunStatus::Waiting;
+    child.attempts[0].status = crate::usage::AttemptStatus::Waiting;
     child.attempts[0].artifact = Some("paused-child".into());
     let question = child.question.as_ref().unwrap().id.to_string();
     let other = chat::create(&mut state);
@@ -390,7 +391,7 @@ fn persistent_resources_follow_real_delegation_and_return_to_parent() {
     created.resource.id = "svc-created-by-child".to_owned().try_into().unwrap();
     created.resource.owner.chat = state.runtime.runs[1].chat_id.clone().unwrap().try_into().unwrap();
     state.services.push(created);
-    state.runtime.runs[1].status = "completed".into();
+    state.runtime.runs[1].status = RunStatus::Completed;
     reconcile(&mut state, |_| Ok(())).unwrap();
     let parent = state.runtime.runs.last().unwrap();
     assert_eq!(parent.chat_id, state.runtime.runs[0].chat_id);
@@ -405,9 +406,9 @@ fn parent_waits_for_child_design_and_delegation_continuations() {
         let mut next = s.runtime.runs[1].clone();
         next.id.push_str("-continuation");
         next.kind = RunKind::DesignAnswer;
-        next.status = "queued".into();
+        next.status = RunStatus::Queued;
         let next_id = next.id.clone();
-        s.runtime.runs[1].status = "continued".into();
+        s.runtime.runs[1].status = RunStatus::Continued;
         if design {
             s.runtime.runs[1].question = Some(crate::design::Question {
                 id: "q".into(),
@@ -432,8 +433,8 @@ fn parent_waits_for_child_design_and_delegation_continuations() {
         s.runtime.runs.push(next);
         reconcile(&mut s, |_| Ok(())).unwrap();
         assert_eq!(s.runtime.runs.len(), 3);
-        assert_eq!(s.runtime.runs[0].status, "waiting");
-        s.runtime.runs[2].status = "completed".into();
+        assert_eq!(s.runtime.runs[0].status, RunStatus::Waiting);
+        s.runtime.runs[2].status = RunStatus::Completed;
         s.runtime.runs[2].result = "Final child evidence after continuation".into();
         reconcile(&mut s, |_| Ok(())).unwrap();
         assert_eq!(s.runtime.runs.len(), 4);
@@ -467,7 +468,7 @@ fn changed_workspace_blocks_continuation_and_pending_same_chat_stays_queued() {
     assert_eq!(crate::scheduler::next(&s.runtime), None);
     s.chats[0].improve_workspace = Some("different-head".into());
     reconcile(&mut s, |_| Ok(())).unwrap();
-    assert_eq!(s.runtime.runs[0].status, "blocked");
+    assert_eq!(s.runtime.runs[0].status, RunStatus::Blocked);
     assert_eq!(s.runtime.runs.len(), 2);
     assert_eq!(crate::scheduler::next(&s.runtime), Some(1));
 }
@@ -573,7 +574,7 @@ fn automatic_turns_holding_reservations_count_toward_the_cap() {
         turn.id = format!("woken-{index}");
         turn.kind = RunKind::AgentCompletion;
         turn.chat_id = Some(lead.clone());
-        turn.status = "running".into();
+        turn.status = RunStatus::Running;
         s.runtime.runs.push(turn);
         request_with_save(&mut s, &format!("woken-{index}"), "n", input(Role::Worker), |_| Ok(())).unwrap();
     }
