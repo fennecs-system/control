@@ -615,6 +615,58 @@ struct Inspection {
     command: Vec<String>,
 }
 const INSPECT: &str = r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},"node":{{json (index .Config.Labels "dev.control.node")}},"resource":{{json (index .Config.Labels "dev.control.resource")}},"chat":{{json (index .Config.Labels "dev.control.chat")}},"generation":{{json (index .Config.Labels "dev.control.generation")}},"status":{{json .State.Status}},"exit_code":{{json .State.ExitCode}},"network":{{json .HostConfig.NetworkMode}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"privileged":{{json .HostConfig.Privileged}},"user":{{json .Config.User}},"pid_mode":{{json .HostConfig.PidMode}},"restart":{{json .HostConfig.RestartPolicy.Name}},"caps":{{json .HostConfig.CapDrop}},"security":{{json .HostConfig.SecurityOpt}},"memory":{{json .HostConfig.Memory}},"cpu":{{json .HostConfig.NanoCpus}},"pids":{{json .HostConfig.PidsLimit}},"mounts":{{json .Mounts}},"tmpfs":{{if index .HostConfig "Tmpfs"}}{{json (index .HostConfig "Tmpfs")}}{{else}}{}{{end}},"storage_opts":{{json (index .HostConfig "StorageOpt")}},"entrypoint":{{json .Config.Entrypoint}},"command":{{json .Config.Cmd}}}"#;
+/// The engine `create` request for `service`, with its workspace volume if any.
+fn create_arguments(service: &Service, workspace: Option<&str>) -> Vec<String> {
+    let r = &service.resource;
+    let mut args = vec![
+        "create".to_owned(),
+        "--pull=never".into(),
+        "--restart=no".into(),
+        "--network=none".into(),
+        "--cap-drop=ALL".into(),
+        "--security-opt=no-new-privileges".into(),
+        format!("--pids-limit={}", service.pids_limit()),
+        format!("--memory={}", service.limits().memory_bytes),
+        format!("--cpus={}", service.limits().cpus),
+        "--log-driver=local".into(),
+        "--log-opt=max-size=1m".into(),
+        "--log-opt=max-file=2".into(),
+        "--name".into(),
+        service.name(),
+        "--user".into(),
+        format!("{}:{}", service.uid, service.gid),
+        "--env".into(),
+        "HOME=/home/agent".into(),
+        "--workdir=/workspace".into(),
+        "--entrypoint=control-service-runner".into(),
+    ];
+    if let Some(workspace) = workspace {
+        args.extend(["--mount".into(), format!("type=volume,source={},target=/workspace", workspace)]);
+    }
+    if service.readonly_root() { args.push("--read-only".into()); }
+    for (key, value) in service.storage.options() {
+        args.extend(["--storage-opt".into(), format!("{key}={value}")]);
+    }
+    for (key, value) in [
+        ("node", r.owner.node.as_str().to_owned()),
+        ("purpose", "service".into()),
+        ("resource", r.id.as_str().to_owned()),
+        ("chat", r.owner.chat.as_str().to_owned()),
+        ("generation", r.generation.get().to_string()),
+    ] {
+        args.extend(["--label".into(), format!("dev.control.{key}={value}")]);
+    }
+    for (path, options) in tmpfs(service) {
+        args.extend(["--tmpfs".into(), format!("{path}:{options}")]);
+    }
+    args.extend([
+        r.image.as_str().to_owned(),
+        r.lease.expires().to_string(),
+        r.lease.seconds().to_string(),
+        service.command.0.to_string(),
+    ]);
+    args
+}
 fn tmpfs(service: &Service) -> HashMap<String, String> {
     [("/workspace", service.profile.service_workspace_mb()), ("/tmp", 128), ("/home/agent", 32)]
         .into_iter()
@@ -801,56 +853,9 @@ impl Engine for Docker {
             .collect()
     }
     fn create(&mut self, service: &Service) -> io::Result<ContainerId> {
-        let r = &service.resource;
         let workspace = workspace::Workspace::of(service);
         if let Some(workspace) = &workspace { workspace.ensure()?; }
-        let mut args = vec![
-            "create".to_owned(),
-            "--pull=never".into(),
-            "--restart=no".into(),
-            "--network=none".into(),
-            "--cap-drop=ALL".into(),
-            "--security-opt=no-new-privileges".into(),
-            format!("--pids-limit={}", service.pids_limit()),
-            format!("--memory={}", service.limits().memory_bytes),
-            format!("--cpus={}", service.limits().cpus),
-            "--log-driver=local".into(),
-            "--log-opt=max-size=1m".into(),
-            "--log-opt=max-file=2".into(),
-            "--name".into(),
-            service.name(),
-            "--user".into(),
-            format!("{}:{}", service.uid, service.gid),
-            "--env".into(),
-            "HOME=/home/agent".into(),
-            "--workdir=/workspace".into(),
-            "--entrypoint=control-service-runner".into(),
-        ];
-        if let Some(workspace) = workspace {
-            args.extend(["--mount".into(), format!("type=volume,source={},target=/workspace", workspace.name())]);
-        }
-        if service.readonly_root() { args.push("--read-only".into()); }
-        for (key, value) in service.storage.options() {
-            args.extend(["--storage-opt".into(), format!("{key}={value}")]);
-        }
-        for (key, value) in [
-            ("node", r.owner.node.as_str().to_owned()),
-            ("purpose", "service".into()),
-            ("resource", r.id.as_str().to_owned()),
-            ("chat", r.owner.chat.as_str().to_owned()),
-            ("generation", r.generation.get().to_string()),
-        ] {
-            args.extend(["--label".into(), format!("dev.control.{key}={value}")]);
-        }
-        for (path, options) in tmpfs(service) {
-            args.extend(["--tmpfs".into(), format!("{path}:{options}")]);
-        }
-        args.extend([
-            r.image.as_str().to_owned(),
-            r.lease.expires().to_string(),
-            r.lease.seconds().to_string(),
-            service.command.0.to_string(),
-        ]);
+        let args = create_arguments(service, workspace.as_ref().map(workspace::Workspace::name));
         crate::engine::create(&args)
             .map_err(|error| if !service.storage.options().is_empty() && ["storage-opt", "quota", "StorageOpt"].iter().any(|word|error.to_string().contains(word)) {
                 fail(format!("Could not create capped service: {error}. storage_limit_mb requires Docker storage-driver quota support; omit it for uncapped disk storage"))

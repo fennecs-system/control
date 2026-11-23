@@ -35,3 +35,61 @@ fn live_rust_playground_success_errors_and_timeout() {
     let timeout = playground("fn main() { loop { std::hint::spin_loop(); } }").unwrap();
     assert_eq!(timeout["status"], "run timeout");
 }
+
+#[test]
+fn playground_launch_vectors_are_pinned() {
+    use crate::engine::golden::{fill, pin};
+    pin(&playground_arguments("control-playground-1", "sha256:img", false), &fill(GOLDEN, &[]));
+    pin(&playground_arguments("control-playground-1", "sha256:img", true), &fill(GOLDEN_BENCH, &[]));
+}
+const GOLDEN: &[&str] = &[
+    "run",
+    "--rm",
+    "--pull=never",
+    "--name",
+    "control-playground-1",
+    "--label",
+    "dev.control.tool=playground",
+    "--network=none",
+    "--user=65532:65532",
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--memory=768m",
+    "--cpus=1",
+    "--pids-limit=64",
+    "--tmpfs",
+    "/tmp:rw,nosuid,exec,mode=1777,size=96m",
+    "--env",
+    "HOME=/tmp",
+    "--workdir=/tmp",
+    "--entrypoint=/bin/control-playground",
+    "-i",
+    "sha256:img",
+];
+const GOLDEN_BENCH: &[&str] = &[
+    "run",
+    "--rm",
+    "--pull=never",
+    "--name",
+    "control-playground-1",
+    "--label",
+    "dev.control.tool=playground",
+    "--network=none",
+    "--user=65532:65532",
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--memory=768m",
+    "--cpus=1",
+    "--pids-limit=64",
+    "--tmpfs",
+    "/tmp:rw,nosuid,exec,mode=1777,size=96m",
+    "--env",
+    "HOME=/tmp",
+    "--workdir=/tmp",
+    "--entrypoint=/bin/control-playground",
+    "-i",
+    "sha256:img",
+    "--bench",
+];

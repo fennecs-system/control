@@ -52,10 +52,7 @@ impl crate::backend::Agent for Antigravity {
         // The text call's scratch root is private and removed after a success.
         let root = call.workspace.parent().ok_or_else(|| fail("Invalid text-call workspace"))?;
         let private = prepare(root, &login, None, None)?;
-        let mut command = container(call.name, call.node, &login, &private)?;
-        command.args(["--mount", &claude::mount(call.workspace, "/workspace", true)?, call.image, "control-agy", "text"]);
-        command.args(FLAGS).args(["--model", call.model]);
-        Ok(command)
+        text_container(call, &login, &private)
     }
     fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {
         control_ai::json_lines(reader, control_ai::antigravity::Antigravity::text(), emit)
@@ -192,6 +189,38 @@ fn container(name: &str, node: &str, login: &Login, private: &Path) -> io::Resul
     login_mounts(&mut command, login)?;
     Ok(command)
 }
+fn text_container(call: &crate::backend::TextCall<'_>, login: &Login, private: &Path) -> io::Result<Command> {
+    let mut command = container(call.name, call.node, login, private)?;
+    command.args(["--mount", &claude::mount(call.workspace, "/workspace", true)?, call.image, "control-agy", "text"]);
+    command.args(FLAGS).args(["--model", call.model]);
+    Ok(command)
+}
+fn turn_container(name: &str, node: &str, login: &Login, private: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<Command> {
+    let mut command = container(name, node, login, private)?;
+    command.args(["--mount", &claude::mount(mailbox, "/workspace", false)?, image, "control-agy", "turn"]);
+    command.args(FLAGS).args(["--model", model]);
+    Ok(command)
+}
+fn login_container(name: &str, node: &str, uid: u32, gid: u32, home: &Path, config: &Path, image: &str) -> io::Result<Command> {
+    let mut command = claude::base(name, node, uid, gid);
+    command.args([
+        "--interactive", "--tty",
+        "--mount", &claude::mount(home, "/home/agent/.gemini", false)?,
+        "--mount", &claude::mount(config, "/home/agent/.config/antigravity", false)?,
+        // No browser can open here. Over SSH the CLI prints an address
+        // and reads the code back (https://antigravity.google/docs/install).
+        "--env", "SSH_CONNECTION=control-login 0 container 22",
+        "--tmpfs", "/workspace:rw,nosuid,size=1m",
+        image, "control-agy", "login",
+    ]);
+    Ok(command)
+}
+/// Lists models with the saved login, without a workspace.
+fn check_container(name: &str, node: &str, login: &Login, private: &Path, image: &str) -> io::Result<Command> {
+    let mut command = container(name, node, login, private)?;
+    command.args(["--tmpfs", "/workspace:rw,nosuid,size=1m", image, "control-agy", "check"]);
+    Ok(command)
+}
 fn login_mounts(command: &mut Command, login: &Login) -> io::Result<()> {
     match login {
         Login::ApiKey(path) => command.args(["--mount", &claude::mount(path, KEY, true)?]),
@@ -258,11 +287,11 @@ pub(crate) fn execute(
     fs::create_dir_all(&mailbox).map_err(|_| failed("Cannot prepare Antigravity mailbox"))?;
     let private = prepare(root, &login, Some(&mcp_config()), Some(&crate::observe::append(bridge, prompt)))
         .map_err(|_| failed("Cannot prepare Antigravity configuration"))?;
-    let mut command = container(&format!("control-{id}"), node, &login, &private).map_err(|_| blocked("Antigravity login metadata or mount path unavailable"))?;
-    let mailbox_mount = claude::mount(&mailbox, "/workspace", false).map_err(|_| blocked("Invalid Antigravity mount path"))?;
-    command.args(["--mount", &mailbox_mount, image, "control-agy", "turn"]);
-    command.args(FLAGS).args(["--model", &attempt.model])
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let name = format!("control-{id}");
+    container(&name, node, &login, &private).map_err(|_| blocked("Antigravity login metadata or mount path unavailable"))?;
+    claude::mount(&mailbox, "/workspace", false).map_err(|_| blocked("Invalid Antigravity mount path"))?;
+    let mut command = turn_container(&name, node, &login, &private, &mailbox, image, &attempt.model).map_err(|_| blocked("Antigravity login metadata or mount path unavailable"))?;
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before Antigravity launch.".into()));
     }
@@ -296,17 +325,7 @@ pub fn command(args: &[String]) -> io::Result<()> {
                 return Err(fail("Antigravity login directory must be private and owned by a non-root user"));
             }
             // The sign-in's own home, kept: the CLI writes its token there.
-            let mut command = claude::base(&format!("control-antigravity-login-{}", std::process::id()), &node()?, meta.uid(), meta.gid());
-            command.args([
-                "--interactive", "--tty",
-                "--mount", &claude::mount(&home, "/home/agent/.gemini", false)?,
-                "--mount", &claude::mount(&config, "/home/agent/.config/antigravity", false)?,
-                // No browser can open here. Over SSH the CLI prints an address
-                // and reads the code back (https://antigravity.google/docs/install).
-                "--env", "SSH_CONNECTION=control-login 0 container 22",
-                "--tmpfs", "/workspace:rw,nosuid,size=1m",
-                &image()?, "control-agy", "login",
-            ]);
+            let mut command = login_container(&format!("control-antigravity-login-{}", std::process::id()), &node()?, meta.uid(), meta.gid(), &home, &config, &image()?)?;
             if !command.status()?.success() {
                 return Err(fail("Antigravity login did not complete"));
             }
@@ -324,8 +343,8 @@ pub fn command(args: &[String]) -> io::Result<()> {
             println!("Antigravity offline workspace isolation verified. No account credentials were mounted or model called.");
             let login = login_in(&directory)?;
             let private = prepare(&state, &login, None, None)?;
-            let mut command = container(&format!("control-antigravity-probe-{}-login", std::process::id()), &node, &login, &private)?;
-            command.args(["--tmpfs", "/workspace:rw,nosuid,size=1m", &image, "control-agy", "check"]).stdin(Stdio::null());
+            let mut command = check_container(&format!("control-antigravity-probe-{}-login", std::process::id()), &node, &login, &private, &image)?;
+            command.stdin(Stdio::null());
             if !command.status()?.success() {
                 return Err(fail("Antigravity could not list models with the saved login"));
             }

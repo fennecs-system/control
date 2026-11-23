@@ -242,6 +242,20 @@ fn search(query: &str, limit: usize) -> io::Result<Value> {
         "Web search unavailable: DuckDuckGo and Bing could not provide results. Try again later.",
     ))
 }
+fn playground_arguments(name: &str, image: &str, optimized: bool) -> Vec<String> {
+    let mut args = [
+        "run", "--rm", "--pull=never", "--name", name, "--label", "dev.control.tool=playground",
+        "--network=none", "--user=65532:65532", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+        "--memory=768m", "--cpus=1", "--pids-limit=64", "--tmpfs", "/tmp:rw,nosuid,exec,mode=1777,size=96m",
+        "--env", "HOME=/tmp", "--workdir=/tmp", "--entrypoint=/bin/control-playground", "-i", image,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    if optimized {
+        args.push("--bench".into());
+    }
+    args
+}
 fn playground(code: &str) -> io::Result<Value> {
     playground_mode(code,false)
 }
@@ -259,17 +273,7 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
         .unwrap_or_default()
         .as_nanos();
     let name = format!("control-playground-{stamp}");
-    let mut args = [
-        "run", "--rm", "--pull=never", "--name", &name, "--label", "dev.control.tool=playground",
-        "--network=none", "--user=65532:65532", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-        "--memory=768m", "--cpus=1", "--pids-limit=64", "--tmpfs", "/tmp:rw,nosuid,exec,mode=1777,size=96m",
-        "--env", "HOME=/tmp", "--workdir=/tmp", "--entrypoint=/bin/control-playground", "-i", &image,
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    if optimized {
-        args.push("--bench".into());
-    }
+    let args = playground_arguments(&name, &image, optimized);
     let finished = crate::engine::ephemeral::run(crate::engine::ephemeral::Spec {
         name: &name,
         args,

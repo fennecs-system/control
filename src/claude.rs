@@ -112,10 +112,14 @@ pub fn credentials_ready() -> io::Result<()> {
 pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->io::Result<Command> {
     let auth=credential()?;
     let meta=fs::symlink_metadata(&auth)?;
-    let mut command=base(name,node,meta.uid(),meta.gid());
+    text_container(image,name,workspace,node,model,&auth,meta.uid(),meta.gid())
+}
+#[allow(clippy::too_many_arguments)]
+fn text_container(image:&str,name:&str,workspace:&Path,node:&str,model:&str,auth:&Path,uid:u32,gid:u32)->io::Result<Command> {
+    let mut command=base(name,node,uid,gid);
     // Check resources are supervised by the caller rather than run reconciliation.
-    command.args(["--interactive","--tmpfs",&format!("/home/agent/.claude:rw,nosuid,uid={},gid={},size=32m",meta.uid(),meta.gid()),
-        "--mount",&mount(&auth,"/home/agent/.claude/.credentials.json",true)?,"--mount",&mount(workspace,"/workspace",true)?,image,
+    command.args(["--interactive","--tmpfs",&format!("/home/agent/.claude:rw,nosuid,uid={uid},gid={gid},size=32m"),
+        "--mount",&mount(auth,"/home/agent/.claude/.credentials.json",true)?,"--mount",&mount(workspace,"/workspace",true)?,image,
         "claude","--print","--output-format","stream-json","--verbose","--no-session-persistence","--restricted","--tools","",
         "--disable-slash-commands","--setting-sources","","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--permission-mode","dontAsk","--model",model]);
     Ok(command)
@@ -213,22 +217,9 @@ pub(crate) fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,comma
     if !meta.is_dir() {
         return Err(fail("Workspace is not a directory"));
     }
-    let mut child = base(name, node, meta.uid(), meta.gid());
-    if !crate::worker_profile::Profile::inspect(image)?.readonly_root() {
-        // Explicitly override base's immutable-root default only for this
-        // credential-free command. No login/model container uses this override.
-        child.arg("--read-only=false");
-    }
+    let readonly_root = crate::worker_profile::Profile::inspect(image)?.readonly_root();
+    let mut child = shell_container(image, name, node, workspace, command, readonly, readonly_root, meta.uid(), meta.gid())?;
     child
-        .args([
-            "--network=none",
-            "--mount",
-            &mount(workspace, "/workspace", readonly)?,
-            image,
-            "bash",
-            "-c",
-            command,
-        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -257,6 +248,26 @@ pub(crate) fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,comma
     Ok(
         json!({"exit_code":status.code(),"stdout":String::from_utf8_lossy(&output),"stderr":String::from_utf8_lossy(&error),"output_limit_bytes":16000}),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shell_container(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,readonly_root:bool,uid:u32,gid:u32)->io::Result<Command> {
+    let mut child = base(name, node, uid, gid);
+    if !readonly_root {
+        // Explicitly override base's immutable-root default only for this
+        // credential-free command. No login/model container uses this override.
+        child.arg("--read-only=false");
+    }
+    child.args([
+        "--network=none",
+        "--mount",
+        &mount(workspace, "/workspace", readonly)?,
+        image,
+        "bash",
+        "-c",
+        command,
+    ]);
+    Ok(child)
 }
 
 pub fn definition() -> Value {
@@ -356,16 +367,10 @@ pub fn execute(
     let mailbox = root.join("claude-mailbox");
     fs::create_dir_all(&mailbox).map_err(|_| failed("Cannot prepare Claude mailbox"))?;
     let name = format!("control-{id}");
-    let mut command = base(&name, node, meta.uid(), meta.gid());
-    let tools=control_context::worker_mcp_names().into_iter().map(|name|format!("mcp__control__{name}")).collect::<Vec<_>>().join(",");
-    command.args(["--interactive", "--tmpfs", &format!("/home/agent/.claude:rw,nosuid,uid={},gid={},size=32m", meta.uid(), meta.gid()), "--mount", &mount(&auth, "/home/agent/.claude/.credentials.json", true).map_err(|_| blocked("Invalid Claude credential path"))?,
-        "--mount", &mount(&mailbox, "/workspace", false).map_err(|_| blocked("Invalid Claude mailbox path"))?, image,
-        "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
-        "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
-        "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
-        "--permission-mode", "dontAsk", "--allowedTools", &tools,
-        "--model", &attempt.model])
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    mount(&auth, "/home/agent/.claude/.credentials.json", true).map_err(|_| blocked("Invalid Claude credential path"))?;
+    mount(&mailbox, "/workspace", false).map_err(|_| blocked("Invalid Claude mailbox path"))?;
+    let mut command = turn_container(&name, node, meta.uid(), meta.gid(), &auth, &mailbox, image, &attempt.model).map_err(|_| blocked("Invalid Claude mount path"))?;
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before Claude launch.".into()));
     }
@@ -379,6 +384,19 @@ pub fn execute(
         failure: |ended, stderr| ended.map(str::to_owned).unwrap_or_else(|| diagnose(stderr)),
     };
     supervise(cli, child, attempt, bridge)
+}
+#[allow(clippy::too_many_arguments)]
+fn turn_container(name: &str, node: &str, uid: u32, gid: u32, auth: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<Command> {
+    let mut command = base(name, node, uid, gid);
+    let tools=control_context::worker_mcp_names().into_iter().map(|name|format!("mcp__control__{name}")).collect::<Vec<_>>().join(",");
+    command.args(["--interactive", "--tmpfs", &format!("/home/agent/.claude:rw,nosuid,uid={uid},gid={gid},size=32m"), "--mount", &mount(auth, "/home/agent/.claude/.credentials.json", true)?,
+        "--mount", &mount(mailbox, "/workspace", false)?, image,
+        "claude", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+        "--restricted", "--tools", "", "--disable-slash-commands", "--setting-sources", "", "--strict-mcp-config",
+        "--mcp-config", "{\"mcpServers\":{\"control\":{\"command\":\"/bin/control-room-mcp\"}}}",
+        "--permission-mode", "dontAsk", "--allowedTools", &tools,
+        "--model", model]);
+    Ok(command)
 }
 /// Decodes a CLI's event stream to its reply and the usage it reported.
 pub(crate) type Capture = fn(&mut dyn Read, &mut dyn FnMut(Activity), &mut dyn FnMut(&control_ai::Usage), &std::sync::atomic::AtomicBool) -> (io::Result<(String, Option<Tokens>)>, control_ai::Usage);
@@ -539,24 +557,14 @@ pub fn command(args: &[String]) -> io::Result<()> {
                     "Claude login directory must be private and owned by a non-root user",
                 ));
             }
-            let mut command = base(
+            let mut command = login_container(
                 &format!("control-claude-login-{}", std::process::id()),
                 &crate::config::node_id().map_err(fail)?,
                 meta.uid(),
                 meta.gid(),
-            );
-            command.args([
-                "--interactive",
-                "--tty",
-                "--tmpfs",
-                "/workspace:rw,nosuid,size=1m",
-                "--mount",
-                &mount(&directory, "/home/agent/.claude", false)?,
+                &directory,
                 &image,
-                "claude",
-                "auth",
-                "login",
-            ]);
+            )?;
             if !command.status()?.success() {
                 return Err(fail("Claude login did not complete"));
             }
@@ -576,6 +584,23 @@ pub fn command(args: &[String]) -> io::Result<()> {
     }
 }
 
+
+fn login_container(name: &str, node: &str, uid: u32, gid: u32, directory: &Path, image: &str) -> io::Result<Command> {
+    let mut command = base(name, node, uid, gid);
+    command.args([
+        "--interactive",
+        "--tty",
+        "--tmpfs",
+        "/workspace:rw,nosuid,size=1m",
+        "--mount",
+        &mount(directory, "/home/agent/.claude", false)?,
+        image,
+        "claude",
+        "auth",
+        "login",
+    ]);
+    Ok(command)
+}
 
 pub(crate) fn render_prompt(objective: &str, review_only: bool) -> String {
     // Static for a chat, like the Codex framing; detail is in tool

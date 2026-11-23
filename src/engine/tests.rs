@@ -50,3 +50,31 @@ fn only_input_exec_forwards_stdin() {
     assert!(input.ends_with(&expected.map(str::to_owned)));
     assert_eq!(input.iter().position(|a| a == "--interactive"), input.iter().position(|a| a == "exec").map(|i| i + 1));
 }
+
+#[test]
+fn exec_vectors_are_pinned() {
+    use super::golden::{args, fill, pin};
+    pin(&args(&exec("c1", "7:8", Some("/workspace"), &[("A", "b")], &["tar", "-x"])), &fill(EXEC, &[]));
+    pin(&args(&exec_input("c1", "7:8", None, &[], &["tar", "-x"])), &fill(EXEC_INPUT, &[]));
+}
+const EXEC: &[&str] = &[
+    "exec",
+    "--user",
+    "7:8",
+    "--env",
+    "A=b",
+    "--workdir",
+    "/workspace",
+    "c1",
+    "tar",
+    "-x",
+];
+const EXEC_INPUT: &[&str] = &[
+    "exec",
+    "--interactive",
+    "--user",
+    "7:8",
+    "c1",
+    "tar",
+    "-x",
+];

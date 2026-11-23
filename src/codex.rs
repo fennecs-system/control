@@ -228,7 +228,10 @@ pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:
     let policy=root.join("worker-seccomp.json");
     fs::write(&policy,include_bytes!("../hosting/worker-seccomp.json")).map_err(|_|"Cannot prepare text sandbox")?;
     sandbox_probe(image,root,&auth,&format!("control-auth-check-{name}"),&policy,node)?;
-    let mut command=container_command(image,name,workspace,&auth,&policy,node)?;
+    Ok(text_container(image,name,workspace,&auth,&policy,node,model)?)
+}
+fn text_container(image:&str,name:&str,workspace:&Path,auth:&Credentials,policy:&Path,node:&str,model:&str)->Result<Command,&'static str> {
+    let mut command=container_command(image,name,workspace,auth,policy,node)?;
     command.args(["codex","exec","--ignore-user-config","--ignore-rules","--ephemeral","--skip-git-repo-check","--json","--model",model]);
     permissions(&mut command);
     for feature in ["shell_tool","apps","multi_agent","browser_use","computer_use","code_mode","js_repl","view_image","sleep_tool","skill_search","skill_mcp_dependency_install","workspace_dependencies"] {
@@ -256,16 +259,14 @@ pub(crate) fn sandbox_probe(
         uid: auth.uid,
         gid: auth.gid,
     };
-    let mut command = container_command(image, name, &workspace, &fake, policy, node)?;
-    command.args(["codex", "sandbox", "-P", "control"]);
-    permissions(&mut command);
     // PID 1 must be the inner execution supervisor, not the account-bearing harness.
     // Its memory is naturally readable by its own child; the outer harness is outside this PID namespace.
     // Each probe writes a fresh result name: Docker Desktop's shared-file cache keeps a
     // stale entry for a name an earlier container created and the host then deleted,
     // so recreating that name failed with ENOENT on alternate probes.
     let result = format!("probe-result-{}", probe_nonce()?);
-    command.args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > \"/workspace/$1\"", "probe", &result])
+    let mut command = probe_container(image, name, &workspace, &fake, policy, node, &result)?;
+    command
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
@@ -289,6 +290,13 @@ pub(crate) fn sandbox_probe(
         let stderr = stderr.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
         format!("{reason} {}", probe_detail(status, written.as_deref(), &stderr))
     })
+}
+fn probe_container(image: &str, name: &str, workspace: &Path, fake: &Credentials, policy: &Path, node: &str, result: &str) -> Result<Command, &'static str> {
+    let mut command = container_command(image, name, workspace, fake, policy, node)?;
+    command.args(["codex", "sandbox", "-P", "control"]);
+    permissions(&mut command);
+    command.args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > \"/workspace/$1\"", "probe", result]);
+    Ok(command)
 }
 pub(crate) fn probe_nonce() -> Result<String, &'static str> {
     let mut nonce = [0u8; 8];
@@ -531,22 +539,7 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
         fs::create_dir(absolute).map_err(|_|failed("Could not prepare judge scratch."))?;
     }
     let mut command =
-        container_command_scoped(image, &container, absolute, &auth, &policy, node,attempt.review_only.then_some(review_source.as_path())).map_err(blocked)?;
-    command.args([
-        "codex",
-        "exec",
-        "--ignore-user-config",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--color",
-        "never",
-        "--json",
-        "--model",
-        &attempt.model,
-        "--output-last-message",
-        "/workspace/.control-result",
-    ]);
-    permissions(&mut command);
+        turn_container(image, &container, absolute, &auth, &policy, node, attempt.review_only.then_some(review_source.as_path()), &attempt.model, bridge.is_some()).map_err(blocked)?;
     let room = bridge.and_then(|(state, run_id)| {
         let s = state.lock().ok()?;
         let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
@@ -557,18 +550,6 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
             .clone()
             .filter(|r| crate::rooms::valid(r))
     });
-    if bridge.is_some() {
-        command.args([
-            "-c",
-            "mcp_servers.control_rooms.command=\"/bin/control-room-mcp\"",
-            "-c",
-            "mcp_servers.control_rooms.required=true",
-        ]);
-        let tools=control_context::worker_mcp_names();
-        command.args(["-c",&format!("mcp_servers.control_rooms.enabled_tools={}",serde_json::to_string(&tools).unwrap())]);
-        for tool in tools {command.args(["-c",&format!("mcp_servers.control_rooms.tools.{tool}.approval_mode=\"approve\"")]);}
-    }
-    command.arg("-");
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -727,3 +708,39 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
     let summary: String = output.chars().take(16000).collect();
     Ok(summary)
 }
+/// One turn's container and Codex arguments; `bridge` adds the room tools.
+#[allow(clippy::too_many_arguments)]
+fn turn_container(image: &str, container: &str, absolute: &Path, auth: &Credentials, policy: &Path, node: &str, review: Option<&Path>, model: &str, bridge: bool) -> Result<Command, &'static str> {
+    let mut command = container_command_scoped(image, container, absolute, auth, policy, node, review)?;
+    command.args([
+        "codex",
+        "exec",
+        "--ignore-user-config",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+        "--json",
+        "--model",
+        model,
+        "--output-last-message",
+        "/workspace/.control-result",
+    ]);
+    permissions(&mut command);
+    if bridge {
+        command.args([
+            "-c",
+            "mcp_servers.control_rooms.command=\"/bin/control-room-mcp\"",
+            "-c",
+            "mcp_servers.control_rooms.required=true",
+        ]);
+        let tools=control_context::worker_mcp_names();
+        command.args(["-c",&format!("mcp_servers.control_rooms.enabled_tools={}",serde_json::to_string(&tools).unwrap())]);
+        for tool in tools {command.args(["-c",&format!("mcp_servers.control_rooms.tools.{tool}.approval_mode=\"approve\"")]);}
+    }
+    command.arg("-");
+    Ok(command)
+}
+
+#[cfg(test)]
+mod tests;

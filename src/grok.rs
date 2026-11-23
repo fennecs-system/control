@@ -47,13 +47,7 @@ impl crate::backend::Agent for Grok {
             })
     }
     fn text_command(&self, call: &crate::backend::TextCall<'_>) -> io::Result<Command> {
-        let auth = credential()?;
-        // A text request carries no prompt file: the caller writes the prompt to
-        // standard input, which `sh` hands to Grok as a file it can read.
-        let mut command = container(call.name, call.node, &auth)?;
-        command.args(["--mount", &claude::mount(call.workspace, "/workspace", true)?, call.image, "bash", "-c", "cat > /tmp/prompt && exec grok \"$@\" --prompt-file /tmp/prompt", "grok"]);
-        command.args(FLAGS).args(["--tools", NO_TOOLS, "--disallowed-tools", "search_tool,use_tool", "--model", call.model]);
-        Ok(command)
+        text_container(call, &credential()?)
     }
     fn text(&self, reader: &mut dyn Read, _max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output> {
         control_ai::json_lines(reader, control_ai::grok::Grok::text(), emit)
@@ -123,6 +117,38 @@ fn container(name: &str, node: &str, auth: &Path) -> io::Result<Command> {
     ]);
     Ok(command)
 }
+fn text_container(call: &crate::backend::TextCall<'_>, auth: &Path) -> io::Result<Command> {
+    // A text request carries no prompt file: the caller writes the prompt to
+    // standard input, which `sh` hands to Grok as a file it can read.
+    let mut command = container(call.name, call.node, auth)?;
+    command.args(["--mount", &claude::mount(call.workspace, "/workspace", true)?, call.image, "bash", "-c", "cat > /tmp/prompt && exec grok \"$@\" --prompt-file /tmp/prompt", "grok"]);
+    command.args(FLAGS).args(["--tools", NO_TOOLS, "--disallowed-tools", "search_tool,use_tool", "--model", call.model]);
+    Ok(command)
+}
+/// One turn's container: Grok's configuration and prompt read-only, the mailbox writable.
+#[allow(clippy::too_many_arguments)]
+fn turn_container(name: &str, node: &str, auth: &Path, config: &Path, turn: &Path, mailbox: &Path, image: &str, model: &str) -> io::Result<Command> {
+    let mut command = container(name, node, auth)?;
+    command.args([
+        "--mount", &claude::mount(config, "/home/agent/.grok/config.toml", true)?,
+        "--mount", &claude::mount(turn, "/home/agent/prompt", true)?,
+        "--mount", &claude::mount(mailbox, "/workspace", false)?,
+        image, "grok", "--prompt-file", "/home/agent/prompt",
+    ]);
+    command.args(FLAGS).args(["--tools", NO_TOOLS, "--model", model]);
+    Ok(command)
+}
+fn login_container(name: &str, node: &str, uid: u32, gid: u32, directory: &Path, image: &str) -> io::Result<Command> {
+    let mut command = claude::base(name, node, uid, gid);
+    command.args([
+        "--interactive", "--tty",
+        "--env", "GROK_HOME=/home/agent/.grok",
+        "--tmpfs", "/workspace:rw,nosuid,size=1m",
+        "--mount", &claude::mount(directory, "/home/agent/.grok", false)?,
+        image, "grok", "login", "--device-auth",
+    ]);
+    Ok(command)
+}
 /// The offline isolation probe; a timeout fails with [`io::ErrorKind::TimedOut`].
 fn probe(image: &str, node: &str, root: &Path, name: &str) -> io::Result<()> {
     let directory = root.join(PROBE);
@@ -176,16 +202,14 @@ pub(crate) fn execute(
     let (config, turn) = (root.join("grok-config.toml"), root.join("grok-prompt"));
     private(&config, CONFIG).and_then(|_| private(&turn, &crate::observe::append(bridge, prompt))).map_err(|_| failed("Cannot prepare Grok configuration"))?;
     let name = format!("control-{id}");
-    let mount = |path: &Path, target: &str, readonly| claude::mount(path, target, readonly).map_err(|_| blocked("Invalid Grok mount path"));
-    let mut command = container(&name, node, &auth).map_err(|_| blocked("Grok credential metadata unavailable"))?;
-    command.args([
-        "--mount", &mount(&config, "/home/agent/.grok/config.toml", true)?,
-        "--mount", &mount(&turn, "/home/agent/prompt", true)?,
-        "--mount", &mount(&mailbox, "/workspace", false)?,
-        image, "grok", "--prompt-file", "/home/agent/prompt",
-    ]);
-    command.args(FLAGS).args(["--tools", NO_TOOLS, "--model", &attempt.model])
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // The container's own mount failure reads as a credential problem; the
+    // others are checked first so each keeps its own message.
+    container(&name, node, &auth).map_err(|_| blocked("Grok credential metadata unavailable"))?;
+    for (path, target, readonly) in [(&config, "/home/agent/.grok/config.toml", true), (&turn, "/home/agent/prompt", true), (&mailbox, "/workspace", false)] {
+        claude::mount(path, target, readonly).map_err(|_| blocked("Invalid Grok mount path"))?;
+    }
+    let mut command = turn_container(&name, node, &auth, &config, &turn, &mailbox, image, &attempt.model).map_err(|_| blocked("Grok credential metadata unavailable"))?;
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before Grok launch.".into()));
     }
@@ -216,14 +240,7 @@ pub fn command(args: &[String]) -> io::Result<()> {
             if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() == 0 {
                 return Err(fail("Grok login directory must be private and owned by a non-root user"));
             }
-            let mut command = claude::base(&format!("control-grok-login-{}", std::process::id()), &node()?, meta.uid(), meta.gid());
-            command.args([
-                "--interactive", "--tty",
-                "--env", "GROK_HOME=/home/agent/.grok",
-                "--tmpfs", "/workspace:rw,nosuid,size=1m",
-                "--mount", &claude::mount(&directory, "/home/agent/.grok", false)?,
-                &image()?, "grok", "login", "--device-auth",
-            ]);
+            let mut command = login_container(&format!("control-grok-login-{}", std::process::id()), &node()?, meta.uid(), meta.gid(), &directory, &image()?)?;
             if !command.status()?.success() {
                 return Err(fail("Grok login did not complete"));
             }

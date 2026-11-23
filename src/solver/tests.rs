@@ -308,3 +308,47 @@ fn live_solvers_run_tiny_models_in_their_containers() {
     assert_eq!(timeout["status"], "timeout", "{timeout}");
     assert!(timeout["elapsed_ms"].as_u64().unwrap() < 1000 * (1 + GRACE.as_secs()), "{timeout}");
 }
+
+#[test]
+fn solver_launch_vector_is_pinned() {
+    use crate::engine::golden::{fill, pin};
+    pin(&arguments("sha256:img", "control-solve-1", &request("highs", 5, false)), &fill(GOLDEN, &[("stage", STAGE)]));
+}
+const GOLDEN: &[&str] = &[
+    "run",
+    "--rm",
+    "--interactive",
+    "--pull=never",
+    "--name",
+    "control-solve-1",
+    "--label",
+    "dev.control.tool=solver",
+    "--network=none",
+    "--user=65534:65534",
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--memory=1024m",
+    "--memory-swap=1024m",
+    "--cpus=2",
+    "--pids-limit=128",
+    "--tmpfs",
+    "/tmp:rw,nosuid,nodev,noexec,size=512m",
+    "--env",
+    "HOME=/tmp",
+    "--workdir=/tmp",
+    "--log-driver=none",
+    "--entrypoint=/bin/bash",
+    "sha256:img",
+    "-c",
+    "{stage}",
+    "/tmp/model.lp",
+    "/tmp/solution.txt",
+    "highs",
+    "--model_file",
+    "/tmp/model.lp",
+    "--time_limit",
+    "5",
+    "--solution_file",
+    "/tmp/solution.txt",
+];

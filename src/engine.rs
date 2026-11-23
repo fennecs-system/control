@@ -146,3 +146,5 @@ fn parse_top(text: &str, limit: usize) -> Vec<Process> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) mod golden;
