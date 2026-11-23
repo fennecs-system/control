@@ -186,7 +186,7 @@ fn sizes(team: &Team) -> [(&'static str, usize, usize); 3] {
         .unwrap();
     let advisor_policy = crate::chat::prompt_prefix(run, session).len();
     let advisor_total =
-        crate::claude::render_prompt(&crate::chat::prompt(&team.state, &team.advisor).unwrap(), true).len();
+        control_claude::render_prompt(&crate::chat::prompt(&team.state, &team.advisor).unwrap(), true).len();
     [
         ("lead", lead_policy, lead_total),
         ("member", member_policy, member_total),
@@ -360,7 +360,7 @@ fn adapter_framing_stays_short_and_keeps_its_safety_essentials() {
     use crate::identity::Workspace;
     let codex = [true, false]
         .map(|managed| crate::worker::render_prompt_mode("", Workspace::User, Some("general"), true, managed));
-    let claude = [false, true].map(|review| crate::claude::render_prompt("", review));
+    let claude = [false, true].map(|review| control_claude::render_prompt("", review));
     for text in codex.iter().chain(&claude) {
         assert!(text.len() <= 1_344, "{} bytes: {text}", text.len());
         assert!(
@@ -454,7 +454,7 @@ fn dump_prompt_sections() {
         "framing-codex-legacy.txt",
         &crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, false),
     );
-    write("framing-claude.txt", &crate::claude::render_prompt("", false));
+    write("framing-claude.txt", &control_claude::render_prompt("", false));
     write("policy.txt", &crate::chat::prompt_prefix(&member, &session));
     write("index.txt", &crate::worker_tools::prompt_index(&team.state, &member));
     write("session.txt", control_context::agent_policy::ACTIVE_SESSION_GUIDANCE);

@@ -49,7 +49,7 @@ pub fn limit(attempt: &Attempt, persistent: bool) -> Option<u64> {
     if let Some(explicit) = attempt.explicit_timeout_seconds {
         return Some(explicit);
     }
-    if attempt.backend == crate::backend::Backend::Local {
+    if attempt.backend.runs_control_loop() {
         return attempt.local_timeout_seconds;
     }
     if persistent {

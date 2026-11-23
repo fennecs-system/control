@@ -252,7 +252,8 @@ fn local_endpoint<'a>(
         Some(model) => (model.backend, model.model.clone()),
         None => (runtime.backend, runtime.configured_model()),
     };
-    (backend == crate::backend::Backend::Local)
+    backend
+        .runs_control_loop()
         .then(|| crate::providers::endpoint(runtime, &name))
         .flatten()
 }

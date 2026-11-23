@@ -5,12 +5,28 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Each client-side crate (and the root) with the only crates that may depend on it.
-const UPPER: [(&str, &[&str]); 4] = [
+/// Each client-side crate, agent backend crate (and the root) with the only
+/// crates that may depend on it. Only the root links a backend, so no backend
+/// depends on another, on a client or on the root.
+const UPPER: [(&str, &[&str]); 9] = [
     ("control", &[]),
     ("control-client", &["control", "control-tui", "control-discord"]),
     ("control-tui", &["control"]),
     ("control-discord", &["control"]),
+    ("control-codex", &["control"]),
+    ("control-claude", &["control"]),
+    ("control-grok", &["control"]),
+    ("control-antigravity", &["control"]),
+    (
+        "control-agent",
+        &[
+            "control",
+            "control-codex",
+            "control-claude",
+            "control-grok",
+            "control-antigravity",
+        ],
+    ),
 ];
 
 /// `package -> dependency` edges that break the direction, in any dependency kind.
@@ -90,6 +106,11 @@ fn leaf_crates_and_clients_do_not_depend_upwards() {
         "control-url-names",
         "control-ingress",
         "control-isolation",
+        "control-agent",
+        "control-codex",
+        "control-claude",
+        "control-grok",
+        "control-antigravity",
     ]
     .iter()
     .for_each(|name| {
@@ -148,4 +169,28 @@ fn standalone_manifests_are_on_edition_2024() {
         })
         .collect::<Vec<_>>();
     assert_eq!(other_editions, Vec::<PathBuf>::new());
+}
+
+#[test]
+fn the_rule_rejects_a_backend_depending_on_another_backend_or_the_root() {
+    let graph = [
+        (
+            "control-grok".to_owned(),
+            vec!["control-agent".to_owned(), "control-claude".to_owned()],
+        ),
+        ("control-codex".to_owned(), vec!["control".to_owned()]),
+        ("control-agent".to_owned(), vec!["control-client".to_owned()]),
+        (
+            "control".to_owned(),
+            vec!["control-agent".to_owned(), "control-grok".to_owned()],
+        ),
+    ];
+    assert_eq!(
+        violations(&graph),
+        [
+            ("control-grok", "control-claude"),
+            ("control-codex", "control"),
+            ("control-agent", "control-client")
+        ]
+    );
 }

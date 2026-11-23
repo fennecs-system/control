@@ -1,21 +1,40 @@
 use super::*;
-use crate::backend::Agent;
+use std::path::PathBuf;
 
 fn args(spec: &RunSpec) -> Vec<String> {
-    crate::engine::golden::run(spec)
+    control_isolation::golden::run(spec)
 }
 fn login(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("control-grok-{tag}-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     let auth = root.join("auth.json");
-    private(&auth, "{}").unwrap();
+    cli::private_file(&auth, "{}").unwrap();
     auth
+}
+/// The login as the host grants it: the file and its owner.
+fn granted(auth: &Path) -> Granted {
+    let meta = fs::symlink_metadata(auth).unwrap();
+    Granted::located(
+        control_agent::Form::Session,
+        auth.to_path_buf(),
+        User {
+            uid: meta.uid(),
+            gid: meta.gid(),
+        },
+    )
+}
+fn message(ended: Option<&str>, stderr: &[u8]) -> String {
+    let ended = ended.map(|text| Ending {
+        text: text.to_owned(),
+        rejected_tools: false,
+    });
+    diagnose(ended, stderr).message()
 }
 
 #[test]
 fn the_container_mounts_the_login_read_only_and_keeps_grok_state_on_a_tmpfs() {
     let auth = login("container");
-    let args = args(&container("control-run-1", "node", &auth, "sha256:img").unwrap());
+    let args = args(&container("control-run-1", "node", &granted(&auth), "sha256:img").unwrap());
     let joined = args.join(" ");
     assert!(joined.contains(&format!(
         "type=bind,src={},dst=/home/agent/.grok/auth.json,readonly",
@@ -57,36 +76,33 @@ fn every_run_removes_groks_own_tools_and_a_text_call_the_mcp_tools_too() {
 #[test]
 fn a_known_failure_gets_the_fixed_message_and_an_unknown_one_groks_own_ending() {
     assert_eq!(
-        diagnose(Some("Grok ended with an error: Rate limit exceeded."), b""),
+        message(Some("Grok ended with an error: Rate limit exceeded."), b""),
         "The signed-in Grok account reached a usage or rate limit."
     );
     assert_eq!(
-        diagnose(Some("Grok ended with max_tokens."), b""),
+        message(Some("Grok ended with max_tokens."), b""),
         "Grok ended with max_tokens."
     );
     assert_eq!(
-        diagnose(None, b"error: 401 Unauthorized"),
+        message(None, b"error: 401 Unauthorized"),
         "Grok account authentication was rejected. Refresh the host login and submit a new run."
     );
-    assert!(diagnose(None, b"").starts_with("Grok stopped without success."));
+    assert!(message(None, b"").starts_with("Grok stopped without success."));
 }
 
 #[test]
 fn the_backend_is_selected_by_its_prefix_and_treated_like_the_shared_default() {
-    assert_eq!(Backend::named("grok"), Some(Backend::Grok));
-    assert!(Backend::hosted().any(|b| b == Backend::Grok));
     // Control's shared framing and captured turn context, not its own prompt.
-    assert!(!Grok.own_prompt() && Grok.host_shell() && !Grok.review_mount());
+    assert!(Grok.own_prompt("", false).is_none() && Grok.host_shell() && !Grok.review_mount());
     assert_eq!(
         (Grok.mailbox(), Grok.probe_workspace()),
         (Some("grok-mailbox"), "grok-isolation-probe")
     );
-    assert_eq!(serde_json::to_string(&Backend::Grok).unwrap(), "\"grok\"");
 }
 
 #[test]
 fn grok_launch_vectors_are_pinned() {
-    use crate::engine::golden::{fill, pin_equivalent, run};
+    use control_isolation::golden::{fill, pin_equivalent, run};
     let auth = login("golden");
     let root = auth.parent().unwrap().to_path_buf();
     let meta = fs::symlink_metadata(&auth).unwrap();
@@ -97,18 +113,20 @@ fn grok_launch_vectors_are_pinned() {
         ("gid", gid.as_str()),
     ];
     let workspace = root.join("workspace");
-    let call = crate::backend::TextCall {
+    let granted = granted(&auth);
+    let call = TextCall {
         image: "sha256:img",
         name: "control-summary-1",
         workspace: &workspace,
         node: "node-1",
         model: "grok-4.7",
+        login: Some(&granted),
     };
-    pin_equivalent(&run(&text_container(&call, &auth).unwrap()), &fill(TEXT, &values));
+    pin_equivalent(&run(&text_container(&call, &granted).unwrap()), &fill(TEXT, &values));
     let turn = turn_container(
         "control-run-1",
         "node-1",
-        &auth,
+        &granted,
         &root.join("grok-config.toml"),
         &root.join("grok-prompt"),
         &root.join(MAILBOX),

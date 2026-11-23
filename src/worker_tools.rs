@@ -511,7 +511,7 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
                 // The fsync runs without the state lock; this mailbox is served serially,
                 // and the run is re-fenced below before anything executes.
                 drop(state);
-                if crate::claude::claim(workspace, nonce).is_err() {
+                if crate::host_shell::claim(workspace, nonce).is_err() {
                     return error(
                         "Workspace command already admitted or intent could not be saved; inspect the attempt before retrying",
                     );
@@ -535,7 +535,7 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
                     return error("Run is not active");
                 }
                 drop(state);
-                let result = crate::claude::shell_scoped(
+                let result = crate::host_shell::shell_scoped(
                     crate::engine::isolation(),
                     &image,
                     &name,
@@ -692,9 +692,6 @@ fn attach_observation(result: &mut Value, block: String) {
     if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
         content.push(json!({"type":"text","text":block}));
     }
-}
-pub fn pump(state: &Arc<Mutex<State>>, run: &str, workspace: &Path, managed: bool) {
-    pump_at(state, run, workspace, workspace, managed);
 }
 pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: &Path, managed: bool) {
     let Ok(envelope) = rooms::take_request(mailbox) else {

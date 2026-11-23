@@ -1,6 +1,6 @@
 mod access;
+mod agent_host;
 mod agent_message;
-mod antigravity;
 mod application;
 mod approvals;
 mod artifacts;
@@ -14,9 +14,6 @@ mod build_environment;
 mod callsigns;
 mod channel_settings;
 mod chat;
-mod child;
-mod claude;
-mod codex;
 mod collective;
 mod command_jobs;
 mod conversation;
@@ -24,9 +21,9 @@ mod conversations;
 mod delegated_results;
 mod delegation;
 mod design;
-mod grok;
 mod history;
 mod history_view;
+mod host_shell;
 mod observe;
 mod pagination;
 mod turn_context;
@@ -34,6 +31,7 @@ mod turn_context;
 #[allow(dead_code)]
 mod watch_frame;
 mod watches;
+use control_agent::child;
 use control_config as config;
 use control_discord::bridge as discord_bridge;
 use control_identity as identity;
@@ -57,7 +55,7 @@ mod lens_ui;
 mod lifecycle;
 mod live_updates;
 mod local_agent;
-mod mailbox_wake;
+mod logins;
 mod mcp_chat;
 mod mcp_http;
 mod mcp_stdio;
@@ -821,14 +819,19 @@ fn run() -> std::io::Result<()> {
     if args.get(1).is_some_and(|s| s == "models") {
         return model_calls::command(&args[2..]);
     }
-    if args.get(1).is_some_and(|s| s == "claude") {
-        return claude::command(&args[2..]);
-    }
-    if args.get(1).is_some_and(|s| s == "antigravity") {
-        return antigravity::command(&args[2..]);
-    }
-    if args.get(1).is_some_and(|s| s == "grok") {
-        return grok::command(&args[2..]);
+    // `control claude|grok|antigravity login|check`.
+    let backend_command = [
+        (
+            backend::Backend::Claude,
+            control_claude::command as fn(control_agent::Command<'_>) -> std::io::Result<()>,
+        ),
+        (backend::Backend::Antigravity, control_antigravity::command),
+        (backend::Backend::Grok, control_grok::command),
+    ]
+    .into_iter()
+    .find(|(backend, _)| args.get(1).is_some_and(|s| s == backend.id()));
+    if let Some((backend, command)) = backend_command {
+        return logins::command(backend, &args[2..], command);
     }
     if args.get(1).is_some_and(|s| s == "--version") {
         if args.get(2).is_some_and(|s| s == "--json") {
