@@ -1,7 +1,7 @@
 //! Bounded repository inspection over the existing credential broker. No writes.
 use super::*;
 use crate::tool_registry::{AttemptCall, AttemptTools};
-use control_client::github::{Query, Section};
+use control_context::github::{Query, Section};
 
 const PAGE_SIZE: usize = 5;
 const OUTPUT_BYTES: usize = 128 * 1024;

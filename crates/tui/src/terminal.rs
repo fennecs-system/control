@@ -241,10 +241,10 @@ impl App {
             }
             _ if text=="/github" || text.starts_with("/github ") => {
                 if self.active.is_empty() { return Err(failure("Open a conversation first")); }
-                let command = control_client::github::Command::parse(text[7..].trim()).map_err(failure)?;
+                let command = control_context::github::Command::parse(text[7..].trim()).map_err(failure)?;
                 let value = match command {
-                    control_client::github::Command::Read(query) => hive.github_read(&self.active, query)?,
-                    control_client::github::Command::Write(operation) => hive.github_write(&self.active, operation)?,
+                    control_context::github::Command::Read(query) => hive.github_read(&self.active, query)?,
+                    control_context::github::Command::Write(operation) => hive.github_write(&self.active, operation)?,
                 };
                 self.inspector = Some(("GitHub operation".into(), serde_json::to_string_pretty(&value).map_err(failure)?));
                 self.scroll=0;self.follow=false;
@@ -477,7 +477,7 @@ impl App {
                 }
                 let folder_reply = (message["run_id"].is_null()
                     && commands::tail(message["text"].as_str().unwrap_or("").trim(), commands::Kind::Open).is_some()
-                    && message["reply"].as_str().and_then(|reply|reply.strip_prefix("Review and approve folder access: ")).and_then(control_client::url_names::dm_route).and_then(|path|path.strip_suffix("/project"))==Some(self.active.as_str())).then(|| {
+                    && message["reply"].as_str().and_then(|reply|reply.strip_prefix("Review and approve folder access: ")).and_then(control_url_names::dm_route).and_then(|path|path.strip_suffix("/project"))==Some(self.active.as_str())).then(|| {
                     if let Some(mount)=self.detail["project"]["mounts"].as_array().and_then(|mounts|mounts.iter().find(|mount|mount["message_index"].as_u64()==Some(position as u64))) {
                         format!("Opened /workspace/{}",clean(mount["name"].as_str().unwrap_or("")))
                     } else if pending_project(&self.detail).is_some_and(|project|project["message_index"].as_u64()==Some(position as u64)) {
@@ -525,11 +525,11 @@ impl App {
                                     clean(event["output"].as_str().unwrap_or(""))
                                         .lines()
                                         .map(|s| {
-                                            let color=if patch {match control_client::diff::kind(s) {
-                                                control_client::diff::Kind::Add=>{let (r,g,b)=control_client::diff::ADD_RGB;Some(Color::Rgb(r,g,b))},
-                                                control_client::diff::Kind::Remove=>{let (r,g,b)=control_client::diff::REMOVE_RGB;Some(Color::Rgb(r,g,b))},
-                                                control_client::diff::Kind::Header=>Some(Color::Rgb(133,133,143)),
-                                                control_client::diff::Kind::Context=>None,
+                                            let color=if patch {match control_diff::kind(s) {
+                                                control_diff::Kind::Add=>{let (r,g,b)=control_diff::ADD_RGB;Some(Color::Rgb(r,g,b))},
+                                                control_diff::Kind::Remove=>{let (r,g,b)=control_diff::REMOVE_RGB;Some(Color::Rgb(r,g,b))},
+                                                control_diff::Kind::Header=>Some(Color::Rgb(133,133,143)),
+                                                control_diff::Kind::Context=>None,
                                             }}else{None};
                                             let style=color.map(|color|Style::default().fg(color)).unwrap_or_default();
                                             Line::styled(format!("  {s}"),style)

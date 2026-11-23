@@ -1,5 +1,5 @@
 use control_identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
-use crate as discord;
+use control_ingress as discord;
 use control_config as config;
 use control_identity as identity;
 use super::{components, gateway, permissions as discord_permissions, delivery::Snapshot};
@@ -218,10 +218,10 @@ fn design_report(question: &Value) -> Option<String> {
     }
     Some(report)
 }
-fn delivery_message(change: Option<&control_client::outbox::Change>, status: &str, link: &str, report: &str) -> String {
+fn delivery_message(change: Option<&control_delivery::Change>, status: &str, link: &str, report: &str) -> String {
     let prefix=format!("Control: {status}.\nContinue on this laptop: {link}\n\n");
     let edits = if status == "waiting" { None } else { change };
-    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),control_client::diff::discord_preview(&event.output))).unwrap_or_default();
+    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),control_diff::discord_preview(&event.output))).unwrap_or_default();
     let budget=1800usize.saturating_sub(prefix.chars().count()+suffix.chars().count());
     let body=if report.chars().count()>budget {
         format!("{}\n… Full reply in chat.",report.chars().take(budget.saturating_sub(23)).collect::<String>())
@@ -749,7 +749,7 @@ impl Bridge {
         if outbound.unsaved {
             let _ = outbound.save_receipts();
         }
-        let events = control_client::outbox::read(&control_client::outbox::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
+        let events = control_delivery::read(&control_delivery::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
         // Recipients who receive design questions as operator requests.
         let (forwarding, operating) = operators(routes);
         let questions: Vec<DiscordId> = if forwarding.enabled && forwarding.chats.is_empty() && forwarding.kinds.contains(&operator::Kind::Question) { operating.iter().filter_map(|to| to.conversation.parse().ok()).collect() } else { Vec::new() };
@@ -780,7 +780,7 @@ impl Bridge {
         }
         Ok(())
     }
-    fn deliver_one(&self, run: &control_client::outbox::Delivery, routes: &[Route], questions: &[DiscordId], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<Outcome, &'static str> {
+    fn deliver_one(&self, run: &control_delivery::Delivery, routes: &[Route], questions: &[DiscordId], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<Outcome, &'static str> {
         {
             {
                 let (actor, action, status) = (&run.actor, run.action, run.status.as_str());
@@ -793,7 +793,7 @@ impl Bridge {
                     return Ok(Outcome::Done);
                 }
                 if (!run.source.starts_with("discord:") && run.chat.is_none())
-                    || !control_client::outbox::DELIVERABLE.contains(&status)
+                    || !control_delivery::DELIVERABLE.contains(&status)
                     || outbound.delivered.contains(&receipt)
                 {
                     return Ok(Outcome::Done);
@@ -866,9 +866,9 @@ enum Outcome {
 struct Outbound {
     /// Position in the delivery outbox; starts at the beginning on launch and
     /// relies on receipts to skip what was already sent.
-    cursor: control_client::outbox::Cursor,
+    cursor: control_delivery::Cursor,
     /// Events waiting for authorization or a route, at most `PARKED`.
-    parked: Vec<control_client::outbox::Delivery>,
+    parked: Vec<control_delivery::Delivery>,
     /// Delivered receipts not yet saved; saving is retried every poll.
     unsaved: bool,
     delivered: HashSet<String>,

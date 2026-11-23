@@ -197,7 +197,7 @@ pub fn replies(detail: &Value, from: usize) -> (Vec<Reply<'_>>, usize) {
         if UNFINISHED.contains(&status) {
             break;
         }
-        if crate::outbox::DELIVERABLE.contains(&status) {
+        if control_delivery::DELIVERABLE.contains(&status) {
             replies.push(Reply { index, status, text: message["reply"].as_str().unwrap_or("") });
         }
         next = index + 1;

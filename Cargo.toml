@@ -30,6 +30,10 @@ control-journal = { path = "crates/journal" }
 control-comonad = { path = "crates/comonad" }
 control-config = { path = "crates/config" }
 control-identity = { path = "crates/identity" }
+control-delivery = { path = "crates/delivery" }
+control-diff = { path = "crates/diff" }
+control-url-names = { path = "crates/url-names" }
+control-ingress = { path = "crates/ingress" }
 control-client = { path = "crates/client" }
 control-discord = { path = "crates/discord" }
 control-tui = { path = "crates/tui", optional = true }
@@ -48,5 +52,5 @@ control = { path = ".", default-features = false, features = ["test-isolation"] 
 
 
 [workspace]
-members = ["crates/context", "crates/mcp", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/client", "crates/tui", "crates/discord"]
+members = ["crates/context", "crates/mcp", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/delivery", "crates/diff", "crates/url-names", "crates/ingress", "crates/client", "crates/tui", "crates/discord"]
 exclude = ["web"]

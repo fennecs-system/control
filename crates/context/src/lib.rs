@@ -2,6 +2,8 @@
 mod library;
 pub mod agent_policy;
 pub mod commands;
+/// Arguments of the GitHub tools and the `/github` command grammar that produces them.
+pub mod github;
 pub mod limits;
 pub mod persona;
 pub mod tool_policy;

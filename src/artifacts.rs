@@ -105,9 +105,9 @@ pub(crate) fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<V
 
 /// Best-effort bounded text inspection for chat previews. Use the artifact path
 /// rules and no-follow reads; omitted files must never look like deletions.
-pub(crate) fn diff_snapshot(root: &Path) -> io::Result<control_client::diff::Snapshot> {
+pub(crate) fn diff_snapshot(root: &Path) -> io::Result<control_diff::Snapshot> {
     use std::os::unix::fs::OpenOptionsExt;
-    fn collect(directory: &fs::File, prefix: &str, snapshot: &mut control_client::diff::Snapshot, total: &mut usize, visited: &mut usize, depth: usize) -> io::Result<()> {
+    fn collect(directory: &fs::File, prefix: &str, snapshot: &mut control_diff::Snapshot, total: &mut usize, visited: &mut usize, depth: usize) -> io::Result<()> {
         if depth>32 || *visited>=4096 {snapshot.incomplete=true;return Ok(());}
         let mut entries=diff_directory_names(directory)?;
         if entries.len()>2048 {snapshot.incomplete=true;return Ok(());}
@@ -138,7 +138,7 @@ pub(crate) fn diff_snapshot(root: &Path) -> io::Result<control_client::diff::Sna
         Ok(())
     }
     let directory=fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW|libc::O_DIRECTORY|libc::O_CLOEXEC).open(root)?;
-    let mut snapshot=control_client::diff::Snapshot::default();
+    let mut snapshot=control_diff::Snapshot::default();
     collect(&directory,"",&mut snapshot,&mut 0,&mut 0,0)?;
     Ok(snapshot)
 }

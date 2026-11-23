@@ -45,8 +45,7 @@ fn check_snapshot(path: &Path) -> Result<()> {
 fn group(name: &str) -> String {
     let name = name.trim_start_matches("./");
     match name {
-        "src/terminal.rs" | "src/bin/control-harness.rs" => "terminal",
-        "src/client.rs" => "shared-client",
+        "src/bin/control-harness.rs" => "terminal",
         _ if name.starts_with("crates/") || name.starts_with("tools/") => {
             return name.split('/').take(2).collect::<Vec<_>>().join("/");
         }
