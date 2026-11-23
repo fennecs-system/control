@@ -122,19 +122,26 @@ subscription's allowance. Add it with `--kind api-key`, then pipe its key into
 `control BACKEND key --account NAME`: the key is read once from standard input
 (never a terminal or an argument), checked only for shape, written 0600 into
 the account's directory, and the command prints only `key saved`. `check` and
-`control accounts list` then report `api-key: present` from file metadata. A
-`+*` pool is refused when its enabled accounts are of more than one kind, so
-work never moves silently between billing kinds.
+`control accounts list` then report `api-key: present` from file metadata, with
+the key's delivery. The key never enters a container: every turn on the account
+gets a per-attempt placeholder, and the host's
+[key-injecting relay](PORTS.md#key-injecting-relay) adds the key to each
+allowed request (`delivery: proxied`). A backend without a relay rule would
+mount the key read-only instead (`delivery: mounted (reason)`, with a warning).
+`"require_proxied_keys": true` in `permissions.json` refuses that. Accounts
+saved before the relay need nothing: their next turn uses it. A `+*` pool is
+refused when its enabled accounts are of more than one kind, so work never
+moves silently between billing kinds.
 
 ```sh
 control accounts add codex metered --kind api-key
-pbpaste | control codex key --account metered        # Codex's own offline `codex login --with-api-key` writes auth.json
+pbpaste | control codex key --account metered        # Codex's own offline `codex login --with-api-key` writes auth.json, which stays on the host
 control accounts add claude metered --kind api-key
-pbpaste | control claude key --account metered       # anthropic-api-key, read by Claude's apiKeyHelper
+pbpaste | control claude key --account metered       # anthropic-api-key; Claude's apiKeyHelper reads a placeholder
 control accounts add grok metered --kind api-key
-pbpaste | control grok key --account metered         # xai-api-key, exported as XAI_API_KEY for Grok alone
+pbpaste | control grok key --account metered         # xai-api-key; Grok's XAI_API_KEY is a placeholder
 control accounts add antigravity metered --kind api-key
-pbpaste | control antigravity key --account metered  # gemini-api-key, exported as GEMINI_API_KEY for agy alone
+pbpaste | control antigravity key --account metered  # gemini-api-key; agy's GEMINI_API_KEY is a placeholder
 ```
 
 Select one like any account: `/model claude+metered:sonnet`. What keeps a key
@@ -144,10 +151,17 @@ from the model is in docs/THREAT-MODEL.md.
 with a notice; other accounts and conversations are not held. No account has a
 cap unless you set one (`control accounts add … --cap N`): a named account runs
 as many attempts at once as the default sign-in does. When a turn reports a
-usage limit, its account cools down: new turns on it wait, with a notice, until
-it is cleared on **Manage → Models & providers** (no retry time is read from the
-provider). Nothing moves to another account automatically; a `+*` pool picks an
-enabled account that is not cooling down when the work is admitted.
+usage limit, it fails with the provider's reason and its account cools down
+until a retry time: the one the provider states (Codex's "try again at …",
+written in UTC in Control's worker images), else 5 minutes, then 15, then every
+hour while the limit holds. Later turns on it wait, each saying why and until
+when in the chat, the TUI, the chat MCP and once on Discord; `control accounts
+list`, `control BACKEND check` and **Manage → Models & providers** show the
+cooldown with the number of turns it holds. At the retry time one turn runs as a
+probe: success clears the cooldown, another limit starts the next wait. Clear it
+early on the providers page or with `control accounts clear BACKEND NAME`.
+Nothing moves to another account automatically; a `+*` pool picks an enabled
+account that is not cooling down when the work is admitted.
 
 ## Configure local models
 

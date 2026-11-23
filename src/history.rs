@@ -613,6 +613,27 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
         with_path(outbox_path()?, |journal| journal.append(&line))?;
         emitted.push((index, run.emitted.clone()));
     }
+    // A run newly held by its account's cooldown: one notice per chat and
+    // account while its held runs wait, never one per queued run.
+    for (index, notice) in crate::providers::accounts::held_notices(&state.runtime) {
+        let run = &state.runtime.runs[index];
+        if let Some(report) = notice {
+            let delivery = Delivery {
+                run: run.id().to_string(),
+                source: run.source.clone(),
+                chat: run.chat_id.clone(),
+                actor: run.actor.clone(),
+                action: run.action,
+                status: control_delivery::HELD.to_owned(),
+                report,
+                question: serde_json::Value::Null,
+                change: None,
+            };
+            let line = serde_json::to_vec(&delivery).map_err(io::Error::other)?;
+            with_path(outbox_path()?, |journal| journal.append(&line))?;
+        }
+        emitted.push((index, run.emitted.clone()));
+    }
     if emitted.is_empty() {
         return Ok(());
     }

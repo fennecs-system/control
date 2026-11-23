@@ -108,10 +108,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
                 RunStatus::Interrupted => "Interrupted",
                 RunStatus::Completed | RunStatus::Continued | RunStatus::Unrecognised(_) => "",
             };
-            let held = run.filter(|_| *run_status == RunStatus::Queued).and_then(|run| {
-                crate::providers::accounts::hold(&state.runtime, run)
-                    .map(|hold| crate::providers::accounts::held(&hold, run))
-            });
+            let held = run.and_then(|run| crate::providers::accounts::held_run(&state.runtime, run));
             let hold = state
                 .runtime
                 .paused

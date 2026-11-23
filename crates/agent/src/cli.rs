@@ -521,6 +521,65 @@ pub enum Canary {
     Refreshable(crate::Keeps),
 }
 
+/// The relay port a proxied turn's CLI is pointed at: inside its own
+/// network-less container, so one fixed port serves every attempt.
+pub const RELAY_PORT: std::num::NonZeroU16 = std::num::NonZeroU16::new(3130).unwrap();
+/// The file in an attempt's private directory that holds a proxied key's
+/// placeholder in the form its CLI reads.
+pub const PLACEHOLDER: &str = "relay-placeholder";
+
+/// `control ID check`'s canary for a proxied API key: a fake key, private
+/// and owned like a real one, that the host keeps; `launch` builds the turn
+/// container for a proxied login with its placeholder at `target`. The launch
+/// must mount no secret and have no network, and inside its stand-in the CLI
+/// reads the placeholder and finds the key nowhere. Prints one line per
+/// assertion and fails unless every one held.
+pub fn proxied_canary_check(
+    isolation: &dyn Isolation,
+    root: &Path,
+    target: &str,
+    launch: impl FnOnce(&crate::Granted) -> io::Result<RunSpec>,
+) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(root)?;
+    let owner = User {
+        uid: meta.uid(),
+        gid: meta.gid(),
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let key = format!("control-canary-key-{}-{nanos}", std::process::id());
+    let file = root.join(format!("canary-key-{nanos}"));
+    private_file(&file, &key)?;
+    let placeholder = format!("ctl-canary-placeholder-{nanos}");
+    let granted = crate::Granted::relayed(owner, crate::Proxied::new(placeholder, RELAY_PORT));
+    let launched = launch(&granted);
+    let _ = fs::remove_file(&file);
+    let spec = launched?;
+    let shown = format!("{:?}{:?}{:?}", spec.argv, spec.env, spec.mounts);
+    let launch_lines = [
+        ("the turn mounts no secret", spec.secrets.is_empty()),
+        (
+            "the turn has no network",
+            spec.network == control_isolation::Network::None,
+        ),
+        ("the key is in no argument, variable or mount", !shown.contains(&key)),
+    ];
+    let results = canary::run_all(isolation, spec, |cli| canary::proxied_assertions(cli, target, &key))?;
+    let (lines, held) = canary::report(&results);
+    launch_lines
+        .iter()
+        .map(|(what, ok)| format!("{} canary: proxied key: {what}", if *ok { "PASS" } else { "FAIL" }))
+        .chain(lines)
+        .for_each(|line| println!("{line}"));
+    if held && launch_lines.iter().all(|(_, ok)| *ok) {
+        Ok(())
+    } else {
+        Err(fail("the proxied-key canary failed; see the FAIL lines above"))
+    }
+}
+
 /// `control ID check`'s credential canary: a fake credential, private and
 /// owned like a real login, beside the check's state; `launch` builds the
 /// turn container with it mounted at `target` as a turn would. Prints one
@@ -564,7 +623,7 @@ pub fn canary_check(
     private_file(&path, &canary)?;
     let target = match granted.form() {
         crate::Form::Session => granted.session_target(target, keeps),
-        crate::Form::ApiKey | crate::Form::CloudDefault => target.to_owned(),
+        crate::Form::ApiKey | crate::Form::CloudDefault | crate::Form::Proxied => target.to_owned(),
     };
     let results = launch(&granted).and_then(|spec| canary::run(isolation, spec, &target, &canary, granted.write()));
     let _ = fs::remove_file(&path);

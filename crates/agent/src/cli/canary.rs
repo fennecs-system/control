@@ -143,12 +143,46 @@ pub fn run(
     canary: &str,
     policy: Write,
 ) -> io::Result<Vec<(Assertion, bool)>> {
+    run_all(isolation, turn, |cli| assertions(cli, target, canary, policy))
+}
+/// What must hold for a proxied key whose real value is `key`: the CLI reads
+/// its placeholder at `target`, and `key` is in no file under the home,
+/// `/tmp` or the workspace, nor in PID 1's environment. The host keeps the
+/// key; nothing in the container may hold it.
+pub fn proxied_assertions(cli: User, target: &str, key: &str) -> Vec<Assertion> {
+    let own = Reader::Cli(cli);
+    vec![
+        read(own, target, Expect::Succeeds),
+        Assertion {
+            reader: own,
+            attempt: "find the account's key in the container's files or PID 1's environment".into(),
+            argv: [
+                "sh",
+                "-c",
+                "grep -rqsF -- \"$1\" /home /tmp /workspace /proc/1/environ",
+                "sh",
+                key,
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            expect: Expect::Fails,
+        },
+        read(own, target, Expect::Succeeds),
+    ]
+}
+/// Starts the stand-in of `turn`, runs the assertions made for its uid inside
+/// it and removes it. A reader whose exec cannot start counts as refused.
+pub fn run_all(
+    isolation: &dyn Isolation,
+    turn: RunSpec,
+    assertions: impl FnOnce(User) -> Vec<Assertion>,
+) -> io::Result<Vec<(Assertion, bool)>> {
     let cli = turn
         .user
         .ok_or_else(|| io::Error::other("the turn container names no user"))?;
     let id = isolation.run_detached(&stand_in(turn))?;
     let quiet = Streams::new(Stream::Null, Stream::Null, Stream::Null);
-    let results = assertions(cli, target, canary, policy)
+    let results = assertions(cli)
         .into_iter()
         .map(|assertion| {
             let exec = ExecSpec {

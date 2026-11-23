@@ -5,8 +5,8 @@
 //! once into typed parts ([`ParsedHead`]), checks it against its backend's fixed
 //! [`InjectionRule`] and the attempt's [`AttemptCap`], and returns the outbound
 //! head as data ([`plan`]) with a [`SecretSlot`] where the edge splices the real
-//! key. This module never sees the key and does no I/O, so it can move to a leaf
-//! crate unchanged; `inject_edge` does the reading, connecting and writing.
+//! key. This crate never sees the key and does no I/O; the host's edge
+//! (`src/ports/inject_edge.rs`) does the reading, connecting and writing.
 use std::{borrow::Cow, fmt, num::NonZeroU16};
 
 mod limits;

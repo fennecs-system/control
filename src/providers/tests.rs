@@ -758,13 +758,33 @@ fn accounts_are_managed_by_command_and_listed_on_the_page() {
     ] {
         assert!(Command::try_from(&args(refused)[..]).is_err(), "{refused}");
     }
-    let mut runtime = crate::runtime::Runtime::default();
-    runtime.accounts = crate::accounts::Store::default().add(entry).unwrap();
-    runtime.account_status =
-        runtime
-            .account_status
-            .cool(crate::backend::Backend::Claude, &second, super::accounts::now(), None);
+    let now = super::accounts::now();
+    let limited = |status: &crate::accounts::Status<_>, backend, name: &_| {
+        status.ended(backend, name, now, crate::accounts::Ended::Limited(None), now)
+    };
+    let claude = limited(&Default::default(), crate::backend::Backend::Claude, &second);
+    let runtime = crate::runtime::Runtime {
+        accounts: crate::accounts::Store::default().add(entry).unwrap(),
+        account_status: limited(
+            &claude,
+            crate::backend::Backend::Codex,
+            &crate::accounts::AccountName::implicit(),
+        ),
+        ..Default::default()
+    };
     let page = render(&runtime);
+    assert!(
+        page.contains("cooling until ") && page.contains("UTC (in 5m)") && page.contains(">Clear</button>"),
+        "{page}"
+    );
+    // `control accounts list` and `control claude check` put the same note on the account's line.
+    let notes = super::accounts::notes(&runtime, now);
+    let lines = crate::logins::report(crate::backend::Backend::Claude, &runtime.accounts, &notes);
+    assert!(
+        lines[1].starts_with("claude+second (api-key, disabled): ") && lines[1].contains(" · cooling until "),
+        "{lines:?}"
+    );
+    assert!(!lines[0].contains("cooling"), "{lines:?}");
     assert!(page.contains("<code>claude+second</code>"), "{page}");
     assert!(page.contains("control claude key --account second"), "{page}");
     assert!(

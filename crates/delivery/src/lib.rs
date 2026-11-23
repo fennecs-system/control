@@ -35,8 +35,19 @@ pub struct Change {
     pub output: String,
 }
 
+/// A queued run its account holds after a usage limit: not a run status, a
+/// notice that later turns wait, sent once per chat and account.
+pub const HELD: &str = "held";
 /// Statuses delivered to frontends.
-pub const DELIVERABLE: [&str; 6] = ["completed", "blocked", "failed", "interrupted", "waiting", "cancelled"];
+pub const DELIVERABLE: [&str; 7] = [
+    "completed",
+    "blocked",
+    "failed",
+    "interrupted",
+    "waiting",
+    "cancelled",
+    HELD,
+];
 
 pub fn path() -> Result<PathBuf, &'static str> {
     control_config::state("history/_outbox.jsonl")

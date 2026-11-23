@@ -161,6 +161,7 @@ dependencies = [
  "control-http",
  "control-identity",
  "control-ingress",
+ "control-inject",
  "control-isolation",
  "control-journal",
  "control-mcp",
@@ -185,6 +186,7 @@ dependencies = [
  "control-ai",
  "control-context",
  "control-effect",
+ "control-inject",
  "control-isolation",
  "libc",
  "serde_json",
@@ -205,6 +207,7 @@ dependencies = [
  "control-agent",
  "control-ai",
  "control-context",
+ "control-inject",
  "control-isolation",
  "serde_json",
 ]
@@ -225,6 +228,7 @@ dependencies = [
  "control-agent",
  "control-ai",
  "control-context",
+ "control-inject",
  "control-isolation",
 ]
 
@@ -251,6 +255,7 @@ dependencies = [
  "control-ai",
  "control-context",
  "control-effect",
+ "control-inject",
  "control-isolation",
  "libc",
  "ring",
@@ -333,6 +338,7 @@ dependencies = [
  "control-agent",
  "control-ai",
  "control-context",
+ "control-inject",
  "control-isolation",
 ]
 
@@ -362,6 +368,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "control-inject"
+version = "0.1.0"
 
 [[package]]
 name = "control-isolation"

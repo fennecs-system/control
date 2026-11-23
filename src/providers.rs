@@ -477,35 +477,42 @@ fn endpoint_row(runtime: &crate::runtime::Runtime, model: &crate::model_calls::E
     )
 }
 
-/// The Manage → Models page polls this while open: one live server-statistics
-/// line per local endpoint, read outside the state lock. Nothing polls when no
-/// page is open.
+/// The Manage → Models page polls `/providers/live` while open: one live
+/// server-statistics line per local endpoint, read outside the state lock.
+/// Nothing polls when no page is open. `/providers/accounts` gives
+/// `control accounts list` and `control BACKEND check` each cooling account's note.
 pub fn live_http(
     stream: &mut impl std::io::Write,
     state: &std::sync::Mutex<crate::State>,
     method: &str,
     path: &str,
 ) -> bool {
-    if path != "/providers/live" {
-        return false;
-    }
-    let endpoints = match (method, state.lock()) {
-        ("GET", Ok(state)) => Ok(local(&state.runtime).cloned().collect::<Vec<_>>()),
+    let accounts = match path {
+        "/providers/live" => false,
+        "/providers/accounts" => true,
+        _ => return false,
+    };
+    let body = match (method, state.lock()) {
+        ("GET", Ok(state)) if accounts => {
+            Ok(serde_json::json!(accounts::notes(&state.runtime, accounts::now())).to_string())
+        }
+        ("GET", Ok(state)) => {
+            let endpoints = local(&state.runtime).cloned().collect::<Vec<_>>();
+            drop(state);
+            Ok(serde_json::Value::Object(crate::model_calls::stats::live(&endpoints)).to_string())
+        }
         ("GET", Err(_)) => Err("State unavailable"),
         _ => Err("Use GET"),
     };
-    let _ = match endpoints {
-        Ok(endpoints) => {
-            let body = serde_json::Value::Object(crate::model_calls::stats::live(&endpoints)).to_string();
-            control_http::respond(
-                stream,
-                "200 OK",
-                "application/json",
-                body.as_bytes(),
-                "",
-                control_http::Policy::Page,
-            )
-        }
+    let _ = match body {
+        Ok(body) => control_http::respond(
+            stream,
+            "200 OK",
+            "application/json",
+            body.as_bytes(),
+            "",
+            control_http::Policy::Page,
+        ),
         Err(message) => control_http::respond(
             stream,
             "400 Bad Request",
@@ -956,7 +963,7 @@ pub(crate) fn clear_account(
 /// kind, whether a login is present, and the command that signs one in.
 /// Metadata only.
 fn render_accounts(runtime: &crate::runtime::Runtime) -> String {
-    let now = accounts::now();
+    let notes = accounts::notes(runtime, accounts::now());
     let rows: String = crate::backend::Backend::hosted()
         .flat_map(|backend| {
             let default = runtime.accounts.default_name(backend);
@@ -966,18 +973,25 @@ fn render_accounts(runtime: &crate::runtime::Runtime) -> String {
             let name = &account.id.name;
             let id = backend.id();
             let signed_in = crate::logins::locate(&account).is_ok();
-            let cooling = runtime.account_status.cooling(backend, name, now).map(|_| {
-                format!("<form method='post' action='/providers'><input type='hidden' name='action' value='account-clear'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='account' value='{name}'><button class='provider-secondary'>Cooling down · clear</button></form>")
+            let cooling = notes.iter().find(|note| note.backend == backend && note.account == *name).map(|note| {
+                format!("<form method='post' action='/providers'><input type='hidden' name='action' value='account-clear'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='account' value='{name}'><span class='provider-description'>{}</span> <button class='provider-secondary'>Clear</button></form>", crate::escape(&note.note))
             });
             format!(
                 "<tr><td><code>{id}+{name}</code>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 if *name == default { " <span class='model-default'>Default</span>" } else { "" },
                 account.kind.as_str(),
                 match (signed_in, account.kind) {
-                    (true, crate::accounts::AccountKind::ApiKey) => "Key saved",
-                    (false, crate::accounts::AccountKind::ApiKey) => "No key yet",
-                    (true, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => "Signed in",
-                    (false, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => "No login yet",
+                    (true, crate::accounts::AccountKind::ApiKey) => format!(
+                        "Key saved · {}",
+                        crate::escape(&crate::ports::key_relay::decision(backend).describe())
+                    ),
+                    (false, crate::accounts::AccountKind::ApiKey) => "No key yet".to_owned(),
+                    (true, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
+                        "Signed in".to_owned()
+                    }
+                    (false, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
+                        "No login yet".to_owned()
+                    }
                 },
                 match (account.enabled, cooling) {
                     (false, _) => "Disabled".to_owned(),

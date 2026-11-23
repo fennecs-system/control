@@ -200,6 +200,41 @@ impl Hive {
         }
     }
 
+    /// The accounts cooling down, as the providers page words them.
+    pub fn account_notes(&self) -> io::Result<Value> {
+        let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
+        let response = self
+            .client
+            .get(endpoint.join("/providers/accounts").map_err(failure)?)
+            .send()
+            .map_err(failure)?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(failure(rejection(status.as_u16(), &body)));
+        }
+        response.json().map_err(failure)
+    }
+    /// Clear an account's cooldown through the providers page's form.
+    pub fn clear_account(&self, backend: &str, account: &str) -> io::Result<()> {
+        let endpoint = Url::parse(&self.endpoint).map_err(failure)?;
+        let response = self
+            .client
+            .post(endpoint.join("/providers").map_err(failure)?)
+            .timeout(Duration::from_secs(15))
+            .header("Origin", endpoint.origin().ascii_serialization())
+            .form(&[("action", "account-clear"), ("provider", backend), ("account", account)])
+            .send()
+            .map_err(failure)?;
+        let status = response.status();
+        // The form answers a cleared account by redirecting back to the page.
+        if status.is_success() || status.is_redirection() {
+            return Ok(());
+        }
+        let body = response.text().unwrap_or_default();
+        Err(failure(rejection(status.as_u16(), &body)))
+    }
+
     /// Dismiss the exact displayed folder request. Returns the server's message;
     /// a request that is no longer pending is a no-op, not an error.
     pub fn dismiss_project(&self, chat: &str, request: &str) -> io::Result<String> {

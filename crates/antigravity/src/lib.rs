@@ -2,8 +2,8 @@
 //! denied, its only tools are Control's over MCP, and executable work runs in
 //! separate offline containers through the host shell tool.
 use control_agent::{
-    Agent, Cause, Checked, Command, Failure, Form, Granted, Host, ImagePin, Keeps, Login, Node, Outcome, Runs,
-    TextCall, Turn, Turns,
+    Agent, Cause, Checked, Command, Failure, Form, Granted, Host, ImagePin, Keeps, KeyDelivery, Login, Node, Outcome,
+    Runs, TextCall, Turn, Turns,
     cli::{self, Canary, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Stream, Streams, Tmpfs, User};
@@ -24,6 +24,9 @@ impl Agent for Antigravity {
         "Google / Antigravity CLI"
     }
     /// Its credential names: never mounted in a workspace today, and never published if one appears there.
+    fn key_delivery(&self) -> KeyDelivery {
+        KeyDelivery::Proxied(&control_inject::GEMINI)
+    }
     fn private_names(&self) -> &'static [&'static str] {
         &[".gemini", "gemini-api-key", "adc.json", "antigravity-oauth-token"]
     }
@@ -198,7 +201,7 @@ fn settings(login: Form, tools: bool) -> Value {
         "disableSlashCommands": true,
         "trustedWorkspaces": ["/workspace"],
     });
-    if login == Form::ApiKey {
+    if matches!(login, Form::ApiKey | Form::Proxied) {
         settings["modelProvider"] = json!("gemini");
     }
     settings
@@ -216,7 +219,7 @@ fn mcp_config(login: Form) -> Value {
         // CLI does not document it, but a server inherits its environment
         // (seen offline in 1.5.14); Control's server needs no key, so it
         // starts without it.
-        Form::ApiKey => {
+        Form::ApiKey | Form::Proxied => {
             json!({"command": "/bin/env", "args": ["-u", "GEMINI_API_KEY", "/bin/control-room-mcp"], "tools": tools})
         }
         Form::Session | Form::CloudDefault => json!({"command": "/bin/control-room-mcp", "tools": tools}),
@@ -251,9 +254,12 @@ fn container(name: &str, node: &str, login: &Granted, private: &Path, image: &st
     }
     .tmpfs(Tmpfs::new("/home/agent/.gemini", Size::Mib(256)).owned(owner))
     .bind(cli::checked(private)?, "/home/agent/.control", Access::ReadOnly);
-    login_secret(spec, login)
+    login_secret(spec, login, private)
 }
 fn text_container(call: &TextCall<'_>, login: &Granted, private: &Path) -> io::Result<RunSpec> {
+    if login.form() == Form::Proxied {
+        return Err(fail("A text call never uses a proxied key"));
+    }
     Ok(container(call.name, call.node, login, private, call.image)?
         .bind(cli::checked(call.workspace)?, "/workspace", Access::ReadOnly)
         .args(["control-agy", "text"])
@@ -269,11 +275,15 @@ fn turn_container(
     image: &str,
     model: &str,
 ) -> io::Result<RunSpec> {
-    Ok(container(name, node, login, private, image)?
+    let spec = container(name, node, login, private, image)?
         .bind(cli::checked(mailbox)?, "/workspace", Access::ReadWrite)
         .args(["control-agy", "turn"])
         .args(FLAGS)
-        .args(["--model", model]))
+        .args(["--model", model]);
+    match login.form() {
+        Form::Proxied => Ok(login.relay()?.offline(spec)),
+        Form::ApiKey | Form::Session | Form::CloudDefault => Ok(spec),
+    }
 }
 fn login_container(
     name: &str,
@@ -324,6 +334,10 @@ fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io
             let private = prepare(root, login, Some(&mcp_config(login.form())), Some(""))?;
             turn_container(&name, node, login, &private, &mailbox, image, "canary")
         })
+    })?;
+    cli::proxied_canary_check(isolation, root, KEY, |login| {
+        let private = prepare(root, login, Some(&mcp_config(login.form())), Some(""))?;
+        turn_container(&name, node, login, &private, &mailbox, image, "canary")
     })
 }
 /// Lists models with the saved login, without a workspace.
@@ -332,9 +346,19 @@ fn check_container(name: &str, node: &str, login: &Granted, private: &Path, imag
         .tmpfs(Tmpfs::new("/workspace", Size::Mib(1)))
         .args(["control-agy", "check"]))
 }
-fn login_secret(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
+/// The login where the CLI reads it. A proxied key is its placeholder at the
+/// key's place, written beside the private settings, which `control-agy`
+/// exports as GEMINI_API_KEY; the CLI is pointed at the relay
+/// (`GOOGLE_GEMINI_BASE_URL`, with `modelProvider` "gemini").
+fn login_secret(spec: RunSpec, login: &Granted, private: &Path) -> io::Result<RunSpec> {
     match login.form() {
         Form::ApiKey => login.mount(spec, "antigravity/api-key", KEY),
+        Form::Proxied => {
+            let relay = login.relay()?;
+            Ok(relay
+                .place(spec, &private.join(cli::PLACEHOLDER), relay.placeholder(), KEY)?
+                .env("GOOGLE_GEMINI_BASE_URL", &relay.origin()))
+        }
         Form::CloudDefault => login.mount(spec.env("AGY_ADC_AUTH", "true"), "antigravity/adc", ADC),
         Form::Session => login.mount_session(spec, "antigravity/google-token", TOKEN, KEEPS),
     }
@@ -358,7 +382,7 @@ fn diagnose(ended: Option<Ending>, stderr: &[u8]) -> Failure {
         {
             Some(Cause::SignIn)
         } else if text.contains("resource_exhausted") || text.contains("out of quota") {
-            Some(Cause::UsageLimit)
+            Some(Cause::UsageLimit { retry_at: None })
         } else {
             control_agent::classify(bytes)
         };

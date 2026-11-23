@@ -37,15 +37,23 @@ Control picks the login from which private file exists under
 
 A named API-key account (`control accounts add antigravity NAME --kind api-key`,
 then `pbpaste | control antigravity key --account NAME`) always uses its
-`gemini-api-key`, never another file. With a key, Control's MCP server is
-started through `env -u GEMINI_API_KEY`, so only the CLI holds the key the
-entrypoint exports.
+`gemini-api-key`, never another file. A key, the implicit account's included,
+stays on the host: Control's
+[key-injecting relay](PORTS.md#key-injecting-relay) adds it to the CLI's
+requests as `x-goog-api-key`. The container holds a per-attempt placeholder at
+`/home/agent/.control-key/gemini-api-key`, which the entrypoint exports as
+`GEMINI_API_KEY`. The container has no network, and `GOOGLE_GEMINI_BASE_URL`
+points the CLI at the relay. Control's MCP server is started through
+`env -u GEMINI_API_KEY`. Verified offline with the pinned image: its request
+(`POST /v1beta/models/<model>:streamGenerateContent?alt=sse`) reached a fake
+provider with the canary key.
 
-Each file is mounted into the CLI's own container and nowhere else: not into
-the workspace, the shell containers or the isolation probe. A key and `adc.json`
-are read-only; the saved Google sign-in is writable, so a token the CLI
-refreshes can be kept (docs/LOCAL-MODELS.md, "Sign-ins stay signed in"). Control
-checks file metadata only and never reads a credential.
+Each sign-in file is mounted into the CLI's own container and nowhere else:
+not into the workspace, the shell containers or the isolation probe. A key is
+never mounted (see above); `adc.json` is read-only; the saved Google sign-in is
+writable, so a token the CLI refreshes can be kept (docs/LOCAL-MODELS.md,
+"Sign-ins stay signed in"). Control checks a sign-in's file metadata only; only
+the relay reads a key, on the host, per request.
 
 `control antigravity login` starts the pinned image with a terminal, with
 `login/gemini` and `login/config` as the CLI's home directories. Sign in with

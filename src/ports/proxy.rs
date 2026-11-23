@@ -172,9 +172,12 @@ fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive
     };
     let binding = crate::services::port_binding(crate::engine::isolation(), &service, &key.container)?;
     let (shared, key, cancel) = (shared.clone(), key.clone(), cancel.clone());
-    multiplex::serve(binding, PROXY_PORT, expires, alive, &|| {}, move |connection, link| {
-        session(&shared, &key, &cancel, connection, link)
-    })
+    multiplex::serve(
+        || binding.spawn(crate::engine::isolation(), RelayMode::Multiplex, PROXY_PORT, expires),
+        alive,
+        &|| {},
+        move |connection, link| session(&shared, &key, &cancel, connection, link),
+    )
 }
 /// Hands one relayed stream to [`handle`].
 fn session(shared: &Arc<Mutex<State>>, key: &Key, cancel: &AtomicBool, connection: Incoming, link: Arc<Transport>) {

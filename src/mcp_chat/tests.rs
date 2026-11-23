@@ -893,3 +893,61 @@ fn named_accounts_and_pools_pass_the_bridge_and_reach_the_parser() {
     }
     assert!(remote.calls.is_empty(), "{:?}", remote.calls);
 }
+
+/// A queued turn held by its account's cooldown says so through the chat MCP,
+/// in the one wording, and a pile of held turns sends one Discord notice.
+#[test]
+fn a_held_turn_says_why_in_chat_read_and_chats_list() {
+    let mut remote = Local::new();
+    let id = created(&run(&mut remote, "chat_create", &json!({"title":"Held"})).unwrap());
+    run(&mut remote, "chat_send", &json!({"id":id,"message":"Build a farm"})).unwrap();
+    let codex = crate::providers::Target {
+        backend: crate::backend::Backend::Codex,
+        ..Default::default()
+    };
+    remote
+        .state
+        .runtime
+        .runs
+        .iter_mut()
+        .for_each(|run| run.target = codex.clone());
+    let now = crate::providers::accounts::now();
+    let runtime = &mut remote.state.runtime;
+    runtime.account_status = runtime.account_status.ended(
+        crate::backend::Backend::Codex,
+        &crate::accounts::AccountName::implicit(),
+        now,
+        crate::accounts::Ended::Limited(None),
+        now,
+    );
+    let held = "Held: codex account default reached its usage limit; retrying at ";
+    let clear = "Clear on the providers page or run `control accounts clear codex default`.";
+    let read = run(&mut remote, "chat_read", &json!({"id":id})).unwrap();
+    assert!(
+        read.contains(held) && read.contains("UTC (in 5m). ") && read.contains(clear),
+        "{read}"
+    );
+    let listed = run(&mut remote, "chats_list", &json!({})).unwrap();
+    assert!(
+        listed.contains(&format!("{id} [queued]")) && listed.contains(held),
+        "{listed}"
+    );
+    // One notice for the chat and account, however many turns it holds.
+    let second = remote.state.runtime.runs[0].clone().with_id("run-held-second");
+    remote.state.runtime.runs.push(second);
+    let notices = crate::providers::accounts::held_notices(&remote.state.runtime);
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert_eq!(notices.iter().filter(|(_, notice)| notice.is_some()).count(), 1);
+    assert!(notices[0].1.as_deref().is_some_and(|text| text.starts_with(held)));
+    remote.state.runtime.runs[0].emitted = Some(RunStatus::Queued);
+    remote.state.runtime.runs[1].emitted = Some(RunStatus::Queued);
+    assert!(crate::providers::accounts::held_notices(&remote.state.runtime).is_empty());
+    let mut third = remote.state.runtime.runs[0].clone().with_id("run-held-third");
+    third.emitted = None;
+    remote.state.runtime.runs.push(third);
+    assert_eq!(
+        crate::providers::accounts::held_notices(&remote.state.runtime),
+        [(2, None)],
+        "an earlier notice still covers it"
+    );
+}

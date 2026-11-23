@@ -115,20 +115,13 @@ arbitrary downloaded code safe.
   `src/worker/tests/attempts.rs`, `only_a_subscription_control_keeps_is_refreshable`
   in `src/logins/tests.rs`, and each backend's refreshable-sign-in test.
 
-- **API keys.** A key is in one private file and reaches a turn only as a
-  typed read-only secret mount in the CLI's own container: never in an
-  argument, `RunSpec.env`, a file Control writes, an activity record, a
-  diagnostic or a published workspace (canary tests in
-  `src/worker/tests/attempts.rs`, one per backend). What keeps the model from
-  reading it today differs by backend. Codex: its own sandbox denies reads of
-  its configuration directory, where the key's `auth.json` is mounted
-  (verified earlier by experiment). Claude and Grok: their built-in tools are
-  removed and the model's shell is a separate offline container with no
-  secret; Claude reads the key through its `apiKeyHelper`, Grok through
-  `XAI_API_KEY` exported inside the CLI's process. Antigravity: its built-in
-  tools are denied only by the CLI's own permission rules (checked offline,
-  see above), which is weaker; its shell is likewise a separate container. A credential-injecting proxy,
-  so that no key enters a container at all, is the planned stronger guarantee.
+- **API keys.** A key is in one private file on the host and never enters a
+  container: the host's [key-injecting relay](#api-keys-the-key-injecting-relay)
+  adds it to each allowed request. The key is in no argument, `RunSpec.env`,
+  mount, file Control writes, activity record, diagnostic or published
+  workspace. Canary tests in `src/worker/tests/attempts.rs` cover each
+  backend. The CLI holds only a per-attempt placeholder, so a model that
+  reads its CLI's files learns nothing usable after the attempt.
 
 - **Malicious builds and base-image integrity.** Pinned Nix images run non-root
   with dropped capabilities, no-new-privileges and resource limits. Lite and
@@ -252,13 +245,26 @@ arbitrary downloaded code safe.
   [ports](../src/ports/tests/auto_tests.rs),
   `private_unlisted_loopback_and_privately_resolving_targets_stay_pending`.
 
-## Key-injecting relay (not yet wired to backends)
+## API keys: the key-injecting relay
 
-The [key-injecting relay](PORTS.md#key-injecting-relay) is built and tested but
-no backend uses it yet. Today an API-key account's key file is still mounted
-read-only into its CLI's container. Once a backend switches over, these hold
-for its API-key accounts:
+An API-key account's key goes through the
+[key-injecting relay](PORTS.md#key-injecting-relay) for all four CLI backends.
+A backend without a relay rule would mount its key read-only. None does today,
+and the node setting `require_proxied_keys` refuses that path.
 
+- **Per backend.**
+  - Codex gets a placeholder `auth.json` and a custom provider on the relay;
+    the real `auth.json` stays on the host.
+  - Claude Code reads its placeholder through its key helper.
+  - Grok Build and Antigravity get theirs exported by their image's wrapper
+    (`control-grok`, `control-agy`).
+  - Each turn's container has no network. A CLI's telemetry, update and
+    error-report traffic therefore cannot leave, and is also switched off
+    where the CLI allows it.
+  - Verified offline with the real Claude Code, Codex and Antigravity images:
+    each CLI's first request arrived at a fake provider with the canary key,
+    and the container never held it.
+  - Grok is implemented to its source and has not yet run against a real image.
 - **True by construction.** The key is never in the container's files,
   environment, arguments, memory, mounts or `/proc`, and the container has no
   network. It holds a per-attempt placeholder that is useless off the relay
@@ -275,12 +281,15 @@ for its API-key accounts:
   echoed the key back in a response would reach the container, since the relay
   does not rewrite responses. Host compromise is out of scope, as everywhere.
 
-Evidence: [inject](../src/ports/inject/tests.rs),
+Evidence: [inject](../crates/inject/src/tests.rs),
 `request_smuggling_shapes_are_refused`,
 `no_outbound_head_ever_contains_the_inbound_placeholder`;
 [inject_edge](../src/ports/inject_edge/tests.rs),
 `the_provider_gets_the_key_and_the_client_never_does`,
-`the_audit_log_holds_metadata_only_and_stays_bounded`.
+`the_audit_log_holds_metadata_only_and_stays_bounded`;
+[attempts](../src/worker/tests/attempts.rs),
+`a_claude_api_key_stays_on_the_host_behind_the_relay` and its Codex, Grok and
+Antigravity siblings; `control ID check`'s proxied-key canary.
 
 ## Guidance is not enforcement
 

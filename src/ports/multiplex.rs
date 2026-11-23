@@ -22,18 +22,16 @@ impl Drop for Process {
         }
     }
 }
-/// Runs one `listen-multi` relay on `service_port` inside the verified
-/// container until it fails or `alive` turns false, handing every stream the
-/// service opens to `session` on its own thread. Returns once all sessions end.
+/// Runs one `listen-multi` relay, which `spawn` starts inside a verified
+/// container, until it fails or `alive` turns false, handing every stream the
+/// container opens to `session` on its own thread. Returns once all sessions end.
 pub(super) fn serve(
-    binding: crate::services::PortBinding,
-    service_port: NonZeroU16,
-    expires: u64,
+    spawn: impl FnOnce() -> io::Result<Child>,
     alive: &dyn Fn() -> bool,
     ready: &dyn Fn(),
     session: impl Fn(Incoming, Arc<Transport>) + Clone + Send + 'static,
 ) -> io::Result<()> {
-    let mut child = binding.spawn(crate::engine::isolation(), RelayMode::Multiplex, service_port, expires)?;
+    let mut child = spawn()?;
     let output = handshake(&mut child, b"CONTROL_RELAY_V3_READY\n", Duration::from_secs(3), alive)?;
     let Some(input) = child.stdin.take() else {
         let _ = child.kill();
@@ -81,10 +79,16 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
     let binding = crate::services::port_binding(crate::engine::isolation(), &service, &port.container)?;
     live_service(shared, port, cancel)?;
     let (owner, route, stop) = (shared.clone(), port.clone(), cancel.clone());
+    let expires = port.approval.as_ref().unwrap().expires;
     serve(
-        binding,
-        port.service_port,
-        port.approval.as_ref().unwrap().expires,
+        || {
+            binding.spawn(
+                crate::engine::isolation(),
+                RelayMode::Multiplex,
+                port.service_port,
+                expires,
+            )
+        },
         &|| live_service(shared, port, cancel).is_ok(),
         &|| receipt(shared, port, true, ""),
         move |connection, link| {
