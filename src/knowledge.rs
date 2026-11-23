@@ -307,7 +307,6 @@ pub fn handle(
     method: &str,
     path: &str,
     query: &HashMap<String, String>,
-    lens: &str,
     body: &[u8],
 ) -> bool {
     if ["/propose", "/review"].contains(&path) && method == "POST" {
@@ -363,7 +362,7 @@ pub fn handle(
             .map(String::as_str)
             .unwrap_or("");
         let saved = query.get("saved").and_then(|s| s.parse().ok());
-        let page = crate::render(state, "knowledge-page", lens, &render(state, selection, saved));
+        let page = crate::shell("knowledge-page", &render(state, selection, saved));
         let _ = control_http::respond(
             stream,
             "200 OK",
@@ -423,7 +422,7 @@ pub fn handle(
                     stream,
                     "409 Conflict",
                     "text/html; charset=utf-8",
-                    crate::render(state, "knowledge-page", lens, &content).as_bytes(),
+                    crate::shell("knowledge-page", &content).as_bytes(),
                     "",
                     control_http::Policy::Page,
                 );

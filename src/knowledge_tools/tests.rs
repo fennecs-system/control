@@ -369,7 +369,6 @@ fn a_proposal_is_an_operator_request_decided_only_through_review() {
             "POST",
             "/review",
             &Default::default(),
-            "general",
             body.as_bytes()
         ));
         String::from_utf8(out).unwrap()

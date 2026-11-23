@@ -895,10 +895,8 @@ pub(crate) fn http_with_save(
             let auto=crate::auto_approval::rule(&state,p.id.as_str()).map(|rule|format!("<span class='tag'>auto · {}</span>",crate::escape(&rule))).unwrap_or_default();
             format!("<article>{auto}<h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form class='decision-form' method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
         }).collect::<String>();
-        Ok(crate::render(
-            &state,
+        Ok(crate::shell(
             "tool-page",
-            "none",
             &format!(
                 "<h2>TCP ports</h2>{ports}<p class='muted'>Request a named service port from a DM. Access remains limited to this service and lease.</p>"
             ),

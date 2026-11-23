@@ -473,7 +473,6 @@ pub(crate) fn handle(
     method: &str,
     path: &str,
     query: &HashMap<String, String>,
-    lens: &str,
     body: &[u8],
 ) -> bool {
     if path == "/personas" && method == "GET" {
@@ -496,7 +495,7 @@ pub(crate) fn handle(
             stream,
             "200 OK",
             "text/html; charset=utf-8",
-            crate::render(state, "persona-page", lens, &content).as_bytes(),
+            crate::shell("persona-page", &content).as_bytes(),
             "",
             control_http::Policy::Page,
         );
@@ -528,7 +527,7 @@ pub(crate) fn handle(
                     stream,
                     "409 Conflict",
                     "text/html; charset=utf-8",
-                    crate::render(state, "persona-page", lens, &html).as_bytes(),
+                    crate::shell("persona-page", &html).as_bytes(),
                     "",
                     control_http::Policy::Page,
                 );

@@ -265,7 +265,7 @@ pub fn handle(
         // Older history URLs redirect here (`url_names::history`). The client
         // loads a DM's turns when its row opens.
         let html = crate::history_view::page(state, &crate::history_view::Filter::from(&crate::fields(query)));
-        let page = crate::web_assets::with_client(&crate::render(state, "history", lens, &html));
+        let page = crate::web_assets::with_client(&crate::shell("history", &html));
         let _ = control_http::respond(
             stream,
             "200 OK",
@@ -336,7 +336,7 @@ pub fn handle(
         respond_chat(
             stream,
             "200 OK",
-            &session_page(&crate::render(state, "session-list", lens, &html), header),
+            &session_page(&crate::shell("session-list", &html), header),
             "",
         );
         return true;
@@ -386,7 +386,7 @@ pub fn handle(
                 respond_chat(
                     stream,
                     "400 Bad Request",
-                    &session_page(&crate::render(state, "session-list", lens, &html), header),
+                    &session_page(&crate::shell("session-list", &html), header),
                     "",
                 );
             }
@@ -466,7 +466,7 @@ pub fn handle(
                 stream,
                 "200 OK",
                 "text/html; charset=utf-8",
-                crate::render(state, "artifact-page", lens, &html).as_bytes(),
+                crate::shell("artifact-page", &html).as_bytes(),
                 "",
                 control_http::Policy::Embedded,
             ),
@@ -485,7 +485,7 @@ pub fn handle(
                 stream,
                 "200 OK",
                 "text/html; charset=utf-8",
-                crate::render(state, "artifact-page", lens, &html).as_bytes(),
+                crate::shell("artifact-page", &html).as_bytes(),
                 "",
                 control_http::Policy::Embedded,
             ),
@@ -504,7 +504,7 @@ pub fn handle(
                 stream,
                 "200 OK",
                 "text/html; charset=utf-8",
-                crate::render(state, "artifact-page", lens, &html).as_bytes(),
+                crate::shell("artifact-page", &html).as_bytes(),
                 "",
                 control_http::Policy::Embedded,
             ),

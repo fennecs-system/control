@@ -193,14 +193,6 @@ fn render(state: &State, view: &str, lens: &str, channel: &str) -> String {
 fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, supplied: Option<String>) -> String {
     let view = if view == "manage" { "nodes" } else { view };
     let lens = lens_ui::normalize(lens);
-    let chat_navigation = matches!(view, "session" | "session-list");
-    let mut page = include_str!("../assets/index.html")
-        .replace("</head>", "<link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>")
-        .replace("{{page_discussion}}", &chat::discussion_link(view))
-        .replace("{{navigation}}", &navigation::primary(view))
-        .replace("{{section_navigation}}", &navigation::secondary(view))
-        .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if view == "rooms" { "rooms-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
-        .replace("{{page_title}}", &navigation::heading(view));
     let supplied = supplied.or_else(|| {
         (view == "authority").then(|| {
             format!(
@@ -227,8 +219,20 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         // Unknown views (including the retired Overview) show the Usage page.
         _ => usage::render(state),
     });
-    page = page.replace("{{content}}", &content);
-    page
+    shell(view, &content)
+}
+/// The page frame around content an internal route already rendered. It reads
+/// no state, so such routes need not hold or fake one.
+pub(crate) fn shell(view: &str, content: &str) -> String {
+    let chat_navigation = matches!(view, "session" | "session-list");
+    include_str!("../assets/index.html")
+        .replace("</head>", "<link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>")
+        .replace("{{page_discussion}}", &chat::discussion_link(view))
+        .replace("{{navigation}}", &navigation::primary(view))
+        .replace("{{section_navigation}}", &navigation::secondary(view))
+        .replace("{{layout_class}}", if chat_navigation { "chat-workspace" } else if view == "rooms" { "rooms-workspace" } else if navigation::managed(view) { "with-section-nav" } else { "" })
+        .replace("{{page_title}}", &navigation::heading(view))
+        .replace("{{content}}", content)
 }
 /// Views whose `channel` is trusted, pre-rendered HTML from internal routes only.
 const INTERNAL_VIEWS: [&str; 8] = [
@@ -624,7 +628,6 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             method,
             path,
             &query,
-            lens,
             &data[header_end..header_end + length],
         ) {
             return;
@@ -635,7 +638,6 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             method,
             path,
             &query,
-            lens,
             &data[header_end..header_end + length],
         ) {
             return;
@@ -646,7 +648,6 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
             method,
             path,
             &query,
-            lens,
             &data[header_end..header_end + length],
         ) {
             return;

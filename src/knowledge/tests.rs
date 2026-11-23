@@ -95,7 +95,7 @@ fn refused_save_response_bytes_are_pinned() {
     let mut state = State::default();
     state.documents.retain(|d| d.id != "scratchpad");
     let mut out = Vec::new();
-    assert!(handle(&mut out, &mut state, "POST", "/save", &HashMap::new(), "", b""));
+    assert!(handle(&mut out, &mut state, "POST", "/save", &HashMap::new(), b""));
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 17\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\nNo draft to save."

@@ -412,7 +412,6 @@ pub fn handle(
     method: &str,
     path: &str,
     query: &HashMap<String, String>,
-    lens: &str,
     body: &[u8],
 ) -> bool {
     if path == "/dna/export" && method == "GET" {
@@ -451,7 +450,7 @@ pub fn handle(
             stream,
             "200 OK",
             "text/html; charset=utf-8",
-            crate::render(state, "lens-page", lens, &content).as_bytes(),
+            crate::shell("lens-page", &content).as_bytes(),
             "",
             control_http::Policy::Page,
         );
@@ -476,7 +475,7 @@ pub fn handle(
                     stream,
                     "409 Conflict",
                     "text/html; charset=utf-8",
-                    crate::render(state, "lens-page", lens, &html).as_bytes(),
+                    crate::shell("lens-page", &html).as_bytes(),
                     "",
                     control_http::Policy::Page,
                 );
