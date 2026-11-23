@@ -329,7 +329,7 @@ fn request_with_save(
             Err("This attempt already delegated work.".into())
         };
     }
-    if run.question.as_ref().is_some_and(|q| q.answer.is_none()) {
+    if run.question.as_ref().is_some_and(|q| q.pending()) {
         return Err("Answer the pending design question before delegation.".into());
     }
     budget(state, run, input.role)?;

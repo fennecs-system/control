@@ -56,7 +56,7 @@ pub(crate) fn continuation_leaf(history: &[Run], origin: usize, runs: &HashMap<&
         let question = run
             .question
             .as_ref()
-            .filter(|question| question.generation == generation && question.answer.is_some())
+            .filter(|question| question.generation == generation && question.answer().is_some())
             .and_then(|question| question.continuation.as_deref())
             .map(|id| (id, RunKind::DesignAnswer));
         let delegated = run

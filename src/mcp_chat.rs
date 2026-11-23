@@ -157,6 +157,12 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "control_design_withdraw",
+        write: true,
+        description: "Withdraw a pending question this caller asked with control_design_ask, for example when it became moot or was settled elsewhere, with an optional short reason. It leaves chat_requests, the web UI, TUI and Discord and stays in that DM's history as withdrawn. Questions an agent asked can be withdrawn here only when the operator enabled question decisions in Manage → Permissions; the run waiting on one ends as if cancelled.",
+        schema: || json!({"type":"object","properties":{"question_id":{"type":"string","maxLength":128,"description":"The ID control_design_ask returned."},"reason":{"type":"string","minLength":1,"maxLength":200}},"required":["question_id"]}),
+    },
+    Tool {
         name: "chat_decide",
         write: true,
         description: "Decide a pending request that chat_requests listed, for the kinds the operator enabled in Manage → Permissions (listed only when one is). kind folder or port: decision allow|deny (loopback=true for a loopback port target); bot: allow|deny; knowledge: allow (accept) or deny (reject); question: answer text.",
@@ -623,6 +629,25 @@ fn design_ask(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     ))
 }
 
+fn design_withdraw(remote: &mut impl Remote, args: &Value, approvals: Approvals) -> io::Result<String> {
+    let question = token(args, "question_id")?
+        .ok_or_else(|| io::Error::other("Specify the question_id control_design_ask returned."))?;
+    let mut arguments = json!({"question_id":question});
+    match args.get("reason") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(reason)) => arguments["reason"] = json!(reason),
+        _ => return Err(io::Error::other("reason must be text.")),
+    }
+    // Another party's question is the operator's to withdraw, as answering it is.
+    if approvals.allows("question") {
+        arguments["as"] = json!("operator");
+    }
+    remote.tool("control.chat.withdraw", arguments)?;
+    Ok(format!(
+        "Withdrew question {question}. It no longer waits on the operator and stays in its DM's history (chat_read)."
+    ))
+}
+
 fn chat_create(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let title = match args.get("title") {
         None | Some(Value::Null) => None,
@@ -790,6 +815,7 @@ pub(crate) fn call(remote: &mut impl Remote, name: &str, args: &Value, approvals
         "chat_stop_services" => chat_stop_services(remote, args),
         "chat_open" => chat_open(remote, args, approvals),
         "control_design_ask" => design_ask(remote, args),
+        "control_design_withdraw" => design_withdraw(remote, args, approvals),
         "chat_decide" => chat_decide(remote, args, approvals),
         _ => Err(io::Error::other("Unknown tool. This bridge serves chat tools only.")),
     }?;
@@ -800,7 +826,7 @@ const CHAT: control_mcp::Server = control_mcp::Server {
     name: "control-chat",
     version: env!("CARGO_PKG_VERSION"),
     instructions: Some(
-        "Drive Control chats as the local operator: chats_list, chat_create, chat_send, chat_read. chat_open raises folder requests and control_design_ask asks the operator a decision (its answer appears in that chat); decisions stay with the operator unless enabled in Manage → Permissions (then chat_decide).",
+        "Drive Control chats as the local operator: chats_list, chat_create, chat_send, chat_read. chat_open raises folder requests and control_design_ask asks the operator a decision (its answer appears in that chat; control_design_withdraw withdraws it); decisions stay with the operator unless enabled in Manage → Permissions (then chat_decide).",
     ),
     invalid: (control_mcp::INVALID_REQUEST, "Invalid JSON-RPC request"),
     unknown: (control_mcp::METHOD_NOT_FOUND, "Method not found"),
