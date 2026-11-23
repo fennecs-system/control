@@ -77,7 +77,7 @@ fn ui_previews() {
     state
         .runtime
         .enqueue("Preview".into(), crate::runtime::RunKind::Chat, "test");
-    let dna = crate::lens_library::render(&state, "gene-0003", None, None, false);
+    let dna = crate::lens_library::render(crate::lens_library::Sources::of(&state), "gene-0003", None, None, false);
     write(
         &directory,
         "dna.html",

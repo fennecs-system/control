@@ -2,7 +2,7 @@
 mod decisions;
 mod guidance;
 mod ingress_guard;
-pub(crate) use guidance::{egress_hint, wait_topic};
+pub(crate) use guidance::{Requests, egress_hint, wait_topic};
 mod multiplex;
 mod proxy;
 pub(crate) use proxy::{env as proxy_env, exports as proxy_exports};

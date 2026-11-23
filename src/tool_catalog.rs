@@ -14,7 +14,7 @@ pub fn render(state: &State, query: &str) -> String {
     let selected = if roots.is_empty() {
         None
     } else {
-        match crate::lens_library::resolve(state, &roots) {
+        match crate::lens_library::resolve(crate::lens_library::Sources::of(state), &roots) {
             Ok(resolved) => Some(resolved.tools.into_iter().collect::<std::collections::BTreeSet<_>>()),
             Err(_) => {
                 error = Some("Unknown or unresolved lens.".to_owned());

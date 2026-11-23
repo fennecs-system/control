@@ -840,8 +840,11 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     };
     // Web and TUI continuations retain the session's original identity, including Discord user limits.
     identity::authorize(&actor, action)?;
-    let context = crate::lens_library::resolve(state, &selected_lenses(&state.chats[index]))
-        .map_err(|_| "Selected context cannot be resolved. Check its DNA before sending.")?;
+    let context = crate::lens_library::resolve(
+        crate::lens_library::Sources::of(state),
+        &selected_lenses(&state.chats[index]),
+    )
+    .map_err(|_| "Selected context cannot be resolved. Check its DNA before sending.")?;
     let native = if requested == Action::Task && !literal && steering.is_none() {
         discord::native_reply(&actor, objective)
     } else {
@@ -1574,7 +1577,8 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 return Err("Specify a list of lenses, including an empty list to clear them.");
             }
             let lenses = parse_lenses(arguments, state)?;
-            crate::lens_library::resolve(state, &lenses).map_err(|_| "Selected context cannot be resolved.")?;
+            crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
+                .map_err(|_| "Selected context cannot be resolved.")?;
             let session = state.chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
             identity::authorize(&session.actor, Action::Task)?;
             session.lens = if lenses.len() == 1 {
@@ -1606,7 +1610,8 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
                 _ => return Err("Unknown room."),
             };
             let lenses = parse_lenses(arguments, state)?;
-            crate::lens_library::resolve(state, &lenses).map_err(|_| "Selected context cannot be resolved.")?;
+            crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
+                .map_err(|_| "Selected context cannot be resolved.")?;
             let id = create(state);
             state.chats.last_mut().unwrap().improve_mode = improve;
             state.chats.last_mut().unwrap().lens = if lenses.len() == 1 {

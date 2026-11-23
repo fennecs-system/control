@@ -71,7 +71,13 @@ fn navigation_shows_dna_and_dms_at_their_existing_urls() {
         &crate::State::default(),
         "lens-page",
         "none",
-        &crate::lens_library::render(&crate::State::default(), "", None, None, false),
+        &crate::lens_library::render(
+            crate::lens_library::Sources::of(&crate::State::default()),
+            "",
+            None,
+            None,
+            false,
+        ),
     );
     assert!(page.contains("<h2>DNA</h2>") && page.contains("＋ New gene"));
 }

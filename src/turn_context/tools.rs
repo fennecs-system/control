@@ -629,7 +629,7 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
         // A pending port request's decision queues this chat's next turn
         // itself (approved or denied), so waiting on it needs no subscription.
         if let Some(id) = topic.strip_prefix("port:") {
-            match crate::ports::wait_topic(state, chat, id) {
+            match crate::ports::wait_topic(crate::ports::Requests::of(state), chat, id) {
                 Ok(()) => {
                     awaited = true;
                     adjusted.push(format!(
@@ -908,7 +908,7 @@ fn respond(
                 attempt.run,
                 attempt.generation,
                 "pending-workspace",
-                crate::watches::delivery::live(state),
+                crate::watches::delivery::live(&state.watches),
             )
             .map_err(|message| {
                 let selected = mailbox.accepted().map(|h| h.processed.as_slice()).unwrap_or_default();

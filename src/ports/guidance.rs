@@ -4,6 +4,7 @@
 //! a hint when a command fails to reach a host one of its requests names.
 //! Text only; it grants and changes nothing.
 use super::*;
+use crate::runtime::Run;
 
 impl Port {
     /// How a process in the service reaches this route once approved.
@@ -44,12 +45,10 @@ impl Port {
 }
 
 /// The chat requested `port` or owns its service, as the same actor.
-fn related(state: &State, port: &Port, chat: &str, actor: &Actor) -> bool {
+fn related(runs: &[Run], port: &Port, chat: &str, actor: &Actor) -> bool {
     &port.actor == actor
         && (port.chat == chat
-            || state
-                .runtime
-                .runs
+            || runs
                 .iter()
                 .any(|run| run.id == port.origin_run && run.chat_id.as_deref() == Some(chat)))
 }
@@ -58,17 +57,35 @@ fn related(state: &State, port: &Port, chat: &str, actor: &Actor) -> bool {
 /// pending: its decision queues the chat's next turn, so no subscription is
 /// needed. `Err((decided, message))` otherwise; `decided` means the decision
 /// is already known and the agent should act on it rather than wait.
-pub(crate) fn wait_topic(state: &State, chat: &str, id: &str) -> Result<(), (bool, String)> {
-    let actor = state
+/// What resolving a port wait reads: the requests, the chats that own them
+/// and the runs that asked.
+#[derive(Clone, Copy)]
+pub(crate) struct Requests<'a> {
+    ports: &'a [Port],
+    chats: &'a [crate::chat::Session],
+    runs: &'a [Run],
+}
+impl<'a> Requests<'a> {
+    pub(crate) fn of(state: &'a State) -> Self {
+        Self {
+            ports: &state.ports,
+            chats: &state.chats,
+            runs: &state.runtime.runs,
+        }
+    }
+}
+pub(crate) fn wait_topic(requests: Requests<'_>, chat: &str, id: &str) -> Result<(), (bool, String)> {
+    let actor = requests
         .chats
         .iter()
         .find(|session| session.id == chat)
         .map(|session| session.actor.clone());
-    let Some(port) = state
-        .ports
-        .iter()
-        .find(|port| port.id.as_str() == id && actor.as_ref().is_some_and(|actor| related(state, port, chat, actor)))
-    else {
+    let Some(port) = requests.ports.iter().find(|port| {
+        port.id.as_str() == id
+            && actor
+                .as_ref()
+                .is_some_and(|actor| related(requests.runs, port, chat, actor))
+    }) else {
         return Err((
             false,
             format!("No port request {id} of this chat; control_port_status lists them"),
@@ -109,20 +126,19 @@ const UNREACHABLE: [&str; 10] = [
 /// to reach a host named by one of the chat's pending or approved egress
 /// requests: wait for the decision, or use the approved relay. Only hosts of
 /// the run's own requests match; nothing is hard-coded.
-pub(crate) fn egress_hint(state: &State, run_id: &str, command: &str, output: &str) -> Option<String> {
+pub(crate) fn egress_hint(runs: &[Run], ports: &[Port], run_id: &str, command: &str, output: &str) -> Option<String> {
     let lower = output.to_ascii_lowercase();
     if !UNREACHABLE.iter().any(|signature| lower.contains(signature)) {
         return None;
     }
-    let run = state.runtime.runs.iter().find(|run| run.id == run_id)?;
+    let run = runs.iter().find(|run| run.id == run_id)?;
     let chat = run.chat_id.as_deref()?;
     let command = command.to_ascii_lowercase();
-    let port = state
-        .ports
+    let port = ports
         .iter()
         .rev()
         .filter(|port| port.direction == Direction::Egress && matches!(port.status, Status::Pending | Status::Approved))
-        .filter(|port| related(state, port, chat, &run.actor))
+        .filter(|port| related(runs, port, chat, &run.actor))
         .find(|port| {
             port.target.as_ref().is_some_and(|target| {
                 let host = target.host.to_ascii_lowercase();

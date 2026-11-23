@@ -918,22 +918,18 @@ impl AttemptTools for Tools {
 
 /// The run's captured versions that are still admitted. Revoked versions are
 /// skipped, so an attempt that starts after revocation does not receive them.
-pub(crate) fn planned(shared: &Arc<Mutex<State>>, run: &str) -> io::Result<Vec<(String, u64)>> {
-    let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-    let Some(run) = state.runtime.runs.iter().find(|r| r.id == run) else {
-        return Ok(Vec::new());
-    };
-    Ok(run
-        .context
-        .as_ref()
+pub(crate) fn planned(runs: &[crate::runtime::Run], packages: &[Manifest], run: &str) -> Vec<(String, u64)> {
+    runs.iter()
+        .find(|r| r.id == run)
+        .and_then(|run| run.context.as_ref())
         .map(|c| {
             c.packages
                 .iter()
-                .filter(|p| current(&state.packages, p).is_some())
+                .filter(|p| current(packages, p).is_some())
                 .map(|p| (p.name.clone(), p.version))
                 .collect()
         })
-        .unwrap_or_default())
+        .unwrap_or_default()
 }
 /// Copy each planned version into the attempt workspace. Returns the names.
 pub(crate) fn copy_into(store: &Path, packages: &[(String, u64)], workspace: &Path) -> io::Result<Vec<String>> {
