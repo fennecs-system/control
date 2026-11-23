@@ -10,10 +10,16 @@ fn profile_checkpoint_load() {
     fs::create_dir_all(&directory).unwrap();
     assert!(!directory.join("state.json").exists(), "use a fresh scratch directory");
     save(&State::initial()).unwrap();
+    // Each load is a process start: the saving process (this one) has let go of
+    // its exclusively locked state.log. Since saves append to that log, a load
+    // while this process still holds it waits and fails as "open elsewhere".
+    let restart = || drop(published().lock().unwrap().remove(&directory));
+    restart();
     black_box(load().unwrap());
     let bytes = fs::metadata(directory.join("state.json")).unwrap().len();
     let mut samples = Vec::new();
     for round in 0..51 {
+        restart();
         let start = Instant::now();
         black_box(load().unwrap());
         if round != 0 {
