@@ -83,6 +83,26 @@ pub fn base(name: &str, node: &str, owner: User) -> RunSpec {
         .env("CLAUDE_CONFIG_DIR", "/home/agent/.claude")
 }
 
+/// Every secret of `spec` lies under a private tmpfs (mode 0700) owned by the
+/// uid the program runs as, so no other uid in the container reaches it.
+/// Otherwise the first secret that does not, by name.
+pub fn secrets_private(spec: &RunSpec) -> Result<(), String> {
+    let covered = |target: &str| {
+        spec.tmpfs.iter().any(|fs| {
+            fs.mode == Some(0o700)
+                && fs.owner.is_some()
+                && fs.owner == spec.user
+                && Path::new(target)
+                    .strip_prefix(&fs.target)
+                    .is_ok_and(|rest| !rest.as_os_str().is_empty())
+        })
+    };
+    spec.secrets
+        .iter()
+        .find(|secret| !covered(&secret.target))
+        .map_or(Ok(()), |secret| Err(secret.name.clone()))
+}
+
 /// Reads `reader` to its end on a thread, keeping at most `max` bytes.
 pub fn drain(mut reader: impl Read + Send + 'static, max: usize) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
@@ -340,6 +360,13 @@ pub fn turn(
         Ok(spec) => spec,
         Err(failure) => return failure.into(),
     };
+    if let Err(secret) = secrets_private(&spec) {
+        return Failure::Blocked(format!(
+            "{} turn would mount {secret} outside its private home",
+            cli.name
+        ))
+        .into();
+    }
     if host.cancelled() {
         return Failure::Cancelled(Cancelled::BeforeLaunch(Some(cli.name))).into();
     }
@@ -510,3 +537,6 @@ pub fn canary_check(
         Err(fail("the credential canary failed; see the FAIL lines above"))
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -328,3 +328,38 @@ fn a_rejected_tool_is_always_an_unexpected_tool_failure() {
         Failure::UnexpectedTools(text.to_owned())
     );
 }
+
+/// A turn and a text call run as the login's owner and carry the login
+/// read-only beneath the CLI's private home, and nothing else secret.
+#[test]
+fn the_login_is_read_only_beneath_the_private_home_of_the_cli_uid() {
+    let auth = login("private");
+    let root = auth.parent().unwrap().to_path_buf();
+    let granted = granted(&auth);
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        &granted,
+        &root.join("grok-config.toml"),
+        &root.join("grok-prompt"),
+        &root.join(MAILBOX),
+        "sha256:img",
+        "grok-4.7",
+    )
+    .unwrap();
+    let call = TextCall {
+        image: "sha256:img",
+        name: "control-summary-1",
+        workspace: &root.join("workspace"),
+        node: "node-1",
+        model: "grok-4.7",
+        login: Some(&granted),
+    };
+    let text = text_container(&call, &granted).unwrap();
+    for spec in [turn, text] {
+        assert_eq!(spec.user, Some(granted.owner()));
+        assert_eq!(cli::secrets_private(&spec), Ok(()));
+        let targets: Vec<_> = spec.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
+        assert_eq!(targets, [(AUTH, Access::ReadOnly)]);
+    }
+}

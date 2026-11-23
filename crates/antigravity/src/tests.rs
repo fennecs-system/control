@@ -502,3 +502,31 @@ fn a_rejected_tool_is_always_an_unexpected_tool_failure() {
         Failure::UnexpectedTools(text.to_owned())
     );
 }
+
+/// Each form of login runs as its owner and is carried read-only beneath the
+/// CLI's private home, and nothing else secret.
+#[test]
+fn every_login_form_is_read_only_beneath_the_private_home_of_the_cli_uid() {
+    let root = directory("private");
+    let private = root.join(PRIVATE);
+    fs::create_dir(&private).unwrap();
+    for (form, target) in [(Form::ApiKey, KEY), (Form::Session, TOKEN), (Form::CloudDefault, ADC)] {
+        let file = root.join("login");
+        cli::private_file(&file, "").unwrap();
+        let login = granted(form, &file);
+        let turn = turn_container(
+            "control-run-1",
+            "node-1",
+            &login,
+            &private,
+            &root.join(MAILBOX),
+            "sha256:img",
+            "gemini",
+        )
+        .unwrap();
+        assert_eq!(turn.user, Some(login.owner()));
+        assert_eq!(cli::secrets_private(&turn), Ok(()), "{form:?}");
+        let targets: Vec<_> = turn.secrets.iter().map(|s| (s.target.as_str(), s.access)).collect();
+        assert_eq!(targets, [(target, Access::ReadOnly)], "{form:?}");
+    }
+}
