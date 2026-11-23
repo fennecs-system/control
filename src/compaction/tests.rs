@@ -522,7 +522,7 @@ fn memory_command_reports_why_and_opts_a_dm_in_or_out() {
     let (mut state, _) = fixture();
     let chat = state.chats[0].id.clone();
     let saved = std::cell::Cell::new(0);
-    let save = |_: &State| {
+    let save = |_: &crate::runtime::Runtime| {
         saved.set(saved.get() + 1);
         Ok(())
     };

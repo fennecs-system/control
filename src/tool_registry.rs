@@ -66,30 +66,262 @@ fn entry(definition: Value) -> Entry {
     }
 }
 fn session_definitions() -> Vec<Value> {
-    json!({"tools":[
-            {"name":"control.chats.list","description":"List local chats.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.chat.create","description":"Create a local operator chat with lenses, optional room/design topic and chat or architect-only improve mode. A channel name creates a fresh task thread; an existing full room address explicitly joins that thread.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"room":{"type":"string"},"lens":{"type":"string"},"lenses":{"type":"array","items":{"type":"string"}},"design_context":{"type":"string"}}}},
-            {"name":"control.chat.lenses","description":"Set lenses from the library for future messages. Existing runs retain their resolved context.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"lenses":{"type":"array","items":{"type":"string"}}},"required":["id","lenses"]}},
-            {"name":"control.chat.rename","description":"Rename a chat. Every client shows this name in place of the chat's callsign.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string","minLength":1,"maxLength":crate::callsigns::MAX_NAME}},"required":["id","name"]}},
-            {"name":"control.lenses.list","description":"List current declarative lens definitions.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.chat.persona","description":"Select a persona (purpose, DNA, standing, default model, behaviours) for a root DM's future messages, or null to clear. Its genes become the DM's DNA; each message captures the current revision. Read-only personas run only as spawned observers.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"persona":{"type":["string","null"]}},"required":["id","persona"]}},
-            {"name":"control.personas.list","description":"List the persona library (current revisions): purpose, DNA, standing, body and behaviours. Personas compose existing pieces and grant nothing.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.persona.read","description":"Read one persona definition (optionally an earlier revision) with its revision history and standing summary.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id"]}},
-            {"name":"control.lens.read","description":"Read a lens definition and its current revision.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
-            {"name":"control.lenses.resolve","description":"Resolve nested lenses against explicit local document snapshots. Does not grant tool authority.","inputSchema":{"type":"object","properties":{"lenses":{"type":"array","items":{"type":"string"}}},"required":["lenses"]}},
-            {"name":"control.rooms.list","description":"List collaboration rooms.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.room.read","description":"Read recent room posts and linked chats.","inputSchema":{"type":"object","properties":{"room":{"type":"string"}},"required":["room"]}},
-            {"name":"control.room.post","description":"Post a concise shared update. This does not send a chat prompt or grant authority.","inputSchema":{"type":"object","properties":{"room":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":2000}},"required":["room","message"]}},
-            {"name":"control.chat.read","description":"Read a chat and its run status.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
-            {"name":"control.run.scores","description":"Read the workload score series of a run: the score probes declared anywhere in the chat's team (root chat and descendants), each with its samples (time, trigger, values), plus the team's milestone count. Values are the workload's own claims, not verified by Control.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
-            {"name":"control.intel.brief","description":"Render the Markdown intel brief for the last 24 hours: per team its goal, progress (claims, score probe changes), cost in tokens, observed pathologies and requests waiting on the operator. Omit chat for the whole node. save=true also writes it to intel/brief-DATE.md under the state directory. Read-only over node state.","inputSchema":{"type":"object","properties":{"chat":{"type":"string"},"save":{"type":"boolean","default":false}}}},
-            {"name":"control.requests.list","description":"List pending operator decisions across all chats: design questions, bot requests and port approvals, grouped by top-level chat in the same shape as control.chat.read. Decide them in that chat.","inputSchema":{"type":"object","properties":{}}},
-            {"name":"control.chat.ask","description":"Ask the operator a decision as a design question: in chat id (an idle operator DM) or else the Decisions DM. It is listed and forwarded like an agent's question, approves nothing and resumes no run. Returns the question ID.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"question":{"type":"string","minLength":1,"maxLength":1000},"options":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"string","minLength":1,"maxLength":200}},"recommended":{"type":"integer","minimum":0,"maximum":3}},"required":["question","options"]}},
-            {"name":"control.chat.withdraw","description":"Withdraw a pending design question the chat MCP caller asked, with an optional short reason; as=operator also withdraws an agent's question for an operator who lets this caller decide questions. It leaves the pending lists and stays in history; a waiting run ends as if cancelled.","inputSchema":{"type":"object","properties":{"question_id":{"type":"string"},"reason":{"type":"string","minLength":1,"maxLength":200},"as":{"type":"string","enum":["operator"]}},"required":["question_id"]}},
-            {"name":"control.services.list","description":"List the live persistent services a chat owns; team=true includes every chat spawned from it.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"team":{"type":"boolean","default":false}},"required":["id"]}},
-            {"name":"control.services.stop","description":"Stop the live persistent services a chat owns (team=true: and every chat spawned from it), or only service_id. The same stop as the services page; ports bound to a stopped service lose authorization.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"team":{"type":"boolean","default":false},"service_id":{"type":"string","maxLength":128}},"required":["id"]}},
-            {"name":"control.chat.send","description":"Send as the chat's original actor. Optional mode changes persist; improve requires architect access.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["chat","improve"]},"id":{"type":"string"},"message":{"type":"string","minLength":1,"maxLength":control_context::limits::CHAT_MESSAGE_CHARS}},"required":["id","message"]}}
-        ]})["tools"].as_array().unwrap().clone()
+    json!({
+        "tools": [
+            {
+                "name": "control.chats.list",
+                "description": "List local chats.",
+                "inputSchema": {"type": "object", "properties": {}}
+            },
+            {
+                "name": "control.chat.create",
+                "description": concat!(
+                    "Create a local operator chat with lenses, optional room/design topic and chat or architect-only ",
+                    "improve mode. A channel name creates a fresh task thread; an existing full room address ",
+                    "explicitly joins that thread."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["chat", "improve"]},
+                        "room": {"type": "string"},
+                        "lens": {"type": "string"},
+                        "lenses": {"type": "array", "items": {"type": "string"}},
+                        "design_context": {"type": "string"}
+                    }
+                }
+            },
+            {
+                "name": "control.chat.lenses",
+                "description": concat!(
+                    "Set lenses from the library for future messages. ",
+                    "Existing runs retain their resolved context."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "lenses": {"type": "array", "items": {"type": "string"}}},
+                    "required": ["id", "lenses"]
+                }
+            },
+            {
+                "name": "control.chat.rename",
+                "description": "Rename a chat. Every client shows this name in place of the chat's callsign.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "name": {"type": "string", "minLength": 1, "maxLength": crate::callsigns::MAX_NAME}
+                    },
+                    "required": ["id", "name"]
+                }
+            },
+            {
+                "name": "control.lenses.list",
+                "description": "List current declarative lens definitions.",
+                "inputSchema": {"type": "object", "properties": {}}
+            },
+            {
+                "name": "control.chat.persona",
+                "description": concat!(
+                    "Select a persona (purpose, DNA, standing, default model, behaviours) for a root DM's future ",
+                    "messages, or null to clear. Its genes become the DM's DNA; each message captures the current ",
+                    "revision. Read-only personas run only as spawned observers."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "persona": {"type": ["string", "null"]}},
+                    "required": ["id", "persona"]
+                }
+            },
+            {
+                "name": "control.personas.list",
+                "description": concat!(
+                    "List the persona library (current revisions): purpose, DNA, standing, body and behaviours. ",
+                    "Personas compose existing pieces and grant nothing."
+                ),
+                "inputSchema": {"type": "object", "properties": {}}
+            },
+            {
+                "name": "control.persona.read",
+                "description": concat!(
+                    "Read one persona definition (optionally an earlier revision) with its revision history and ",
+                    "standing summary."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "revision": {"type": "integer", "minimum": 1}},
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "control.lens.read",
+                "description": "Read a lens definition and its current revision.",
+                "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
+            },
+            {
+                "name": "control.lenses.resolve",
+                "description": concat!(
+                    "Resolve nested lenses against explicit local ",
+                    "document snapshots. Does not grant tool authority."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"lenses": {"type": "array", "items": {"type": "string"}}},
+                    "required": ["lenses"]
+                }
+            },
+            {
+                "name": "control.rooms.list",
+                "description": "List collaboration rooms.",
+                "inputSchema": {"type": "object", "properties": {}}
+            },
+            {
+                "name": "control.room.read",
+                "description": "Read recent room posts and linked chats.",
+                "inputSchema": {"type": "object", "properties": {"room": {"type": "string"}}, "required": ["room"]}
+            },
+            {
+                "name": "control.room.post",
+                "description": "Post a concise shared update. This does not send a chat prompt or grant authority.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "room": {"type": "string"},
+                        "message": {"type": "string", "minLength": 1, "maxLength": 2000}
+                    },
+                    "required": ["room", "message"]
+                }
+            },
+            {
+                "name": "control.chat.read",
+                "description": "Read a chat and its run status.",
+                "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
+            },
+            {
+                "name": "control.run.scores",
+                "description": concat!(
+                    "Read the workload score series of a run: the score probes declared anywhere in the chat's team ",
+                    "(root chat and descendants), each with its samples (time, trigger, values), plus the team's ",
+                    "milestone count. Values are the workload's own claims, not verified by Control."
+                ),
+                "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
+            },
+            {
+                "name": "control.intel.brief",
+                "description": concat!(
+                    "Render the Markdown intel brief for the last 24 hours: per team its goal, progress (claims, ",
+                    "score probe changes), cost in tokens, observed pathologies and requests waiting on the operator. ",
+                    "Omit chat for the whole node. save=true also writes it to intel/brief-DATE.md under the state ",
+                    "directory. Read-only over node state."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"chat": {"type": "string"}, "save": {"type": "boolean", "default": false}}
+                }
+            },
+            {
+                "name": "control.requests.list",
+                "description": concat!(
+                    "List pending operator decisions across all chats: design questions, bot requests and port ",
+                    "approvals, grouped by top-level chat in the same shape as control.chat.read. Decide them in that ",
+                    "chat."
+                ),
+                "inputSchema": {"type": "object", "properties": {}}
+            },
+            {
+                "name": "control.chat.ask",
+                "description": concat!(
+                    "Ask the operator a decision as a design question: in chat id (an idle operator DM) or else the ",
+                    "Decisions DM. It is listed and forwarded like an agent's question, approves nothing and resumes ",
+                    "no run. Returns the question ID."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "question": {"type": "string", "minLength": 1, "maxLength": 1000},
+                        "options": {
+                            "type": "array",
+                            "minItems": 2,
+                            "maxItems": 4,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 200}
+                        },
+                        "recommended": {"type": "integer", "minimum": 0, "maximum": 3}
+                    },
+                    "required": ["question", "options"]
+                }
+            },
+            {
+                "name": "control.chat.withdraw",
+                "description": concat!(
+                    "Withdraw a pending design question the chat MCP caller asked, with an optional short reason; ",
+                    "as=operator also withdraws an agent's question for an operator who lets this caller decide ",
+                    "questions. It leaves the pending lists and stays in history; a waiting run ends as if cancelled."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question_id": {"type": "string"},
+                        "reason": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "as": {"type": "string", "enum": ["operator"]}
+                    },
+                    "required": ["question_id"]
+                }
+            },
+            {
+                "name": "control.services.list",
+                "description": concat!(
+                    "List the live persistent services a chat owns; ",
+                    "team=true includes every chat spawned from it."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "team": {"type": "boolean", "default": false}},
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "control.services.stop",
+                "description": concat!(
+                    "Stop the live persistent services a chat owns (team=true: and every chat spawned from it), or ",
+                    "only service_id. The same stop as the services page; ports bound to a stopped service lose ",
+                    "authorization."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "team": {"type": "boolean", "default": false},
+                        "service_id": {"type": "string", "maxLength": 128}
+                    },
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "control.chat.send",
+                "description": concat!(
+                    "Send as the chat's original actor. Optional mode changes persist; improve requires architect ",
+                    "access."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["chat", "improve"]},
+                        "id": {"type": "string"},
+                        "message": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": control_context::limits::CHAT_MESSAGE_CHARS
+                        }
+                    },
+                    "required": ["id", "message"]
+                }
+            }
+        ]
+    })["tools"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 pub fn entries() -> &'static [Entry] {
     static CATALOG: OnceLock<Vec<Entry>> = OnceLock::new();
@@ -184,7 +416,24 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     tools
 }
 fn browser_definition() -> Value {
-    json!({"name":"control.browser.capture","description":"Render a self-contained HTML preview inside the configured root using offline Nix Firefox. Returns a PNG artifact. No network or host browser profile. Requires the pinned browser image.","inputSchema":{"type":"object","properties":{"input":{"type":"string"},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["input"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({
+        "name": "control.browser.capture",
+        "description": concat!(
+            "Render a self-contained HTML preview inside the configured root using offline Nix Firefox. Returns a PNG ",
+            "artifact. No network or host browser profile. Requires the pinned browser image."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "input": {"type": "string"},
+                "width": {"type": "integer", "minimum": 240, "maximum": 2560},
+                "height": {"type": "integer", "minimum": 240, "maximum": 2560}
+            },
+            "required": ["input"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+    })
 }
 #[cfg(test)]
 mod tests;

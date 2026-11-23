@@ -37,8 +37,8 @@ pub(super) fn usage() -> String {
 }
 
 /// Whether `service`'s current generation holds an approved target egress.
-fn has_egress(state: &State, service: &Service) -> bool {
-    state.ports.iter().any(|p| {
+fn has_egress(ports: &[Port], service: &Service) -> bool {
+    ports.iter().any(|p| {
         p.service == service.resource.id
             && p.generation == service.resource.generation
             && p.direction == Direction::Egress
@@ -48,13 +48,13 @@ fn has_egress(state: &State, service: &Service) -> bool {
 }
 /// Environment for a command started in `service`: the proxy settings when it
 /// has approved egress, otherwise nothing.
-pub(crate) fn env(state: &State, service: &Service) -> &'static [(&'static str, &'static str)] {
-    if has_egress(state, service) { &ENV } else { &[] }
+pub(crate) fn env(ports: &[Port], service: &Service) -> &'static [(&'static str, &'static str)] {
+    if has_egress(ports, service) { &ENV } else { &[] }
 }
 /// Shell `export` line equivalent to [`env`], for watch commands the runner
 /// starts. Empty without egress.
-pub(crate) fn exports(state: &State, service: &Service) -> String {
-    let pairs = env(state, service);
+pub(crate) fn exports(ports: &[Port], service: &Service) -> String {
+    let pairs = env(ports, service);
     if pairs.is_empty() {
         return String::new();
     }
@@ -87,17 +87,17 @@ impl Key {
     }
 }
 /// Live, authorized target egress grants of `key`.
-fn grants<'a>(state: &'a State, key: &'a Key, time: u64) -> impl Iterator<Item = &'a Port> {
-    state.ports.iter().filter(move |p| {
+fn grants<'a>(authority: PortAuthority<'a>, key: &'a Key, time: u64) -> impl Iterator<Item = &'a Port> {
+    authority.ports.iter().filter(move |p| {
         p.direction == Direction::Egress
             && p.target.is_some()
             && Key::of(p) == *key
-            && authorized(state, p, time).is_ok()
+            && authorized(authority, p, time).is_ok()
     })
 }
 /// The live grant for exactly `host:port`, if any.
-fn grant(state: &State, key: &Key, host: &str, port: u16, time: u64) -> Option<Port> {
-    grants(state, key, time)
+fn grant(authority: PortAuthority<'_>, key: &Key, host: &str, port: u16, time: u64) -> Option<Port> {
+    grants(authority, key, time)
         .find(|p| {
             p.target
                 .as_ref()
@@ -145,7 +145,7 @@ fn run(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>) {
             && !crate::shutdown::requested()
             && shared
                 .lock()
-                .is_ok_and(|state| grants(&state, key, now()).next().is_some())
+                .is_ok_and(|state| grants(PortAuthority::of(&state), key, now()).next().is_some())
     };
     while alive() {
         let _ = listen(shared, key, cancel, &alive);
@@ -161,14 +161,14 @@ fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive
     let (service, expires) = {
         let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let time = now();
-        let ports = grants(&state, key, time).collect::<Vec<_>>();
+        let ports = grants(PortAuthority::of(&state), key, time).collect::<Vec<_>>();
         let first = ports.first().ok_or_else(|| io::Error::other("No approved egress"))?;
         let expires = ports
             .iter()
             .filter_map(|p| p.approval.as_ref().map(|a| a.expires))
             .max()
             .unwrap_or(time);
-        (authorized(&state, first, time)?, expires)
+        (authorized(PortAuthority::of(&state), first, time)?, expires)
     };
     let binding = crate::services::port_binding(crate::engine::isolation(), &service, &key.container)?;
     let (shared, key, cancel) = (shared.clone(), key.clone(), cancel.clone());
@@ -329,12 +329,12 @@ pub(super) fn handle(
             && !crate::shutdown::requested()
             && shared
                 .lock()
-                .is_ok_and(|state| authorized(&state, grant, now()).is_ok())
+                .is_ok_and(|state| authorized(PortAuthority::of(&state), grant, now()).is_ok())
     };
     let grant = shared
         .lock()
         .ok()
-        .and_then(|state| grant(&state, key, &host, port, now()));
+        .and_then(|state| grant(PortAuthority::of(&state), key, &host, port, now()));
     let Some((grant, target)) = grant.and_then(|g| g.approval.as_ref().and_then(|a| a.pinned).map(|t| (g, t))) else {
         return respond(&mut client, "403 Forbidden", &denied(&host, port));
     };

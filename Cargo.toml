@@ -50,6 +50,8 @@ tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 # Every test build of the binary links a library whose node directories are
 # isolated; `#[cfg(test)]` alone would not reach the library from binary tests.
 control = { path = ".", default-features = false, features = ["test-isolation"] }
+# The scripted container backend that whole-attempt tests drive.
+control-isolation = { path = "crates/isolation", features = ["testing"] }
 
 
 [workspace]

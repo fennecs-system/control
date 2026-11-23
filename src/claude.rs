@@ -516,6 +516,7 @@ pub fn execute(
     );
     let cli = Cli {
         name: "Claude",
+        isolation,
         id,
         mailbox: &mailbox,
         workspace,
@@ -596,6 +597,7 @@ pub(crate) type Capture = fn(
 /// mailbox mounted as its `/workspace`.
 pub(crate) struct Cli<'a> {
     pub name: &'static str,
+    pub isolation: &'a dyn Isolation,
     pub id: &'a str,
     pub mailbox: &'a Path,
     pub workspace: &'a Path,
@@ -617,6 +619,7 @@ pub(crate) fn supervise(
 ) -> Outcome {
     let Cli {
         name,
+        isolation,
         id,
         mailbox,
         workspace,
@@ -719,7 +722,7 @@ pub(crate) fn supervise(
     if !success {
         let _ = child.kill();
         let _ = child.wait();
-        crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+        crate::attempt_control::stop(isolation, bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
     }
     let (result, usage) = output
         .join()

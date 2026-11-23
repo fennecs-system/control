@@ -259,9 +259,8 @@ pub(crate) fn record(
     }
 }
 /// The rule that approved request `id`, if the policy did.
-pub(crate) fn rule(state: &State, id: &str) -> Option<String> {
-    state
-        .auto_decisions
+pub(crate) fn rule(decisions: &[Record], id: &str) -> Option<String> {
+    decisions
         .iter()
         .rev()
         .find(|record| record.id == id)
@@ -301,7 +300,7 @@ pub(crate) fn overview(state: &State) -> String {
             )
         })
         .collect::<Vec<_>>();
-    let ports = crate::ports::overview(state);
+    let ports = crate::ports::overview(&state.ports, &state.auto_decisions);
     let bots = crate::bots::active(state)
         .into_iter()
         .map(|chat| format!("<p>{}</p>", link(chat)))

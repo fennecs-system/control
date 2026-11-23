@@ -78,7 +78,7 @@ pub fn handle(stream: &mut TcpStream, method: &str, target: &str, body: &[u8]) -
             Err(error) => content.push_str(&format!("<p role='alert'>{}</p>", escape(&error.to_string()))),
         }
     }
-    let page = crate::render(&crate::State::default(), "tool-page", "none", &content);
+    let page = crate::shell("tool-page", &content);
     let _ = control_http::respond(
         stream,
         "200 OK",

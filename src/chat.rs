@@ -116,7 +116,7 @@ pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: boo
     } else {
         Vec::new()
     };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(state,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
+    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&state.lens_library,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
     html
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
@@ -566,8 +566,9 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         return Err("Control is stopping; try again after restart.");
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Model) {
-        let reply = crate::providers::selection::command(state, id, option)?;
-        let session = state.chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
+        let State { chats, runtime, .. } = state;
+        let session = chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
+        let reply = crate::providers::selection::command(session, runtime, option)?;
         session.messages.push(Message {
             speaker: Default::default(),
             text: text.trim().into(),
@@ -1100,7 +1101,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         value["pending_bots"]=crate::bots::pending_json(state,id);
         value["pending_knowledge"]=json!(crate::knowledge_tools::pending_json(state,id));
         value["bot_revision"]=json!(crate::bots::decision_revision(state));
-        value["port_revision"]=json!(crate::ports::decision_revision(state));
+        value["port_revision"]=json!(crate::ports::decision_revision(&state.ports));
         value["agent_activity"]=json!(agent_activity(state,id));
         value["room_listener"]=crate::rooms::listener_status(state,id).unwrap_or(Value::Null);
         value["bot"]=crate::bots::status(state,id).map_or(Value::Null,Value::from);
@@ -1117,7 +1118,7 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
 }
 pub fn list(state: &State) -> Value {
     let decision_revision = crate::design::decision_revision(state);
-    let port_revision = crate::ports::decision_revision(state);
+    let port_revision = crate::ports::decision_revision(&state.ports);
     let bot_revision = crate::bots::decision_revision(state);
     let callsigns = crate::callsigns::all(&state.chats);
     let status = statuses(state);
@@ -1194,7 +1195,7 @@ pub fn pending_requests(state: &State) -> Value {
         .map(|s| s.id.as_str());
     let chats = waiting
         .chain(crate::bots::pending_chats(state))
-        .chain(crate::ports::pending_chats(state))
+        .chain(crate::ports::pending_chats(&state.ports))
         .chain(crate::intel::pending_chats(state))
         .chain(crate::knowledge_tools::pending_chats(state))
         .chain(folders);
@@ -1246,9 +1247,9 @@ pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
         "<section class='conversation'><div class='conversation-heading'>{}<h2>{}</h2>{mode}<span class='conversation-links'>{room}<a href='/dm/{id}/artifacts'>Artifacts ↗</a></span>{}<details class='chat-requests'><summary>Requests <span class='request-count' aria-live='polite'></span></summary><aside class='request-drawer' aria-label='Pending requests'><iframe class='chat-requests-frame' data-live-chat src='/dm/{id}/requests' title='Pending requests'></iframe></aside></details></div><div class='conversation-main'><iframe class='chat-transcript' data-live-chat src='/dm/{id}/transcript#latest' title='Conversation'></iframe><form class='conversation-composer' id='session-message' method='post' action='/dm/{id}/messages'><textarea name='message' required rows='3' aria-label='Message' placeholder='Message Control…'></textarea>{}<div class='composer-footer'>{}<button class='send-message' aria-label='Send message'>↑</button></div></form></div></section>",
         crate::navigation::conversation_button(state, id),
         escape(&crate::callsigns::name_or_id(&state.chats, id)),
-        crate::scores::line(state, id),
+        crate::scores::line(&state.scores, id),
         command_menu(&session.actor),
-        crate::lens_library::choices(state, &lenses, "session-message")
+        crate::lens_library::choices(&state.lens_library, &lenses, "session-message")
     ))
 }
 fn command_text(text: &str) -> String {
@@ -1270,8 +1271,12 @@ pub fn transcript(state: &State, id: &str) -> Result<String, &'static str> {
     let runs = crate::conversation::Conversation::of(state, session);
     let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
     let project_message = crate::projects::message_index(session);
-    html.push_str(&crate::previews::links(state, id));
-    html.push_str(&crate::github::panel(state, id));
+    html.push_str(&crate::previews::links(&state.previews, id));
+    html.push_str(&crate::github::panel(
+        &state.github_publications,
+        &state.runtime.runs,
+        id,
+    ));
     if let Some(listener) = crate::rooms::listener_status(state, id) {
         html.push_str(&format!(
             "<p class='message-status'>Room #{} · {}</p>",

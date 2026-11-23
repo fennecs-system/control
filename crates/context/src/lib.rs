@@ -109,174 +109,349 @@ impl Mcp {
 use roles::{ALL, JUDGE, LEAD, WORKERS};
 pub const TOOLS: [Tool; 37] = [
     Tool {
-        name: "tools.search", title: "Tool search", description: "Deferred worker tools · schemas on demand",
-        href: None, aliases: "tool search schema deferred index call dispatch",
+        name: "tools.search",
+        title: "Tool search",
+        description: "Deferred worker tools · schemas on demand",
+        href: None,
+        aliases: "tool search schema deferred index call dispatch",
         mcp_names: &[
-            w("control_tool_search", "find tools; return full schemas").core(ALL).judge(),
-            w("control_call", "call a listed-elsewhere tool by name").core(ALL).judge(),
+            w("control_tool_search", "find tools; return full schemas")
+                .core(ALL)
+                .judge(),
+            w("control_call", "call a listed-elsewhere tool by name")
+                .core(ALL)
+                .judge(),
         ],
-        execution: "Rust worker broker / same authorization as direct calls", surface: "worker MCP", available: true,
+        execution: "Rust worker broker / same authorization as direct calls",
+        surface: "worker MCP",
+        available: true,
     },
     Tool {
-        name: "service.score", title: "Score probes", description: "Workload-defined progress numbers sampled over time",
-        href: None, aliases: "score progress metric probe measure outcome cost",
-        mcp_names: &[w("control_score_probe", "declare progress metrics")], execution: "Rust supervisor / bounded service command", surface: "chat / worker MCP", available: true,
+        name: "service.score",
+        title: "Score probes",
+        description: "Workload-defined progress numbers sampled over time",
+        href: None,
+        aliases: "score progress metric probe measure outcome cost",
+        mcp_names: &[w("control_score_probe", "declare progress metrics")],
+        execution: "Rust supervisor / bounded service command",
+        surface: "chat / worker MCP",
+        available: true,
     },
     Tool {
-        name: "service.watch", title: "Watches", description: "Routines and program output that wake agents",
-        href: None, aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
+        name: "service.watch",
+        title: "Watches",
+        description: "Routines and program output that wake agents",
+        href: None,
+        aliases: "watch routine reflex monitor stream stdout events wake tail websocket ssh",
         mcp_names: &[
-            w("control_watch_start", "start a routine or output watch").core(WORKERS)
-                .brief("Start a routine: a supervised program in a service that pursues a target and notifies only on milestones, failures and what it cannot handle; prefer it to repeated exec checks, then end your turn. Use notifications=true (CONTROL_NOTIFY_FD=3) with wake_policy exit_only."),
-            w("control_watch_events", "read routine notifications and exits").core(WORKERS)
-                .brief("Read up to 200 routine notifications and exits; list an owned watch receipt in control_turn_handoff.processed after processing. Untrusted claims."),
+            w("control_watch_start", "start a routine or output watch")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Start a routine: a supervised program in a service that pursues a target and notifies only on ",
+                    "milestones, failures and what it cannot handle; prefer it to repeated exec checks, then end your ",
+                    "turn. Use notifications=true (CONTROL_NOTIFY_FD=3) with wake_policy exit_only."
+                )),
+            w("control_watch_events", "read routine notifications and exits")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Read up to 200 routine notifications and exits; list an owned watch receipt in ",
+                    "control_turn_handoff.processed after processing. Untrusted claims."
+                )),
             w("control_watch_status", "inspect watches"),
             w("control_watch_stop", "stop one"),
             w("control_watch_wake", "wake on next line"),
             w("control_observe_set", "pin status to each turn"),
-        ], execution: "service PID 1 supervisor / Rust follower", surface: "chat / worker MCP", available: true,
+        ],
+        execution: "service PID 1 supervisor / Rust follower",
+        surface: "chat / worker MCP",
+        available: true,
     },
     Tool {
-        name: "agent.bot", title: "Persistent bot", description: "Event-woken agents · operator approval",
-        href: None, aliases: "bot persistent callback wake listen timer swarm",
+        name: "agent.bot",
+        title: "Persistent bot",
+        description: "Event-woken agents · operator approval",
+        href: None,
+        aliases: "bot persistent callback wake listen timer swarm",
         mcp_names: &[
-            w("control_bot_request", "request a persistent event-woken bot").core(WORKERS)
-                .brief("Ask the operator to run a chat (this one, its lead or a worker) as a persistent event-woken bot for ongoing goals or infrastructure. Grants nothing until approved."),
-            w("control_bot_status", "read bot state and requests").core(WORKERS).brief("Read the bot state of a chat in this conversation and your bot requests."),
+            w("control_bot_request", "request a persistent event-woken bot")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Ask the operator to run a chat (this one, its lead or a worker) as a persistent event-woken bot ",
+                    "for ongoing goals or infrastructure. Grants nothing until approved."
+                )),
+            w("control_bot_status", "read bot state and requests")
+                .core(WORKERS)
+                .brief("Read the bot state of a chat in this conversation and your bot requests."),
             w("control_bot_pause", "pause bot wakes"),
-        ], execution: "Rust supervisor / continuation runs", surface: "chat / worker MCP", available: true,
+        ],
+        execution: "Rust supervisor / continuation runs",
+        surface: "chat / worker MCP",
+        available: true,
     },
     Tool {
-        name: "agent.continuity", title: "Agent continuity", description: "Callback deltas and checkpointed working notes",
-        href: None, aliases: "session context handoff callbacks delta continuity recovery",
+        name: "agent.continuity",
+        title: "Agent continuity",
+        description: "Callback deltas and checkpointed working notes",
+        href: None,
+        aliases: "session context handoff callbacks delta continuity recovery",
         mcp_names: &[
-            w("control_turn_context", "read callbacks that arrived this turn").core(WORKERS)
-                .brief("Read callbacks since this turn started (source=room for room deltas): events, time left, wake_topics, receipt; notes=true adds working notes. A wake already lists its cause."),
-            w("control_turn_handoff", "stage notes and yield the turn").core(WORKERS)
-                .brief("Stage notes and yield. disposition: continue, wait (topics from wake_topics or claim:<room>/<key>) or done. Omit processed to acknowledge all delivered events. payload {subgoal, findings[{claim,confidence}], tried[{approach,outcome}], pending[{action,expected}], next[{condition,action}]}; omit to keep notes. Mutating tools are fenced after acceptance."),
+            w("control_turn_context", "read callbacks that arrived this turn")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Read callbacks since this turn started (source=room for room deltas): events, time left, ",
+                    "wake_topics, receipt; notes=true adds working notes. A wake already lists its cause."
+                )),
+            w("control_turn_handoff", "stage notes and yield the turn")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Stage notes and yield. disposition: continue, wait (topics from wake_topics or ",
+                    "claim:<room>/<key>) or done. Omit processed to acknowledge all delivered events. payload ",
+                    "{subgoal, findings[{claim,confidence}], tried[{approach,outcome}], pending[{action,expected}], ",
+                    "next[{condition,action}]}; omit to keep notes. Mutating tools are fenced after acceptance."
+                )),
             w("control_recovery", "restore unpublished work"),
             w("control_history_read", "page older conversation"),
-        ], execution: "Rust attempt mailbox / workspace checkpoint / bounded history recall", surface: "agent MCP", available: true,
+        ],
+        execution: "Rust attempt mailbox / workspace checkpoint / bounded history recall",
+        surface: "agent MCP",
+        available: true,
     },
     Tool {
-        name:"service.ports",title:"TCP ports",description:"Scoped service connections · operator approval",
-        href: Some("/tools/ports"),aliases:"network tcp port ingress egress loopback proxy relay",
-        mcp_names:&[
+        name: "service.ports",
+        title: "TCP ports",
+        description: "Scoped service connections · operator approval",
+        href: Some("/tools/ports"),
+        aliases: "network tcp port ingress egress loopback proxy relay",
+        mcp_names: &[
             w("control_port_request", "request a TCP port"),
             w("control_port_status", "port status"),
             w("control_port_stop", "stop a relay"),
-        ],execution:"Rust capability broker / offline service relay",surface:"chat / local TCP",available:true,
-    },
-    Tool {
-        name: "service.persistent", title: "Persistent service", description: "Private offline tools · leased lifetime",
-        href: Some("/tools/services"), aliases: "bot persistent container lifecycle attach stop service",
-        mcp_names: &[
-            w("control_service_start", "start a persistent offline service").core(WORKERS)
-                .brief("Start a chat-owned offline container that survives turns. Keep ALL task data in /workspace (persistent); other paths are lost. Foreground command; confirm with control_service_status."),
-            w("control_service_attach", "one service's status, logs"),
-            w("control_service_status", "list services and their leases").core(WORKERS).brief("Service status and bounded logs; without service_id, list services. detail node: node capacity."),
-            w("control_service_stop", "stop this chat's or a teammate's service").core(WORKERS)
-                .brief("Stop this chat's or a teammate's service (status: team_services); /workspace is kept."),
-            w("control_service_exec", "run a command in a service").core(WORKERS)
-                .brief("Run a bounded command in a chat-owned service; inline result within wait_seconds, else an execution_id. Killed at timeout_seconds; repeated or long work belongs in control_watch_start."),
-            w("control_service_exec_status", "await or read a service command").core(WORKERS)
-                .brief("Await or read a service command by execution_id (from exec or copy): output, exit code, outcome."),
-            w("control_service_copy", "copy workspace files into a service").core(WORKERS)
-                .brief("Copy a file or tree from /workspace into a service /workspace (relative paths; secrets and build dirs skipped). If running, await control_service_exec_status before ending your turn."),
         ],
-        execution: "credential-free Nix container / Rust supervisor", surface: "chat / worker MCP", available: true,
+        execution: "Rust capability broker / offline service relay",
+        surface: "chat / local TCP",
+        available: true,
     },
     Tool {
-        name: "github.pull_request", title: "GitHub", description: "Scoped PR inspection · improvement draft publication",
-        href: None, aliases: "github git pull request draft publish review",
+        name: "service.persistent",
+        title: "Persistent service",
+        description: "Private offline tools · leased lifetime",
+        href: Some("/tools/services"),
+        aliases: "bot persistent container lifecycle attach stop service",
+        mcp_names: &[
+            w("control_service_start", "start a persistent offline service")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Start a chat-owned offline container that survives turns. Keep ALL task data in /workspace ",
+                    "(persistent); other paths are lost. Foreground command; confirm with control_service_status."
+                )),
+            w("control_service_attach", "one service's status, logs"),
+            w("control_service_status", "list services and their leases")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Service status and bounded logs; without service_id, ",
+                    "list services. detail node: node capacity."
+                )),
+            w("control_service_stop", "stop this chat's or a teammate's service")
+                .core(WORKERS)
+                .brief("Stop this chat's or a teammate's service (status: team_services); /workspace is kept."),
+            w("control_service_exec", "run a command in a service")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Run a bounded command in a chat-owned service; inline result within wait_seconds, else an ",
+                    "execution_id. Killed at timeout_seconds; repeated or long work belongs in control_watch_start."
+                )),
+            w("control_service_exec_status", "await or read a service command")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Await or read a service command by execution_id ",
+                    "(from exec or copy): output, exit code, outcome."
+                )),
+            w("control_service_copy", "copy workspace files into a service")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Copy a file or tree from /workspace into a service /workspace (relative paths; secrets and build ",
+                    "dirs skipped). If running, await control_service_exec_status before ending your turn."
+                )),
+        ],
+        execution: "credential-free Nix container / Rust supervisor",
+        surface: "chat / worker MCP",
+        available: true,
+    },
+    Tool {
+        name: "github.pull_request",
+        title: "GitHub",
+        description: "Scoped PR inspection · improvement draft publication",
+        href: None,
+        aliases: "github git pull request draft publish review",
         mcp_names: &[
             w("control_github_open_pr", "draft PR"),
             w("control_github_read", "read PR, reviews, checks"),
             w("control_github_write", "comment, edit or merge"),
-        ], execution: "Rust credential broker / GitHub API", surface: "improve chat / MCP", available: true,
+        ],
+        execution: "Rust credential broker / GitHub API",
+        surface: "improve chat / MCP",
+        available: true,
     },
     Tool {
-        name:"agent.delegate",title:"Spawn agents",description:"Background tasks · blocking worker or judge",
-        href: None,aliases:"persona review judge subagent spawn delegation",
-        mcp_names:&[
+        name: "agent.delegate",
+        title: "Spawn agents",
+        description: "Background tasks · blocking worker or judge",
+        href: None,
+        aliases: "persona review judge subagent spawn delegation",
+        mcp_names: &[
             w("control_agent_spawn_blocking", "await a child or judge review"),
-            w("control_agent_spawn", "start background agents; returns immediately").core(WORKERS)
-                .brief("Start background workers, one objective each; returns at once; never poll. Children own goals, inheriting model and genes unless given a persona."),
+            w("control_agent_spawn", "start background agents; returns immediately")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Start background workers, one objective each; returns at once; never poll. Children own goals, ",
+                    "inheriting model and genes unless given a persona."
+                )),
             w("control_agent_spawn_status", "batch status"),
             w("control_agent_spawn_cancel", "cancel a batch"),
             w("control_agent_result", "read a child result").core(JUDGE).judge(),
-            w("control_agent_message", "message a participant chat directly").core(ALL).advisor()
-                .brief("Message a peer or descendant in your task tree (IDs from control_room_read); read at its next wake unless urgent=true. Do not also broadcast. services shares resources you hold."),
-        ],execution:"local Rust / durable bounded task queue",surface:"chat / worker MCP",available:true,
+            w("control_agent_message", "message a participant chat directly")
+                .core(ALL)
+                .advisor()
+                .brief(concat!(
+                    "Message a peer or descendant in your task tree (IDs from control_room_read); read at its next ",
+                    "wake unless urgent=true. Do not also broadcast. services shares resources you hold."
+                )),
+        ],
+        execution: "local Rust / durable bounded task queue",
+        surface: "chat / worker MCP",
+        available: true,
     },
     // Offered only by the `advisor` lens. Selecting it makes the option exist
     // for that task tree; the operator's bot approval is still the authority.
     Tool {
-        name: "team.advisor", title: "Team advisor", description: "Opt-in read-only judge its team's members ask · operator approval",
-        href: None, aliases: "advisor judge ask question method lead swarm",
-        mcp_names: &[], execution: "Rust judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
+        name: "team.advisor",
+        title: "Team advisor",
+        description: "Opt-in read-only judge its team's members ask · operator approval",
+        href: None,
+        aliases: "advisor judge ask question method lead swarm",
+        mcp_names: &[],
+        execution: "Rust judge bot",
+        surface: "control_agent_spawn role=judge · control_bot_request",
+        available: true,
     },
     // Offered only by the `acceptance` lens: its judge
     // hears only its team's completion.
     Tool {
-        name: "team.acceptance", title: "Acceptance check", description: "Opt-in read-only judge that compares a finished result with the request · operator approval",
-        href: None, aliases: "acceptance check done finished scope quality judge request",
-        mcp_names: &[], execution: "Rust lifecycle fact / judge bot", surface: "control_agent_spawn persona=acceptance · control_bot_request", available: true,
+        name: "team.acceptance",
+        title: "Acceptance check",
+        description: "Opt-in read-only judge that compares a finished result with the request · operator approval",
+        href: None,
+        aliases: "acceptance check done finished scope quality judge request",
+        mcp_names: &[],
+        execution: "Rust lifecycle fact / judge bot",
+        surface: "control_agent_spawn persona=acceptance · control_bot_request",
+        available: true,
     },
     // Offered only by the `monitor` lens: its judge
     // hears its team's host facts.
     Tool {
-        name: "team.monitor", title: "Team monitor", description: "Opt-in read-only judge woken by host facts about its team · operator approval",
-        href: None, aliases: "monitor observer stall gaps blocked bottleneck facts judge",
-        mcp_names: &[], execution: "Rust lifecycle facts / judge bot", surface: "control_agent_spawn persona=monitor · control_bot_request", available: true,
+        name: "team.monitor",
+        title: "Team monitor",
+        description: "Opt-in read-only judge woken by host facts about its team · operator approval",
+        href: None,
+        aliases: "monitor observer stall gaps blocked bottleneck facts judge",
+        mcp_names: &[],
+        execution: "Rust lifecycle facts / judge bot",
+        surface: "control_agent_spawn persona=monitor · control_bot_request",
+        available: true,
     },
     // Offered only by the `timers` lens: a team's agents may set check-in
     // timers (a bot interval or a wait recheck). Without it they wait for events.
     Tool {
-        name: "bot.timer", title: "Check-in timers", description: "Opt-in: agents may wake themselves on a timer (a bot interval or a wait recheck)",
-        href: None, aliases: "timer cron schedule recheck interval check-in poll",
-        mcp_names: &[], execution: "Rust bot supervisor", surface: "control_bot_request every_minutes · control_turn_handoff recheck_seconds", available: true,
+        name: "bot.timer",
+        title: "Check-in timers",
+        description: "Opt-in: agents may wake themselves on a timer (a bot interval or a wait recheck)",
+        href: None,
+        aliases: "timer cron schedule recheck interval check-in poll",
+        mcp_names: &[],
+        execution: "Rust bot supervisor",
+        surface: "control_bot_request every_minutes · control_turn_handoff recheck_seconds",
+        available: true,
     },
     // Offered only by the `antibody` lens. Selecting it on an operator-owned root
     // chat makes a node-wide antibody option exist; bot approval still decides.
     Tool {
-        name: "node.antibody", title: "Antibodies", description: "Opt-in read-only observers that tag pathologies in any team and notify its lead or the operator · operator approval",
-        href: None, aliases: "antibody watcher immune counter-intel sentinel observer patrol pathology loop polling churn cost burn",
-        mcp_names: &[], execution: "Rust lifecycle and pathology facts / judge bot", surface: "control_agent_spawn role=judge · control_bot_request", available: true,
+        name: "node.antibody",
+        title: "Antibodies",
+        description: concat!(
+            "Opt-in read-only observers that tag pathologies in any team and notify its lead or the operator · ",
+            "operator approval"
+        ),
+        href: None,
+        aliases: concat!(
+            "antibody watcher immune counter-intel sentinel ",
+            "observer patrol pathology loop polling churn cost burn"
+        ),
+        mcp_names: &[],
+        execution: "Rust lifecycle and pathology facts / judge bot",
+        surface: "control_agent_spawn role=judge · control_bot_request",
+        available: true,
     },
     Tool {
-        name: "intel.brief", title: "Intel brief", description: "Read-only team and node summary: goals, progress, cost, pathologies, open requests",
-        href: None, aliases: "intel brief daily report summary progress cost tokens pathology",
+        name: "intel.brief",
+        title: "Intel brief",
+        description: "Read-only team and node summary: goals, progress, cost, pathologies, open requests",
+        href: None,
+        aliases: "intel brief daily report summary progress cost tokens pathology",
         mcp_names: &[
             op("control.intel.brief"),
-            w("control_intel_brief", "team or node progress, cost, pathologies").judge()
-                .brief("Read-only Markdown summary of your team (an antibody: any team or the node): goals, progress, tokens, pathologies, open operator requests."),
+            w("control_intel_brief", "team or node progress, cost, pathologies")
+                .judge()
+                .brief(concat!(
+                    "Read-only Markdown summary of your team (an antibody: any team or the node): goals, progress, ",
+                    "tokens, pathologies, open operator requests."
+                )),
         ],
-        execution: "pure Rust over node state", surface: "operator MCP / worker MCP / channels", available: true,
+        execution: "pure Rust over node state",
+        surface: "operator MCP / worker MCP / channels",
+        available: true,
     },
     Tool {
-        name: "operator.notify", title: "Operator notice", description: "Rate-limited notice to the operator's channels; no decision requested",
-        href: None, aliases: "notify alert operator discord escalate notice",
+        name: "operator.notify",
+        title: "Operator notice",
+        description: "Rate-limited notice to the operator's channels; no decision requested",
+        href: None,
+        aliases: "notify alert operator discord escalate notice",
         mcp_names: &[w("control_operator_notify", "notify the operator (rate-limited)").advisor()],
-        execution: "local Rust / channel adapters", surface: "worker MCP / channels", available: true,
+        execution: "local Rust / channel adapters",
+        surface: "worker MCP / channels",
+        available: true,
     },
     Tool {
-        name: "workspace.commands", title: "Workspace commands", description: "Offline jobs · live output",
-        href: None, aliases: "shell terminal build test logs cancel environment",
+        name: "workspace.commands",
+        title: "Workspace commands",
+        description: "Offline jobs · live output",
+        href: None,
+        aliases: "shell terminal build test logs cancel environment",
         mcp_names: &[
-            w("control_workspace_start", "async workspace command").core(JUDGE).judge(),
+            w("control_workspace_start", "async workspace command")
+                .core(JUDGE)
+                .judge(),
             w("control_workspace_status", "await it").core(JUDGE).judge(),
             w("control_workspace_cancel", "cancel it").judge(),
         ],
-        execution: "credential-free Nix container", surface: "chat / TUI", available: true,
+        execution: "credential-free Nix container",
+        surface: "chat / TUI",
+        available: true,
     },
     Tool {
-        name: "preview.serve", title: "Local preview", description: "Nix service · private localhost origin",
-        href: None, aliases: "ports proxy service browser preview tunnel",
+        name: "preview.serve",
+        title: "Local preview",
+        description: "Nix service · private localhost origin",
+        href: None,
+        aliases: "ports proxy service browser preview tunnel",
         mcp_names: &[
             w("control_preview_start", "serve a localhost preview"),
             w("control_preview_stop", "stop it"),
-        ], execution: "credential-free Nix container", surface: "chat / browser", available: true,
+        ],
+        execution: "credential-free Nix container",
+        surface: "chat / browser",
+        available: true,
     },
     Tool {
         name: "project.request",
@@ -284,7 +459,10 @@ pub const TOOLS: [Tool; 37] = [
         description: "Operator-approved folder · isolated worktree",
         href: None,
         aliases: "open directory code workspace trust mount",
-        mcp_names: &[op("control.project.request"), w("control_project_request", "request a host folder")],
+        mcp_names: &[
+            op("control.project.request"),
+            w("control_project_request", "request a host folder"),
+        ],
         execution: "local Rust / explicit operator approval",
         surface: "chat / TUI / MCP",
         available: true,
@@ -295,8 +473,12 @@ pub const TOOLS: [Tool; 37] = [
         description: "Agent question · pauses for your answer",
         href: None,
         aliases: "architecture options recommendation",
-        mcp_names: &[w("control_design_ask", "ask the user; pauses task").core(LEAD)
-            .brief("Ask the user a consequential choice (scope, new access, giving up, irreversible); 2-4 options. Pauses the task: stop after asking.")],
+        mcp_names: &[w("control_design_ask", "ask the user; pauses task")
+            .core(LEAD)
+            .brief(concat!(
+                "Ask the user a consequential choice (scope, new access, giving up, irreversible); 2-4 options. ",
+                "Pauses the task: stop after asking."
+            ))],
         execution: "local Rust / durable task pause",
         surface: "chat / TUI / Discord",
         available: true,
@@ -330,7 +512,9 @@ pub const TOOLS: [Tool; 37] = [
         href: Some("/knowledge"),
         aliases: "notes files",
         mcp_names: &[
-            op("control.knowledge.search"), op("control.knowledge.read"), op("control.knowledge.propose"),
+            op("control.knowledge.search"),
+            op("control.knowledge.read"),
+            op("control.knowledge.propose"),
             w("control_knowledge_search", "search documents").judge(),
             w("control_knowledge_read", "read a document").judge(),
             w("control_knowledge_propose", "propose for review"),
@@ -346,7 +530,10 @@ pub const TOOLS: [Tool; 37] = [
         href: None,
         aliases: "tool package reuse version client library install",
         mcp_names: &[
-            op("control.packages.search"), op("control.package.read"), op("control.package.import"), op("control.package.revoke"),
+            op("control.packages.search"),
+            op("control.package.read"),
+            op("control.package.import"),
+            op("control.package.revoke"),
             w("control_packages_search", "search packages").judge(),
             w("control_package_read", "read one").judge(),
         ],
@@ -394,8 +581,10 @@ pub const TOOLS: [Tool; 37] = [
         href: Some("/tools/rust"),
         aliases: "code compile execute benchmark performance timing",
         mcp_names: &[
-            op("control.rust.run"), w("control_rust_run", "run a snippet").judge(),
-            op("control.rust.bench"), w("control_rust_bench", "benchmark code").judge(),
+            op("control.rust.run"),
+            w("control_rust_run", "run a snippet").judge(),
+            op("control.rust.bench"),
+            w("control_rust_bench", "benchmark code").judge(),
         ],
         execution: "offline Nix container",
         surface: "Rust playground",
@@ -407,7 +596,10 @@ pub const TOOLS: [Tool; 37] = [
         description: "Bounded text inference · configured private endpoint",
         href: None,
         aliases: "llm local model llama qwen gguf inference generate text completion",
-        mcp_names: &[op("control.model.generate"), w("control_model_generate", "local text generation")],
+        mcp_names: &[
+            op("control.model.generate"),
+            w("control_model_generate", "local text generation"),
+        ],
         execution: "Rust adapter / operator-run inference service",
         surface: "worker MCP / operator MCP / CLI",
         available: true,
@@ -418,7 +610,10 @@ pub const TOOLS: [Tool; 37] = [
         description: "A* / Dijkstra over an inline graph or grid",
         href: None,
         aliases: "route routing shortest path planning graph grid astar dijkstra navigation",
-        mcp_names: &[op("control.search.path"), w("control_search_path", "A*/Dijkstra over graph or grid").judge()],
+        mcp_names: &[
+            op("control.search.path"),
+            w("control_search_path", "A*/Dijkstra over graph or grid").judge(),
+        ],
         execution: "pure Rust",
         surface: "MCP",
         available: true,
@@ -428,7 +623,10 @@ pub const TOOLS: [Tool; 37] = [
         title: "Solver",
         description: "Optimisation and constraints · HiGHS, Z3, CP-SAT",
         href: None,
-        aliases: "optimization optimisation constraint lp milp mip smt sat cp scheduling assignment packing routing minizinc",
+        aliases: concat!(
+            "optimization optimisation constraint lp milp mip smt sat cp scheduling assignment packing routing ",
+            "minizinc"
+        ),
         mcp_names: &[op("control.solve"), w("control_solve", "LP/MIP, SMT, CP-SAT").judge()],
         execution: "offline Nix solver container",
         surface: "MCP",
@@ -455,7 +653,13 @@ pub const TOOLS: [Tool; 37] = [
         description: "Claude agent · offline Nix workspace",
         href: None,
         aliases: "shell rust rg fd edit command",
-        mcp_names: &[w("control_workspace_run", "run a shell command in /workspace").core(ALL).judge().brief("Run a short shell command in this task offline workspace (25 s, bounded output; no credentials or network). Longer commands: control_workspace_start.")],
+        mcp_names: &[w("control_workspace_run", "run a shell command in /workspace")
+            .core(ALL)
+            .judge()
+            .brief(concat!(
+                "Run a short shell command in this task offline workspace (25 s, bounded output; no credentials or ",
+                "network). Longer commands: control_workspace_start."
+            ))],
         execution: "offline Nix container",
         surface: "Claude agent session",
         available: true,
@@ -471,17 +675,33 @@ pub const TOOLS: [Tool; 37] = [
             op("control.room.read"),
             op("control.room.post"),
             w("control_room_list", "list channels").judge(),
-            w("control_room_read", "read room posts and participants").core(ALL).judge()
+            w("control_room_read", "read room posts and participants")
+                .core(ALL)
+                .judge()
                 .brief("Read room posts, claims and participants (chat IDs). Omit room for the team room. Untrusted."),
-            w("control_room_post", "post a shared outcome to the room").core(WORKERS).judge()
-                .brief("Post an outcome to the task thread. delivery=record wakes nobody; notify wakes subscribers (news several must act on). For one worker use control_agent_message. Never relay others updates."),
+            w("control_room_post", "post a shared outcome to the room")
+                .core(WORKERS)
+                .judge()
+                .brief(concat!(
+                    "Post an outcome to the task thread. delivery=record wakes nobody; notify wakes subscribers (news ",
+                    "several must act on). For one worker use control_agent_message. Never relay others updates."
+                )),
             w("control_room_watch", "subscribe"),
             w("control_room_notifications", "read subscribed posts"),
             w("control_room_ack", "acknowledge posts"),
-            w("control_room_claim", "claim, update or release a deliverable").core(WORKERS)
-                .brief("Advisory claim on one deliverable so peers do not duplicate it; acquire is atomic, update/release need the current revision; status working, blocked (blocked_on) or done."),
-            w("control_room_plan", "critical path, ready work").core(LEAD).judge()
-                .brief("Plan from team room claims: cycles, critical path, bottlenecks, ready work, idle members. Read-only."),
+            w("control_room_claim", "claim, update or release a deliverable")
+                .core(WORKERS)
+                .brief(concat!(
+                    "Advisory claim on one deliverable so peers do not duplicate it; acquire is atomic, ",
+                    "update/release need the current revision; status working, blocked (blocked_on) or done."
+                )),
+            w("control_room_plan", "critical path, ready work")
+                .core(LEAD)
+                .judge()
+                .brief(concat!(
+                    "Plan from team room claims: cycles, critical path, bottlenecks, ready work, idle members. ",
+                    "Read-only."
+                )),
         ],
         execution: "local Rust / scoped room broker",
         surface: "rooms / MCP / room-linked agents",
@@ -535,7 +755,9 @@ pub const TOOLS: [Tool; 37] = [
             op("control.lenses.list"),
             op("control.lens.read"),
             op("control.lenses.resolve"),
-            w("control_guidance", "read captured guidance by topic").core(ALL).judge()
+            w("control_guidance", "read captured guidance by topic")
+                .core(ALL)
+                .judge()
                 .brief("Read a guidance topic from your prompt index (or session, rooms); no topic lists them."),
         ],
         execution: "pure Rust / lens library",

@@ -7,18 +7,67 @@ static MUTATION: Mutex<()> = Mutex::new(());
 
 pub(crate) fn definition(operator: bool) -> Value {
     let number = json!({"type":"integer","minimum":1,"maximum":u32::MAX});
-    let mut schema = json!({"oneOf":[
-        {"type":"object","properties":{"action":{"const":"comment"},"pull_request":number,"body":{"type":"string","minLength":1,"maxLength":16000}},"required":["action","pull_request","body"],"additionalProperties":false},
-        {"type":"object","properties":{"action":{"const":"update"},"pull_request":number,"title":{"type":"string","minLength":1,"maxLength":200},"body":{"type":"string","maxLength":16000}},"required":["action","pull_request"],"anyOf":[{"required":["title"]},{"required":["body"]}],"additionalProperties":false},
-        {"type":"object","properties":{"action":{"const":"merge"},"pull_request":number,"expected_head_sha":{"type":"string","pattern":"^[0-9a-fA-F]{40}$"},"method":{"type":"string","enum":["squash","merge","rebase"],"default":"squash"}},"required":["action","pull_request","expected_head_sha"],"additionalProperties":false}
-    ]});
+    let mut schema = json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "comment"},
+                    "pull_request": number,
+                    "body": {"type": "string", "minLength": 1, "maxLength": 16000}
+                },
+                "required": ["action", "pull_request", "body"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "update"},
+                    "pull_request": number,
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "body": {"type": "string", "maxLength": 16000}
+                },
+                "required": ["action", "pull_request"],
+                "anyOf": [{"required": ["title"]}, {"required": ["body"]}],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "merge"},
+                    "pull_request": number,
+                    "expected_head_sha": {"type": "string", "pattern": "^[0-9a-fA-F]{40}$"},
+                    "method": {"type": "string", "enum": ["squash", "merge", "rebase"], "default": "squash"}
+                },
+                "required": ["action", "pull_request", "expected_head_sha"],
+                "additionalProperties": false
+            }
+        ]
+    });
     if operator {
-        schema = json!({"type":"object","properties":{"chat_id":{"type":"string"},"operation":schema},"required":["chat_id","operation"],"additionalProperties":false});
+        schema = json!({
+            "type": "object",
+            "properties": {"chat_id": {"type": "string"}, "operation": schema},
+            "required": ["chat_id", "operation"],
+            "additionalProperties": false
+        });
     } else {
         // MCP inputSchema is an object schema, including when alternatives are used.
         schema["type"] = json!("object");
     }
-    json!({"name":"control_github_write","description":"Comment on a PR, update its title/body, or merge an exact head SHA in the operator-bound repository. Requires active improvement/architect authority; merge also requires node allow_merge and the configured base branch. GitHub enforces its branch rules. Read/review CI before merging; this tool does not infer approval or CI success. External effects are never automatically retried: after an uncertain result inspect remote state, especially before repeating comments. No arbitrary URLs, repositories, base changes, bypasses, force pushes or deployment.","inputSchema":schema,"annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}})
+    json!({
+        "name": "control_github_write",
+        "description": concat!(
+            "Comment on a PR, update its title/body, or merge an exact head SHA in the operator-bound repository. ",
+            "Requires active improvement/architect authority; merge also requires node allow_merge and the configured ",
+            "base branch. GitHub enforces its branch rules. Read/review CI before merging; this tool does not infer ",
+            "approval or CI success. External effects are never automatically retried: after an uncertain result ",
+            "inspect remote state, especially before repeating comments. No arbitrary URLs, repositories, base ",
+            "changes, bypasses, force pushes or deployment."
+        ),
+        "inputSchema": schema,
+        "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true}
+    })
 }
 
 struct WriteApi<'a>(ReadApi<'a>);

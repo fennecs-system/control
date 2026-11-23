@@ -132,13 +132,31 @@ pub fn push(samples: &mut VecDeque<Sample>, sample: Sample) {
     samples.push_back(sample);
 }
 
+/// What a team's milestone count reads: the chat tree, completed runs and
+/// done claims. Read-only borrows, so counting cannot reach or change the
+/// rest of `State`.
+#[derive(Clone, Copy)]
+pub(crate) struct TeamProgress<'a> {
+    chats: &'a [crate::chat::Session],
+    runs: &'a [crate::runtime::Run],
+    claims: &'a [crate::rooms::claims::Claim],
+}
+impl<'a> TeamProgress<'a> {
+    pub(crate) fn of(state: &'a State) -> Self {
+        Self {
+            chats: &state.chats,
+            runs: &state.runtime.runs,
+            claims: &state.collective.claims,
+        }
+    }
+}
 /// Completed turns plus done claims across the team of `chat`: the count whose
 /// increase triggers a milestone sample.
-pub fn milestones(state: &State, chat: &str) -> u64 {
-    let teams = Teams::new(state);
+pub fn milestones(progress: TeamProgress<'_>, chat: &str) -> u64 {
+    let teams = Teams::new(progress.chats);
     teams
         .root(chat)
-        .and_then(|root| teams.milestones(state, &[root]).get(root).copied())
+        .and_then(|root| teams.milestones(progress, &[root]).get(root).copied())
         .unwrap_or(0)
 }
 /// Each chat's team root, computed once per pass: one walk over the chats and
@@ -147,9 +165,8 @@ struct Teams<'a> {
     roots: HashMap<&'a str, &'a str>,
 }
 impl<'a> Teams<'a> {
-    fn new(state: &'a State) -> Self {
-        let parents = state
-            .chats
+    fn new(chats: &'a [crate::chat::Session]) -> Self {
+        let parents = chats
             .iter()
             .map(|chat| (chat.id.as_str(), chat.parent_chat.as_deref()))
             .collect::<HashMap<_, _>>();
@@ -175,15 +192,14 @@ impl<'a> Teams<'a> {
         self.roots.get(chat).copied()
     }
     /// Milestones of the teams rooted at `wanted`.
-    fn milestones(&self, state: &State, wanted: &[&'a str]) -> HashMap<&'a str, u64> {
+    fn milestones(&self, progress: TeamProgress<'_>, wanted: &[&'a str]) -> HashMap<&'a str, u64> {
         let mut counts = wanted.iter().map(|root| (*root, 0)).collect::<HashMap<_, u64>>();
         let mut count = |chat: &str| {
             if let Some(total) = self.root(chat).and_then(|root| counts.get_mut(root)) {
                 *total += 1
             }
         };
-        for run in state
-            .runtime
+        for run in progress
             .runs
             .iter()
             .filter(|run| run.status == "completed" && !run.attempts.is_empty())
@@ -192,8 +208,7 @@ impl<'a> Teams<'a> {
                 count(chat)
             }
         }
-        for claim in state
-            .collective
+        for claim in progress
             .claims
             .iter()
             .filter(|claim| claim.status == crate::rooms::claims::Status::Done)
@@ -216,13 +231,13 @@ fn due(state: &State, time: u64) -> Vec<Due> {
     if state.scores.is_empty() {
         return Vec::new();
     }
-    let teams = Teams::new(state);
+    let teams = Teams::new(&state.chats);
     let roots = state
         .scores
         .iter()
         .filter_map(|probe| teams.root(&probe.chat))
         .collect::<Vec<_>>();
-    let counts = teams.milestones(state, &roots);
+    let counts = teams.milestones(TeamProgress::of(state), &roots);
     state
         .scores
         .iter()
@@ -313,11 +328,10 @@ fn apply(
     true
 }
 /// Probes of chats that no longer exist are dropped.
-fn retire(state: &mut State) -> bool {
-    let before = state.scores.len();
-    let State { scores, chats, .. } = state;
+fn retire(scores: &mut Vec<Probe>, chats: &[crate::chat::Session]) -> bool {
+    let before = scores.len();
     scores.retain(|probe| chats.iter().any(|chat| chat.id == probe.chat));
-    before != state.scores.len()
+    before != scores.len()
 }
 
 /// Samples due probes until shutdown. Probe commands run without the state lock.
@@ -326,7 +340,8 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
         while !crate::shutdown::pause(TICK) {
             let pending = match shared.lock() {
                 Ok(mut state) => {
-                    if retire(&mut state) {
+                    let State { scores, chats, .. } = &mut *state;
+                    if retire(scores, chats) {
                         let _ = crate::storage::save(&state);
                     }
                     due(&state, now())
@@ -391,13 +406,14 @@ pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
         .filter(|probe| team.contains(probe.chat.as_str()))
         .map(summary)
         .collect::<Vec<_>>();
-    Ok(json!({"root":root,"milestones":milestones(state, chat),"probes":probes,
-        "note":"Values are the workload's own untrusted claims; Control does not interpret them."}))
+    Ok(
+        json!({"root":root,"milestones":milestones(TeamProgress::of(state), chat),"probes":probes,
+        "note":"Values are the workload's own untrusted claims; Control does not interpret them."}),
+    )
 }
 /// One line for the chat view: the latest values of this chat's probes.
-pub fn line(state: &State, chat: &str) -> String {
-    let parts = state
-        .scores
+pub fn line(probes: &[Probe], chat: &str) -> String {
+    let parts = probes
         .iter()
         .filter(|probe| probe.chat == chat)
         .map(|probe| {
@@ -444,15 +460,37 @@ pub enum ScoreCall {
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![
-            json!({"name":"control_score_probe","description":"Declare how this chat's workload is scored, so progress is measured by the workload's own numbers rather than by claims or messages. The command runs in one of your services (as the service user, in /workspace, 10 s for this test run and 20 s later) and must print a JSON object of up to 8 numbers on its last line, e.g. {\"blocks_placed\":75,\"beds\":2}, {\"items\":120} or {\"alerts\":3}. It must be quick and read-only: report state your workload already keeps, never act. Control runs it now to check it, then every interval_seconds (default 300) and when your team completes a turn or a claim, and keeps a capped series the operator can read. A probe on the team's root chat scores the whole team. Redeclaring the same name replaces it; clear=true removes it. Up to 4 per chat.","inputSchema":{"type":"object","properties":{
-            "name":{"type":"string","minLength":1,"maxLength":32,"default":"score"},
-            "service_id":{"type":"string"},
-            "command":{"type":"string","minLength":1,"maxLength":MAX_COMMAND_BYTES},
-            "interval_seconds":{"type":"integer","minimum":MIN_INTERVAL,"maximum":MAX_INTERVAL,"default":DEFAULT_INTERVAL},
-            "clear":{"type":"boolean","default":false}},"additionalProperties":false},
-            "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
-        ]
+        vec![json!({
+            "name": "control_score_probe",
+            "description": concat!(
+                "Declare how this chat's workload is scored, so progress is measured by the workload's own ",
+                "numbers rather than by claims or messages. The command runs in one of your services (as the ",
+                "service user, in /workspace, 10 s for this test run and 20 s later) and must print a JSON object ",
+                "of up to 8 numbers on its last line, e.g. {\"blocks_placed\":75,\"beds\":2}, {\"items\":120} or ",
+                "{\"alerts\":3}. It must be quick and read-only: report state your workload already keeps, never ",
+                "act. Control runs it now to check it, then every interval_seconds (default 300) and when your ",
+                "team completes a turn or a claim, and keeps a capped series the operator can read. A probe on ",
+                "the team's root chat scores the whole team. Redeclaring the same name replaces it; clear=true ",
+                "removes it. Up to 4 per chat."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 32, "default": "score"},
+                    "service_id": {"type": "string"},
+                    "command": {"type": "string", "minLength": 1, "maxLength": MAX_COMMAND_BYTES},
+                    "interval_seconds": {
+                        "type": "integer",
+                        "minimum": MIN_INTERVAL,
+                        "maximum": MAX_INTERVAL,
+                        "default": DEFAULT_INTERVAL
+                    },
+                    "clear": {"type": "boolean", "default": false}
+                },
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+        })]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_score_probe"
@@ -583,7 +621,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
                 .map_err(|error| io::Error::other(format!("The probe was not saved: {error}")))?;
             let time = now();
             let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-            let milestones = milestones(&state, &chat);
+            let milestones = milestones(TeamProgress::of(&state), &chat);
             let mut probe = Probe {
                 chat: chat.clone(),
                 name: name.clone(),

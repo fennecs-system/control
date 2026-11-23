@@ -83,7 +83,7 @@ pub fn load() -> io::Result<State> {
     let mut changed = crate::providers::repoint(&mut state.chats, &renamed);
     if !renamed.is_empty() {
         // Persist the merged library so model.json shows one entry per model.
-        crate::providers::save_settings(&state)?;
+        crate::providers::save_settings(&state.runtime)?;
     }
     state.runtime.execution = crate::scheduler::load_limits()?;
     // Journal lines from a save that never happened are dropped, then

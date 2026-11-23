@@ -962,7 +962,7 @@ fn reports_keep_valid_utf8_prefixes_but_reject_malformed_files_and_links() {
 #[test]
 #[ignore = "run alone with isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR; requests process-wide shutdown"]
 fn isolated_supervisor_retains_intent_after_worker_panic() {
-    fn panic_worker(_: Arc<Mutex<State>>, _: Task) {
+    fn panic_worker(_: &dyn control_isolation::Isolation, _: Arc<Mutex<State>>, _: Task) {
         panic!("Injected worker failure");
     }
     assert!(
@@ -978,7 +978,7 @@ fn isolated_supervisor_retains_intent_after_worker_panic() {
     crate::chat::send(&mut initial, &chat, "Work", "test").unwrap();
     storage::save(&initial).unwrap();
     let state = Arc::new(Mutex::new(initial));
-    let threads = start_with(state, panic_worker);
+    let threads = start_with(state, crate::engine::isolation(), panic_worker);
     let start = Instant::now();
     while !crate::shutdown::requested() {
         assert!(start.elapsed() < Duration::from_secs(10), "Panic was not supervised");
@@ -1048,7 +1048,7 @@ fn overlapping_commits_rollback_only_their_own_conversation() {
 #[ignore = "run alone with isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR; requests process-wide shutdown"]
 fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     // The real dispatcher, durable checkpoints and commit path, without model calls.
-    fn execute(state: Arc<Mutex<State>>, task: Task) {
+    fn execute(_: &dyn control_isolation::Isolation, state: Arc<Mutex<State>>, task: Task) {
         {
             let mut s = state.lock().unwrap();
             s.runtime.runs.iter_mut().find(|r| r.id == task.0).unwrap().result = "entered".into();
@@ -1096,7 +1096,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     storage::save(&initial).unwrap();
     let ids: Vec<_> = initial.runtime.runs.iter().map(|r| r.id.clone()).collect();
     let state = Arc::new(Mutex::new(initial));
-    let threads = start_with(state.clone(), execute);
+    let threads = start_with(state.clone(), crate::engine::isolation(), execute);
     let wait = |expected: &[(usize, &str, Option<&str>)]| {
         let start = Instant::now();
         loop {
@@ -1850,7 +1850,11 @@ fn source_workspace_snapshots_required_build_inputs_and_explains_failures() {
 }
 #[test]
 fn untrusted_jobs_are_rejected_before_container_or_credential_access() {
+    let engine = control_isolation::scripted::Scripted::new(|_: &_| {
+        control_isolation::scripted::Answer::Refuse("no engine".into())
+    });
     let result = execute(
+        &engine,
         "test",
         "modify Control",
         &Actor::Unknown,
@@ -1859,6 +1863,7 @@ fn untrusted_jobs_are_rejected_before_container_or_credential_access() {
         None,
     );
     assert!(matches!(result, Err(("blocked", _))));
+    assert!(engine.calls().is_empty(), "no container request was made");
 }
 
 #[test]
@@ -2249,3 +2254,5 @@ fn a_local_turn_stopped_at_its_step_cap_leaves_a_host_checkpoint() {
         "{input}"
     );
 }
+#[path = "tests/attempts.rs"]
+mod attempts;

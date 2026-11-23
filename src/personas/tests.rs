@@ -291,7 +291,7 @@ fn behaviours_apply_on_spawn_through_existing_primitives() {
         "{prompt}"
     );
     // A later bot request for it defaults to the persona's schedule.
-    assert_eq!(schedule(&state, &child_chat), Some(30));
+    assert_eq!(schedule(&state.runtime.runs, &child_chat), Some(30));
 }
 
 #[test]
@@ -457,15 +457,7 @@ fn the_personas_page_lists_built_ins_and_saves_revisions() {
 fn page_response_head_is_pinned() {
     let mut state = State::default();
     let mut out = Vec::new();
-    assert!(handle(
-        &mut out,
-        &mut state,
-        "GET",
-        "/personas",
-        &HashMap::new(),
-        "",
-        b""
-    ));
+    assert!(handle(&mut out, &mut state, "GET", "/personas", &HashMap::new(), b""));
     let text = String::from_utf8(out).unwrap();
     let (head, body) = text.split_once("\r\n\r\n").unwrap();
     assert!(body.starts_with("<!doctype html>"), "{body}");

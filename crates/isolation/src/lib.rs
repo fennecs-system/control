@@ -17,6 +17,8 @@ use std::{
 
 mod docker;
 mod observed;
+#[cfg(any(test, feature = "testing"))]
+pub mod scripted;
 pub use docker::{Docker, bounded_output};
 pub use observed::*;
 

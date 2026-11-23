@@ -50,7 +50,7 @@ fn live_stopped_writer_leaves_recovery_bytes_without_a_model_handoff() {
         termination: Some(Termination::TimedOut),
         ..Default::default()
     };
-    capture(None, &mut attempt);
+    capture(crate::engine::isolation(), None, &mut attempt);
     let running = crate::engine::query(&["ps", "--quiet", "--filter", &format!("id={}", id.trim())]).unwrap();
     // Cleanup even when the assertion below reports an ownership/copy failure.
     if !running.trim().is_empty() {

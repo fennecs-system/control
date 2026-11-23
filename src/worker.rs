@@ -1,5 +1,6 @@
 use crate::identity::{self, Action, Actor, Workspace};
 use crate::{State, runtime, storage};
+use control_isolation::Isolation;
 use std::{
     fs,
     path::Path,
@@ -131,9 +132,11 @@ impl Threads {
     }
 }
 pub fn start(state: Arc<Mutex<State>>) -> Threads {
-    start_with(state, run_task)
+    start_with(state, crate::engine::isolation(), run_task)
 }
-fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) -> Threads {
+/// A worker turn, run on its own thread with the node's isolation backend.
+type Execute = fn(&'static dyn Isolation, Arc<Mutex<State>>, Task);
+fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execute: Execute) -> Threads {
     // Inbox admission is independent of the execution slot: a model can run for
     // minutes without preventing a new DM from becoming a durable queued turn.
     let inbox_state = Arc::clone(&state);
@@ -197,8 +200,8 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                                 .collect::<Vec<_>>(),
                         )
                     };
-                    let reconciled = crate::lifecycle::reconcile(crate::engine::isolation(), &owners, &services)
-                        .and_then(|()| crate::recovery::reconcile(&state).map_err(|e| e.to_string()));
+                    let reconciled = crate::lifecycle::reconcile(isolation, &owners, &services)
+                        .and_then(|()| crate::recovery::reconcile(isolation, &state).map_err(|e| e.to_string()));
                     if let Ok(mut s) = state.lock() {
                         match &reconciled {
                             Err(message) => {
@@ -327,7 +330,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
                         .name(format!("control-run-{run}"))
                         .spawn(move || {
                             let _finished = Finished(finished);
-                            execute(shared, task);
+                            execute(isolation, shared, task);
                         }) {
                         Ok(worker) => workers.handles.push(worker),
                         Err(_) => {
@@ -359,7 +362,7 @@ fn start_with(state: Arc<Mutex<State>>, execute: fn(Arc<Mutex<State>>, Task)) ->
         failed,
     }
 }
-fn run_task(state: Arc<Mutex<State>>, task: Task) {
+fn run_task(isolation: &dyn Isolation, state: Arc<Mutex<State>>, task: Task) {
     let mut attempt = task.4;
     let started = Instant::now();
     let workspace_id = attempt
@@ -367,6 +370,7 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
         .clone()
         .unwrap_or_else(|| format!("{}-attempt-{}", task.0, task.5));
     let mut outcome = execute(
+        isolation,
         &workspace_id,
         &task.1,
         &task.2,
@@ -417,7 +421,7 @@ fn run_task(state: Arc<Mutex<State>>, task: Task) {
         if attempt.termination.is_none() {
             attempt.termination = Some(crate::attempt_control::Termination::PublicationFailed);
         }
-        crate::recovery::capture(Some((&state, &task.0)), &mut attempt);
+        crate::recovery::capture(isolation, Some((&state, &task.0)), &mut attempt);
     }
     attempt.elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     // A failed checkpoint must not strand the run or stop dispatch: keep the
@@ -1329,6 +1333,7 @@ fn publish_workspace(
     result
 }
 fn execute(
+    isolation: &dyn Isolation,
     id: &str,
     objective: &str,
     actor: &Actor,
@@ -1356,7 +1361,6 @@ fn execute(
         .map(Ok)
         .unwrap_or_else(crate::config::node_id)
         .map_err(blocked)?;
-    let isolation = crate::engine::isolation();
     if !isolation.ready() {
         return Err(blocked(
             "Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution.",
@@ -1507,7 +1511,7 @@ pub fn check() -> std::io::Result<()> {
     let mut attempt = crate::usage::Attempt::new();
     attempt.image = runtime::worker_image();
     attempt.node_id = crate::config::node_id().ok();
-    execute(&id,
+    execute(crate::engine::isolation(), &id,
         "Run a shell command that writes exactly control-account-check-ok to /workspace/connection-check. Do not inspect credentials. Then reply with one short confirmation.",
         &Actor::LocalOperator, Action::Task, &mut attempt, None)
         .map_err(|(_, message)| std::io::Error::other(message))?;

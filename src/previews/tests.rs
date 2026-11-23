@@ -37,7 +37,7 @@ fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
         let running = active && !stopping && save_ok && launched;
         assert_eq!(result.is_ok(), running);
         assert_eq!(state.previews[0].status == "running", running);
-        assert_eq!(links(&state, &chat).contains("Open preview"), running);
+        assert_eq!(links(&state.previews, &chat).contains("Open preview"), running);
         assert_eq!(preview.stopped.load(Ordering::Relaxed), !running);
         // An unrelated later save cannot revive a fenced service.
         let saved: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();

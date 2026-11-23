@@ -41,15 +41,40 @@ impl AttemptTools for Tools {
     }
 }
 pub(crate) fn definition(operator: bool) -> Value {
-    let mut schema = json!({"type":"object","properties":{
-        "pull_request":{"type":"integer","minimum":1,"maximum":u32::MAX},
-        "section":{"type":"string","enum":["overview","files","comments","reviews","review-comments","checks","statuses"],"default":"overview"},
-        "page":{"type":"integer","minimum":1,"maximum":1000,"default":1}
-    },"required":["pull_request"],"additionalProperties":false});
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "pull_request": {"type": "integer", "minimum": 1, "maximum": u32::MAX},
+            "section": {
+                "type": "string",
+                "enum": ["overview", "files", "comments", "reviews", "review-comments", "checks", "statuses"],
+                "default": "overview"
+            },
+            "page": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1}
+        },
+        "required": ["pull_request"],
+        "additionalProperties": false
+    });
     if operator {
-        schema = json!({"type":"object","properties":{"chat_id":{"type":"string"},"query":schema},"required":["chat_id","query"],"additionalProperties":false});
+        schema = json!({
+            "type": "object",
+            "properties": {"chat_id": {"type": "string"}, "query": schema},
+            "required": ["chat_id", "query"],
+            "additionalProperties": false
+        });
     }
-    json!({"name":"control_github_read","description":"Read a PR overview or five files/comments/reviews/checks/statuses from the operator-bound repository. Text and patches are bounded excerpts with truncation flags; original URLs are evidence only and never fetched. Checks/statuses capture the PR's current head SHA; empty results do not prove CI success. Fork-head checks outside the binding fail visibly. Requires architect/improvement authority. No arbitrary URLs, credential access, comment writes, merges, reruns or deployment.","inputSchema":schema,"annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":true}})
+    json!({
+        "name": "control_github_read",
+        "description": concat!(
+            "Read a PR overview or five files/comments/reviews/checks/statuses from the operator-bound repository. ",
+            "Text and patches are bounded excerpts with truncation flags; original URLs are evidence only and never ",
+            "fetched. Checks/statuses capture the PR's current head SHA; empty results do not prove CI success. ",
+            "Fork-head checks outside the binding fail visibly. Requires architect/improvement authority. No ",
+            "arbitrary URLs, credential access, comment writes, merges, reruns or deployment."
+        ),
+        "inputSchema": schema,
+        "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": true}
+    })
 }
 
 #[derive(Clone, Copy)]

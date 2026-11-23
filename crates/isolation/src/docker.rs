@@ -401,7 +401,7 @@ fn size(size: Size) -> String {
     }
 }
 /// The storage driver's size syntax, in upper-case units.
-fn disk_size(size: Size) -> String {
+pub(crate) fn disk_size(size: Size) -> String {
     match size {
         Size::Bytes(bytes) => bytes.to_string(),
         Size::Mib(mib) => format!("{mib}M"),
@@ -456,7 +456,7 @@ fn secret(secret: &SecretMount) -> io::Result<String> {
         readonly(secret.access)
     ))
 }
-fn tmpfs(tmpfs: &Tmpfs) -> String {
+pub(crate) fn tmpfs(tmpfs: &Tmpfs) -> String {
     let exec = match tmpfs.exec {
         Exec::Engine => None,
         Exec::Allow => Some("exec".to_owned()),

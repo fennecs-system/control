@@ -159,10 +159,43 @@ struct Input {
     capture: bool,
 }
 pub fn definition() -> Value {
-    json!({"name":"control_web_fetch","description":"Fetch an operator-approved HTTP(S) origin. Request access at /tools/browser for this chat first. Public IPs only; redirects require their own origin grant. Returns bounded untrusted text and links; optional capture renders this single fetched HTML offline, without remote assets. Workers remain offline. Never include secrets in a URL.","inputSchema":{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"capture":{"type":"boolean"}},"required":["url"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}})
+    json!({
+        "name": "control_web_fetch",
+        "description": concat!(
+            "Fetch an operator-approved HTTP(S) origin. Request access at /tools/browser for this chat first. Public ",
+            "IPs only; redirects require their own origin grant. Returns bounded untrusted text and links; optional ",
+            "capture renders this single fetched HTML offline, without remote assets. Workers remain offline. Never ",
+            "include secrets in a URL."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "maxLength": 2048}, "capture": {"type": "boolean"}},
+            "required": ["url"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}
+    })
 }
 pub fn capture_definition() -> Value {
-    json!({"name":"control_browser_capture","description":"Render up to 16000 bytes of self-contained HTML in offline Nix Firefox. No network, host profile or worker-directory mount. Returns a screenshot artifact and an inline image when small enough. Use inline CSS/assets; this does not test a running HTTP preview or remote asset loading.","inputSchema":{"type":"object","properties":{"html":{"type":"string","minLength":1,"maxLength":16000},"width":{"type":"integer","minimum":240,"maximum":2560},"height":{"type":"integer","minimum":240,"maximum":2560}},"required":["html"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({
+        "name": "control_browser_capture",
+        "description": concat!(
+            "Render up to 16000 bytes of self-contained HTML in offline Nix Firefox. No network, host profile or ",
+            "worker-directory mount. Returns a screenshot artifact and an inline image when small enough. Use inline ",
+            "CSS/assets; this does not test a running HTTP preview or remote asset loading."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "html": {"type": "string", "minLength": 1, "maxLength": 16000},
+                "width": {"type": "integer", "minimum": 240, "maximum": 2560},
+                "height": {"type": "integer", "minimum": 240, "maximum": 2560}
+            },
+            "required": ["html"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+    })
 }
 fn capture_html(html: &str, width: u16, height: u16) -> io::Result<crate::browser::Capture> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -344,10 +377,17 @@ fn fetch(
     }
     unreachable!()
 }
-fn permitted(state: &State, chat: &str, actor: &Actor, url: &Url, time: u64) -> io::Result<()> {
+fn permitted(
+    chats: &[crate::chat::Session],
+    grants: &[Grant],
+    chat: &str,
+    actor: &Actor,
+    url: &Url,
+    time: u64,
+) -> io::Result<()> {
     crate::identity::authorize(actor, crate::identity::Action::Task).map_err(io::Error::other)?;
-    if !state.chats.iter().any(|c| c.id == chat && &c.actor == actor)
-        || !state.web_grants.iter().any(|g| g.permits(chat, actor, url, time))
+    if !chats.iter().any(|c| c.id == chat && &c.actor == actor)
+        || !grants.iter().any(|g| g.permits(chat, actor, url, time))
     {
         return Err(io::Error::other(
             "Origin not approved for this chat. Ask the operator to grant access at /tools/browser.",
@@ -384,7 +424,7 @@ pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Res
         }) {
             return Err(io::Error::other("Attempt is no longer active"));
         }
-        permitted(&state, &chat, &actor, url, now())
+        permitted(&state.chats, &state.web_grants, &chat, &actor, url, now())
     };
     fetch_evidence(&mut Http, &input, &FETCH_ACTIVE, authorize, evidence)
 }
@@ -575,10 +615,8 @@ pub fn http(
             })
             .collect::<String>();
         let grants=state.web_grants.iter().filter(|g|g.expires>now()).map(|g|format!("<li>{} · {} · {}s <form class='decision-form' method='post' action='/tools/browser/access'><input type='hidden' name='revoke' value='{}'><button>Revoke</button></form></li>",crate::escape(&g.origin.0),crate::escape(&g.chat),g.expires.saturating_sub(now()),crate::escape(&g.id))).collect::<String>();
-        Ok(crate::render(
-            &state,
+        Ok(crate::shell(
             "browser",
-            "none",
             &format!(
                 "<h2>Web access</h2><form method='post' action='/tools/browser/access'><label>DM<select name='chat'>{chats}</select></label><label>Origin<input name='origin' type='url' placeholder='https://example.com' required></label><label>Seconds<input name='seconds' type='number' value='900' min='1' max='3600' required></label><button class='primary'>Allow origin</button></form><ul>{grants}</ul><a href='/tools/browser'>Browser</a>"
             ),

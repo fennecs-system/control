@@ -326,7 +326,25 @@ pub fn paths(tail: &str, home: Option<&str>) -> Vec<String> {
         .collect()
 }
 pub fn definition(worker: bool) -> Value {
-    json!({"name":if worker {"control_project_request"} else {"control.project.request"},"description":"Request an operator-approved folder at /workspace/name on this node. Existing approved folders remain available. Does not read or authorize the path; the operator must confirm in Control. Supply name to resolve duplicate folder names.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},"inputSchema":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string","maxLength":4096},"name":{"type":"string","maxLength":128}},"required":if worker {json!(["path"])}else{json!(["id","path"])},"additionalProperties":false}})
+    json!({
+        "name": if worker {"control_project_request"} else {"control.project.request"},
+        "description": concat!(
+            "Request an operator-approved folder at /workspace/name on this node. Existing approved folders remain ",
+            "available. Does not read or authorize the path; the operator must confirm in Control. Supply name to ",
+            "resolve duplicate folder names."
+        ),
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "path": {"type": "string", "maxLength": 4096},
+                "name": {"type": "string", "maxLength": 128}
+            },
+            "required": if worker {json!(["path"])}else{json!(["id","path"])},
+            "additionalProperties": false
+        }
+    })
 }
 pub fn panel(state: &State, id: &str) -> String {
     let Some(chat) = state.chats.iter().find(|c| c.id == id) else {

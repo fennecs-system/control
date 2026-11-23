@@ -67,7 +67,11 @@ fn snapshot(root: &Path, source: &Path, candidate: &Candidate) -> io::Result<()>
 
 /// Stop verification and file copying run outside shared state. Failure is an
 /// explicit record, not a claim that a live workspace is an immutable snapshot.
-pub fn capture(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &mut Attempt) {
+pub fn capture(
+    isolation: &dyn control_isolation::Isolation,
+    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    attempt: &mut Attempt,
+) {
     if attempt.review_only || attempt.recovery.is_some() {
         return;
     }
@@ -88,7 +92,7 @@ pub fn capture(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &mut Attempt
         draft: attempt.turn_mailbox.as_ref().and_then(|m| m.accepted()).cloned(),
     };
     let result = (|| {
-        crate::attempt_control::stop(bridge, attempt).map_err(io::Error::other)?;
+        crate::attempt_control::stop(isolation, bridge, attempt).map_err(io::Error::other)?;
         if let Some((shared, id)) = bridge {
             let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
             let live = state
@@ -122,7 +126,7 @@ pub fn capture(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &mut Attempt
 
 /// Restart reconciliation supplies stopped writers before new admissions. No
 /// recovery turn is scheduled; ordinary cancellation/pause semantics stay intact.
-pub fn reconcile(shared: &Arc<Mutex<State>>) -> io::Result<()> {
+pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mutex<State>>) -> io::Result<()> {
     let pending: Vec<_> = {
         let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         state
@@ -137,7 +141,7 @@ pub fn reconcile(shared: &Arc<Mutex<State>>) -> io::Result<()> {
             .collect()
     };
     for (id, mut attempt) in pending {
-        capture(Some((shared, &id)), &mut attempt);
+        capture(isolation, Some((shared, &id)), &mut attempt);
         let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let Some(live) = state
             .runtime
@@ -218,9 +222,29 @@ struct Input {
 }
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![
-            json!({"name":"control_recovery","description":"Inspect unpublished recovery evidence from this chat and action. Without generation, list candidates (paged by offset). With generation, read metadata/draft and a bounded file listing; path reads a UTF-8 file up to 64 KiB. restore=true copies the full candidate into a new .control-recovery-GENERATION folder in the active workspace, only if the original committed base and project grant still match. It never replaces committed state or acknowledges events. Reconcile external effects before using recovered files. Snapshot uses the existing checkpoint exclusions for credentials, generated folders and symlinks.","inputSchema":{"type":"object","properties":{"generation":{"type":"string"},"path":{"type":"string"},"restore":{"type":"boolean","default":false},"offset":{"type":"integer","minimum":0}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
-        ]
+        vec![json!({
+            "name": "control_recovery",
+            "description": concat!(
+                "Inspect unpublished recovery evidence from this chat and action. Without generation, list ",
+                "candidates (paged by offset). With generation, read metadata/draft and a bounded file listing; ",
+                "path reads a UTF-8 file up to 64 KiB. restore=true copies the full candidate into a new ",
+                ".control-recovery-GENERATION folder in the active workspace, only if the original committed base ",
+                "and project grant still match. It never replaces committed state or acknowledges events. ",
+                "Reconcile external effects before using recovered files. Snapshot uses the existing checkpoint ",
+                "exclusions for credentials, generated folders and symlinks."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "generation": {"type": "string"},
+                    "path": {"type": "string"},
+                    "restore": {"type": "boolean", "default": false},
+                    "offset": {"type": "integer", "minimum": 0}
+                },
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "openWorldHint": false}
+        })]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_recovery"
