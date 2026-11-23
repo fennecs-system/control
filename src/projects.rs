@@ -346,8 +346,8 @@ pub fn definition(worker: bool) -> Value {
         }
     })
 }
-pub fn panel(state: &State, id: &str) -> String {
-    let Some(chat) = state.chats.iter().find(|c| c.id == id) else {
+pub fn panel(chats: &[crate::chat::Session], id: &str) -> String {
+    let Some(chat) = chats.iter().find(|c| c.id == id) else {
         return String::new();
     };
     let path = chat.project.as_ref().map(|p| p.path.as_str()).unwrap_or("");
@@ -1355,7 +1355,7 @@ fn http_in(
     let page = |state: &State, status: &str| {
         format!(
             "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Open project</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{status}{}<a href='/dm/{id}'>Back to DM</a></main></body></html>",
-            panel(state, id)
+            panel(&state.chats, id)
         )
     };
     // The chat client posts decisions with `response=json`, like port requests.
@@ -1380,7 +1380,7 @@ fn http_in(
                 return Ok(Reply::Page(format!(
                     "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><meta http-equiv='refresh' content='1;url=/dm/{id}/project?importing={}'><title>Importing folder</title><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/workspace.css'></head><body><main>{}<a href='/dm/{id}'>Back to DM</a></main></body></html>",
                     crate::escape(&project.request),
-                    panel(&state, id)
+                    panel(&state.chats, id)
                 )));
             }
             if let Some(request) = watched

@@ -1501,7 +1501,7 @@ fn operator_open_list_reports_each_path_and_requests_the_valid_folders_together(
             .collect::<Vec<_>>(),
         [("other", Some(index))]
     );
-    let panel = panel(&state, &id);
+    let panel = panel(&state.chats, &id);
     assert!(
         panel.contains("Trust these 2 folders")
             && panel.contains("<code>/workspace/other</code>")
