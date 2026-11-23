@@ -636,7 +636,11 @@ fn run() -> std::io::Result<()> {
         return github::cli(&args[2..]);
     }
     if args.get(1).is_some_and(|s| s == "package") {
-        return packages::cli(&args[2..]);
+        // A client of the running server, so it lives with the other client entry points.
+        let (tool, arguments) = packages::cli_request(&args[2..])?;
+        let result = control_client::Hive::connect(&format!("http://{}", config::server_addr()))?.tool(tool, arguments)?;
+        println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+        return Ok(());
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "help") {
         println!("control [serve | tui | mcp | discord | doctor | config | open | browser | federation | package]\nserve: local web/MCP server on CONTROL_ADDR (default 127.0.0.1:8080)\ntui: Rust terminal client\nmcp [--root DIRECTORY]: local tools for an external harness\nmcp --chat: drive chats as the local operator from an external harness\ndiscord --enable: listen to this node's configured DMs\ndoctor: offline prerequisites; no model calls\nconfig init | path: initialize or locate personal configuration\nopen: sign in to the local website\nbrowser capture FILE [WIDTH HEIGHT]: offline Nix Firefox capture\nfederation help: signed offline lens exchange\npackage import | revoke | list | show: admit and inspect reusable tool packages\n--check-worker: one authenticated sandbox test (uses model usage)\n--version [--json]: version, platform and optional build identification");
