@@ -115,7 +115,7 @@ fn an_api_key_account_is_located_by_its_kind_and_reported_from_metadata() {
         (granted.form(), granted.path()),
         (Form::ApiKey, directory.join("anthropic-api-key").as_path())
     );
-    let lines = report(Backend::Claude, &store);
+    let lines = report(Backend::Claude, &store, &[]);
     assert!(
         lines
             .iter()
@@ -249,7 +249,7 @@ fn a_sign_in_failure_names_the_command_for_its_account() {
         );
     }
     // Each account's line in `control accounts list` and `check` names it too.
-    let lines = report(Backend::Claude, &store);
+    let lines = report(Backend::Claude, &store, &[]);
     assert!(
         lines
             .iter()

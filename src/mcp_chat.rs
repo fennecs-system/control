@@ -279,6 +279,9 @@ fn line(row: &Value) -> String {
     if row["project_pending"] == true {
         notes.push("folder request pending".into());
     }
+    if let Some(held) = row["held"].as_str() {
+        notes.push(held.to_owned());
+    }
     format!(
         "{} [{}] {} ({})",
         text(row, "id"),
@@ -420,6 +423,9 @@ fn chat_read(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
             "#{index} [{}]{run}{kind}",
             message["status"].as_str().unwrap_or("?")
         ));
+        if let Some(held) = message["held"].as_str() {
+            out.push(held.to_owned());
+        }
         out.push(format!("> {}", clip(&text(message, "text"), max)));
         let reply = text(message, "reply");
         if !reply.is_empty() {

@@ -144,10 +144,17 @@ from the model is in docs/THREAT-MODEL.md.
 with a notice; other accounts and conversations are not held. No account has a
 cap unless you set one (`control accounts add … --cap N`): a named account runs
 as many attempts at once as the default sign-in does. When a turn reports a
-usage limit, its account cools down: new turns on it wait, with a notice, until
-it is cleared on **Manage → Models & providers** (no retry time is read from the
-provider). Nothing moves to another account automatically; a `+*` pool picks an
-enabled account that is not cooling down when the work is admitted.
+usage limit, it fails with the provider's reason and its account cools down
+until a retry time: the one the provider states (Codex's "try again at …",
+written in UTC in Control's worker images), else 5 minutes, then 15, then every
+hour while the limit holds. Later turns on it wait, each saying why and until
+when in the chat, the TUI, the chat MCP and once on Discord; `control accounts
+list`, `control BACKEND check` and **Manage → Models & providers** show the
+cooldown with the number of turns it holds. At the retry time one turn runs as a
+probe: success clears the cooldown, another limit starts the next wait. Clear it
+early on the providers page or with `control accounts clear BACKEND NAME`.
+Nothing moves to another account automatically; a `+*` pool picks an enabled
+account that is not cooling down when the work is admitted.
 
 ## Configure local models
 
