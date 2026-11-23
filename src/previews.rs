@@ -16,6 +16,25 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+crate::application::status_text::status_enum! {
+    /// A preview's lifecycle, saved as its lowercase name.
+    pub enum PreviewStatus {
+        Preparing = "preparing",
+        Running = "running",
+        Failed = "failed",
+        Stopped = "stopped",
+        Unavailable = "unavailable",
+    }
+}
+impl PreviewStatus {
+    /// Not confirmed stopped: the preview keeps its slot and stays listed.
+    pub fn is_retained(&self) -> bool {
+        match self {
+            Self::Stopped => false,
+            Self::Preparing | Self::Running | Self::Failed | Self::Unavailable | Self::Unrecognised(_) => true,
+        }
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Preview {
     pub id: String,
@@ -25,7 +44,7 @@ pub struct Preview {
     pub command_hash: String,
     pub container_id: Option<String>,
     pub url: Option<String>,
-    pub status: String,
+    pub status: PreviewStatus,
     #[serde(skip)]
     stopped: Arc<AtomicBool>,
 }
@@ -230,14 +249,15 @@ pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Resu
             .clone();
         let id = name(&attempt)?;
         if let Some(existing) = state.previews.iter().find(|p| p.id == id) {
-            if existing.command_hash == hash && existing.port == input.port && existing.status == "running" {
+            if existing.command_hash == hash && existing.port == input.port && existing.status == PreviewStatus::Running
+            {
                 return Ok(json!({"id":id,"url":existing.url}));
             }
-            if existing.status != "stopped" {
+            if existing.status.is_retained() {
                 return Err(fail("Stop this attempt's existing preview before changing its service"));
             }
         }
-        if state.previews.iter().filter(|p| p.status != "stopped").count() >= 16 {
+        if state.previews.iter().filter(|p| p.status.is_retained()).count() >= 16 {
             return Err(fail("Stop an existing preview before starting another (limit 16)"));
         }
         listener = TcpListener::bind("127.0.0.1:0")?;
@@ -250,7 +270,7 @@ pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Resu
             command_hash: hash,
             container_id: None,
             url: Some(format!("http://{id}.localhost:{host_port}/")),
-            status: "preparing".into(),
+            status: PreviewStatus::Preparing,
             stopped: Arc::default(),
         };
         let previous = state
@@ -321,12 +341,16 @@ fn checkpoint_launch(
         .iter_mut()
         .find(|p| p.id == preview.id)
         .ok_or_else(|| fail("Preview intent is missing"))?;
-    if record.status != "preparing" || !Arc::ptr_eq(&record.stopped, &preview.stopped) {
+    if record.status != PreviewStatus::Preparing || !Arc::ptr_eq(&record.stopped, &preview.stopped) {
         return Err(fail("Preview was stopped or replaced while starting"));
     }
     record.container_id.clone_from(&preview.container_id);
     let running = launched && active && !stopping;
-    record.status = if running { "running" } else { "failed" }.into();
+    record.status = if running {
+        PreviewStatus::Running
+    } else {
+        PreviewStatus::Failed
+    };
     if !running {
         record.stopped.store(true, Ordering::Relaxed);
     }
@@ -335,7 +359,7 @@ fn checkpoint_launch(
     }
     if save(state).is_err() || !running {
         let record = state.previews.iter_mut().find(|p| p.id == preview.id).unwrap();
-        record.status = "failed".into();
+        record.status = PreviewStatus::Failed;
         record.stopped.store(true, Ordering::Relaxed);
         return Err(fail(
             "Preview launch was fenced; inspect its retained intent before retrying",
@@ -348,9 +372,9 @@ fn fence_launch(shared: &Arc<Mutex<State>>, preview: &Preview) {
     preview.stopped.store(true, Ordering::Relaxed);
     // Only a verified stop frees the resource slot. Failed cleanup retains intent.
     let status = if preview.container_id.is_some() && stop_resource(crate::engine::isolation(), preview).is_ok() {
-        "stopped"
+        PreviewStatus::Stopped
     } else {
-        "failed"
+        PreviewStatus::Failed
     };
     if let Ok(mut state) = shared.lock()
         && let Some(record) = state
@@ -358,7 +382,7 @@ fn fence_launch(shared: &Arc<Mutex<State>>, preview: &Preview) {
             .iter_mut()
             .find(|p| p.id == preview.id && Arc::ptr_eq(&p.stopped, &preview.stopped))
     {
-        record.status = status.into();
+        record.status = status;
         record.stopped.store(true, Ordering::Relaxed);
         let _ = crate::storage::save(&state);
     }
@@ -487,7 +511,7 @@ fn proxy(_shared: Arc<Mutex<State>>, preview: Preview, listener: TcpListener) ->
 }
 pub fn restore(shared: Arc<Mutex<State>>) {
     let records = shared.lock().map(|s| s.previews.clone()).unwrap_or_default();
-    for preview in records.into_iter().filter(|p| p.status == "running") {
+    for preview in records.into_iter().filter(|p| p.status == PreviewStatus::Running) {
         if crate::shutdown::requested() {
             break;
         }
@@ -509,12 +533,10 @@ pub fn restore(shared: Arc<Mutex<State>>) {
         if result.is_err()
             && let Ok(mut state) = shared.lock()
         {
-            if let Some(record) = state
-                .previews
-                .iter_mut()
-                .find(|p| p.id == preview.id && p.status == "running" && p.container_id == preview.container_id)
-            {
-                record.status = "unavailable".into();
+            if let Some(record) = state.previews.iter_mut().find(|p| {
+                p.id == preview.id && p.status == PreviewStatus::Running && p.container_id == preview.container_id
+            }) {
+                record.status = PreviewStatus::Unavailable;
                 record.stopped.store(true, Ordering::Relaxed);
             }
             let _ = crate::storage::save(&state);
@@ -538,7 +560,7 @@ pub fn stop(shared: &Arc<Mutex<State>>, chat: &str, id: &str) -> io::Result<()> 
         .find(|p| p.id == id)
         .filter(|p| p.container_id == preview.container_id && p.url == preview.url)
         .ok_or_else(|| fail("Preview changed while stopping; review its current state"))?;
-    record.status = "stopped".into();
+    record.status = PreviewStatus::Stopped;
     record.stopped.store(true, Ordering::Relaxed);
     for c in state.chats.iter_mut().filter(|c| c.id == chat) {
         c.revision = c.revision.saturating_add(1);
@@ -547,18 +569,18 @@ pub fn stop(shared: &Arc<Mutex<State>>, chat: &str, id: &str) -> io::Result<()> 
 }
 pub fn links(previews: &[Preview], chat: &str) -> String {
     let mut html = String::new();
-    for preview in previews.iter().filter(|p| p.chat == chat && p.status != "stopped") {
+    for preview in previews.iter().filter(|p| p.chat == chat && p.status.is_retained()) {
         let link = preview
             .url
             .as_ref()
-            .filter(|_| preview.status == "running")
+            .filter(|_| preview.status == PreviewStatus::Running)
             .map(|url| {
                 format!(
                     "<a target='_blank' rel='noopener noreferrer' href='{}'>Open preview ↗</a>",
                     crate::escape(url)
                 )
             })
-            .unwrap_or_else(|| format!("<span>Preview · {}</span>", crate::escape(&preview.status)));
+            .unwrap_or_else(|| format!("<span>Preview · {}</span>", crate::escape(preview.status.as_str())));
         html.push_str(&format!("<div class='preview-link'>{link}<form method='post' target='_top' action='/dm/{chat}/preview/stop'><input type='hidden' name='id' value='{}'><button>Stop</button></form></div>",crate::escape(&preview.id)));
     }
     html
