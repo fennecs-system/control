@@ -249,7 +249,8 @@ fn local_endpoint<'a>(state: &'a State, session: &crate::chat::Session) -> Optio
         Some(model) => (model.backend, model.model.clone()),
         None => (state.runtime.backend, state.runtime.configured_model()),
     };
-    (backend == crate::backend::Backend::Local)
+    backend
+        .runs_control_loop()
         .then(|| crate::providers::endpoint(&state.runtime, &name))
         .flatten()
 }

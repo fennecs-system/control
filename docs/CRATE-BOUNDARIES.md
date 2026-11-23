@@ -35,6 +35,8 @@ generic invariant that existing interfaces cannot express.
 | `control-tui` | The terminal interface behind `control tui` and `control-harness`. Depends on `control-client`; owns ratatui and crossterm. |
 | `control-discord` | The Discord bridge (`control discord`, `control-discord`): gateway, components, delivery and the per-DM routing. Depends on `control-client` and `control-ingress`. |
 | `control-isolation` | Containers as data: `RunSpec` (image, program, user, mounts, secrets, tmpfs, limits, seccomp, network, logs, input) and the `Isolation` trait that carries out every container operation (run, create, start, kill, remove, inspect, list, exec, wait, logs, stats, top, image labels, volumes), with the `Docker` backend; engine output is parsed into typed observations by pure functions. `std`, Serde and `serde_json` only. |
+| `control-agent` | The agent backend interface: the `Agent` trait and its facts, a turn's typed inputs (`Turn`, `Granted`), the host context traits (`Host`, `Events`, `Node`), the `Outcome` and `Failure` a turn returns with their status and wording, and `cli`: what the CLI backends whose only tools are Control's share (base container, isolation probe, supervised turn). Also the child-process waiter and mailbox wake those use. No application state. |
+| `control-codex`, `control-claude`, `control-grok`, `control-antigravity` | One agent backend each: its containers and launch arguments, decoder wiring, probe, text call, turn and `control ID login\|check`. Depend only on `control-agent`, `control-ai`, `control-isolation`, `control-context` (and Codex on `control-effect`); only the root links them. |
 
 The `control` library (`src/lib.rs`) keeps only build information and the
 operator's permission policy, which the server alone uses. Discord follows typed
@@ -69,35 +71,58 @@ malformed requests.
 ## Agent backends
 
 A backend is one way to run an agent turn: the Codex CLI, the Claude Code CLI,
-the Grok Build CLI, the Antigravity CLI, or a local endpoint whose tool loop Control runs itself. `Backend`
-(`src/backend.rs`) stays the closed tag persisted with each run and attempt.
-What a backend supplies is the `Agent` trait beside it: identity and default
-model, pinned image, credential readiness, the offline isolation probe, the
-bounded text call and its decoder, and the names it keeps private in a
-workspace. `Backend::agent()` is the only dispatch; `src/codex.rs`,
-`src/claude.rs`, `src/grok.rs`, `src/antigravity.rs` and `src/local_agent.rs` each implement it. `src/worker.rs`
-holds generic execution only.
+the Grok Build CLI, the Antigravity CLI, or a local endpoint whose tool loop
+Control runs itself. `Backend` (`src/backend.rs`) stays the closed tag
+persisted with each run and attempt, and `Backend::agent()` is the only
+dispatch from it. What a backend supplies is the `Agent` trait in
+`control-agent`: identity and default model, where its image is pinned, how
+its login is checked, the offline isolation probe, the bounded text call and
+its decoder, who runs a turn's tool loop (`runs`), and the facts listed below.
+`control-codex`, `control-claude`, `control-grok` and `control-antigravity`
+each implement it in their own crate; the local endpoint's implementation is
+still `src/local_agent.rs`. `worker::execute` prepares the workspace, renders
+the prompt and dispatches once through the trait.
 
-The trait's signatures name only `std`, `control_ai` and `control_isolation`, so each implementation
-can move to its own crate without a cycle: `control-codex`, `control-claude`,
-`control-grok`, `control-antigravity`, `control-local`. A backend gets
-what it needs from the host as arguments and never names application state.
-This is one trait and plain crates, not a plugin runtime: backends are linked
-into the binary and adding one adds a variant.
+A CLI turn (`Turns::turn`) receives a `Turn` of typed values (attempt id,
+isolation handle, node, image, model, prepared workspace, rendered prompt,
+admission time, whether Control's tools are served, and the login) and a
+`&mut dyn Host`: cancellation, design requests, tool pumping for its
+mailbox, the attempt's time limit and handoff (`poll`), stopping its
+containers, the declared observation, and an `Events` sink a reader thread
+records activity and usage through. It returns an `Outcome`: not launched,
+or launched with its usage and a reply or a `Failure`. `Failure` is an enum
+(blocked, a classified provider `Cause` such as a usage limit or rejected
+login, the CLI's own ending, unexpected tools, time limit, cancellation,
+design wait, interruption, an unfinished tool call); its status and wording
+live in `control-agent`, and `agent_host::finish` turns it into attempt
+state. The host implements these traits in `src/agent_host.rs`; no backend
+names `State`, `Attempt` or a root module.
 
-Still open before the crates can move:
+Backends never locate credentials. The host (`src/logins.rs`) finds the one
+implicit account per backend at the path its backend used to look at itself,
+checks its metadata and hands it in as a `Granted` (form, path, owner); the
+backend only decides where its container mounts it, read-only. Login and
+check subcommands receive the account directory the same way.
 
-- Running a turn. Claude, Grok and Antigravity share one supervisor (`claude::supervise`),
-  its container flags (`claude::base`) and the host shell, which belong in a
-  module of their own before any of them moves. `worker::execute` matches on the backend and each `execute`
-  takes `&mut Attempt` and the shared state handle for cancellation, tool
-  pumping, activity records and attempt control. Those need a narrow host
-  context first.
-- Prompt rendering (`turn_context.rs`) uses the root `identity::Workspace`.
-- The shared failure classifier and its wording (`worker::worker_failure`).
-- Checks that ask "is this the local endpoint kind" (endpoint registry,
-  compaction model, capacity, the local turn limit, the tool list's `local`
-  fact) compare the tag directly.
+Claude, Grok and Antigravity share `control_agent::cli`: the base container,
+the shell isolation probe, and one turn from probe through mailbox and launch
+to the supervised reply, parameterised by each backend's data (`Cli`) and its
+own container. Control's shell tool, which those probes and the host shell
+use, is `src/host_shell.rs`. `tests/crate_boundaries.rs` checks that only the
+root depends on a backend crate.
+
+Still open:
+
+- The local endpoint's crate (`control-local`). Its loop (`local_agent::run`,
+  `context`, `thinking`) already works through its own `Host` trait, but its
+  nudge texts share `worker_tools::nudges` with the host, its tests use the
+  tool registry, personas and toolbox, and its host (`Live`, `execute`) reads
+  the endpoint registry, the chat's compactor, bot continuation, the turn
+  inbox, observations and recall from `State`.
+- Prompt rendering (`turn_context.rs`) uses the root `identity::Workspace`;
+  it stays with the host, which hands a backend the rendered prompt.
+- Endpoint selection still asks whether a model is the local kind
+  (`providers.rs`), as the registry it reads is that backend's.
 
 ### Differences in treatment
 
@@ -107,19 +132,20 @@ it can be evened out on purpose; do not add to the list.
 
 | Difference | Codex | Claude | Grok | Antigravity | Local |
 | --- | --- | --- | --- | --- | --- |
-| Tool loop | its own CLI | its own CLI | its own CLI | its own CLI | Control's loop (`local_agent`), with its own step cap, thinking levels and in-turn compaction |
+| Tool loop (`runs`) | its own CLI | its own CLI | its own CLI | its own CLI | Control's loop (`local_agent`), with its own step cap, thinking levels and in-turn compaction |
 | Shell (`host_shell`) | CLI's sandboxed shell inside the turn container | Control's shell tool in a separate offline container | same as Claude | same as Claude | Control's shell tool |
-| Turn context | captured context and policy prompt (`worker::render_prompt`) | its own shorter prompt (`claude::render_prompt`), no captured turn context | same as Codex | same as Codex | same as Codex |
+| Web search (`own_web_search`) | the CLI's built-in search stays on in a turn (its text calls turn it off) | Control's search tool only: its own tools are removed | same as Claude | same as Claude | Control's search tool |
+| Turn context (`own_prompt`) | captured context and policy prompt (`worker::render_prompt`) | its own shorter prompt (`control_claude::render_prompt`) unless the attempt captured its turn context | same as Codex | same as Codex | same as Codex |
 | Deferred tool list | search then call through MCP | same | every Control tool through Grok's `search_tool` and `use_tool` meta-tools: it has no way to list MCP tools directly | every Control tool declared eagerly (`mcp_control_TOOL`): a lazy MCP tool is found by reading a schema file, which its file permission is denied | tools callable directly by name (`local` fact) |
 | Judge source (`review_mount`) | `/review` read-only beside a writable scratch `/workspace` | `/workspace` | `/workspace` | `/workspace` | `/workspace` |
 | Main container mount (`mailbox`) | the workspace | a mailbox directory beside it | same as Claude | same as Claude | no agent container |
 | Isolation probe | canary-credential sandbox probe before every turn and text call | tool-isolation probe before every turn | same as Claude | same as Claude | none |
-| Login check | before the workspace is restored | inside the turn | inside the turn | inside the turn | no login |
+| Login check (`login`) | before the workspace is restored | inside the turn | inside the turn | inside the turn | no login |
 | Default turn limit | worker and bot limits | same | same | same | its own `local-turn-timeout-secs` (3600 s) |
 | Usage | reported at turn end only, so an accepted handoff waits up to 20 s for it | per model call | per model response, totals at the end | per step, totals at the end | per model call |
-| Unfinished MCP call at exit | turn marked interrupted (`finish_codex_tools`) | not checked | not checked | not checked | not applicable |
+| Unfinished MCP call at exit | turn marked interrupted (`Failure::UnfinishedTool`) | not checked | not checked | not checked | not applicable |
 | Session memory (`own_memory`) | `--ephemeral` | `--no-session-persistence` | a fresh session whose files die with the container; `--no-memory` | a fresh conversation whose files die with the container; no flag turns persistence off | Control's transcript |
-| Wording | failure text, the default provider label on a new attempt and the Usage page assume Codex | failure text is Codex's with the name replaced | failure text is Codex's with the name replaced, or Grok's own ending | failure text is Codex's with the name replaced, its own sign-in wording, or the CLI's own ending | generic |
+| Wording | its own unclassified failure, "Worker outputs", the default provider label on a new attempt and the Usage page assume Codex | classified failures name it; its own unclassified sentence | same as Claude, or Grok's own ending | its own sign-in wording, or the CLI's own ending | generic |
 | Compaction | configured summary model | same | same | same | the chat's own local model unless configured |
 | Unexpected tools | not checked | stopped at start if the CLI lists a tool outside Control's | stopped if it lists or calls a tool outside the two meta-tools | stopped if it calls a tool outside Control's or starts a subagent; it always lists its built-in tools, which its permission rules deny | not applicable |
 | Prompt delivery | standard input | standard input | a private file mounted read-only | a private file mounted read-only, sent as one stream-json message | request body |
@@ -136,7 +162,9 @@ and `control discord`, and uses the MCP client for `control mcp`, `control mcp
 Dependencies point one way. Formats that a writer and its readers share live in
 leaf crates (`control-config`, `control-identity`, `control-context`,
 `control-delivery`, `control-diff`, `control-url-names`, `control-ingress`)
-that depend on no client and not on the server. Clients depend on leaf crates,
+that depend on no client and not on the server. Agent backend crates depend on
+`control-agent` and leaf crates, never on the server, a client or each other;
+only the server links them. Clients depend on leaf crates,
 the server depends on leaf crates, and the binary composes the server with the
 clients as subcommands. `tests/crate_boundaries.rs` checks this with `cargo
 metadata`.

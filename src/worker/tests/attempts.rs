@@ -541,7 +541,17 @@ fn each_sandbox_probe_writes_and_removes_a_fresh_result_name() {
         _ => Answer::Model,
     });
     for _ in 0..2 {
-        crate::codex::sandbox_probe(&engine, IMAGE, &root, &auth, "control-probe-names", &policy, NODE).unwrap();
+        control_codex::sandbox_probe(
+            &crate::agent_host::NODE,
+            &engine,
+            IMAGE,
+            &root,
+            &auth,
+            "control-probe-names",
+            &policy,
+            NODE,
+        )
+        .unwrap();
     }
     let results: Vec<_> = engine
         .calls()
@@ -569,7 +579,7 @@ fn check_containers_and_run_containers_carry_their_purpose() {
             _ => Answer::Model,
         })
         .image(IMAGE, &[]);
-        backend.agent().probe(&engine, IMAGE).unwrap();
+        backend.agent().probe(&crate::agent_host::NODE, &engine, IMAGE).unwrap();
         let calls = engine.calls();
         let spawned: Vec<_> = calls.iter().filter_map(Call::spec).collect();
         assert_eq!(spawned.len(), 1, "{backend:?}");

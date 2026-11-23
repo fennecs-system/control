@@ -93,7 +93,8 @@ fn structured_activity_keeps_tools_bounded_and_excludes_reasoning() {
         serde_json::json!({"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":4,"output_tokens":8}})
     );
     let mut activity = Vec::new();
-    let tokens = capture_with(events.as_bytes(), |event| activity.push(event))
+    let tokens = control_codex::capture_codex(events.as_bytes(), |event| activity.push(event))
+        .0
         .tokens
         .unwrap();
     assert_eq!(tokens.output_tokens, 8);

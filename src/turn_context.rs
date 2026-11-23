@@ -385,9 +385,9 @@ pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
         .filter(|id| crate::chat::valid_id(id))
         .ok_or_else(|| io::Error::other("Missing attempt identity"))?;
     let objective = crate::chat::prompt(state, &run.id).unwrap_or_else(|| run.objective.to_string());
-    let text = match run.backend.agent().own_prompt() {
-        true => crate::claude::render_prompt(&objective, attempt.review_only),
-        false => {
+    let text = match run.backend.agent().own_prompt(&objective, attempt.review_only) {
+        Some(own) => own,
+        None => {
             let scope = crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
             let room = state
                 .chats
@@ -493,10 +493,10 @@ fn project_with(
         .position(id)
         .ok_or_else(|| io::Error::other("Run has no conversation entry"))?;
     let scope = crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
-    let prefix = match run.backend.agent().own_prompt() {
+    let prefix = match run.backend.agent().own_prompt("", crate::delegation::is_judge(run)) {
+        Some(own) => own,
         // Every other backend receives the same Control-owned policy text.
-        false => crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, true),
-        true => crate::claude::render_prompt("", crate::delegation::is_judge(run)),
+        None => crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, true),
     };
     let policy = format!(
         "{}{}\n{}\n",

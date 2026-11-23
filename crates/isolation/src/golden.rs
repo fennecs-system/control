@@ -3,18 +3,18 @@
 //! a flag that changes, appears or disappears fails a test. Golden text uses
 //! `{name}` placeholders for values a test cannot fix (paths, ids, uids).
 //!
-//! Every site now builds a [`control_isolation::RunSpec`] or `ExecSpec` and gets
+//! Every site now builds a [`crate::RunSpec`] or `ExecSpec` and gets
 //! the backend's one order and spelling of options, while the sites used to
 //! differ in both, so most compare with [`pin_equivalent`] against the vector
 //! they produced before; those whose bytes did not change keep [`pin`].
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The engine arguments the Docker backend runs `spec` with.
-pub(crate) fn run(spec: &control_isolation::RunSpec) -> Vec<String> {
-    control_isolation::Docker::run_arguments(spec).unwrap()
+pub fn run(spec: &crate::RunSpec) -> Vec<String> {
+    crate::Docker::run_arguments(spec).unwrap()
 }
 /// The golden vector with each `{key}` replaced by its value.
-pub(crate) fn fill(golden: &[&str], values: &[(&str, &str)]) -> Vec<String> {
+pub fn fill(golden: &[&str], values: &[(&str, &str)]) -> Vec<String> {
     golden
         .iter()
         .map(|word| {
@@ -26,7 +26,7 @@ pub(crate) fn fill(golden: &[&str], values: &[(&str, &str)]) -> Vec<String> {
 }
 /// Byte-for-byte equality.
 #[track_caller]
-pub(crate) fn pin(actual: &[String], golden: &[String]) {
+pub fn pin(actual: &[String], golden: &[String]) {
     assert_eq!(actual, golden, "engine arguments changed:\n{}", literal(actual));
 }
 /// Equality as the engine CLI parses the vector: the same subcommand and image
@@ -36,7 +36,7 @@ pub(crate) fn pin(actual: &[String], golden: &[String]) {
 /// duplicates. Tmpfs option lists compare as sets. Unknown flags fail, and
 /// `--restart=no`, the engine default, equals its absence.
 #[track_caller]
-pub(crate) fn pin_equivalent(actual: &[String], golden: &[String]) {
+pub fn pin_equivalent(actual: &[String], golden: &[String]) {
     assert_eq!(
         parse(actual),
         parse(golden),
