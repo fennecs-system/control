@@ -16,7 +16,7 @@ generic invariant that existing interfaces cannot express.
 
 | Crate | Responsibility |
 | --- | --- |
-| `control-context` | Pure lens selection and composition, captured context, shared command and tool-policy definitions, attempt mailboxes and working notes. No mutable application state or resource permissions. |
+| `control-context` | Pure lens selection and composition, captured context, shared command and tool-policy definitions (including the GitHub tools' arguments and `/github` grammar), attempt mailboxes and working notes. No mutable application state or resource permissions. |
 | `control-http` | Typed HTTP response serialization and security headers. Routing, authorization and state stay in callers. |
 | `control-ai` | Provider record decoding into normalized activity, usage and final results, plus the bounded text-call contract. No credentials, networking, containers or UI. |
 | `control-core` | Borrowed scheduling inputs, validated slot capacity, pure admission/dispatch/attempt-generation predicates and typed persistent-resource transitions. `std` only; optional Serde validates identities and leases at persistence boundaries. See [persistent tools](PERSISTENT-TOOLS.md). |
@@ -26,13 +26,17 @@ generic invariant that existing interfaces cannot express.
 | `control-journal` | Append-only JSON-lines history, one file per conversation. Appends write and sync only the new line; positions never move. Implements `control_comonad::Space`. |
 | `control-config` | Personal node directories, bounded private file reads and writes, the server address and the state file's schema. `test-isolation` keeps every test build off the operator's node. |
 | `control-identity` | Actors, actions, roles, the Discord access policy, DM bindings and the authorization check. Depends only on `control-config`. |
-| `control-client` | The loopback MCP client (`Hive`) and typed operator operations, operator decisions, the live-update follower, chat navigation, GitHub commands and the chat-app channel core. Also the contracts the server writes or answers: the outbox delivery feed, user-facing URL names and diff previews. Talks to the server only over HTTP/MCP and node files. |
+| `control-delivery` | The delivery feed for frontends: the `Delivery` record the server appends to `history/_outbox.jsonl` (also the record history keeps), the cursor-based reader the Discord bridge follows and the statuses clients treat as delivered. |
+| `control-diff` | Bounded, deterministic unified-diff snapshots and previews and their line classes, used by the server, the terminal and Discord. |
+| `control-url-names` | User-facing URL names (`/dm/ID`, `/dms`, `/dna`, history pages) and the permanent redirects from earlier names. |
+| `control-ingress` | The inbound message contract between the Discord bridge and the server: the `discord-inbox/` record (`Incoming`), DM chat ids and links, and the `!control` / `/improve` command grammar both apply. |
+| `control-client` | The loopback MCP client (`Hive`) and typed operator operations, operator decisions, the live-update follower, chat navigation and the chat-app channel core. Talks to the server only over HTTP/MCP and node files. |
 | `control-tui` | The terminal interface behind `control tui` and `control-harness`. Depends on `control-client`; owns ratatui and crossterm. |
-| `control-discord` | The Discord bridge (`control discord`, `control-discord`): gateway, components, delivery and the per-DM routing. Depends on `control-client`. |
+| `control-discord` | The Discord bridge (`control discord`, `control-discord`): gateway, components, delivery and the per-DM routing. Depends on `control-client` and `control-ingress`. |
 
 The `control` library (`src/lib.rs`) keeps only build information and the
 operator's permission policy, which the server alone uses. Discord follows typed
-delivery events from the outbox (`crates/client/src/outbox.rs`) and reads no
+delivery events from the outbox (`crates/delivery/src/lib.rs`) and reads no
 other application state except which inbound DMs were accepted. Authorization
 and DM binding are rechecked at delivery.
 
@@ -100,8 +104,27 @@ The terminal, the loopback client and the Discord bridge are crates that do not
 depend on the server: the compiler rejects any use of its `State`, routing or
 rendering. They reach Control only over HTTP/MCP and the node's files. The
 server binary depends on them, not the other way round: it runs `control tui`
-and `control discord`, uses the MCP client for `control mcp` and package
-imports, and reads Discord's inbound message type and the channel settings.
+and `control discord`, and uses the MCP client for `control mcp`, `control mcp
+--chat` and `control package`.
+
+Dependencies point one way. Formats that a writer and its readers share live in
+leaf crates (`control-config`, `control-identity`, `control-context`,
+`control-delivery`, `control-diff`, `control-url-names`, `control-ingress`)
+that depend on no client and not on the server. Clients depend on leaf crates,
+the server depends on leaf crates, and the binary composes the server with the
+clients as subcommands. `tests/crate_boundaries.rs` checks this with `cargo
+metadata`.
+
+Some server modules still name `control-client` because the format they share
+with clients has not left it yet: the channel settings page
+(`channel::Settings`, `channels.json`), the permissions page and the chat MCP
+tools (`operator::pending`, the reading of a request group), and the Intel
+brief date (`channel::utc_date`). `operator::Kind` is used by the channel
+settings too, so these move together, as one leaf crate for operator requests
+and channel settings, once `operator.rs` and `channel.rs` are split from the
+`Hive` calls beside them. `mcp_chat` is both the `control mcp --chat` client and
+the server's `control_chat` worker tool; its `Hive` transport moves to the
+entry point when the MCP stdio code settles.
 
 The `tui` feature is on by default and is the optional dependency on
 `control-tui`; `--no-default-features` builds a server without terminal code or

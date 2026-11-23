@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn groups_preserve_presentation_boundary() {
-    assert_eq!(group("./src/terminal.rs"), "terminal");
+    assert_eq!(group("./src/bin/control-harness.rs"), "terminal");
     assert_eq!(group("web/src/main.rs"), "web");
     assert_eq!(group("crates/bot/src/lib.rs"), "crates/bot");
 }
