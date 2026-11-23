@@ -203,7 +203,8 @@ pub(crate) fn scope<'a>(
             .and_then(|d| d.child.as_deref().map(|child| (d, child)))
         {
             if !from.attempts.last().is_some_and(|a| {
-                a.status == "waiting" && a.workspace_id.as_deref() == Some(delegated.generation.as_str())
+                a.status == crate::usage::AttemptStatus::Waiting
+                    && a.workspace_id.as_deref() == Some(delegated.generation.as_str())
             }) {
                 return Err("Delegated source generation mismatch.");
             }
@@ -312,7 +313,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
     let attempt = child
         .attempts
         .last()
-        .filter(|a| a.status == "completed")
+        .filter(|a| a.status == crate::usage::AttemptStatus::Completed)
         .ok_or("Completed child attempt is unavailable.")?;
     let generation = format!("{}-attempt-{}", child.id, child.attempts.len());
     let artifact = attempt

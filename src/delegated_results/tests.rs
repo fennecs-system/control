@@ -68,7 +68,7 @@ pub(crate) fn fixture() -> State {
     parent.attempts.push(Attempt {
         workspace_id: Some("parent-attempt-1".into()),
         artifact: Some("parent-attempt-1".into()),
-        status: "waiting".into(),
+        status: crate::usage::AttemptStatus::Waiting,
         ..Attempt::default()
     });
     parent.delegation = Some(Delegation {
@@ -104,7 +104,7 @@ pub(crate) fn fixture() -> State {
         workspace_id: Some("child-attempt-1".into()),
         artifact: Some("child-attempt-1".into()),
         parent_artifact: Some("parent-attempt-1".into()),
-        status: "completed".into(),
+        status: crate::usage::AttemptStatus::Completed,
         ..Attempt::default()
     }];
     child.result = "All requested changes implemented and verified".into();

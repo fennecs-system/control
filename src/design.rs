@@ -781,7 +781,9 @@ pub fn answer(
     let attempt = run
         .attempts
         .last()
-        .filter(|a| a.workspace_id.as_deref() == Some(&question.generation) && a.status == "waiting")
+        .filter(|a| {
+            a.workspace_id.as_deref() == Some(&question.generation) && a.status == crate::usage::AttemptStatus::Waiting
+        })
         .ok_or("Paused attempt is unavailable.")?;
     let checkpoint = attempt
         .project_checkpoint

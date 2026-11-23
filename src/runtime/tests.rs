@@ -22,7 +22,7 @@ fn run_history_shows_attempts_and_measured_tokens() {
     );
     // A running attempt shows its live totals as a lower bound so far.
     runtime.runs[0].attempts.push(crate::usage::Attempt {
-        status: "running".into(),
+        status: crate::usage::AttemptStatus::Running,
         tokens: Some(crate::usage::Tokens {
             input_tokens: 1000,
             cached_input_tokens: 900,

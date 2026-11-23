@@ -376,7 +376,12 @@ fn selected(
     let attempt = run
         .attempts
         .last()
-        .filter(|a| a.status == "completed" && !a.review_only && a.github_source.is_some() && a.artifact.is_some())
+        .filter(|a| {
+            a.status == crate::usage::AttemptStatus::Completed
+                && !a.review_only
+                && a.github_source.is_some()
+                && a.artifact.is_some()
+        })
         .ok_or_else(|| {
             io::Error::other(
                 "This run has no captured GitHub source/checkpoint; configure GitHub and start a new improvement",

@@ -261,7 +261,10 @@ fn restart_fences_running_and_cancelling_without_replaying_or_publishing() {
         state.runtime.runs.iter().map(|r| r.status.as_str()).collect::<Vec<_>>(),
         vec!["interrupted", "interrupted", "queued", "completed"]
     );
-    assert_eq!(state.runtime.runs[1].attempts[0].status, "interrupted");
+    assert_eq!(
+        state.runtime.runs[1].attempts[0].status,
+        crate::usage::AttemptStatus::Interrupted
+    );
     assert_eq!(
         crate::history::activity(
             state.runtime.runs[1].chat_id.as_deref(),

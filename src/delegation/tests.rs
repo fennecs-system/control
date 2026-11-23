@@ -50,7 +50,7 @@ fn pause(s: &mut State, role: Role) {
     request_with_save(s, &id, "nonce", input(role), |_| Ok(())).unwrap();
     s.runtime.runs[0].status = RunStatus::Waiting;
     let a = &mut s.runtime.runs[0].attempts[0];
-    a.status = "waiting".into();
+    a.status = crate::usage::AttemptStatus::Waiting;
     a.artifact = Some("immutable-paused-source".into());
 }
 #[test]
@@ -329,7 +329,7 @@ fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
     crate::design::tests::ask_without_io(&mut state, &child_id, "question", crate::design::tests::input()).unwrap();
     let child = &mut state.runtime.runs[1];
     child.status = RunStatus::Waiting;
-    child.attempts[0].status = "waiting".into();
+    child.attempts[0].status = crate::usage::AttemptStatus::Waiting;
     child.attempts[0].artifact = Some("paused-child".into());
     let question = child.question.as_ref().unwrap().id.to_string();
     let other = chat::create(&mut state);

@@ -361,7 +361,7 @@ fn only_completed_same_chat_improvements_can_be_published() {
     let run = &mut state.runtime.runs[0];
     run.status = RunStatus::Completed;
     run.attempts.push(Attempt {
-        status: "completed".into(),
+        status: crate::usage::AttemptStatus::Completed,
         artifact: Some("a-fixture".into()),
         github_source: Some(Source {
             repository: "example/project".into(),

@@ -459,7 +459,7 @@ fn answer_question(state: &mut State, index: usize) -> usize {
     let generation = run.attempts.last().unwrap().workspace_id.clone().unwrap();
     run.status = RunStatus::Waiting;
     let attempt = run.attempts.last_mut().unwrap();
-    attempt.status = "waiting".into();
+    attempt.status = crate::usage::AttemptStatus::Waiting;
     attempt.artifact = Some(format!("checkpoint-{generation}"));
     run.question = Some(crate::design::Question {
         id: format!("question-{generation}").into(),
@@ -480,7 +480,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     watch(&mut state, &root, true);
     let parent = &mut state.runtime.runs[0];
     parent.status = RunStatus::Waiting;
-    parent.attempts[0].status = "waiting".into();
+    parent.attempts[0].status = crate::usage::AttemptStatus::Waiting;
     parent.attempts[0].artifact = Some("parent-checkpoint".into());
     parent.delegation = Some(crate::delegation::Delegation {
         input: crate::delegation::Input {

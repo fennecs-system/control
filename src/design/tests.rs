@@ -29,7 +29,7 @@ pub fn paused() -> (State, String) {
     ask_with_save(&mut state, &id, "nonce-1", input(), |_| Ok(())).unwrap();
     let run = &mut state.runtime.runs[0];
     run.status = RunStatus::Waiting;
-    run.attempts[0].status = "waiting".into();
+    run.attempts[0].status = crate::usage::AttemptStatus::Waiting;
     run.attempts[0].artifact = Some("paused-workspace".into());
     *run.result = summary(run.question.as_ref().unwrap());
     (state, chat)
@@ -269,7 +269,7 @@ fn multiple_decisions_preserve_original_objective_and_publication_baseline() {
     let id = run.id.clone();
     ask_with_save(&mut state, &id, "nonce-2", input(), |_| Ok(())).unwrap();
     state.runtime.runs[1].status = RunStatus::Waiting;
-    state.runtime.runs[1].attempts[0].status = "waiting".into();
+    state.runtime.runs[1].attempts[0].status = crate::usage::AttemptStatus::Waiting;
     state.runtime.runs[1].attempts[0].artifact = Some("second-pause".into());
     answer(&mut state, &chat, None, "2", "test").unwrap();
     let continuation = state.runtime.runs[2].continuation.as_ref().unwrap();

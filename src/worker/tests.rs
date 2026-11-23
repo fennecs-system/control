@@ -389,7 +389,7 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
 
     // Finished: the attempt's own record replaces the live one.
     let attempt = &mut state.runtime.runs[0].attempts[0];
-    attempt.status = "completed".into();
+    attempt.status = crate::usage::AttemptStatus::Completed;
     attempt.record_usage(control_ai::Usage {
         tokens: Some(so_far),
         complete: true,
@@ -712,7 +712,7 @@ fn result_rollback_preserves_attempt_history_and_live_diagnostics() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Work", "test").unwrap();
     let historical = crate::usage::Attempt {
-        status: "failed".into(),
+        status: crate::usage::AttemptStatus::Failed,
         workspace_id: Some("historical".into()),
         ..Default::default()
     };

@@ -273,7 +273,7 @@ fn interrupt_active(state: &mut State) -> bool {
             run.status = RunStatus::Interrupted;
             run.result = "The control plane stopped during this run. Inspect the container before retrying.".into();
             if let Some(attempt) = run.attempts.last_mut() {
-                attempt.status = "interrupted".into();
+                attempt.status = crate::usage::AttemptStatus::Interrupted;
                 attempt
                     .termination
                     .get_or_insert(crate::attempt_control::Termination::Restarted);

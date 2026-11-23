@@ -402,7 +402,9 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
     let attempt = parent
         .attempts
         .last()
-        .filter(|a| a.status == "waiting" && a.workspace_id.as_deref() == Some(&d.generation))
+        .filter(|a| {
+            a.status == crate::usage::AttemptStatus::Waiting && a.workspace_id.as_deref() == Some(&d.generation)
+        })
         .ok_or("Paused delegation attempt is unavailable.")?;
     let checkpoint = attempt
         .project_checkpoint

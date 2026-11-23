@@ -609,7 +609,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
     crate::design::tests::ask_without_io(&mut state, &old_id, "question", crate::design::tests::input()).unwrap();
     let old = &mut state.runtime.runs[child_index];
     old.status = RunStatus::Waiting;
-    old.attempts[0].status = "waiting".into();
+    old.attempts[0].status = crate::usage::AttemptStatus::Waiting;
     old.attempts[0].artifact = Some("paused-workspace".into());
     crate::design::answer(&mut state, &child, None, "1", "test").unwrap();
     let answer_index = state.runtime.runs.len() - 1;

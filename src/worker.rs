@@ -292,7 +292,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                                         "Could not start execution thread; restart Control after checking resources."
                                             .into();
                                     if let Some(attempt) = run.attempts.last_mut() {
-                                        attempt.status = "blocked".into();
+                                        attempt.status = crate::usage::AttemptStatus::Blocked;
                                     }
                                 }
                                 let _ = storage::save(&s);
@@ -577,6 +577,10 @@ fn commit(
             }
         });
     }
+    attempt.status = match &outcome {
+        Ok(_) => crate::usage::AttemptStatus::Completed,
+        Err((status, _)) => crate::usage::AttemptStatus::from(*status),
+    };
     let (status, result) = match outcome {
         Ok(summary) => (RunStatus::Completed, summary),
         Err((status, message)) => (
@@ -590,7 +594,6 @@ fn commit(
     };
     let previous_status = std::mem::replace(&mut r.status, status.clone());
     let previous_result = std::mem::replace(&mut *r.result, result);
-    attempt.status = r.status.to_string();
     // A turn cut off before its handoff leaves a host-written note so the
     // next turn resumes; it shares this transaction and its rollback.
     let mut interrupted = None;
