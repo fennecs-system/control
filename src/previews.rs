@@ -72,58 +72,9 @@ fn launch(preview: &Preview, command: &str, workspace: &Path) -> io::Result<Stri
         .as_deref()
         .ok_or_else(|| fail("Missing pinned image"))?;
     let result = (|| {
-        let wrapper=format!("set -eu\nexec 2>&1\ncat > /tmp/control-port-forward.rs <<'CONTROL_FORWARD_SOURCE'\n{}\nCONTROL_FORWARD_SOURCE\nrustc --edition=2024 /tmp/control-port-forward.rs -o /tmp/control-port-forward\nexec bash -c \"$1\"",include_str!("../tools/port-forward/main.rs"));
-        let id = query(&[
-            "run",
-            "--detach",
-            "--pull=never",
-            "--init",
-            "--name",
-            &preview.id,
-            "--label",
-            &format!("dev.control.node={node}"),
-            "--label",
-            &format!("dev.control.attempt={}", preview.id),
-            "--label",
-            "dev.control.purpose=preview",
-            "--network",
-            "none",
-            "--user",
-            &format!("{}:{}", unsafe { libc::getuid() }, unsafe {
-                libc::getgid()
-            }),
-            "--read-only",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-            "--pids-limit=128",
-            "--memory=1g",
-            "--cpus=2",
-            "--log-driver=local",
-            "--log-opt=max-size=1m",
-            "--log-opt=max-file=2",
-            "--tmpfs",
-            "/tmp:rw,exec,nosuid,nodev,size=512m",
-            "--tmpfs",
-            &format!(
-                "/home/agent:rw,nosuid,uid={},gid={},size=64m",
-                unsafe { libc::getuid() },
-                unsafe { libc::getgid() }
-            ),
-            "--env",
-            "HOME=/home/agent",
-            "--env",
-            "CARGO_TARGET_DIR=/tmp/target",
-            "--mount",
-            &format!("type=bind,src={source},dst=/workspace,readonly"),
-            "--workdir",
-            "/workspace",
-            image,
-            "bash",
-            "-c",
-            &wrapper,
-            "control-preview",
-            command,
-        ])?;
+        let (uid, gid) = (unsafe { libc::getuid() }, unsafe { libc::getgid() });
+        let arguments = run_arguments(&preview.id, node, image, uid, gid, source, command);
+        let id = query(&arguments.iter().map(String::as_str).collect::<Vec<_>>())?;
         let id = id.trim().to_owned();
         if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(fail("Invalid preview container ID"));
@@ -135,6 +86,57 @@ fn launch(preview: &Preview, command: &str, workspace: &Path) -> io::Result<Stri
         let _ = stop_resource(preview);
     }
     result
+}
+/// The detached preview container serving `command` from a read-only workspace.
+fn run_arguments(name: &str, node: &str, image: &str, uid: u32, gid: u32, source: &str, command: &str) -> Vec<String> {
+    let wrapper=format!("set -eu\nexec 2>&1\ncat > /tmp/control-port-forward.rs <<'CONTROL_FORWARD_SOURCE'\n{}\nCONTROL_FORWARD_SOURCE\nrustc --edition=2024 /tmp/control-port-forward.rs -o /tmp/control-port-forward\nexec bash -c \"$1\"",include_str!("../tools/port-forward/main.rs"));
+    [
+        "run",
+        "--detach",
+        "--pull=never",
+        "--init",
+        "--name",
+        name,
+        "--label",
+        &format!("dev.control.node={node}"),
+        "--label",
+        &format!("dev.control.attempt={name}"),
+        "--label",
+        "dev.control.purpose=preview",
+        "--network",
+        "none",
+        "--user",
+        &format!("{uid}:{gid}"),
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pids-limit=128",
+        "--memory=1g",
+        "--cpus=2",
+        "--log-driver=local",
+        "--log-opt=max-size=1m",
+        "--log-opt=max-file=2",
+        "--tmpfs",
+        "/tmp:rw,exec,nosuid,nodev,size=512m",
+        "--tmpfs",
+        &format!("/home/agent:rw,nosuid,uid={uid},gid={gid},size=64m"),
+        "--env",
+        "HOME=/home/agent",
+        "--env",
+        "CARGO_TARGET_DIR=/tmp/target",
+        "--mount",
+        &format!("type=bind,src={source},dst=/workspace,readonly"),
+        "--workdir",
+        "/workspace",
+        image,
+        "bash",
+        "-c",
+        &wrapper,
+        "control-preview",
+        command,
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 pub fn verify(name: &str, attempt: &Attempt) -> io::Result<()> {
     if attempt.project.is_none() || self::name(attempt)? != name {

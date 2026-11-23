@@ -1,13 +1,16 @@
 use super::*;
 use std::cell::Cell;
 
-fn spec(input: &[u8], deadline: Duration, stderr_bytes: Option<usize>) -> Spec<'static> {
-    Spec { name: "unused", args: Vec::new(), input: input.to_vec(), deadline, stdout_bytes: 8, stderr_bytes, unavailable: "Could not start the test tool" }
+fn spec(input: &[u8], deadline: Duration, stderr_bytes: Option<usize>) -> Spec {
+    Spec { run: RunSpec::default(), input: input.to_vec(), deadline, stdout_bytes: 8, stderr_bytes, unavailable: "Could not start the test tool" }
 }
-fn shell(script: &str) -> Command {
-    let mut command = Command::new("sh");
+fn shell(script: &str) -> impl FnOnce(Streams) -> io::Result<Child> {
+    let mut command = std::process::Command::new("sh");
     command.args(["-c", script]);
-    command
+    started(command)
+}
+fn started(mut command: std::process::Command) -> impl FnOnce(Streams) -> io::Result<Child> {
+    move |streams| streams.apply(&mut command).spawn()
 }
 
 #[test]
@@ -50,6 +53,6 @@ fn removes_and_kills_a_container_past_its_deadline() {
 
 #[test]
 fn a_spawn_failure_names_the_tool() {
-    let error = run_with(Command::new("/nonexistent/control-engine"), spec(b"", Duration::from_secs(1), None), || ()).unwrap_err();
+    let error = run_with(started(std::process::Command::new("/nonexistent/control-engine")), spec(b"", Duration::from_secs(1), None), || ()).unwrap_err();
     assert_eq!(error.to_string(), "Could not start the test tool");
 }

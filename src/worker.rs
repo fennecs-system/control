@@ -1084,6 +1084,7 @@ fn execute(
         .map(Ok)
         .unwrap_or_else(crate::config::node_id)
         .map_err(blocked)?;
+    let isolation = crate::engine::isolation();
     if !crate::engine::ready() {
         return Err(blocked("Linux container engine unavailable. Start Docker on this laptop; Control will not fall back to host execution."));
     }
@@ -1129,15 +1130,15 @@ fn execute(
             // after the cache-stable prefix and outside the step transcript.
             let prompt = captured.unwrap_or_else(|| render_prompt(objective, scope, room.as_deref(), bridge.is_some()));
             match attempt.backend {
-                crate::backend::Backend::Grok => (crate::grok::execute(id, prompt, attempt, bridge, &absolute, &image, &node)?, "Grok outputs"),
-                crate::backend::Backend::Antigravity => (crate::antigravity::execute(id, prompt, attempt, bridge, &absolute, &image, &node)?, "Antigravity outputs"),
+                crate::backend::Backend::Grok => (crate::grok::execute(isolation, id, prompt, attempt, bridge, &absolute, &image, &node)?, "Grok outputs"),
+                crate::backend::Backend::Antigravity => (crate::antigravity::execute(isolation, id, prompt, attempt, bridge, &absolute, &image, &node)?, "Antigravity outputs"),
                 _ => (crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?, "Local agent outputs"),
             }
         }
-        crate::backend::Backend::Claude => (crate::claude::execute(id, objective, attempt, bridge, &absolute, &image, &node)?, "Claude outputs"),
+        crate::backend::Backend::Claude => (crate::claude::execute(isolation, id, objective, attempt, bridge, &absolute, &image, &node)?, "Claude outputs"),
         crate::backend::Backend::Codex => {
             let auth = auth.ok_or_else(|| blocked("Codex credentials were not checked."))?;
-            let turn = crate::codex::Turn { id, objective, scope, captured, bridge, workspace: &workspace, absolute: &absolute, image: &image, node: &node, auth };
+            let turn = crate::codex::Turn { id, objective, scope, captured, bridge, workspace: &workspace, absolute: &absolute, image: &image, node: &node, auth, isolation };
             (crate::codex::execute(turn, attempt)?, "Worker outputs")
         }
     };

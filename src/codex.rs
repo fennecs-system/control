@@ -4,11 +4,11 @@ use crate::identity::Workspace;
 use crate::worker::{handoff_grace_over, interrupt_unfinished_tools, observe_workspace_diff, read_report, record_activity_for, render_prompt, timeout_message, worker_failure, SANDBOX_PROBE_WAIT, UNKNOWN_FAILURE};
 use crate::State;
 use control_effect::sync::Recv;
+use control_isolation::{Access, Input, Isolation, Limits, Proc, RunSpec, Size, Stream, Streams, Tmpfs, User};
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -39,8 +39,8 @@ impl crate::backend::Agent for Codex {
     fn probe(&self, image: &str) -> Result<(), String> {
         offline_probe(image)
     }
-    fn text_command(&self, call: &crate::backend::TextCall<'_>) -> std::io::Result<Command> {
-        text_command(call.image, call.name, call.workspace, call.node, call.model).map_err(std::io::Error::other)
+    fn text_run(&self, call: &crate::backend::TextCall<'_>) -> std::io::Result<RunSpec> {
+        text_run(call.image, call.name, call.workspace, call.node, call.model).map_err(std::io::Error::other)
     }
     fn text(&self, reader: &mut dyn std::io::Read, max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> std::io::Result<control_ai::Output> {
         control_ai::json_lines(reader, Text { inner: Default::default(), text: None, bad: false, max }, emit)
@@ -124,7 +124,7 @@ pub(crate) fn offline_probe(image: &str) -> Result<(), String> {
         .map_err(|_| "Could not prepare embedded worker security profile.")?;
     let canary = Credentials { path: root.join("unused"), uid: owner.uid(), gid: owner.gid() };
     let name = format!("control-auth-check-doctor-{}-probe", std::process::id());
-    sandbox_probe(image, &root, &canary, &name, &policy, &node)
+    sandbox_probe(crate::engine::isolation(), image, &root, &canary, &name, &policy, &node)
 }
 pub(crate) fn credentials_ready() -> Result<(), &'static str> {
     Credentials::locate().map(|_| ())
@@ -136,109 +136,75 @@ pub(crate) fn mount_path(path: &Path) -> Result<&str, &'static str> {
         .ok_or("Container mount paths must be absolute UTF-8 paths without commas or newlines.")
 }
 
-pub(crate) fn container_command(
+pub(crate) fn container_spec(
     image: &str,
     name: &str,
     workspace: &Path,
     auth: &Credentials,
     policy: &Path,
     node: &str,
-) -> Result<Command, &'static str> {
-    container_command_scoped(image,name,workspace,auth,policy,node,None)
+) -> Result<RunSpec, &'static str> {
+    container_spec_scoped(image,name,workspace,auth,policy,node,None)
 }
-pub(crate) fn container_command_scoped(
+pub(crate) fn container_spec_scoped(
     image:&str,name:&str,workspace:&Path,auth:&Credentials,policy:&Path,node:&str,review:Option<&Path>,
-) -> Result<Command,&'static str> {
-    let mount = format!("type=bind,src={},dst=/workspace", mount_path(workspace)?);
-    let credential_mount = format!(
-        "type=bind,src={},dst=/home/agent/.codex/auth.json,readonly",
-        mount_path(&auth.path)?
-    );
+) -> Result<RunSpec,&'static str> {
+    mount_path(workspace)?;
+    mount_path(&auth.path)?;
     let seccomp = fs::canonicalize(policy).map_err(|_| "Worker seccomp profile is missing.")?;
-    let seccomp = format!("seccomp={}", mount_path(&seccomp)?);
-    let user = format!("{}:{}", auth.uid, auth.gid);
-    let home = format!(
-        "/home/agent:rw,nosuid,uid={},gid={},size=64m",
-        auth.uid, auth.gid
-    );
-    let codex_home = home.replacen("/home/agent:", "/home/agent/.codex:", 1);
-    let mut command = crate::engine::scrubbed();
-    command
-        .args([
-            "run",
-            "--interactive",
-            "--rm",
-            "--pull=never",
-            "--name",
-            name,
-            "--label",
-            &format!("dev.control.node={node}"),
-            "--label",
-            &format!("dev.control.attempt={name}"),
-            "--label",
-            if name.starts_with("control-auth-check-") || name.starts_with("control-summary-") { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
-            "--user",
-            &user,
-            "--read-only",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-            "--security-opt",
-            &seccomp,
-            // Docker's masked proc entries prevent unprivileged bubblewrap from mounting proc.
-            // Credential access is denied by the inner sandbox; no outer capabilities are granted.
-            "--security-opt=systempaths=unconfined",
-            "--pids-limit=256",
-            "--memory=2g",
-            "--cpus=2",
-            "--tmpfs",
-            "/tmp:rw,nosuid,size=512m",
-            "--tmpfs",
-            &home,
-            "--tmpfs",
-            &codex_home,
-            "--mount",
-            &mount,
-            "--mount",
-            &credential_mount,
-            "--workdir",
-            "/workspace",
-            "--env",
-            "HOME=/home/agent",
-            "--env",
-            "CODEX_HOME=/home/agent/.codex",
-        ]);
-    if let Some(source)=review {
-        command.args(["--mount",&format!("type=bind,src={},dst=/review,readonly",mount_path(source)?)]);
+    mount_path(&seccomp)?;
+    review.map(mount_path).transpose()?;
+    let owner = User { uid: auth.uid, gid: auth.gid };
+    let spec = RunSpec {
+        name: name.into(),
+        image: image.into(),
+        user: Some(owner),
+        workdir: Some("/workspace".into()),
+        input: Input::Attached,
+        seccomp: Some(seccomp),
+        // Docker's masked proc entries prevent unprivileged bubblewrap from mounting proc.
+        // Credential access is denied by the inner sandbox; no outer capabilities are granted.
+        proc: Proc::Unmasked,
+        limits: Limits { pids: Some(256), memory: Some(Size::Gib(2)), cpus: Some(2), ..Limits::default() },
+        ..RunSpec::default()
     }
-    command.arg(image);
-    Ok(command)
+    .label("dev.control.node", node)
+    .label("dev.control.attempt", name);
+    let spec = crate::lifecycle::label_purpose(spec, name.starts_with("control-auth-check-") || name.starts_with("control-summary-"))
+        .tmpfs(Tmpfs::new("/tmp", Size::Mib(512)))
+        .tmpfs(Tmpfs::new("/home/agent", Size::Mib(64)).owned(owner))
+        .tmpfs(Tmpfs::new("/home/agent/.codex", Size::Mib(64)).owned(owner))
+        .bind(workspace, "/workspace", Access::ReadWrite)
+        .secret("codex/auth.json", &auth.path, "/home/agent/.codex/auth.json", Access::ReadOnly)
+        .env("HOME", "/home/agent")
+        .env("CODEX_HOME", "/home/agent/.codex");
+    Ok(match review {
+        Some(source) => spec.bind(source, "/review", Access::ReadOnly),
+        None => spec,
+    })
 }
 
-pub(crate) fn permissions(command: &mut Command) {
-    for setting in PERMISSIONS {
-        command.args(["-c", setting]);
-    }
+pub(crate) fn permissions(spec: RunSpec) -> RunSpec {
+    spec.args(PERMISSIONS.iter().flat_map(|setting| ["-c", setting]))
 }
 
 /// A bounded text request reuses the worker's credential isolation, without
 /// workspace tools, MCP, project files or resumable provider state.
-pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->Result<Command,String> {
+pub(crate) fn text_run(image:&str,name:&str,workspace:&Path,node:&str,model:&str)->Result<RunSpec,String> {
     let auth=Credentials::locate()?;
     let root=workspace.parent().ok_or("Invalid summary workspace")?;
     let policy=root.join("worker-seccomp.json");
     fs::write(&policy,include_bytes!("../hosting/worker-seccomp.json")).map_err(|_|"Cannot prepare text sandbox")?;
-    sandbox_probe(image,root,&auth,&format!("control-auth-check-{name}"),&policy,node)?;
-    let mut command=container_command(image,name,workspace,&auth,&policy,node)?;
-    command.args(["codex","exec","--ignore-user-config","--ignore-rules","--ephemeral","--skip-git-repo-check","--json","--model",model]);
-    permissions(&mut command);
-    for feature in ["shell_tool","apps","multi_agent","browser_use","computer_use","code_mode","js_repl","view_image","sleep_tool","skill_search","skill_mcp_dependency_install","workspace_dependencies"] {
-        command.args(["--disable",feature]);
-    }
-    command.args(["-c","web_search=\"disabled\"","-c","agents.enabled=false","-c","project_doc_max_bytes=0","-"]);
-    Ok(command)
+    sandbox_probe(crate::engine::isolation(),image,root,&auth,&format!("control-auth-check-{name}"),&policy,node)?;
+    Ok(text_container(image,name,workspace,&auth,&policy,node,model)?)
+}
+fn text_container(image:&str,name:&str,workspace:&Path,auth:&Credentials,policy:&Path,node:&str,model:&str)->Result<RunSpec,&'static str> {
+    let spec=permissions(container_spec(image,name,workspace,auth,policy,node)?.args(["codex","exec","--ignore-user-config","--ignore-rules","--ephemeral","--skip-git-repo-check","--json","--model",model]));
+    Ok(spec.args(["shell_tool","apps","multi_agent","browser_use","computer_use","code_mode","js_repl","view_image","sleep_tool","skill_search","skill_mcp_dependency_install","workspace_dependencies"].iter().flat_map(|feature| ["--disable",feature])).args(["-c","web_search=\"disabled\"","-c","agents.enabled=false","-c","project_doc_max_bytes=0","-"]))
 }
 
 pub(crate) fn sandbox_probe(
+    isolation: &dyn Isolation,
     image: &str,
     root: &Path,
     auth: &Credentials,
@@ -256,19 +222,15 @@ pub(crate) fn sandbox_probe(
         uid: auth.uid,
         gid: auth.gid,
     };
-    let mut command = container_command(image, name, &workspace, &fake, policy, node)?;
-    command.args(["codex", "sandbox", "-P", "control"]);
-    permissions(&mut command);
     // PID 1 must be the inner execution supervisor, not the account-bearing harness.
     // Its memory is naturally readable by its own child; the outer harness is outside this PID namespace.
     // Each probe writes a fresh result name: Docker Desktop's shared-file cache keeps a
     // stale entry for a name an earlier container created and the host then deleted,
     // so recreating that name failed with ENOENT on alternate probes.
     let result = format!("probe-result-{}", probe_nonce()?);
-    command.args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > \"/workspace/$1\"", "probe", &result])
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
+    let spec = probe_container(image, name, &workspace, &fake, policy, node, &result)?;
+    let mut child = isolation
+        .spawn(&spec, Streams::new(Stream::Null, Stream::Null, Stream::Piped))
         .map_err(|_| "Cannot start sandbox verification.")?;
     let stderr = tail_reader(child.stderr.take());
     let child = crate::child::watch(child).map_err(|_| "Cannot observe sandbox verification.")?;
@@ -289,6 +251,9 @@ pub(crate) fn sandbox_probe(
         let stderr = stderr.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
         format!("{reason} {}", probe_detail(status, written.as_deref(), &stderr))
     })
+}
+fn probe_container(image: &str, name: &str, workspace: &Path, fake: &Credentials, policy: &Path, node: &str, result: &str) -> Result<RunSpec, &'static str> {
+    Ok(permissions(container_spec(image, name, workspace, fake, policy, node)?.args(["codex", "sandbox", "-P", "control"])).args(["--", "bash", "-c", "set -eu; for path in /home/agent/.codex/auth.json /proc/self/root/home/agent/.codex/auth.json /proc/1/root/home/agent/.codex/auth.json; do if cat \"$path\" >/dev/null 2>&1; then exit 41; fi; done; IFS= read -r -d '' supervisor < /proc/1/cmdline; test \"$supervisor\" = codex-linux-sandbox || exit 42; printf verified > \"/workspace/$1\"", "probe", result]))
 }
 pub(crate) fn probe_nonce() -> Result<String, &'static str> {
     let mut nonce = [0u8; 8];
@@ -504,9 +469,10 @@ pub(crate) struct Turn<'a> {
     pub image: &'a str,
     pub node: &'a str,
     pub auth: Credentials,
+    pub isolation: &'a dyn Isolation,
 }
 pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Result<String, (&'static str, String)> {
-    let Turn { id, objective, scope, captured, bridge, workspace, absolute, image, node, auth } = turn;
+    let Turn { id, objective, scope, captured, bridge, workspace, absolute, image, node, auth, isolation } = turn;
     let blocked = |m: &str| ("blocked", m.to_owned());
     let failed = |m: &str| ("failed", m.to_owned());
     let policy = absolute.parent().unwrap().join("worker-seccomp.json");
@@ -514,6 +480,7 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
         .map_err(|_| failed("Could not prepare embedded worker security profile."))?;
     // Verify each attempt before mounting real credentials; successes are not cached.
     sandbox_probe(
+        isolation,
         image,
         absolute.parent().unwrap(),
         &auth,
@@ -530,23 +497,8 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
         fs::rename(absolute, &review_source).map_err(|_|failed("Could not isolate judge source."))?;
         fs::create_dir(absolute).map_err(|_|failed("Could not prepare judge scratch."))?;
     }
-    let mut command =
-        container_command_scoped(image, &container, absolute, &auth, &policy, node,attempt.review_only.then_some(review_source.as_path())).map_err(blocked)?;
-    command.args([
-        "codex",
-        "exec",
-        "--ignore-user-config",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--color",
-        "never",
-        "--json",
-        "--model",
-        &attempt.model,
-        "--output-last-message",
-        "/workspace/.control-result",
-    ]);
-    permissions(&mut command);
+    let spec =
+        turn_container(image, &container, absolute, &auth, &policy, node, attempt.review_only.then_some(review_source.as_path()), &attempt.model, bridge.is_some()).map_err(blocked)?;
     let room = bridge.and_then(|(state, run_id)| {
         let s = state.lock().ok()?;
         let run = s.runtime.runs.iter().find(|r| r.id == run_id)?;
@@ -557,27 +509,11 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
             .clone()
             .filter(|r| crate::rooms::valid(r))
     });
-    if bridge.is_some() {
-        command.args([
-            "-c",
-            "mcp_servers.control_rooms.command=\"/bin/control-room-mcp\"",
-            "-c",
-            "mcp_servers.control_rooms.required=true",
-        ]);
-        let tools=control_context::worker_mcp_names();
-        command.args(["-c",&format!("mcp_servers.control_rooms.enabled_tools={}",serde_json::to_string(&tools).unwrap())]);
-        for tool in tools {command.args(["-c",&format!("mcp_servers.control_rooms.tools.{tool}.approval_mode=\"approve\"")]);}
-    }
-    command.arg("-");
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before launch.".into()));
     }
-    let mut child = command
-        .spawn()
+    let mut child = isolation
+        .spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))
         .map_err(|_| failed("Could not start the container worker."))?;
     let diagnostics = capture_diagnostics(child.stderr.take().unwrap());
     let stdout = child.stdout.take().unwrap();
@@ -727,3 +663,37 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
     let summary: String = output.chars().take(16000).collect();
     Ok(summary)
 }
+/// One turn's container and Codex arguments; `bridge` adds the room tools.
+#[allow(clippy::too_many_arguments)]
+fn turn_container(image: &str, container: &str, absolute: &Path, auth: &Credentials, policy: &Path, node: &str, review: Option<&Path>, model: &str, bridge: bool) -> Result<RunSpec, &'static str> {
+    let spec = container_spec_scoped(image, container, absolute, auth, policy, node, review)?.args([
+        "codex",
+        "exec",
+        "--ignore-user-config",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+        "--json",
+        "--model",
+        model,
+        "--output-last-message",
+        "/workspace/.control-result",
+    ]);
+    let spec = permissions(spec);
+    let tools = control_context::worker_mcp_names();
+    let rooms = bridge.then(|| {
+        [
+            "mcp_servers.control_rooms.command=\"/bin/control-room-mcp\"".to_owned(),
+            "mcp_servers.control_rooms.required=true".to_owned(),
+            format!("mcp_servers.control_rooms.enabled_tools={}", serde_json::to_string(&tools).unwrap()),
+        ]
+        .into_iter()
+        .chain(tools.iter().map(|tool| format!("mcp_servers.control_rooms.tools.{tool}.approval_mode=\"approve\"")))
+        .collect::<Vec<_>>()
+    });
+    Ok(spec.args(rooms.into_iter().flatten().flat_map(|setting| ["-c".to_owned(), setting])).args(["-"]))
+}
+
+#[cfg(test)]
+mod tests;

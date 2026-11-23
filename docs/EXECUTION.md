@@ -67,7 +67,9 @@ workspaces; it never silently replays model requests.
 
 ## Resource scope
 
-Container CPU, memory and process limits apply to each attempt and its tools. The
+Containers are described as `RunSpec` data and started through the `Isolation`
+trait in `crates/isolation`; `src/engine.rs` hands the node's backend (Docker)
+to the entry points. Container CPU, memory and process limits apply to each attempt and its tools. The
 slot limit bounds model fan-out, not disk use or a node-wide CPU or memory
 reservation. There is no hard quota on live workspace storage yet; size the limit
 for the machine and workload.

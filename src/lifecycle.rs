@@ -252,6 +252,12 @@ pub fn stop_attempt(attempt: &Attempt) -> Result<(), &'static str> {
 /// Containers started by `control check`, `control claude check` or login carry
 /// this label; they are supervised by their command, never by run reconciliation.
 pub const CHECK_LABEL: &str = "dev.control.purpose=check";
+/// Labels a check supervised by its own command, or a run's container, which
+/// run reconciliation owns.
+pub(crate) fn label_purpose(spec: control_isolation::RunSpec, check: bool) -> control_isolation::RunSpec {
+    let (name, value) = if check { CHECK_LABEL } else { "dev.control.purpose=run" }.split_once('=').unwrap();
+    spec.label(name, value)
+}
 /// Identity-only snapshot of every attempt (no activity), taken under the state lock.
 pub struct Owner {
     pub active: bool,

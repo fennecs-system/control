@@ -1319,3 +1319,102 @@ fn teammates_use_and_stop_their_teams_services_without_a_grant() {
     let elsewhere: NodeId = "node-b".to_owned().try_into().unwrap();
     assert!(target(&s, &elsewhere, &worker_run, &id).is_err());
 }
+
+#[test]
+fn service_create_vector_is_pinned() {
+    use crate::engine::golden::{fill, pin_equivalent};
+    let (mut state, run, _, time) = fixture();
+    admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+    let mut service = state.services[0].clone();
+    let r = &service.resource;
+    let (name, uid, gid, chat, id, generation, expires, seconds, command) = (service.name(), service.uid.to_string(), service.gid.to_string(), r.owner.chat.as_str().to_owned(), r.id.as_str().to_owned(), r.generation.get().to_string(), r.lease.expires().to_string(), r.lease.seconds().to_string(), service.command.0.to_string());
+    let (node, image) = (r.owner.node.as_str().to_owned(), r.image.as_str().to_owned());
+    let values = [("name", name.as_str()), ("uid", &uid), ("gid", &gid), ("chat", &chat), ("id", &id), ("generation", &generation), ("expires", &expires), ("seconds", &seconds), ("command", &command), ("node", &node), ("image", &image)];
+    // The tmpfs set comes from a map, so its order was never fixed.
+    pin_equivalent(&create_arguments(&service, Some("control-ws-golden")), &fill(GOLDEN_VOLUME, &values));
+    service.storage = Storage::Memory;
+    pin_equivalent(&create_arguments(&service, None), &fill(GOLDEN_MEMORY, &values));
+}
+const GOLDEN_VOLUME: &[&str] = &[
+    "create",
+    "--pull=never",
+    "--restart=no",
+    "--network=none",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--pids-limit=64",
+    "--memory=536870912",
+    "--cpus=1",
+    "--log-driver=local",
+    "--log-opt=max-size=1m",
+    "--log-opt=max-file=2",
+    "--name",
+    "{name}",
+    "--user",
+    "{uid}:{gid}",
+    "--env",
+    "HOME=/home/agent",
+    "--workdir=/workspace",
+    "--entrypoint=control-service-runner",
+    "--mount",
+    "type=volume,source=control-ws-golden,target=/workspace",
+    "--label",
+    "dev.control.node={node}",
+    "--label",
+    "dev.control.purpose=service",
+    "--label",
+    "dev.control.resource={id}",
+    "--label",
+    "dev.control.chat={chat}",
+    "--label",
+    "dev.control.generation={generation}",
+    "--tmpfs",
+    "/tmp:rw,nosuid,nodev,uid={uid},gid={gid},size=128m",
+    "{image}",
+    "{expires}",
+    "{seconds}",
+    "{command}",
+];
+const GOLDEN_MEMORY: &[&str] = &[
+    "create",
+    "--pull=never",
+    "--restart=no",
+    "--network=none",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--pids-limit=64",
+    "--memory=536870912",
+    "--cpus=1",
+    "--log-driver=local",
+    "--log-opt=max-size=1m",
+    "--log-opt=max-file=2",
+    "--name",
+    "{name}",
+    "--user",
+    "{uid}:{gid}",
+    "--env",
+    "HOME=/home/agent",
+    "--workdir=/workspace",
+    "--entrypoint=control-service-runner",
+    "--read-only",
+    "--label",
+    "dev.control.node={node}",
+    "--label",
+    "dev.control.purpose=service",
+    "--label",
+    "dev.control.resource={id}",
+    "--label",
+    "dev.control.chat={chat}",
+    "--label",
+    "dev.control.generation={generation}",
+    "--tmpfs",
+    "/workspace:rw,exec,nosuid,nodev,uid={uid},gid={gid},size=64m",
+    "--tmpfs",
+    "/tmp:rw,nosuid,nodev,uid={uid},gid={gid},size=128m",
+    "--tmpfs",
+    "/home/agent:rw,nosuid,nodev,uid={uid},gid={gid},size=32m",
+    "{image}",
+    "{expires}",
+    "{seconds}",
+    "{command}",
+];
