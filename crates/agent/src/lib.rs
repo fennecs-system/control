@@ -14,7 +14,7 @@ pub use failure::{
     CANCELLED, Cancelled, Cause, Failure, SignIn, StatedRetry, Status, UNFINISHED_TOOL, WAITING, classify,
     stated_retry, timeout_message,
 };
-pub use granted::{Folder, Form, Granted, Keep, Keeps, Names, Write, sweep, sweep_plan};
+pub use granted::{Folder, Form, Granted, Keep, Keeps, KeyDelivery, Names, Proxied, Write, sweep, sweep_plan};
 pub use host::{Control, Events, Host, Node, Stop};
 pub use key::{ApiKey, KeyError};
 
@@ -109,6 +109,12 @@ pub trait Agent: Sync {
     /// search through Control's tool.
     fn own_web_search(&self) -> bool {
         false
+    }
+    /// How an API-key account's key reaches the CLI. The shared behaviour is
+    /// a mount; a backend whose provider has a relay rule declares
+    /// [`KeyDelivery::Proxied`] and handles [`Form::Proxied`].
+    fn key_delivery(&self) -> KeyDelivery {
+        KeyDelivery::Mounted("its provider has no key-relay rule")
     }
 }
 

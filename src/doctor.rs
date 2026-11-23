@@ -119,6 +119,20 @@ pub fn run() -> io::Result<()> {
             Ok(()) => check(&format!("{name}: credential metadata"), true, ""),
             Err(reason) => check(&format!("{name}: credential metadata"), false, &reason),
         }
+        // How this backend's API-key accounts get their key, when it has any.
+        let keyed = crate::providers::accounts::read().is_ok_and(|store| {
+            store
+                .of(backend)
+                .any(|a| a.kind == crate::accounts::AccountKind::ApiKey)
+        });
+        if keyed {
+            let decision = crate::ports::key_relay::decision(backend);
+            check(
+                &format!("{name}: API keys, {}", decision.describe()),
+                !matches!(decision, crate::ports::key_relay::Decision::Refused(_)),
+                "turns on its API-key accounts are refused while require_proxied_keys is on",
+            );
+        }
     }
     if config.join("discord.env").exists() || config.join("discord-access.json").exists() {
         // A placeholder policy is valid; a missing token leaves the optional bridge off.

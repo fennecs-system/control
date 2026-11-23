@@ -1,7 +1,7 @@
 //! Unmodified Claude Code harness; executable tools run in separate offline containers.
 use control_agent::{
-    Agent, Checked, Command, Failure, Folder, Form, Granted, Host, ImagePin, Keep, Keeps, Login, Names, Node, Outcome,
-    Runs, TextCall, Turn, Turns,
+    Agent, Checked, Command, Failure, Folder, Form, Granted, Host, ImagePin, Keep, Keeps, KeyDelivery, Login, Names,
+    Node, Outcome, Runs, TextCall, Turn, Turns,
     cli::{self, Canary, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Streams, Tmpfs, User};
@@ -80,6 +80,9 @@ impl Agent for Claude {
     fn probe_workspace(&self) -> &'static str {
         PROBE.directory
     }
+    fn key_delivery(&self) -> KeyDelivery {
+        KeyDelivery::Proxied(&control_inject::ANTHROPIC)
+    }
 }
 impl Turns for Claude {
     fn turn(&self, turn: Turn<'_>, host: &mut dyn Host) -> Outcome {
@@ -87,10 +90,23 @@ impl Turns for Claude {
         let (node, image) = (turn.node.to_owned(), turn.image.to_owned());
         cli::turn(&CLI, turn, host, |prepared| {
             let blocked = |message: &str| Failure::Blocked(message.to_owned());
-            cli::checked(prepared.login.path()).map_err(|_| blocked("Invalid Claude credential path"))?;
+            match prepared.login.form() {
+                Form::Session | Form::ApiKey | Form::CloudDefault => {
+                    cli::checked(prepared.login.path()).map_err(|_| blocked("Invalid Claude credential path"))?;
+                }
+                Form::Proxied => {}
+            }
             cli::checked(prepared.mailbox).map_err(|_| blocked("Invalid Claude mailbox path"))?;
-            turn_container(prepared.name, &node, prepared.login, prepared.mailbox, &image, &model)
-                .map_err(|_| blocked("Invalid Claude mount path"))
+            turn_container(
+                prepared.name,
+                &node,
+                prepared.login,
+                prepared.root,
+                prepared.mailbox,
+                &image,
+                &model,
+            )
+            .map_err(|_| blocked("Invalid Claude mount path"))
         })
     }
 }
@@ -177,7 +193,10 @@ fn text_container(
         ..cli::base(name, node, owner)
     }
     .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner));
-    Ok(mount(spec, login)?
+    if login.form() == Form::Proxied {
+        return Err(fail("A text call never uses a proxied key"));
+    }
+    Ok(mount(spec, login, workspace)?
         .bind(cli::checked(workspace)?, "/workspace", Access::ReadOnly)
         .args([
             "claude",
@@ -203,10 +222,12 @@ fn text_container(
         .args(settings(login)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn turn_container(
     name: &str,
     node: &str,
     login: &Granted,
+    private: &Path,
     mailbox: &Path,
     image: &str,
     model: &str,
@@ -223,7 +244,7 @@ fn turn_container(
         ..cli::base(name, node, owner)
     }
     .tmpfs(Tmpfs::new("/home/agent/.claude", Size::Mib(32)).owned(owner));
-    Ok(mount(spec, login)?
+    let spec = mount(spec, login, private)?
         .bind(cli::checked(mailbox)?, "/workspace", Access::ReadWrite)
         .args([
             "claude",
@@ -248,7 +269,8 @@ fn turn_container(
             "--model",
             model,
         ])
-        .args(settings(login)))
+        .args(settings(login));
+    offline(spec, login)
 }
 
 /// The name of an API-key account's key file, in its directory and here.
@@ -267,20 +289,39 @@ const KEY_SETTINGS: &str = concat!(
     r#""}"#
 );
 /// The login where the CLI reads its form of it: a key read-only, a sign-in
-/// as the host granted it.
-fn mount(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
+/// as the host granted it. A proxied key is its placeholder at the key's
+/// place, written in the attempt's `private` directory, with Claude pointed at
+/// the relay (`ANTHROPIC_BASE_URL`) and kept from its other hosts
+/// (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`: telemetry, updates, error
+/// reports).
+fn mount(spec: RunSpec, login: &Granted, private: &Path) -> io::Result<RunSpec> {
     match login.form() {
         Form::ApiKey => login.mount(spec, "claude/api-key", KEY),
+        Form::Proxied => {
+            let relay = login.relay()?;
+            Ok(relay
+                .place(spec, &private.join(cli::PLACEHOLDER), relay.placeholder(), KEY)?
+                .env("ANTHROPIC_BASE_URL", &relay.origin())
+                .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"))
+        }
         Form::Session | Form::CloudDefault => {
             login.mount_session(spec, "claude/credentials", CREDENTIALS, Keeps::Folder(&SIGN_IN))
         }
     }
 }
-/// The flags that point Claude at an API key; a sign-in needs none.
+/// The flags that point Claude at an API key, or its placeholder, through its
+/// key helper; a sign-in needs none.
 fn settings(login: &Granted) -> &'static [&'static str] {
     match login.form() {
-        Form::ApiKey => &["--settings", KEY_SETTINGS],
+        Form::ApiKey | Form::Proxied => &["--settings", KEY_SETTINGS],
         Form::Session | Form::CloudDefault => &[],
+    }
+}
+/// A proxied turn has no network and starts once its relay listens.
+fn offline(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
+    match login.form() {
+        Form::Proxied => Ok(login.relay()?.offline(spec)),
+        Form::ApiKey | Form::Session | Form::CloudDefault => Ok(spec),
     }
 }
 
@@ -370,8 +411,11 @@ fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io
     .into_iter()
     .try_for_each(|(login, target)| {
         cli::canary_check(isolation, root, login, target, |login| {
-            turn_container(&name, node, login, &mailbox, image, "canary")
+            turn_container(&name, node, login, root, &mailbox, image, "canary")
         })
+    })?;
+    cli::proxied_canary_check(isolation, root, KEY, |login| {
+        turn_container(&name, node, login, root, &mailbox, image, "canary")
     })
 }
 

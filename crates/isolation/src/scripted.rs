@@ -290,6 +290,9 @@ pub struct Scripted<F> {
     /// The standard input of each `wait` process the model serves, closed
     /// (ending the process) when its container stops.
     waiters: Mutex<Vec<(ContainerId, ChildStdin)>>,
+    /// Each attached `spawn`'s container name and the process serving it: the
+    /// engine runs that container, by name, while the process lives.
+    attached: Mutex<Vec<(String, u32)>>,
 }
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -303,7 +306,23 @@ impl<F: Fn(&Call) -> Answer + Sync> Scripted<F> {
             calls: Mutex::default(),
             model: Mutex::default(),
             waiters: Mutex::default(),
+            attached: Mutex::default(),
         }
+    }
+    /// Whether the process serving the attached container `name` still runs.
+    fn attached_running(&self, name: &str) -> bool {
+        let pid = lock(&self.attached)
+            .iter()
+            .rev()
+            .find(|(attached, _)| attached == name)
+            .map(|(_, pid)| *pid);
+        pid.is_some_and(|pid| {
+            Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        })
     }
     /// A local image and its labels.
     pub fn image(mut self, image: &str, labels: &[(&str, &str)]) -> Self {
@@ -370,7 +389,9 @@ impl<F: Fn(&Call) -> Answer + Sync> Isolation for Scripted<F> {
         let mut command = self
             .ask(Call::Spawn(spec.clone()))?
             .unwrap_or_else(|| Command::new("true"));
-        streams.apply(&mut command).spawn()
+        let child = streams.apply(&mut command).spawn()?;
+        lock(&self.attached).push((spec.name.clone(), child.id()));
+        Ok(child)
     }
     fn run_detached(&self, spec: &RunSpec) -> io::Result<ContainerId> {
         Docker::detached_arguments(spec)?;
@@ -415,7 +436,7 @@ impl<F: Fn(&Call) -> Answer + Sync> Isolation for Scripted<F> {
     /// The engine refuses an exec into a container that is not running.
     fn exec(&self, spec: &ExecSpec, streams: Streams) -> io::Result<Child> {
         let scripted = self.ask(Call::Exec(spec.clone()))?;
-        if !lock(&self.model).running(&spec.container) {
+        if !lock(&self.model).running(&spec.container) && !self.attached_running(spec.container.as_str()) {
             return Err(io::Error::other("Container is not running"));
         }
         let mut command = scripted.unwrap_or_else(|| Command::new("true"));

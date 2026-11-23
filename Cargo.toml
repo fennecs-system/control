@@ -42,6 +42,7 @@ control-codex = { path = "crates/codex" }
 control-claude = { path = "crates/claude" }
 control-grok = { path = "crates/grok" }
 control-antigravity = { path = "crates/antigravity" }
+control-inject = { path = "crates/inject" }
 control-tui = { path = "crates/tui", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 ring = "0.17.14"
@@ -63,7 +64,7 @@ control-isolation = { path = "crates/isolation", features = ["testing"] }
 
 
 [workspace]
-members = ["crates/context", "crates/mcp", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/delivery", "crates/diff", "crates/url-names", "crates/ingress", "crates/client", "crates/tui", "crates/discord", "crates/isolation", "crates/agent", "crates/claude", "crates/grok", "crates/antigravity", "crates/codex"]
+members = ["crates/context", "crates/mcp", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/delivery", "crates/diff", "crates/url-names", "crates/ingress", "crates/client", "crates/tui", "crates/discord", "crates/isolation", "crates/agent", "crates/claude", "crates/grok", "crates/antigravity", "crates/codex", "crates/inject"]
 exclude = ["web"]
 
 [workspace.package]

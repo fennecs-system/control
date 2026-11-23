@@ -59,13 +59,20 @@ there after a turn (docs/LOCAL-MODELS.md). It never extracts a macOS Keychain en
 file, which is mounted read-only. Repeat `login` when the session expires.
 
 An Anthropic API key instead (billed per use): `control accounts add claude NAME
---kind api-key`, then `pbpaste | control claude key --account NAME`. The key is
-mounted read-only at `/home/agent/.control-key/anthropic-api-key` in Claude's
-own container, and `--settings '{"apiKeyHelper":"cat <that file>"}'` has Claude
-read it itself (`--restricted` keeps `--settings`; verified offline in the pinned
-image, whose init event reports `apiKeySource: apiKeyHelper`). The key is in no
-argument, variable or file Control writes; Claude's built-in tools are removed
-and its shell runs in a separate container with no secret.
+--kind api-key`, then `pbpaste | control claude key --account NAME`. The key
+stays on the host: Control's [key-injecting relay](PORTS.md#key-injecting-relay)
+adds it to Claude's requests. Claude's container instead holds a per-attempt
+placeholder at `/home/agent/.control-key/anthropic-api-key`, which
+`--settings '{"apiKeyHelper":"cat <that file>"}'` has Claude read itself
+(`--restricted` keeps `--settings`; its init event reports
+`apiKeySource: apiKeyHelper`). The container has no network.
+`ANTHROPIC_BASE_URL` points Claude at the relay on its loopback, and
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` keeps it from its other hosts.
+Claude Code sends the placeholder in both `Authorization: Bearer` and
+`x-api-key`; the relay strips both and sends the key as `x-api-key`. Verified
+offline with the pinned image: its requests (`POST /v1/messages?beta=true`)
+reached a fake provider with the canary key. Claude's built-in tools are
+removed, and its shell runs in a separate container with no secret.
 
 In **Manage → Models & providers**, click a saved Claude Code model to make it
 the default, or use **+ New model** / **Edit** to manage backend/model pairs. The

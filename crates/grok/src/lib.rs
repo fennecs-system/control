@@ -2,8 +2,8 @@
 //! only tools are Control's over MCP, and executable work runs in separate
 //! offline containers through the host shell tool.
 use control_agent::{
-    Agent, Checked, Command, Failure, Folder, Form, Granted, Host, ImagePin, Keep, Keeps, Login, Names, Node, Outcome,
-    Runs, TextCall, Turn, Turns,
+    Agent, Checked, Command, Failure, Folder, Form, Granted, Host, ImagePin, Keep, Keeps, KeyDelivery, Login, Names,
+    Node, Outcome, Runs, TextCall, Turn, Turns,
     cli::{self, Canary, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Streams, Tmpfs, User};
@@ -25,6 +25,11 @@ impl Agent for Grok {
     /// Its credential names: never mounted in a workspace today, and never published if one appears there.
     fn private_names(&self) -> &'static [&'static str] {
         &[".grok", ".grok-login", KEY_FILE]
+    }
+    /// Implemented to Grok Build's source at the pinned revision; not yet run
+    /// against a real Grok image (docs/GROK.md).
+    fn key_delivery(&self) -> KeyDelivery {
+        KeyDelivery::Proxied(&control_inject::XAI)
     }
     fn name(&self) -> &'static str {
         "Grok"
@@ -91,7 +96,7 @@ impl Turns for Grok {
                 .map_err(|_| Failure::Failed("Cannot prepare Grok configuration".into()))?;
             // The container's own mount failure reads as a credential problem; the
             // others are checked first so each keeps its own message.
-            container(prepared.name, &node, prepared.login, &image)
+            container(prepared.name, &node, prepared.login, prepared.root, &image)
                 .map_err(|_| blocked("Grok credential metadata unavailable"))?;
             [&config, &prompt, prepared.mailbox]
                 .into_iter()
@@ -101,6 +106,7 @@ impl Turns for Grok {
                 prepared.name,
                 &node,
                 prepared.login,
+                prepared.root,
                 &config,
                 &prompt,
                 prepared.mailbox,
@@ -190,7 +196,7 @@ const KEY: &str = "/home/agent/.control-key/xai-api-key";
 /// The MCP configuration for the login's form.
 fn config_for(login: &Granted) -> &'static str {
     match login.form() {
-        Form::ApiKey => KEY_CONFIG,
+        Form::ApiKey | Form::Proxied => KEY_CONFIG,
         Form::Session | Form::CloudDefault => CONFIG,
     }
 }
@@ -200,7 +206,7 @@ fn config_for(login: &Granted) -> &'static str {
 /// variable of the container.
 fn program(login: &Granted) -> &'static str {
     match login.form() {
-        Form::ApiKey => "control-grok",
+        Form::ApiKey | Form::Proxied => "control-grok",
         Form::Session | Form::CloudDefault => "grok",
     }
 }
@@ -209,8 +215,12 @@ fn fail(message: &str) -> io::Error {
     io::Error::other(message)
 }
 /// The shared CLI container with Grok's home on a tmpfs, so sessions and logs
-/// die with it, and the login mounted as the host granted it.
-fn container(name: &str, node: &str, login: &Granted, image: &str) -> io::Result<RunSpec> {
+/// die with it, and the login mounted as the host granted it. A proxied key
+/// is its placeholder at the key's place, written in the attempt's `private`
+/// directory, which `control-grok` exports as XAI_API_KEY; Grok is pointed at
+/// the relay (`GROK_XAI_API_BASE_URL`, whose `/api-key` probe and model routes
+/// the relay allows) and kept from its updater and telemetry.
+fn container(name: &str, node: &str, login: &Granted, private: &Path, image: &str) -> io::Result<RunSpec> {
     let owner = login.owner();
     let spec = RunSpec {
         image: image.into(),
@@ -221,15 +231,33 @@ fn container(name: &str, node: &str, login: &Granted, image: &str) -> io::Result
     .tmpfs(Tmpfs::new("/home/agent/.grok", Size::Mib(64)).owned(owner));
     match login.form() {
         Form::ApiKey => login.mount(spec, "grok/api-key", KEY),
+        Form::Proxied => {
+            let relay = login.relay()?;
+            Ok(relay
+                .place(spec, &private.join(cli::PLACEHOLDER), relay.placeholder(), KEY)?
+                .env("GROK_XAI_API_BASE_URL", &format!("{}/v1", relay.origin()))
+                .env("GROK_DISABLE_AUTOUPDATER", "1")
+                .env("GROK_TELEMETRY_ENABLED", "0"))
+        }
         Form::Session | Form::CloudDefault => {
             login.mount_session(spec, "grok/auth.json", AUTH, Keeps::Folder(&SIGN_IN))
         }
     }
 }
+/// A proxied turn has no network and starts once its relay listens.
+fn offline(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
+    match login.form() {
+        Form::Proxied => Ok(login.relay()?.offline(spec)),
+        Form::ApiKey | Form::Session | Form::CloudDefault => Ok(spec),
+    }
+}
 fn text_container(call: &TextCall<'_>, login: &Granted) -> io::Result<RunSpec> {
+    if login.form() == Form::Proxied {
+        return Err(fail("A text call never uses a proxied key"));
+    }
     // A text request carries no prompt file: the caller writes the prompt to
     // standard input, which `sh` hands to Grok as a file it can read.
-    Ok(container(call.name, call.node, login, call.image)?
+    Ok(container(call.name, call.node, login, call.workspace, call.image)?
         .bind(cli::checked(call.workspace)?, "/workspace", Access::ReadOnly)
         .args([
             "bash".to_owned(),
@@ -256,19 +284,21 @@ fn turn_container(
     name: &str,
     node: &str,
     login: &Granted,
+    private: &Path,
     config: &Path,
     turn: &Path,
     mailbox: &Path,
     image: &str,
     model: &str,
 ) -> io::Result<RunSpec> {
-    Ok(container(name, node, login, image)?
+    let spec = container(name, node, login, private, image)?
         .bind(cli::checked(config)?, "/home/agent/.grok/config.toml", Access::ReadOnly)
         .bind(cli::checked(turn)?, "/home/agent/prompt", Access::ReadOnly)
         .bind(cli::checked(mailbox)?, "/workspace", Access::ReadWrite)
         .args([program(login), "--prompt-file", "/home/agent/prompt"])
         .args(FLAGS)
-        .args(["--tools", NO_TOOLS, "--model", model]))
+        .args(["--tools", NO_TOOLS, "--model", model]);
+    offline(spec, login)
 }
 /// The credential canary in a turn's own container, for each form of login,
 /// on a fake credential.
@@ -290,8 +320,12 @@ fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io
     .try_for_each(|(login, target)| {
         cli::canary_check(isolation, root, login, target, |login| {
             cli::private_file(&config, config_for(login))?;
-            turn_container(&name, node, login, &config, &prompt, &mailbox, image, "canary")
+            turn_container(&name, node, login, root, &config, &prompt, &mailbox, image, "canary")
         })
+    })?;
+    cli::proxied_canary_check(isolation, root, KEY, |login| {
+        cli::private_file(&config, config_for(login))?;
+        turn_container(&name, node, login, root, &config, &prompt, &mailbox, image, "canary")
     })
 }
 fn login_container(name: &str, node: &str, owner: User, directory: &Path, image: &str) -> io::Result<RunSpec> {

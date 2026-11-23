@@ -128,7 +128,7 @@ fn with_policy(granted: Granted, write: Write) -> Granted {
     match (granted.form(), write) {
         (Form::Session, Write::Refreshable) => Granted::refreshable(granted.path().to_path_buf(), granted.owner()),
         (Form::Session, Write::ReadOnly)
-        | (Form::ApiKey | Form::CloudDefault, Write::ReadOnly | Write::Refreshable) => granted,
+        | (Form::ApiKey | Form::CloudDefault | Form::Proxied, Write::ReadOnly | Write::Refreshable) => granted,
     }
 }
 
@@ -163,7 +163,7 @@ pub(crate) fn sign_in_command(account: &Account) -> String {
 fn file(located: (Location, PathBuf), account: &Account, form: Form) -> io::Result<Granted> {
     let label = account.id.backend.label();
     let next = || match form {
-        Form::ApiKey => format!("Run {} to save its key", sign_in_command(account)),
+        Form::ApiKey | Form::Proxied => format!("Run {} to save its key", sign_in_command(account)),
         Form::Session | Form::CloudDefault => {
             format!("Run {} to sign in inside the Nix container", sign_in_command(account))
         }
@@ -275,7 +275,10 @@ pub(crate) fn report(
         .map(|account| {
             let name = &account.id.name;
             let state = match (locate(&account), account.kind) {
-                (Ok(_), AccountKind::ApiKey) => "api-key: present (private file, non-root owner)".to_owned(),
+                (Ok(_), AccountKind::ApiKey) => format!(
+                    "api-key: present (private file, non-root owner), {}",
+                    crate::ports::key_relay::decision(backend).describe()
+                ),
                 (Ok(_), AccountKind::Subscription | AccountKind::Cloud) => {
                     "signed in (private file, non-root owner)".to_owned()
                 }
@@ -356,7 +359,7 @@ pub(crate) fn command(
             private_directory(&directory)?;
             crate::config::write_in(&directory, file.name, key.expose())?;
         }
-        KeyWriter::Cli => run(backend_command(Some(&key)))?,
+        KeyWriter::Cli { .. } => run(backend_command(Some(&key)))?,
     }
     locate(&account)?;
     println!("key saved");

@@ -1330,7 +1330,7 @@ fn execute(
         Some(control_agent::Login {
             checked: control_agent::Checked::BeforeWorkspace,
             ..
-        }) => Some(login(&store, attempt).map_err(|e| blocked(&e.to_string()))?),
+        }) => Some(login(&store, attempt, id).map_err(|e| blocked(&e.to_string()))?),
         _ => None,
     };
     let workspace = runtime::workspace(id).map_err(blocked)?;
@@ -1397,9 +1397,9 @@ fn execute(
         // after the cache-stable prefix and outside the step transcript.
         control_agent::Runs::Control => crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?,
         control_agent::Runs::Cli(cli) => {
-            let login = match early {
-                Some(granted) => Ok(granted),
-                None => login(&store, attempt),
+            let (login, relay) = match early.map_or_else(|| login(&store, attempt, id), Ok) {
+                Ok((granted, relay)) => (Ok(granted), relay),
+                Err(error) => (Err(error), None),
             };
             // What a sign-in failure tells the operator to run for this account.
             let sign_in = control_agent::SignIn::from(crate::logins::sign_in_command(&crate::logins::account(
@@ -1428,7 +1428,9 @@ fn execute(
                 attempt,
                 workspace: &absolute,
             };
-            let outcome = cli.turn(turn, &mut host);
+            // A proxied key's relay serves the turn's container while it runs.
+            let container = format!("control-{id}");
+            let outcome = crate::ports::key_relay::during(relay, isolation, &container, || cli.turn(turn, &mut host));
             crate::agent_host::finish(outcome, attempt, bridge, id, &sign_in)?
         }
     };
@@ -1446,15 +1448,18 @@ fn execute(
     Ok(output)
 }
 /// The attempt's login, located for the account it captured as the node
-/// defines that account now (its kind says which file holds the login).
+/// defines that account now (its kind says which file holds the login), and
+/// for a proxied API key the relay that serves attempt `id`.
 fn login(
     store: &std::io::Result<crate::accounts::Store<crate::backend::Backend>>,
     attempt: &crate::usage::Attempt,
-) -> std::io::Result<control_agent::Granted> {
+    id: &str,
+) -> std::io::Result<(control_agent::Granted, Option<crate::ports::key_relay::KeyRelay>)> {
     let store = store
         .as_ref()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-    crate::logins::locate(&crate::logins::account(store, attempt.backend, &attempt.account))
+    let account = crate::logins::account(store, attempt.backend, &attempt.account);
+    crate::ports::key_relay::grant(&account, store, id)
 }
 /// The node's accounts as the running server holds them, else as saved.
 fn accounts(

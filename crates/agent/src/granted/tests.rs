@@ -120,3 +120,39 @@ fn only_a_refreshable_sign_in_is_mounted_writable_and_never_a_key() {
             .is_err()
     );
 }
+
+#[test]
+fn a_proxied_key_mounts_nothing_and_its_cli_waits_offline_for_the_relay() {
+    let spec = RunSpec::default;
+    let port = std::num::NonZeroU16::new(3130).unwrap();
+    let relay = Proxied::new("ctl-0123".into(), port);
+    let granted = Granted::relayed(OWNER, relay.clone());
+    assert_eq!((granted.form(), granted.owner()), (Form::Proxied, OWNER));
+    assert_eq!(granted.relay().unwrap(), &relay);
+    assert!(Granted::located(Form::ApiKey, "/k".into(), OWNER).relay().is_err());
+    // There is no file to mount: a backend that tried would fail closed.
+    assert!(granted.mount(spec(), "cli/key", "/home/agent/.key").is_err());
+    assert!(!format!("{granted:?}").contains("ctl-0123"));
+    assert_eq!(relay.origin(), "http://127.0.0.1:3130");
+    let directory = std::env::temp_dir().join(format!("proxied-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("relay-placeholder");
+    let placed = relay
+        .place(spec().args(["cli", "--flag"]), &file, "ctl-0123", "/home/agent/.key")
+        .unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), "ctl-0123");
+    assert!(placed.secrets.is_empty());
+    let mount = placed.mounts.last().unwrap();
+    assert_eq!(
+        (mount.target.as_str(), mount.access),
+        ("/home/agent/.key", Access::ReadOnly)
+    );
+    let offline = relay.offline(placed);
+    assert_eq!(offline.network, Network::None);
+    assert_eq!(
+        offline.argv[..5],
+        ["/bin/sh", "-c", RELAY_WAIT, "control-relay-wait", "0C3A"].map(str::to_owned)
+    );
+    assert_eq!(offline.argv[5..], ["cli", "--flag"].map(str::to_owned));
+    fs::remove_dir_all(directory).unwrap();
+}

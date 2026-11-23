@@ -196,6 +196,32 @@ fn attempt_as(
     kind: crate::accounts::AccountKind,
     turn: impl Fn(&RunSpec) -> Command + Sync,
 ) -> Finished {
+    let engine = Scripted::new(|call: &Call| match call {
+        Call::Spawn(spec) if spec.name.ends_with("-probe") => Answer::Run(probe(spec)),
+        Call::Spawn(spec) => Answer::Run(turn(spec)),
+        // A proxied key's relay: the real one, run on this machine.
+        Call::Exec(spec) if spec.argv.first().is_some_and(|w| w == "/bin/control-tcp-relay") => {
+            let mut relay = Command::new(relay_binary());
+            relay.args(&spec.argv[1..]);
+            Answer::Run(relay)
+        }
+        _ => Answer::Model,
+    })
+    .image(IMAGE, &[]);
+    let finished = attempt_in(&engine, IMAGE, backend, account, kind);
+    Finished {
+        calls: engine.calls(),
+        ..finished
+    }
+}
+/// The same on any engine and image; `calls` is left empty.
+fn attempt_in(
+    engine: &dyn control_isolation::Isolation,
+    image: &str,
+    backend: Backend,
+    account: &str,
+    kind: crate::accounts::AccountKind,
+) -> Finished {
     NODE_STATE.get_or_init(|| storage::initialize().unwrap());
     let account = crate::accounts::AccountName::try_from(account).unwrap();
     let mut state = State::default();
@@ -219,8 +245,10 @@ fn attempt_as(
     state.runtime.runs[0].target.account = account;
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let attempt = &mut state.runtime.runs[0].attempts[0];
-    attempt.image = Some(IMAGE.into());
+    attempt.image = Some(image.into());
     attempt.node_id = Some(NODE.into());
+    // The backend's own default, which a real CLI recognises.
+    attempt.model = backend.agent().default_model().into();
     // Run IDs come from the clock: tests running at once keep apart by a count.
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -233,14 +261,8 @@ fn attempt_as(
     let (id, objective, actor, action) = (run.id.clone(), run.objective.to_string(), run.actor.clone(), run.action);
     let generation = attempt.workspace_id.clone().unwrap();
     let shared = Arc::new(Mutex::new(state));
-    let engine = Scripted::new(|call: &Call| match call {
-        Call::Spawn(spec) if spec.name.ends_with("-probe") => Answer::Run(probe(spec)),
-        Call::Spawn(spec) => Answer::Run(turn(spec)),
-        _ => Answer::Model,
-    })
-    .image(IMAGE, &[]);
     let outcome = execute(
-        &engine,
+        engine,
         &generation,
         &objective,
         &actor,
@@ -265,7 +287,7 @@ fn attempt_as(
         state,
         root: fs::canonicalize(runtime::workspace(&generation).unwrap().parent().unwrap()).unwrap(),
         generation,
-        calls: engine.calls(),
+        calls: Vec::new(),
     }
 }
 /// The turn's login arrives as one typed read-only secret and nowhere else.
@@ -516,17 +538,16 @@ fn an_antigravity_attempt_runs_from_probe_to_published_workspace() {
     let finished = attempt(Backend::Antigravity, |spec| cli(spec, &before, &after, &[]));
     let turn = finished.turn();
     assert_eq!(turn.image.as_str(), IMAGE);
-    assert_secret(
-        turn,
-        Backend::Antigravity,
-        "antigravity/api-key",
-        "/home/agent/.control-key/gemini-api-key",
-    );
+    // The key in the implicit account's folder is proxied like a named
+    // account's: a placeholder where the key would be, no secret, no network.
+    assert!(turn.secrets.is_empty(), "{:?}", turn.secrets);
+    let placeholder = fs::read_to_string(host(turn, "/home/agent/.control-key/gemini-api-key")).unwrap();
+    assert!(placeholder.starts_with("ctl-"), "{placeholder}");
     assert_eq!(
         fs::canonicalize(host(turn, "/workspace")).unwrap(),
         finished.root.join("antigravity-mailbox")
     );
-    assert_eq!(turn.network, Network::Engine);
+    assert_eq!(turn.network, Network::None);
     let private = host(turn, "/home/agent/.control");
     let mcp: Value = serde_json::from_slice(&fs::read(private.join("mcp_config.json")).unwrap()).unwrap();
     // This account is an API key: the server starts without the exported key.
@@ -534,7 +555,7 @@ fn an_antigravity_attempt_runs_from_probe_to_published_workspace() {
         mcp["mcpServers"]["control"]["args"],
         json!(["-u", "GEMINI_API_KEY", "/bin/control-room-mcp"])
     );
-    assert_eq!(turn.argv[..2], ["control-agy", "turn"]);
+    assert_eq!(turn.argv[5..7], ["control-agy", "turn"]);
     assert_eq!(
         finished.activity(),
         [
@@ -619,6 +640,7 @@ fn each_sandbox_probe_writes_and_removes_a_fresh_result_name() {
         uid: owner.uid(),
         gid: owner.gid(),
         write: control_agent::Write::ReadOnly,
+        relay: None,
     };
     let engine = Scripted::new(|call: &Call| match call {
         Call::Spawn(spec) => Answer::Run(probe(spec)),
@@ -971,12 +993,127 @@ fn holding(root: &std::path::Path, canary: &str) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// `tools/tcp-relay` built for this machine, the program the scripted engine
+/// runs for `control-tcp-relay listen-multi`, so a turn's relay is the real one.
+fn relay_binary() -> PathBuf {
+    static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            let directory = crate::test_support::scratch("tcp-relay");
+            fs::create_dir_all(&directory).unwrap();
+            let binary = directory.join("control-tcp-relay");
+            let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tools/tcp-relay/main.rs");
+            let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
+            let built = Command::new(rustc)
+                .args(["--edition=2024", source, "-o"])
+                .arg(&binary)
+                .status()
+                .unwrap();
+            assert!(built.success(), "tools/tcp-relay builds");
+            binary
+        })
+        .clone()
+}
+/// A provider stand-in: keeps each request it receives and answers 200.
+fn fake_provider() -> (std::net::SocketAddr, Arc<Mutex<Vec<Vec<u8>>>>) {
+    fake_provider_answering(b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nprovider-says")
+}
+/// The same, answering every request with `reply`.
+fn fake_provider_answering(reply: &'static [u8]) -> (std::net::SocketAddr, Arc<Mutex<Vec<Vec<u8>>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let kept = seen.clone();
+    std::thread::spawn(move || {
+        for mut socket in listener.incoming().flatten() {
+            let mut data = Vec::new();
+            let mut byte = [0; 1];
+            while !data.ends_with(b"\r\n\r\n") && socket.read(&mut byte).unwrap_or(0) == 1 {
+                data.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&data).to_ascii_lowercase();
+            let length: usize = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .map_or(0, |n| n.trim().parse().unwrap());
+            let mut body = vec![0; length];
+            let _ = socket.read_exact(&mut body);
+            data.extend(body);
+            kept.lock().unwrap().push(data);
+            let _ = socket.write_all(reply);
+        }
+    });
+    (address, seen)
+}
+/// How a stand-in CLI presents its placeholder, as its real CLI does.
+#[derive(Clone, Copy)]
+enum Presents {
+    /// `Authorization: Bearer` (Grok).
+    Bearer,
+    /// `Authorization: Bearer` with the placeholder read from `auth.json` (Codex).
+    CodexAuth,
+    /// Both `x-api-key` and `Authorization: Bearer` (Claude Code).
+    Anthropic,
+    /// `x-goog-api-key` (Antigravity).
+    Google,
+}
+/// `turn` preceded by two requests through the turn's relay, as its CLI would
+/// make them: one to `route`, kept as `relay-reply`, and one to a path off
+/// the allow-list, kept as `relay-refused`, both beside the mailbox.
+fn through_relay(spec: &RunSpec, target: &str, presents: Presents, route: &str, turn: Command) -> Command {
+    const STEP: &str = r#"set -eu
+port=$1; file=$2; style=$3; route=$4; out=$5
+shift 5
+key=$(cat "$file")
+if [ "$style" = codex ]; then key=$(printf '%s' "$key" | sed -n 's/.*"OPENAI_API_KEY":"\([^"]*\)".*/\1/p'); fi
+ask() {
+  n=0
+  until case "$style" in
+      bearer|codex) curl -s -o "$2" -X POST -H "Authorization: Bearer $key" --data '{}' "http://127.0.0.1:$port$1";;
+      anthropic) curl -s -o "$2" -X POST -H "x-api-key: $key" -H "Authorization: Bearer $key" --data '{}' "http://127.0.0.1:$port$1";;
+      google) curl -s -o "$2" -X POST -H "x-goog-api-key: $key" --data '{}' "http://127.0.0.1:$port$1";;
+    esac
+  do
+    n=$((n + 1)); [ "$n" -lt 400 ] || exit 4; sleep 0.05
+  done
+}
+ask "$route" "$out/relay-reply"
+ask /v1/files "$out/relay-refused"
+exec "$@"
+"#;
+    let port = u16::from_str_radix(&spec.argv[4], 16).unwrap().to_string();
+    let file = host(spec, target);
+    let out = host(spec, "/workspace").parent().unwrap().to_path_buf();
+    let style = match presents {
+        Presents::Bearer => "bearer",
+        Presents::CodexAuth => "codex",
+        Presents::Anthropic => "anthropic",
+        Presents::Google => "google",
+    };
+    let mut command = sh(
+        STEP,
+        &[&port, file.to_str().unwrap(), style, route, out.to_str().unwrap()],
+    );
+    command.arg(turn.get_program()).args(turn.get_args());
+    command
+}
+
 /// One attempt of `backend` on an API-key account whose key is a fresh
-/// canary, with `turn` serving the CLI. The key reaches the turn only as one
-/// typed read-only secret mount at `target`; it is in no argument, variable,
-/// file Control wrote, record, diagnostic or published file, and no other
-/// container (the probe, the model's shell) mounts any secret.
-fn assert_key_unreadable(backend: Backend, target: &str, turn: impl Fn(&RunSpec) -> Command + Sync) -> Finished {
+/// canary, with `turn` serving the CLI after its relay requests
+/// ([`through_relay`]). The key never enters the turn: the launch mounts no
+/// secret and has no network, the CLI finds only its placeholder at
+/// `target`, and the key is in no argument, variable, file Control wrote,
+/// record, diagnostic or published file. A request through the relay reaches
+/// the provider with the key and without the placeholder; one off the
+/// allow-list is refused and audited; once the attempt ends its relay is gone.
+fn assert_key_proxied(
+    backend: Backend,
+    target: &str,
+    presents: Presents,
+    route: &str,
+    turn: impl Fn(&RunSpec) -> Command + Sync,
+) -> Finished {
     use std::os::unix::fs::DirBuilderExt;
     let name = format!("key-{}", backend.id());
     let account = crate::accounts::AccountName::try_from(name.as_str()).unwrap();
@@ -991,35 +1128,36 @@ fn assert_key_unreadable(backend: Backend, target: &str, turn: impl Fn(&RunSpec)
         .mode(0o700)
         .create(&directory)
         .unwrap();
-    let file = crate::accounts::Backend::key_file(backend).unwrap().name;
-    crate::config::write_in(&directory, file, canary.as_bytes()).unwrap();
-    let key = fs::canonicalize(directory.join(file)).unwrap();
-    let finished = attempt_as(backend, &name, crate::accounts::AccountKind::ApiKey, |spec| turn(spec));
-    assert_eq!(finished.outcome.as_deref(), Ok(REPLY), "{backend:?}");
-    let turn_name = format!("control-{}", finished.generation);
-    let spawned = finished.spawned();
-    let launched = spawned
-        .iter()
-        .find(|spec| spec.name == turn_name)
-        .expect("the turn launched");
-    let [secret] = launched.secrets.as_slice() else {
-        panic!("one secret: {:?}", launched.secrets)
+    let file = crate::accounts::Backend::key_file(backend).unwrap();
+    let saved = match file.writer {
+        crate::accounts::KeyWriter::Host => canary.clone(),
+        crate::accounts::KeyWriter::Cli { field } => json!({ field: canary }).to_string(),
     };
+    crate::config::write_in(&directory, file.name, saved.as_bytes()).unwrap();
+    let (provider, requests) = fake_provider();
+    crate::ports::key_relay::fakes::register(&format!("{}+{name}", backend.id()), provider);
+    let finished = attempt_as(backend, &name, crate::accounts::AccountKind::ApiKey, |spec| {
+        through_relay(spec, target, presents, route, turn(spec))
+    });
+    assert_eq!(finished.outcome.as_deref(), Ok(REPLY), "{backend:?}");
+    let launched = finished.turn();
+    assert!(launched.secrets.is_empty(), "{backend:?}: {:?}", launched.secrets);
+    assert_eq!(launched.network, Network::None, "{backend:?}");
     assert_eq!(
-        (secret.target.as_str(), secret.access),
-        (target, Access::ReadOnly),
-        "{backend:?}"
+        &launched.argv[..2],
+        ["/bin/sh", "-c"],
+        "{backend:?} waits for its relay"
     );
-    assert_eq!(fs::canonicalize(&secret.source).unwrap(), key);
+    // The placeholder, read-only where the key would be, and nothing else of the account.
+    let placeholder = fs::read_to_string(host(launched, target)).unwrap();
+    assert!(!placeholder.contains(&canary), "{backend:?}");
+    let token = placeholder
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        .find_map(|word| word.rsplit_once("ctl-").map(|(_, hex)| hex.to_owned()))
+        .filter(|hex| hex.len() == 32)
+        .unwrap_or_else(|| panic!("{backend:?}: a placeholder in {placeholder}"));
     let directory = fs::canonicalize(&directory).unwrap();
-    // A key is never writable, in the turn or in any other container.
-    assert!(
-        spawned
-            .iter()
-            .all(|spec| spec.secrets.iter().all(|s| s.access == Access::ReadOnly)),
-        "{backend:?}: an API-key account mounts nothing writable"
-    );
-    spawned.iter().for_each(|spec| {
+    finished.spawned().iter().for_each(|spec| {
         let shown = format!("{:?}{:?}", spec.argv, spec.env);
         assert!(!shown.contains(&canary), "{backend:?}: {} names the key", spec.name);
         assert!(
@@ -1029,27 +1167,55 @@ fn assert_key_unreadable(backend: Backend, target: &str, turn: impl Fn(&RunSpec)
             "{backend:?}: {} binds the account directory",
             spec.name
         );
-        // Codex's probe mounts an empty stand-in; nothing else but the turn has the key.
-        if spec.name != turn_name {
-            assert!(
-                spec.secrets
-                    .iter()
-                    .all(|s| fs::canonicalize(&s.source).map_or(true, |p| p != key && !p.starts_with(&directory))),
-                "{backend:?}: {} mounts the key",
-                spec.name
-            );
-        }
+        assert!(
+            spec.secrets
+                .iter()
+                .all(|s| fs::canonicalize(&s.source).map_or(true, |p| !p.starts_with(&directory))),
+            "{backend:?}: {} mounts the key",
+            spec.name
+        );
     });
-    // Files Control wrote for the turn: MCP configuration, settings, prompt,
-    // mailbox, workspace and the tool replies the stub kept.
+    // The provider got the key, never the placeholder.
+    let sent = requests.lock().unwrap().clone();
+    let [request] = sent.as_slice() else {
+        panic!("{backend:?}: one relayed request, not {}", sent.len())
+    };
+    let request = String::from_utf8_lossy(request);
+    assert!(request.contains(&canary), "{backend:?}: {request}");
+    assert!(!request.to_ascii_lowercase().contains(&token), "{backend:?}: {request}");
+    let (reply, refused) = (
+        fs::read_to_string(finished.root.join("relay-reply")).unwrap(),
+        fs::read_to_string(finished.root.join("relay-refused")).unwrap(),
+    );
+    assert_eq!(reply, "provider-says", "{backend:?}");
+    assert!(refused.contains("route_not_allowed"), "{backend:?}: {refused}");
+    // Audited, metadata only.
+    let audit = fs::read_to_string(crate::config::state("secrets-audit.jsonl").unwrap()).unwrap();
+    let lines: Vec<Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|line| line["attempt"] == finished.generation.as_str())
+        .collect();
+    assert_eq!(lines.len(), 2, "{backend:?}: {lines:?}");
+    assert_eq!(
+        (lines[0]["status"].as_u64(), lines[0]["refusal"].is_null()),
+        (Some(200), true)
+    );
+    assert_eq!(lines[1]["refusal"], "route_not_allowed", "{backend:?}");
+    assert!(!audit.contains(&canary) && !audit.contains(&token), "{backend:?}");
+    // After the attempt the relay is gone, so the placeholder opens nothing.
+    let port = u16::from_str_radix(&launched.argv[4], 16).unwrap();
+    assert!(
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
+        "{backend:?}: the relay outlived its attempt"
+    );
+    // Files Control wrote for the turn: placeholder, settings, prompt,
+    // mailbox, workspace and the replies the stub kept.
     assert_eq!(holding(&finished.root, &canary), Vec::<PathBuf>::new(), "{backend:?}");
     // What was recorded: activity, diagnostics, usage and the run itself.
     let recorded = serde_json::to_string(&(&finished.state.runtime, &finished.live, &finished.attempt)).unwrap();
     assert!(!recorded.contains(&canary), "{backend:?}: the key was recorded");
-    assert!(
-        !recorded.contains(&account.to_string()) || finished.attempt.account == account,
-        "only the attempt's own record names its account"
-    );
+    assert!(!recorded.contains(&token), "{backend:?}: the placeholder was recorded");
     let artifact = finished.attempt.artifact.clone().expect("the workspace was published");
     let manifest = crate::artifacts::manifest(&artifact).unwrap();
     manifest.files.iter().for_each(|entry| {
@@ -1061,7 +1227,7 @@ fn assert_key_unreadable(backend: Backend, target: &str, turn: impl Fn(&RunSpec)
         );
     });
     // The key files are never published if they appear in a workspace.
-    assert!(crate::artifacts::excluded(file), "{file}");
+    assert!(crate::artifacts::excluded(file.name), "{}", file.name);
     fs::remove_dir_all(directory).unwrap();
     finished
 }
@@ -1083,30 +1249,49 @@ fn model_shell(finished: &Finished) {
 }
 
 #[test]
-fn a_codex_api_key_is_only_a_read_only_mount() {
+fn a_codex_api_key_stays_on_the_host_behind_the_relay() {
     let recorded = include_str!("../../../crates/ai/tests/fixtures/codex-handoff-completed.jsonl");
     let (before, after) = recorded.split_at(recorded.match_indices('\n').nth(2).unwrap().0 + 1);
     let after = after.replace("Handed off; waiting for the build watch.", REPLY);
     // Codex runs its own shell inside its sandbox, which denies its home.
-    let finished = assert_key_unreadable(Backend::Codex, "/home/agent/.codex/auth.json", |spec| {
-        cli(spec, before, &after, &[(".control-result", REPLY)])
-    });
+    let finished = assert_key_proxied(
+        Backend::Codex,
+        "/home/agent/.codex/auth.json",
+        Presents::CodexAuth,
+        "/v1/responses",
+        |spec| cli(spec, before, &after, &[(".control-result", REPLY)]),
+    );
     let turn = finished.turn();
     assert!(turn.argv.iter().any(|w| w.contains("\"/home/agent/.codex\"=\"deny\"")));
+    let port = u16::from_str_radix(&turn.argv[4], 16).unwrap();
+    for setting in [
+        "model_provider=\"control\"".to_owned(),
+        format!(
+            "model_providers.control={{name=\"Control key relay\",base_url=\"http://127.0.0.1:{port}/v1\",wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}"
+        ),
+        "analytics.enabled=false".to_owned(),
+    ] {
+        assert!(turn.argv.contains(&setting), "{setting}: {:?}", turn.argv);
+    }
 }
 
 #[test]
-fn a_claude_api_key_is_read_only_by_claudes_own_helper() {
+fn a_claude_api_key_stays_on_the_host_behind_the_relay() {
     let (before, after) = claude_stream();
-    let finished = assert_key_unreadable(Backend::Claude, "/home/agent/.control-key/anthropic-api-key", |spec| {
-        cli_with_shell(spec, &before, &after)
-    });
+    let finished = assert_key_proxied(
+        Backend::Claude,
+        "/home/agent/.control-key/anthropic-api-key",
+        Presents::Anthropic,
+        "/v1/messages?beta=true",
+        |spec| cli_with_shell(spec, &before, &after),
+    );
     model_shell(&finished);
-    let turn = finished
-        .spawned()
-        .into_iter()
-        .find(|spec| spec.argv.first().is_some_and(|w| w == "claude"))
-        .unwrap();
+    let turn = finished.turn();
+    let port = u16::from_str_radix(&turn.argv[4], 16).unwrap();
+    let env = |name: &str| turn.env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+    assert_eq!(env("ANTHROPIC_BASE_URL"), Some(format!("http://127.0.0.1:{port}")));
+    assert_eq!(env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC").as_deref(), Some("1"));
+    assert_eq!(turn.argv[5], "claude");
     let at = turn.argv.iter().position(|w| w == "--settings").unwrap();
     assert_eq!(
         turn.argv[at + 1],
@@ -1119,7 +1304,7 @@ fn a_claude_api_key_is_read_only_by_claudes_own_helper() {
 }
 
 #[test]
-fn a_grok_api_key_is_exported_only_inside_grok() {
+fn a_grok_api_key_stays_on_the_host_behind_the_relay() {
     let before = lines(&[
         json!({"type":"available_commands","tools":["search_tool","use_tool"],"commands":[]}),
         json!({"type":"usage","messageId":"resp_1","stopReason":"tool_use","usage":{"input_tokens":400,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":0}}),
@@ -1128,15 +1313,24 @@ fn a_grok_api_key_is_exported_only_inside_grok() {
         json!({"type":"text","data":REPLY}),
         json!({"type":"end","stopReason":"end_turn","sessionId":"s","requestId":"r","usage":{"input_tokens":812,"cache_read_input_tokens":41000,"cache_creation_input_tokens":100,"output_tokens":45,"reasoning_tokens":7,"total_tokens":41957},"num_turns":2}),
     ]);
-    let finished = assert_key_unreadable(Backend::Grok, "/home/agent/.control-key/xai-api-key", |spec| {
-        cli_with_shell(spec, &before, &after)
-    });
+    let finished = assert_key_proxied(
+        Backend::Grok,
+        "/home/agent/.control-key/xai-api-key",
+        Presents::Bearer,
+        "/v1/chat/completions",
+        |spec| cli_with_shell(spec, &before, &after),
+    );
     model_shell(&finished);
-    let turn = finished
-        .spawned()
-        .into_iter()
-        .find(|spec| spec.argv.first().is_some_and(|w| w == "control-grok"))
-        .unwrap();
+    let turn = finished.turn();
+    assert_eq!(turn.argv[5], "control-grok");
+    let port = u16::from_str_radix(&turn.argv[4], 16).unwrap();
+    let env = |name: &str| turn.env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+    assert_eq!(
+        env("GROK_XAI_API_BASE_URL"),
+        Some(format!("http://127.0.0.1:{port}/v1"))
+    );
+    assert_eq!(env("GROK_DISABLE_AUTOUPDATER").as_deref(), Some("1"));
+    assert_eq!(env("GROK_TELEMETRY_ENABLED").as_deref(), Some("0"));
     let config = fs::read_to_string(host(turn, "/home/agent/.grok/config.toml")).unwrap();
     assert!(
         config.contains(r#"args = ["-u", "XAI_API_KEY", "/bin/control-room-mcp"]"#),
@@ -1145,25 +1339,105 @@ fn a_grok_api_key_is_exported_only_inside_grok() {
 }
 
 #[test]
-fn an_antigravity_api_key_on_a_named_account_is_only_a_read_only_mount() {
+fn an_antigravity_api_key_stays_on_the_host_behind_the_relay() {
     let before = lines(&[
         json!({"event":"init","conversation_id":"c","init":{"model":"gemini-4-neon-medium","cwd":"/workspace","tools":["ask_permission","call_mcp_tool","run_command"],"permission_mode":"always-proceed"}}),
     ]);
     let after = lines(&[
         json!({"event":"result","result":{"conversation_id":"c","status":"SUCCESS","response":REPLY,"duration_seconds":6.88,"num_turns":1,"usage":{"input_tokens":10418,"output_tokens":589,"thinking_tokens":551,"cache_read_tokens":8113,"total_tokens":11007}}}),
     ]);
-    let finished = assert_key_unreadable(
+    let finished = assert_key_proxied(
         Backend::Antigravity,
         "/home/agent/.control-key/gemini-api-key",
+        Presents::Google,
+        "/v1beta/models/gemini-4-neon-medium:streamGenerateContent?alt=sse",
         |spec| cli_with_shell(spec, &before, &after),
     );
     model_shell(&finished);
-    let turn = finished
-        .spawned()
-        .into_iter()
-        .find(|spec| spec.argv.first().is_some_and(|w| w == "control-agy"))
-        .unwrap();
+    let turn = finished.turn();
+    assert_eq!(turn.argv[5], "control-agy");
+    let port = u16::from_str_radix(&turn.argv[4], 16).unwrap();
+    let env = |name: &str| turn.env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+    assert_eq!(env("GOOGLE_GEMINI_BASE_URL"), Some(format!("http://127.0.0.1:{port}")));
     let private = host(turn, "/home/agent/.control");
     let settings: Value = serde_json::from_slice(&fs::read(private.join("settings.json")).unwrap()).unwrap();
     assert_eq!(settings["modelProvider"], "gemini");
+}
+
+/// Live and offline: each backend's real CLI, in its pinned image, on an
+/// API-key account whose key is a canary. The turn's container has no network
+/// and no key; its CLI's first request leaves through the relay and reaches a
+/// fake provider on this machine with the canary key and without the
+/// placeholder. The fake provider refuses every request, so no model is
+/// called and the turn fails. `CONTROL_QA_KEY_RELAY_<ID>_IMAGE` names each
+/// backend's image (`sha256:…`); backends without one are skipped.
+#[test]
+#[ignore = "needs a container engine and the backend images; makes no model call"]
+fn live_each_cli_reaches_the_relay_with_only_its_placeholder() {
+    use std::os::unix::fs::DirBuilderExt;
+    const REFUSED: &[u8] = b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 99\r\nConnection: close\r\n\r\n{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Control relay check: no model\"}}";
+    let checked: Vec<Backend> = [Backend::Claude, Backend::Codex, Backend::Antigravity, Backend::Grok]
+        .into_iter()
+        .filter_map(|backend| {
+            let variable = format!("CONTROL_QA_KEY_RELAY_{}_IMAGE", backend.id().to_uppercase());
+            let image = std::env::var(&variable).ok()?;
+            let name = format!("live-{}", backend.id());
+            let account = crate::accounts::AccountName::try_from(name.as_str()).unwrap();
+            let canary = format!("CANARY-{}-{}", backend.id(), std::process::id());
+            let directory = crate::logins::directory(backend, &account).unwrap();
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&directory)
+                .unwrap();
+            let file = crate::accounts::Backend::key_file(backend).unwrap();
+            let saved = match file.writer {
+                crate::accounts::KeyWriter::Host => canary.clone(),
+                crate::accounts::KeyWriter::Cli { field } => json!({ field: canary }).to_string(),
+            };
+            crate::config::write_in(&directory, file.name, saved.as_bytes()).unwrap();
+            let (provider, requests) = fake_provider_answering(REFUSED);
+            crate::ports::key_relay::fakes::register(&format!("{}+{name}", backend.id()), provider);
+            let finished = attempt_in(
+                crate::engine::isolation(),
+                &image,
+                backend,
+                &name,
+                crate::accounts::AccountKind::ApiKey,
+            );
+            let sent = requests.lock().unwrap().clone();
+            let heads: Vec<String> = sent
+                .iter()
+                .map(|request| {
+                    let text = String::from_utf8_lossy(request);
+                    text.split("\r\n\r\n").next().unwrap_or_default().to_owned()
+                })
+                .collect();
+            eprintln!(
+                "{backend:?}: {:?}; provider saw {} request(s)",
+                finished.outcome,
+                sent.len()
+            );
+            heads.iter().for_each(|head| {
+                eprintln!("  {}", head.lines().next().unwrap_or_default());
+            });
+            assert!(!sent.is_empty(), "{backend:?}: no request reached the provider");
+            assert!(
+                sent.iter()
+                    .all(|r| r.windows(canary.len()).any(|w| w == canary.as_bytes())),
+                "{backend:?}: every request carries the key"
+            );
+            assert!(
+                heads.iter().all(|head| !head.contains("ctl-")),
+                "{backend:?}: no request carries the placeholder"
+            );
+            assert_eq!(holding(&finished.root, &canary), Vec::<PathBuf>::new(), "{backend:?}");
+            fs::remove_dir_all(directory).unwrap();
+            Some(backend)
+        })
+        .collect();
+    assert!(
+        !checked.is_empty(),
+        "set CONTROL_QA_KEY_RELAY_<ID>_IMAGE for at least one backend"
+    );
 }

@@ -36,7 +36,9 @@ impl crate::accounts::Backend for Backend {
             // `codex login --with-api-key` writes the key into auth.json.
             Self::Codex => Some(KeyFile {
                 name: "auth.json",
-                writer: KeyWriter::Cli,
+                writer: KeyWriter::Cli {
+                    field: "OPENAI_API_KEY",
+                },
             }),
             Self::Claude => host("anthropic-api-key"),
             Self::Grok => host("xai-api-key"),

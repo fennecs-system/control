@@ -3,9 +3,10 @@
 //! whether a login may be written: the host decides that ([`Write`]); a
 //! backend only says where in its container the granted login goes and how
 //! its CLI keeps a sign-in it refreshes ([`Keeps`]).
-use control_isolation::{Access, RunSpec, User};
+use control_isolation::{Access, Network, RunSpec, User};
 use std::{
-    fs, io,
+    fmt, fs, io,
+    num::NonZeroU16,
     path::{Path, PathBuf},
 };
 
@@ -14,10 +15,81 @@ use std::{
 pub enum Form {
     /// The CLI's own saved sign-in.
     Session,
-    /// A provider API key in a private file.
+    /// A provider API key in a private file, mounted read-only.
     ApiKey,
     /// Google Cloud Application Default Credentials.
     CloudDefault,
+    /// A provider API key the host's relay adds to each request
+    /// (docs/PORTS.md, "Key-injecting relay"): the CLI holds only a
+    /// placeholder ([`Proxied`]) and its container has no network.
+    Proxied,
+}
+
+/// What a CLI holds instead of a proxied key: a placeholder that unlocks the
+/// key only through its attempt's relay while the attempt runs, and the
+/// container-loopback port that relay listens on. It cannot be printed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Proxied {
+    placeholder: String,
+    port: NonZeroU16,
+}
+impl Proxied {
+    pub fn new(placeholder: String, port: NonZeroU16) -> Self {
+        Self { placeholder, port }
+    }
+    pub fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+    pub fn port(&self) -> NonZeroU16 {
+        self.port
+    }
+    /// The relay as a CLI's base URL: plain HTTP on the container's loopback.
+    pub fn origin(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+    /// `spec` with `contents` (the placeholder in the form the CLI reads it)
+    /// written to the private host `file` and bound read-only at `target`,
+    /// where the CLI would have read a mounted key. Not a secret mount: the
+    /// placeholder is worthless off the relay.
+    pub fn place(&self, spec: RunSpec, file: &Path, contents: &str, target: &str) -> io::Result<RunSpec> {
+        crate::cli::private_file(file, contents)?;
+        Ok(spec.bind(crate::cli::checked(file)?.to_path_buf(), target, Access::ReadOnly))
+    }
+    /// `spec` with no network and its program started only once the relay
+    /// listens on the container's loopback, so the CLI's first request finds
+    /// it. The wait gives up after 30 s.
+    pub fn offline(&self, spec: RunSpec) -> RunSpec {
+        let wait = [
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            RELAY_WAIT.to_owned(),
+            "control-relay-wait".to_owned(),
+            format!("{:04X}", self.port.get()),
+        ];
+        RunSpec {
+            network: Network::None,
+            argv: wait.into_iter().chain(spec.argv.iter().cloned()).collect(),
+            ..spec
+        }
+    }
+}
+impl fmt::Debug for Proxied {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Proxied {{ placeholder: hidden, port: {} }}", self.port)
+    }
+}
+/// Waits for a listener on 127.0.0.1 at the hex port `$1`, then runs the rest.
+const RELAY_WAIT: &str = r#"p=$1; shift; n=0; until grep -q " 0100007F:$p 00000000:0000 0A" /proc/net/tcp; do n=$((n+1)); [ "$n" -lt 600 ] || { echo "Control's key relay did not start" >&2; exit 75; }; sleep 0.05; done; exec "$@""#;
+
+/// How a backend's API-key accounts reach its CLI. Each backend declares one
+/// ([`crate::Agent::key_delivery`]); the host never special-cases a backend.
+#[derive(Clone, Copy, Debug)]
+pub enum KeyDelivery {
+    /// Through the host's key-injecting relay under this rule: nothing is
+    /// mounted, the container holds a placeholder and has no network.
+    Proxied(&'static control_inject::InjectionRule),
+    /// The key file mounted read-only into the CLI's container, and why.
+    Mounted(&'static str),
 }
 
 /// Whether a turn may write its login back. Decided by the host from who
@@ -125,6 +197,8 @@ pub struct Granted {
     path: PathBuf,
     owner: User,
     write: Write,
+    /// The placeholder and relay, exactly when `form` is [`Form::Proxied`].
+    relay: Option<Proxied>,
 }
 impl Granted {
     /// The host's checked login, read-only: a private regular file owned by `owner`.
@@ -134,7 +208,25 @@ impl Granted {
             path,
             owner,
             write: Write::ReadOnly,
+            relay: None,
         }
+    }
+    /// A proxied key: nothing is mounted. The CLI runs as `owner`, the key
+    /// file's owner, and holds `relay`'s placeholder.
+    pub fn relayed(owner: User, relay: Proxied) -> Self {
+        Self {
+            form: Form::Proxied,
+            path: PathBuf::new(),
+            owner,
+            write: Write::ReadOnly,
+            relay: Some(relay),
+        }
+    }
+    /// The placeholder and relay of a proxied key.
+    pub fn relay(&self) -> io::Result<&Proxied> {
+        self.relay
+            .as_ref()
+            .ok_or_else(|| io::Error::other("This login is not a proxied key"))
     }
     /// A subscription sign-in the CLI may write back. Only a sign-in can be
     /// refreshable, so no key or cloud credential is ever mounted writable.

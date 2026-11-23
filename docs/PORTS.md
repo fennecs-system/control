@@ -188,20 +188,46 @@ guessed port ID grants nothing.
 
 ## Key-injecting relay
 
-Not yet used by any backend: no turn runs through it, and API-key accounts
-still mount their key file as before. The relay is built and tested so the
-next change can switch the CLIs to it one backend at a time.
+An API key never enters a container. A CLI turn on an API-key account of
+Codex, Claude, Grok or Antigravity gets a per-attempt placeholder instead of
+its key, and no network (`--network=none`). Its only way out is this relay,
+reached over the same `listen-multi` stdio relay as ports. On the host, the
+relay checks each request against its backend's fixed rule and the attempt's
+placeholder, then adds the real key and sends the request over TLS to the
+provider's fixed origin. The CLI's base URL points at the relay over plain
+HTTP on the container's loopback (`127.0.0.1:3130`).
 
-The aim is that an API key never enters a container. A CLI turn with an
-API-key account gets a per-attempt placeholder instead of its key and no
-network (`--network=none`). Its only way out is this relay, reached over the
-same `listen-multi` stdio relay as ports. On the host, the relay checks each
-request against its backend's fixed rule and the attempt's placeholder, then
-adds the real key and sends the request over TLS to the provider's fixed
-origin. The CLI's base URL points at the relay over plain HTTP on container
-loopback.
+How a turn uses it:
 
-- **Pure core** (`src/ports/inject.rs`). It parses the request head once into
+- The host locates the account's key file as before: it must be private and
+  owned by a non-root user. It never mounts it. The turn gets a fresh random
+  placeholder for this attempt, written where the CLI reads its key, and the
+  CLI is pointed at the relay. See the table below for each CLI.
+- Once the turn's container runs, the host execs `control-tcp-relay
+  listen-multi 3130` into it as the CLI's user. The CLI starts only once that
+  port listens, waiting at most 30 seconds.
+- Each request's key is read from the account's file on the host and cleared
+  after it is written upstream. For Codex the file is the `auth.json` that
+  `control codex key` writes, and the key is its `OPENAI_API_KEY`.
+- The relay stops when the turn ends, so the placeholder is worthless from then on.
+
+| CLI | Placeholder | Pointed at the relay by |
+| --- | --- | --- |
+| Codex | `auth.json` holding `OPENAI_API_KEY: sk-proj-ctl-…` | `-c model_provider="control"` with a `model_providers.control` entry (`wire_api="responses"`, `requires_openai_auth=true`, `supports_websockets=false`); `analytics.enabled=false` |
+| Claude Code | `ctl-…` in the key-helper file | `ANTHROPIC_BASE_URL`; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
+| Grok Build | `ctl-…`, exported as `XAI_API_KEY` by `control-grok` | `GROK_XAI_API_BASE_URL` (`…/v1`); `GROK_DISABLE_AUTOUPDATER=1`, `GROK_TELEMETRY_ENABLED=0` (from source; not yet run with a real Grok image) |
+| Antigravity | `ctl-…`, exported as `GEMINI_API_KEY` by `control-agy` | `GOOGLE_GEMINI_BASE_URL`, with `"modelProvider": "gemini"` |
+
+Nothing changes for the operator: existing API-key accounts use the relay
+from their next turn. Each backend declares its delivery
+(`Agent::key_delivery`); all four are proxied. A backend whose provider has no
+rule would mount its key read-only instead. Such an account would show
+`delivery: mounted (reason)` with a warning in `control accounts list`,
+`control ID check`, `control doctor` and the providers page. Setting
+`"require_proxied_keys": true` in the node's `permissions.json` refuses such
+turns outright. It is off by default, and today it refuses nothing.
+
+- **Pure core** (crate `control-inject`). It parses the request head once into
   typed parts and refuses ambiguous heads. That covers duplicate `Host` or
   `Content-Length`, folded headers, bare CR or LF, whitespace before a colon,
   non-ASCII or empty header names, and absolute- or authority-form targets.
@@ -212,7 +238,8 @@ loopback.
   `Proxy-*`, hop-by-hop and framing headers removed. It ends with
   `Connection: close` and a slot for the key. The core never sees the key.
   Refusals answer 400, 403, 411, 413 or 431.
-- **Edge** (`src/ports/inject_edge.rs`). It reads one head within ten seconds,
+- **Edge** (`src/ports/inject_edge.rs`; per attempt, `src/ports/key_relay.rs`).
+  It reads one head within ten seconds,
   connects to the rule's origin (the name is resolved on the host), and writes
   the planned head with the key spliced in. The key is read per request from
   the account's private key file and cleared after that write. The edge then
@@ -323,7 +350,7 @@ and closing open tunnels, proxy settings present only with approved egress, the
 usage text and the reserved port. The ignored `proxy_relay_benchmark` compares
 tunnel throughput and round-trip latency with the raw relay path.
 
-`src/ports/inject/tests.rs` and `src/ports/inject_edge/tests.rs` cover the
+`crates/inject/src/tests.rs` and `src/ports/inject_edge/tests.rs` cover the
 key-injecting relay:
 
 - every refusal and smuggling shape, and each backend's allow-list;
@@ -334,6 +361,18 @@ key-injecting relay:
 - that events reach the client before the provider finishes;
 - each bound's status, and audit lines that hold metadata only and are pruned;
 - two interleaved streams through the multiplex transport.
+
+Whole attempts in `src/worker/tests/attempts.rs` (`…_stays_on_the_host_behind_the_relay`,
+one per backend) run the real `tools/tcp-relay`, built from source, as the
+container's relay. A stand-in CLI sends requests through it to a fake provider.
+They check that the launch mounts no secret and has no network, and that only
+the placeholder is inside. The provider gets the key and never the placeholder.
+A path off the allow-list is refused and audited. The key is in no argument,
+variable, file, record or published file. The relay is gone once the attempt
+ends. The ignored `live_each_cli_reaches_the_relay_with_only_its_placeholder`
+does the same with each real CLI in its pinned image against a fake provider
+that refuses every request, so no model is called. Set
+`CONTROL_QA_KEY_RELAY_<ID>_IMAGE` for each backend to check.
 
 Two ignored live tests in `src/ports/tests/live_tests.rs` need
 `CONTROL_QA_SERVICE_IMAGE` (an immutable image ID) and `CONTROL_QA_CONTROL_BIN`,
