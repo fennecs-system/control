@@ -90,16 +90,19 @@ pub fn bots_toolbar(history: bool, search: &str, controls: &str) -> String {
 /// are on Bots / History (`crate::history_view`). Built from the chat list
 /// under the state lock; rendering reads only this.
 pub struct Picker {
+    /// Each row's id, then its title.
+    texts: crate::texts::Texts,
     rows: Vec<Row>,
-    active: String,
+    /// No DM is open: "+ New DM" is the current page.
+    new: bool,
     /// More threads than the picker shows: link to History.
     more: bool,
 }
 struct Row {
-    id: String,
-    title: String,
     depth: usize,
+    /// The open DM or one of its ancestors; read only for rows with children.
     open: bool,
+    current: bool,
 }
 impl Picker {
     pub fn of(chats: &[crate::chat::Session], active: &str) -> Self {
@@ -140,47 +143,49 @@ impl Picker {
                 selected.extend(entries[root..root_end].iter());
             }
         }
-        Self {
-            rows: selected
-                .iter()
-                .map(|entry| Row {
-                    id: entry.session.id.clone(),
-                    title: crate::callsigns::label(entry.session, callsigns[entry.position]).into_owned(),
+        let mut texts = crate::texts::Texts::with_capacity(2 * selected.len(), 96 * selected.len());
+        let rows = selected
+            .iter()
+            .enumerate()
+            .map(|(position, entry)| {
+                let id = entry.session.id.as_str();
+                texts.push(id);
+                texts.push(&crate::callsigns::label(entry.session, callsigns[entry.position]));
+                Row {
                     depth: entry.depth,
-                    open: expanded.contains(entry.session.id.as_str()),
-                })
-                .collect(),
-            active: active.to_owned(),
+                    open: selected.get(position + 1).is_some_and(|next| next.depth > entry.depth)
+                        && expanded.contains(id),
+                    current: id == active,
+                }
+            })
+            .collect();
+        Self {
+            texts,
+            rows,
+            new: active.is_empty(),
             more: roots.len() > crate::pagination::SIZE,
         }
     }
     pub fn render(&self) -> String {
-        let current = if self.active.is_empty() {
-            " aria-current='page'"
-        } else {
-            ""
-        };
+        let current = if self.new { " aria-current='page'" } else { "" };
         let mut links = format!("<a href='/dms?new=1'{current}>+ New DM</a>");
         let mut branches = Vec::new();
         for (position, row) in self.rows.iter().enumerate() {
+            let (id, title) = (self.texts.get(2 * position), self.texts.get(2 * position + 1));
             while branches.last().is_some_and(|depth| *depth >= row.depth) {
                 links.push_str("</div></details>");
                 branches.pop();
             }
             // Keep very deep threads readable without narrowing their row backgrounds.
             let depth = row.depth.min(8);
-            let title = crate::escape(&row.title);
-            let current = if row.id == self.active {
-                " aria-current='page'"
-            } else {
-                ""
-            };
+            let title = crate::escape(title);
+            let current = if row.current { " aria-current='page'" } else { "" };
             let link = format!(
                 "<a class='conversation-link' href='/dm/{}' title='{title}' data-conversation-depth='{depth}'{current}><span class='conversation-title'>{title}</span></a>",
-                row.id
+                id
             );
             if self.rows.get(position + 1).is_some_and(|next| next.depth > row.depth) {
-                links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",row.id,if row.open {" open"}else{""}));
+                links.push_str(&format!("<details class='conversation-branch' data-chat-branch='{}'{}><summary data-conversation-depth='{depth}'>{link}</summary><div class='conversation-children'>",id,if row.open {" open"}else{""}));
                 branches.push(row.depth);
             } else {
                 links.push_str(&link);

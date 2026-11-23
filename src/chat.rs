@@ -707,7 +707,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
                 .filter(|run| run.chat_id.as_ref().is_some_and(|chat| chats.contains(chat)))
                 .filter(|run| run.status.is_proceeding())
                 .filter(|run| actor == crate::identity::Actor::LocalOperator || run.actor == actor)
-                .map(|run| run.id().to_string())
+                .map(|run| run.id().as_str().to_owned())
                 .collect::<Vec<_>>();
             for run in &runs {
                 crate::lifecycle::request_cancel(&mut state.runtime, run, &actor)?;
@@ -731,7 +731,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             .filter(|run| target.is_empty() || run.id() == target)
             .min_by_key(|run| (run.status == RunStatus::Queued, run.queue_order))
             .ok_or("No matching pending run in this chat.")?;
-        let run_id = run.id().to_string();
+        let run_id = run.id().as_str().to_owned();
         crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &actor)?;
         mark_cancelled(state, &[id.to_owned()]);
         let stopping = state
@@ -888,7 +888,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             state.runtime.runs.pop();
             return Err(error);
         }
-        Some(state.runtime.runs[queued].id().to_string())
+        Some(state.runtime.runs[queued].id().as_str().to_owned())
     } else {
         None
     };
@@ -1247,7 +1247,7 @@ pub struct Page {
     commands: (bool, bool),
     picker: crate::navigation::Picker,
     scores: Vec<String>,
-    genes: Vec<(String, String)>,
+    genes: crate::texts::Texts,
     selected: Vec<String>,
 }
 impl Page {

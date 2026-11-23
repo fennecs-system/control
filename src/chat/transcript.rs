@@ -24,6 +24,9 @@ pub struct Transcript {
     bot: Option<String>,
     entries: Vec<Entry>,
     agents: Vec<(String, Activity)>,
+    /// Every attempt's events, already rendered (see [`events_html`]), back
+    /// to back; each attempt keeps its range.
+    events: String,
     /// The project panel when no message carries it.
     project: Option<String>,
 }
@@ -43,8 +46,6 @@ struct Turn {
     project: Option<Project>,
     delegated: Option<String>,
     run: Option<String>,
-    /// The run's reply, which its own message events repeat.
-    reply: String,
     attempts: Vec<Attempt>,
     commands: Vec<Activity>,
 }
@@ -67,7 +68,7 @@ enum ProjectPart {
 struct Attempt {
     parts: Vec<StatusPart>,
     traced: bool,
-    events: Result<Vec<Activity>, String>,
+    events: Result<std::ops::Range<usize>, String>,
 }
 
 /// Everything the transcript of chat `id` shows, read in one critical section.
@@ -75,6 +76,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
     let session = super::viewable(&state.chats, id)?;
     let runs = crate::conversation::Conversation::of(state, session);
     let project_message = crate::projects::message_index(session);
+    let mut events = String::new();
     let entries = session
         .messages
         .iter()
@@ -184,7 +186,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
                             parts: attempt.status(index),
                             traced: attempt.context_trace.is_some(),
                             events: crate::history::activity(run.chat_id.as_deref(), attempt)
-                                .map(std::borrow::Cow::into_owned)
+                                .map(|activity| events_html(&mut events, position, index, run_reply, &activity))
                                 .map_err(|error| error.to_string()),
                         })
                         .collect()
@@ -198,8 +200,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
                 body,
                 project,
                 delegated,
-                run: run.map(|r| r.id().to_string()),
-                reply: run_reply.to_owned(),
+                run: run.map(|r| r.id().as_str().to_owned()),
                 attempts,
                 commands: message
                     .run_id
@@ -224,6 +225,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
         }),
         bot: crate::bots::status(state, id),
         entries,
+        events,
         agents: super::agent_activity(state, id)
             .into_iter()
             .map(|entry| (entry.chat.to_owned(), entry.activity))
@@ -240,7 +242,9 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
 impl Transcript {
     pub fn render(&self) -> String {
         let id = self.id.as_str();
-        let mut html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>".to_owned();
+        // The events are most of the page; reserve for them once.
+        let mut html = String::with_capacity(self.events.len() + 512 * (self.entries.len() + 2));
+        html.push_str("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='transcript'>");
         html.push_str(&self.panels);
         if let Some((room, state)) = &self.listener {
             html.push_str(&format!(
@@ -259,7 +263,7 @@ impl Transcript {
                     "<p class='message-status preserve' aria-label='Control notice'>{}</p>",
                     escape(line)
                 )),
-                Entry::Turn(turn) => turn.render(id, &mut html),
+                Entry::Turn(turn) => turn.render(id, &self.events, &mut html),
             }
         }
         if !self.agents.is_empty() {
@@ -288,7 +292,7 @@ impl Transcript {
 }
 
 impl Turn {
-    fn render(&self, id: &str, html: &mut String) {
+    fn render(&self, id: &str, events: &str, html: &mut String) {
         let position = self.position;
         let status = if self.status.is_empty() {
             String::new()
@@ -355,51 +359,10 @@ impl Turn {
                     line.join(" · ")
                 ));
             }
-            let events = match &attempt.events {
-                Ok(events) => events,
-                Err(error) => {
-                    html.push_str(&format!("<p class='message-status' role='alert'>{}</p>", escape(error)));
-                    continue;
-                }
-            };
-            for event in events.iter().filter(|event| event.kind == "file_change") {
-                let patch = &event.output;
-                if patch.is_empty() {
-                    continue;
-                }
-                let mut body = String::new();
-                for line in patch.lines() {
-                    let class = match control_diff::kind(line) {
-                        control_diff::Kind::Add => "diff-add",
-                        control_diff::Kind::Remove => "diff-remove",
-                        control_diff::Kind::Header => "diff-header",
-                        control_diff::Kind::Context => "diff-context",
-                    };
-                    body.push_str(&format!("<span class='diff-line {class}'>{}</span>", escape(line)));
-                }
-                html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),index+1,escape(&event.text)));
+            match &attempt.events {
+                Ok(range) => html.push_str(&events[range.clone()]),
+                Err(error) => html.push_str(&format!("<p class='message-status' role='alert'>{}</p>", escape(error))),
             }
-            for event in events
-                .iter()
-                .filter(|event| event.kind == "message" && event.text.trim() != self.reply.trim())
-            {
-                html.push_str(&format!("<article class='assistant-message' data-transcript-key='{position}-{index}-message-{}'><p class='preserve'>{}</p></article>",escape(&event.id),escape(&event.text)));
-            }
-            let mut events = events
-                .iter()
-                .filter(|event| event.kind != "file_change" && event.kind != "message")
-                .enumerate()
-                .peekable();
-            if events.peek().is_none() {
-                continue;
-            }
-            html.push_str(&format!(
-                "<details class='run-activity' data-transcript-key='{position}-{index}-activity'><summary>Recent activity · attempt {}</summary>", index + 1
-            ));
-            for (event_index, event) in events {
-                html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", escape(&event.status), escape(&event.text), escape(&event.output)));
-            }
-            html.push_str("</details>");
         }
         if !self.commands.is_empty() {
             html.push_str(&format!("<details class='run-activity' data-transcript-key='{position}-commands'><summary>Commands · {}</summary>",self.commands.len()));
@@ -409,4 +372,60 @@ impl Turn {
             html.push_str("</details>");
         }
     }
+}
+
+/// One attempt's file changes, messages (other than the run's reply) and
+/// other events. Built while the view is copied: the events are the bulk of
+/// a transcript, and copying them to render later costs more than rendering
+/// them once.
+fn events_html(
+    html: &mut String,
+    position: usize,
+    index: usize,
+    reply: &str,
+    events: &[Activity],
+) -> std::ops::Range<usize> {
+    let start = html.len();
+    for event in events.iter().filter(|event| event.kind == "file_change") {
+        let patch = &event.output;
+        if patch.is_empty() {
+            continue;
+        }
+        let mut body = String::new();
+        for line in patch.lines() {
+            let class = match control_diff::kind(line) {
+                control_diff::Kind::Add => "diff-add",
+                control_diff::Kind::Remove => "diff-remove",
+                control_diff::Kind::Header => "diff-header",
+                control_diff::Kind::Context => "diff-context",
+            };
+            body.push_str("<span class='diff-line ");
+            body.push_str(class);
+            body.push_str("'>");
+            crate::escape_into(&mut body, line);
+            body.push_str("</span>");
+        }
+        html.push_str(&format!("<details class='edit-diff' data-transcript-key='{position}-{index}-diff-{}'><summary>Changes · attempt {} <span>{}</span></summary><pre aria-label='File changes'>{body}</pre></details>",escape(&event.id),index+1,escape(&event.text)));
+    }
+    for event in events
+        .iter()
+        .filter(|event| event.kind == "message" && event.text.trim() != reply.trim())
+    {
+        html.push_str(&format!("<article class='assistant-message' data-transcript-key='{position}-{index}-message-{}'><p class='preserve'>{}</p></article>",escape(&event.id),escape(&event.text)));
+    }
+    let mut events = events
+        .iter()
+        .filter(|event| event.kind != "file_change" && event.kind != "message")
+        .enumerate()
+        .peekable();
+    if events.peek().is_some() {
+        html.push_str(&format!(
+            "<details class='run-activity' data-transcript-key='{position}-{index}-activity'><summary>Recent activity · attempt {}</summary>", index + 1
+        ));
+        for (event_index, event) in events {
+            html.push_str(&format!("<details class='command-activity' data-transcript-key='{position}-{index}-event-{event_index}'><summary><span>{}</span> <code>{}</code></summary><pre>{}</pre></details>", escape(&event.status), escape(&event.text), escape(&event.output)));
+        }
+        html.push_str("</details>");
+    }
+    start..html.len()
 }

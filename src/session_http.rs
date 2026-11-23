@@ -367,12 +367,6 @@ pub fn handle(
     body: &[u8],
 ) -> bool {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    // The server serves these before taking the lock (`crate::read_response`);
-    // a caller already holding the state, such as a test, gets the same bytes.
-    if let Some(page) = ChatPage::of(method, path, header) {
-        let _ = CHAT_PAGES.reply(state, page).write(stream);
-        return true;
-    }
     if method == "GET" && path == "/" && crate::fields(query).get("view").is_some_and(|v| v == "evolution") {
         let _ = control_http::respond(
             stream,
@@ -519,6 +513,12 @@ pub fn handle(
     let Some(route) = path.strip_prefix("/dm/") else {
         return false;
     };
+    // The server serves these before taking the lock (`crate::read_response`);
+    // a caller already holding the state, such as a test, gets the same bytes.
+    if let Some(page) = ChatPage::of(method, path, header) {
+        let _ = CHAT_PAGES.reply(state, page).write(stream);
+        return true;
+    }
     let (id, operation) = route.split_once('/').unwrap_or((route, ""));
     if !chat::valid_id(id) {
         let _ = control_http::respond(

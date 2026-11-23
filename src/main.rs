@@ -88,6 +88,7 @@ mod spawning;
 mod storage;
 #[cfg(test)]
 mod test_support;
+mod texts;
 mod tool_catalog;
 mod tool_registry;
 mod toolbox;
@@ -153,12 +154,29 @@ pub(crate) fn error_page(message: &str, back: &str) -> String {
         escape(back)
     )
 }
+/// HTML-escapes `&`, `<`, `>`, `"` and `'` in one pass.
 fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    let mut out = String::with_capacity(s.len());
+    escape_into(&mut out, s);
+    out
+}
+/// [`escape`], appended to `out` without a temporary string.
+fn escape_into(out: &mut String, s: &str) {
+    // The escaped bytes are ASCII, so every split is on a character boundary.
+    let start = s.bytes().enumerate().fold(0, |start, (at, byte)| {
+        let entity = match byte {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            b'\'' => "&#39;",
+            _ => return start,
+        };
+        out.push_str(&s[start..at]);
+        out.push_str(entity);
+        at + 1
+    });
+    out.push_str(&s[start..]);
 }
 fn decode(s: &str) -> String {
     let bytes = s.as_bytes();
