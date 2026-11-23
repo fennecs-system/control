@@ -1711,3 +1711,56 @@ fn room_checkpoint_failure_rolls_back_and_invalid_membership_creates_nothing() {
             .any(|c| c["id"] == chat["id"])
     );
 }
+/// Pins the operator endpoint's envelopes, including malformed input, so the
+/// shared protocol module keeps each reply byte for byte.
+#[test]
+fn operator_mcp_envelopes_are_pinned() {
+    let mut state = State::default();
+    let version = env!("CARGO_PKG_VERSION");
+    for (request, expected) in [
+        (json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}),
+            json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"control","version":version}}})),
+        (json!({"jsonrpc":"2.0","id":"a","method":"initialize","params":{"protocolVersion":"1999-01-01"}}),
+            json!({"jsonrpc":"2.0","id":"a","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"control","version":version}}})),
+        (json!({"jsonrpc":"2.0","id":2,"method":"ping"}), json!({"jsonrpc":"2.0","id":2,"result":{}})),
+        (json!({"jsonrpc":"2.0","id":null,"method":"ping"}), json!({"jsonrpc":"2.0","id":null,"result":{}})),
+        (json!({"jsonrpc":"1.0","id":3,"method":"ping"}), json!({"jsonrpc":"2.0","id":3,"error":{"code":-32600,"message":"Invalid request."}})),
+        (json!({"id":4,"method":"ping"}), json!({"jsonrpc":"2.0","id":4,"error":{"code":-32600,"message":"Invalid request."}})),
+        (json!([{"jsonrpc":"2.0","id":5,"method":"ping"}]), json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid request."}})),
+        (json!({"jsonrpc":"2.0","id":6,"method":"resources/list"}), json!({"jsonrpc":"2.0","id":6,"error":{"code":-32601,"message":"Method not found."}})),
+        (json!({"jsonrpc":"2.0","id":7}), json!({"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found."}})),
+        (json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"control.packages.search","arguments":{}}}),
+            json!({"jsonrpc":"2.0","id":8,"result":{"content":[{"type":"text","text":"Package tools are served by the HTTP MCP endpoint."}],"isError":true}})),
+        (json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"control.chats.list","arguments":{}}}),
+            json!({"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"[]"}],"structuredContent":{"data":[]},"isError":false}})),
+    ] {
+        assert_eq!(rpc(&mut state, &request), expected, "{request}");
+    }
+    let listed = rpc(&mut state, &json!({"jsonrpc":"2.0","id":10,"method":"tools/list"}));
+    assert_eq!(listed, json!({"jsonrpc":"2.0","id":10,"result":{"tools":crate::tool_registry::http_definitions()}}));
+}
+/// The `/mcp` route's own framing answers before any tool runs.
+#[test]
+fn operator_mcp_http_framing_is_pinned() {
+    let mut state = State::default();
+    let mut send = |method: &str, header: &str, body: &[u8]| {
+        let mut response = Vec::new();
+        assert!(handle(&mut response, &mut state, method, "/mcp", "none", header, body));
+        let response = String::from_utf8(response).unwrap();
+        let status = response.lines().next().unwrap().to_owned();
+        let body = response.split_once("\r\n\r\n").unwrap().1.to_owned();
+        (status, body)
+    };
+    let cases: [(&str, &str, &[u8], &str, &str); 7] = [
+        ("GET", "", b"", "HTTP/1.1 405 Method Not Allowed", "Use MCP POST requests."),
+        ("POST", "MCP-Protocol-Version: 1999-01-01\r\n", b"not json", "HTTP/1.1 400 Bad Request", "Unsupported MCP protocol version."),
+        ("POST", "", b"not json", "HTTP/1.1 400 Bad Request", r#"{"error":{"code":-32700,"message":"Invalid JSON."},"id":null,"jsonrpc":"2.0"}"#),
+        ("POST", "", br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, "HTTP/1.1 202 Accepted", ""),
+        ("POST", "", br#"{"jsonrpc":"2.0","method":"tools/call"}"#, "HTTP/1.1 400 Bad Request", "A request ID is required."),
+        ("POST", "", br#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#, "HTTP/1.1 400 Bad Request", "A request ID is required."),
+        ("POST", "mcp-protocol-version: 2025-03-26\r\n", br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, "HTTP/1.1 200 OK", r#"{"id":1,"jsonrpc":"2.0","result":{}}"#),
+    ];
+    for (method, header, body, status, expected) in cases {
+        assert_eq!(send(method, header, body), (status.to_owned(), expected.to_owned()), "{method} {header}");
+    }
+}

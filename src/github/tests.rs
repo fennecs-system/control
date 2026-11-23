@@ -453,3 +453,31 @@ fn source_git_output_is_bounded_by_time_and_size() {
     assert!(started.elapsed() < Duration::from_secs(20), "a hung process is killed at the bound");
     assert!(bounded_output(shell("printf 0123456789abcdefXYZ"), 16, Duration::from_secs(30)).is_err(), "output over the size bound fails");
 }
+/// Pins the `/mcp` envelopes of the three GitHub tools served before the
+/// state lock: unacknowledged mutations and reads fail as tool results, an
+/// unacknowledged publication is a protocol error.
+#[test]
+fn github_mcp_envelopes_are_pinned() {
+    let shared = Arc::new(Mutex::new(State::default()));
+    let send = |body: Value| {
+        let mut output = Vec::new();
+        let served = http(&mut output, &shared, "POST", "/mcp", body.to_string().as_bytes());
+        let text = String::from_utf8(output).unwrap();
+        (served, text.split_once("\r\n\r\n").map(|(_, body)| serde_json::from_str::<Value>(body).unwrap()))
+    };
+    let failure = |id: Value, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":text}],"isError":true}}));
+    for (body, expected) in [
+        (json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control_github_write"}}), failure(Value::Null, "GitHub mutations require an acknowledged JSON-RPC request")),
+        (json!({"jsonrpc":"1.0","id":1,"method":"tools/call","params":{"name":"control_github_write"}}), failure(json!(1), "GitHub mutations require an acknowledged JSON-RPC request")),
+        (json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control_github_write","arguments":{}}}), failure(json!(2), "Expected chat_id and a typed GitHub operation")),
+        (json!({"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"control_github_read"}}), failure(Value::Null, "GitHub inspection requires an acknowledged JSON-RPC request")),
+        (json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"control_github_read","arguments":{}}}), failure(json!(3), "Expected chat_id and a bounded query")),
+        (json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control_github_open_pr"}}),
+            Some(json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Publication requires an acknowledged JSON-RPC request"}}))),
+        (json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"control_github_open_pr","arguments":{}}}), failure(json!(4), "Expected run_id, title and optional body")),
+    ] {
+        assert_eq!(send(body.clone()), (true, expected), "{body}");
+    }
+    assert_eq!(send(json!({"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"name":"control_github_write"}})), (false, None));
+    assert_eq!(send(json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"control.chats.list"}})), (false, None));
+}
