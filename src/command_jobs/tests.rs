@@ -210,6 +210,8 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     let attempt = &mut state.runtime.runs[0].attempts[0];
     attempt.image = Some(image);
     attempt.node_id = Some(crate::config::node_id().unwrap());
+    // Commands are bounded by the attempt's own deadline since e2eead3; start the attempt now.
+    attempt.started_unix = now();
     let state = Arc::new(Mutex::new(state));
     struct Cleanup(Arc<Mutex<State>>);
     impl Drop for Cleanup {

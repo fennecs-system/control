@@ -209,14 +209,35 @@ fn stop_container(isolation: &dyn Isolation, container: &Container) -> Result<()
             .map_err(|_| "Could not stop the verified worker; work remains fenced.")?;
     }
     // Query by immutable ID. Empty output proves no running writer, including --rm.
-    let active = isolation
-        .list(States::Running, &Select::Id(container.id.clone()))
-        .map_err(|_| "Could not confirm worker exit; work remains fenced.")?;
-    if !active.is_empty() {
-        return Err("Worker is still running; work remains fenced.");
-    }
+    let running = || {
+        isolation
+            .list(States::Running, &Select::Id(container.id.clone()))
+            .map(|active| !active.is_empty())
+            .map_err(|_| "Could not confirm worker exit; work remains fenced.")
+    };
+    await_exit(running, || std::thread::sleep(EXIT_POLL))?;
     // Best effort: --rm usually removed it already; an exited leftover is removed by verified ID.
     let _ = isolation.remove(Target::Id(&container.id));
+    Ok(())
+}
+const EXIT_POLLS: usize = 100;
+const EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+/// The engine can acknowledge a kill while it still lists the container as
+/// running, so a single check would fence a writer that is about to exit.
+/// Polls `running` (pausing between checks) for a bounded time instead.
+fn await_exit(mut running: impl FnMut() -> Result<bool, &'static str>, pause: impl Fn()) -> Result<(), &'static str> {
+    let still_running = (0..EXIT_POLLS)
+        .map(|poll| {
+            if poll > 0 {
+                pause();
+            }
+            running()
+        })
+        .find(|checked| checked != &Ok(true))
+        .unwrap_or(Ok(true))?;
+    if still_running {
+        return Err("Worker is still running; work remains fenced.");
+    }
     Ok(())
 }
 
