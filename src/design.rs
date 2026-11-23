@@ -237,7 +237,7 @@ pub fn ask_operator(state: &mut State, chat: Option<&str>, input: Input) -> Resu
     let mut run = crate::application::runs::Submission {
         objective: input.question.clone(), kind: RunKind::AgentMessage, source: ASKED.into(),
         actor: identity::Actor::LocalOperator, action: identity::Action::Task,
-    }.into_run(run_id.clone(), order, state.runtime.backend, None);
+    }.into_run(run_id.clone(), order, state.runtime.backend, (state.runtime.backend == crate::backend::Backend::Local).then(|| state.runtime.configured_model()));
     let question = Question { id: question_id(&run_id, ASKED), generation: run_id.clone(), nonce: ASKED.into(), input, answer: None, continuation: None };
     let id = question.id.clone();
     run.status = "waiting".into();

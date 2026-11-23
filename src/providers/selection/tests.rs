@@ -83,7 +83,7 @@ fn local_endpoint_models_are_listed_as_text_only_and_refused_for_agent_turns() {
     assert!(crate::chat::send(&mut state, &chat, "/model local:local-qwen", "test").is_err());
     assert!(state.chats[0].model.is_none());
     assert!(state.runtime.runs.is_empty());
-    // A local selection can never become the persisted node default.
+    // A local model is never a saved hosted entry; a local default names its endpoint.
     let local = Model::captured(Backend::Local, "local-qwen".into());
     assert!(super::super::validate_models(std::slice::from_ref(&local), &local).is_err());
 

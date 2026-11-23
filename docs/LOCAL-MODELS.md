@@ -27,9 +27,14 @@ keeps its tool permissions and role. Invalid selections are rejected before any
 effect, and changing a retried request's selection is a conflict. There is never
 a silent fallback to another provider.
 
-## Configure text models
+## Configure local models
 
-In **Manage → Models & providers → Text models**, add one entry per model:
+**Manage → Models & providers** lists every model that can run agent turns under
+**Agent models**, in two groups: *Integrations* (hosted CLIs) and *Local*
+(endpoints that serve tool calls). Clicking a row makes it the default for new DMs
+and spawned agents; a local model can be the default. Entries that only
+summarize or generate text sit under **Summary models**. Configuration is behind
+each row's **Edit** and **+ New model → Local endpoint**; add one entry per model:
 
 - a unique name and the model alias the endpoint serves (one entry per endpoint
   and model ID);
@@ -41,8 +46,10 @@ In **Manage → Models & providers → Text models**, add one entry per model:
 - **Serves tool calls** when the server runs with tool calls (`--jinja`), so the
   entry can also run agent turns.
 
-Each entry lists its capabilities (summaries and text generation, plus agent
-turns when it serves tool calls). Roles refer to entries by name: the compactor
+Each entry's **Edit** shows what it serves (summaries and text generation, plus
+agent turns when it serves tool calls); ticking **Serves tool calls** moves a
+local endpoint into Agent models. The default local model cannot be removed or
+lose tool calls until another default is chosen. Roles refer to entries by name: the compactor
 under **Memory Tree model**, `control_model_generate` by `model`, and agent turns
 by `/model local:NAME`. **Edit** changes everything except the name and adapter,
 with the same validation as adding. Older settings that had two entries for the
@@ -302,7 +309,7 @@ server-wide reasoning budget: Control sets thinking per request (see
 between turns to pick up the new flags. The
 script writes `inference/ALIAS.json` in the configuration directory (backend,
 model path, SHA256, alias, port and a revision string) and prints the values for
-**Manage → Models & providers → + New text model**: adapter *Local endpoint*, the
+**Manage → Models & providers → + New model → Local endpoint**: the
 alias as name and model ID, `http://127.0.0.1:PORT/v1`, the revision and context
 size. It never edits `model.json`. A single-service install from an earlier
 release (record `inference.json`) is stopped when a start reuses its alias or

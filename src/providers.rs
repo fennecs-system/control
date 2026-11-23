@@ -31,6 +31,12 @@ pub fn capacity(runtime:&crate::runtime::Runtime,backend:crate::backend::Backend
 pub(crate) fn endpoint<'a>(runtime:&'a crate::runtime::Runtime,name:&str)->Option<&'a crate::model_calls::Endpoint> {
     local(runtime).find(|m|m.id==name)
 }
+/// The node default may be a local endpoint that serves tool calls. It is not a
+/// saved hosted model: the endpoint entry is its only record.
+fn local_default(models:&[crate::model_calls::Endpoint],selected:&Model)->bool {
+    selected.backend==crate::backend::Backend::Local && models.iter().any(|m|m.cli.is_none() && m.tools && m.id==selected.model)
+}
+const LOCAL_DEFAULT: &str = "This local model is the default for new DMs. Choose another default first.";
 /// Capability, not a listing, decides whether an agent turn can run.
 pub(crate) fn agent_capable(runtime:&crate::runtime::Runtime,model:&Model)->bool {
     model.backend!=crate::backend::Backend::Local || endpoint(runtime,&model.model).is_some_and(|e|e.tools)
@@ -154,6 +160,14 @@ pub fn load_settings(runtime: &mut crate::runtime::Runtime) -> std::io::Result<V
             let mut settings = migrate(settings, &installed)?;
             let renamed = merge_duplicates(&mut settings.text_models, &mut settings.compaction);
             validate_text(&settings.text_models, &settings.compaction)?;
+            if settings.backend == crate::backend::Backend::Local {
+                if let Some((_, to)) = renamed.iter().find(|(from, _)| *from == settings.model) {
+                    settings.model = to.clone();
+                }
+                if !local_default(&settings.text_models, &Model::captured(settings.backend, settings.model.clone())) {
+                    return Err(std::io::Error::other("Invalid saved models or default in model.json"));
+                }
+            }
             runtime.compaction.models = settings.text_models;
             runtime.compaction.settings = settings.compaction;
             runtime.models = settings.models;
@@ -201,7 +215,8 @@ fn migrate(
         model: settings.model.clone(),
         ..Default::default()
     };
-    if settings.models.is_empty() {
+    let local = selected.backend == crate::backend::Backend::Local;
+    if settings.models.is_empty() && !local {
         settings.models.push(selected.clone());
         // Older settings retained only the selection. Seed other installed backends.
         for &backend in installed {
@@ -219,10 +234,12 @@ fn migrate(
 }
 
 fn validate_models(models: &[Model], selected: &Model) -> std::io::Result<()> {
+    // A local default is checked against the endpoint entries once they are read.
+    let local = selected.backend == crate::backend::Backend::Local;
     if models.len() > 64
-        || !selected.backend.default_capable()
+        || (!local && !selected.backend.default_capable())
         || models.iter().any(|m|!m.backend.default_capable())
-        || !models.iter().any(|m|m.same(selected))
+        || (!local && !models.iter().any(|m|m.same(selected)))
         || models
             .iter()
             .enumerate()
@@ -241,7 +258,7 @@ fn configured(runtime: &crate::runtime::Runtime) -> Vec<Model> {
         model: runtime.configured_model(),
         ..Default::default()
     };
-    if !models.iter().any(|m|m.same(&current)) {
+    if current.backend.default_capable() && !models.iter().any(|m|m.same(&current)) {
         models.push(current);
     }
     models
@@ -258,35 +275,69 @@ fn local(runtime: &crate::runtime::Runtime) -> impl Iterator<Item=&crate::model_
 }
 
 pub fn render(runtime: &crate::runtime::Runtime) -> String {
-    let mut html = String::from("<div class='providers-page'><h2>Models &amp; providers</h2><p class='provider-description'>Choose the default agent model and configure optional history summaries.</p><p id='saved' class='provider-saved save-confirmation' role='status'>Saved.</p><section class='provider-section' aria-labelledby='agent-models-heading'><h3 id='agent-models-heading'>Agent models</h3><p class='provider-description'>Used for DMs and newly spawned agents. Select a model to make it the default.</p><div class='model-list' aria-label='Configured models'>");
+    // While this page is open its client reads each local server's statistics
+    // every few seconds; a closed or hidden page reads nothing.
+    let live = if local(runtime).next().is_some() { " data-live-src='/providers/live' data-live-every='5'" } else { "" };
+    let mut html = format!("<div class='providers-page'{live}><h2>Models &amp; providers</h2><p id='saved' class='provider-saved save-confirmation' role='status'>Saved.</p><section class='provider-section' aria-labelledby='agent-models-heading'><h3 id='agent-models-heading'>Agent models</h3><p class='provider-description'>Select the default for new DMs and spawned agents.</p><h4 class='model-group'>Integrations</h4><div class='model-list' aria-label='Integration models'>");
     for entry in configured(runtime) {
         let model = crate::escape(&entry.model);
         let id = entry.backend.id();
         let label = entry.backend.label();
         let selected =
             entry.backend == runtime.backend && entry.model == runtime.configured_model();
-        let marker = if selected {
-            "<span class='model-default'>Default</span>"
-        } else {
-            ""
-        };
+        let marker = if selected { DEFAULT_MARK } else { "" };
         let capacity=entry.capacity;
         html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{model}'>{model}</span><span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary aria-label='Edit {label} model {model}'>Edit</summary><div class='model-edit-body'><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model ID<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Save model</button></form>"));
         html.push_str(&format!("<form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><h4>Context capacity</h4><p class='provider-description'>Leave context tokens empty to use the provider policy. Instructions that cannot fit are reported, never truncated.</p><div class='provider-fields'><label>Context tokens<input name='context_tokens' type='number' min='1' placeholder='Unknown' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool token reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label></div><p class='provider-description'>Input bytes conservatively count as tokens.</p><button class='primary'>Save capacity</button></form></div></details></section>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));
     }
-    // Local endpoints are listed once, under Text models, with their capabilities;
-    // they are chosen per chat or spawn and never become the node default.
-    html.push_str("</div><p class='provider-description'>Local models that serve tool calls are chosen per DM with <code>/model local:NAME</code> or per spawn with <code>local:NAME</code>; see Text models.</p><details class='model-add'><summary>+ New model</summary>");
+    // Every local endpoint that serves tool calls runs agent turns too: it is
+    // listed with the same one-click default, and its connection is edited here only.
+    html.push_str("</div><h4 class='model-group'>Local</h4><div class='model-list' aria-label='Local models'>");
+    let (agents, summaries): (Vec<_>, Vec<_>) = runtime.compaction.models.iter().partition(|m| m.cli.is_none() && m.tools);
+    if agents.is_empty() {
+        html.push_str("<p class='provider-empty'>No local model serves tool calls yet.</p>");
+    }
+    for model in &agents {
+        html.push_str(&endpoint_row(runtime, model));
+    }
+    html.push_str("</div><details class='model-add'><summary>+ New model</summary>");
     for backend in crate::backend::Backend::hosted() {
         let id = backend.id();
         let label = backend.label();
         let default = crate::escape(&backend.default_model());
         html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='add'><input type='hidden' name='provider' value='{id}'><label>{label} model ID<input name='model' required maxlength='100' value='{default}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Add model</button></form>"));
     }
-    html.push_str("</details></section>");
-    html.push_str(&render_text(runtime));
+    html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><h4>Local endpoint</h4>{}<button class='primary'>Add local model</button></form></details></section>", text_fields(None, true)));
+    // Entries that cannot run agent turns: summaries and text generation only.
+    html.push_str(&format!("<section class='provider-section' aria-labelledby='summary-models-heading'><details class='model-add summary-models'><summary id='summary-models-heading'>Summary models ({})</summary><p class='provider-description'>Summaries and <code>control_model_generate</code> only; a local endpoint that serves tool calls is listed under Agent models.</p><div class='model-list' aria-label='Summary models'>", summaries.len()));
+    for model in &summaries {
+        html.push_str(&endpoint_row(runtime, model));
+    }
+    html.push_str(&format!("</div><form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><h4>New summary model</h4>{}<button class='primary'>Add summary model</button></form></details></section>", text_fields(None, false)));
+    html.push_str(&render_memory(runtime));
     html.push_str("</div>");
     html
+}
+const DEFAULT_MARK: &str = "<span class='model-default'>Default</span>";
+/// One endpoint entry as a compact row: an agent-capable local endpoint leads
+/// with the default control, any other entry with its name; everything else
+/// (statistics, limits, revision, connection, removal) is behind Edit.
+fn endpoint_row(runtime: &crate::runtime::Runtime, model: &crate::model_calls::Endpoint) -> String {
+    let memory = &runtime.compaction;
+    let id = crate::escape(&model.id);
+    let adapter = model.cli.map_or("Local endpoint", |backend| backend.label());
+    let place = if model.cli.is_none() { crate::escape(&model.url) } else { crate::escape(&model.model) };
+    let compactor = if memory.settings.enabled && memory.settings.model.as_deref() == Some(model.id.as_str()) { "<span class='model-default'>Compactor</span>" } else { "" };
+    let name = format!("<span class='model-name'><span class='model-id' title='{id}'>{id}</span><span class='model-provider'>{adapter} · {place}</span></span>");
+    let head = if model.cli.is_none() && model.tools {
+        let selected = runtime.backend == crate::backend::Backend::Local && runtime.configured_model() == model.id;
+        format!("<form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{}'><input type='hidden' name='model' value='{id}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span>{name}{compactor}{}</button></form>",
+            crate::backend::Backend::Local.id(), if selected { DEFAULT_MARK } else { "" })
+    } else {
+        format!("<div class='model-choice model-static'>{name}{compactor}</div>")
+    };
+    format!("<section class='model-row'>{head}<details class='model-edit'><summary aria-label='Edit model {id}'>Edit</summary><div class='model-edit-body'><dl class='model-metadata'><div><dt>Model</dt><dd>{}</dd></div><div><dt>Serves</dt><dd>{}</dd></div><div><dt>Context tokens</dt><dd>{}</dd></div><div><dt>Output reserve</dt><dd>{} tokens</dd></div></dl>{}<details class='model-revision'><summary>Weights / runtime revision</summary><code>{}</code></details><form method='post' action='/providers'><input type='hidden' name='action' value='text-edit'><input type='hidden' name='id' value='{id}'>{}<button class='primary'>Save model</button></form><form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='text-remove'><input type='hidden' name='id' value='{id}'><button class='provider-secondary' aria-label='Remove model {id}'>Remove</button></form></div></details></section>",
+        crate::escape(&model.model), capabilities(model), model.limits.context_tokens, model.limits.output_tokens, live_slot(model), crate::escape(&model.revision), text_fields(Some(model), false))
 }
 
 /// The Manage → Models page polls this while open: one live server-statistics
@@ -382,16 +433,26 @@ fn capabilities(model: &crate::model_calls::Endpoint) -> &'static str {
 }
 /// Fields shared by the add and edit forms, so both are parsed and validated alike.
 /// Editing keeps the name (chats and the compactor refer to it) and the adapter.
-fn text_fields(model: Option<&crate::model_calls::Endpoint>) -> String {
+fn text_fields(model: Option<&crate::model_calls::Endpoint>, local: bool) -> String {
     let value = |f: fn(&crate::model_calls::Endpoint) -> String, default: &str| model.map_or_else(|| default.to_owned(), |m| crate::escape(&f(m)));
     let endpoint = model.is_none_or(|m| m.cli.is_none());
     let mut html = String::from("<div class='provider-fields'>");
     if model.is_none() {
-        html.push_str("<label>Adapter<select name='adapter'><option value='endpoint'>Local endpoint</option><option value='codex'>Codex CLI</option><option value='claude'>Claude CLI</option></select></label><label>Name<input name='id' required maxlength='100' placeholder='qwen-local'></label>");
+        // A new local model is always an endpoint; a summary model may also be a hosted CLI.
+        if local {
+            html.push_str("<input type='hidden' name='adapter' value='endpoint'>");
+        } else {
+            html.push_str("<label>Adapter<select name='adapter'><option value='endpoint'>Local endpoint</option>");
+            for backend in crate::backend::Backend::hosted() {
+                html.push_str(&format!("<option value='{}'>{} CLI</option>", backend.id(), backend.agent().name()));
+            }
+            html.push_str("</select></label>");
+        }
+        html.push_str("<label>Name<input name='id' required maxlength='100' placeholder='qwen-local'></label>");
     }
     html.push_str(&format!("<label>Model ID or server alias<input name='model' required maxlength='100' value='{}'></label>", value(|m| m.model.clone(), "")));
     if endpoint {
-        html.push_str(&format!("<label>Private endpoint{}<input name='url' placeholder='http://127.0.0.1:8081/v1' value='{}'></label>", if model.is_none() { " (leave empty for CLI)" } else { "" }, value(|m| m.url.clone(), "")));
+        html.push_str(&format!("<label>Private endpoint{}<input name='url' placeholder='http://127.0.0.1:8081/v1' value='{}'></label>", if model.is_none() && !local { " (leave empty for CLI)" } else { "" }, value(|m| m.url.clone(), "")));
     }
     html.push_str(&format!(concat!("<label>Weights/runtime revision<input name='revision' required maxlength='256' value='{}'></label>",
         "<label>Declared context tokens<input name='context_tokens' type='number' min='1024' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label>",
@@ -406,29 +467,13 @@ fn text_fields(model: Option<&crate::model_calls::Endpoint>) -> String {
             html.push_str(&format!("<option value='{0}'{1}>{0}</option>", level.name(), if level == current { " selected" } else { "" }));
         }
         html.push_str("</select><small>For reasoning models (Qwen3 family). Control adapts it per step around this level; at most half the output reserve goes to thinking. Summaries never think.</small></label></div>");
-        html.push_str(&format!("<label class='summary-toggle'><input name='tools' type='checkbox'{}><span><strong>Serves tool calls</strong><small>Local endpoint only. Declares OpenAI-style tool calls (llama.cpp <code>--jinja</code>) so DMs and agents may select <code>local:NAME</code> for agent turns.</small></span></label>", if model.is_some_and(|m| m.tools) { " checked" } else { "" }));
+        html.push_str(&format!("<label class='summary-toggle'><input name='tools' type='checkbox'{}><span><strong>Serves tool calls</strong><small>Local endpoint only. Declares OpenAI-style tool calls (llama.cpp <code>--jinja</code>): the model is then listed under Agent models, can be the default, and is selectable as <code>local:NAME</code>.</small></span></label>", if local || model.is_some_and(|m| m.tools) { " checked" } else { "" }));
     }
     html
 }
-fn render_text(runtime: &crate::runtime::Runtime) -> String {
+fn render_memory(runtime: &crate::runtime::Runtime) -> String {
     let memory = &runtime.compaction;
-    let mut html = "<section class='provider-section' aria-labelledby='summary-models-heading'><h3 id='summary-models-heading'>Text models</h3><p class='provider-description'>One entry per endpoint and model. Each can summarize history and answer <code>control_model_generate</code>; a local endpoint that serves tool calls also runs agent turns. The compactor and per-DM agent choices point at these entries.</p><div class='model-list' aria-label='Text models'".to_owned();
-    // While this page is open its client reads each local server's statistics
-    // every few seconds; a closed or hidden page reads nothing.
-    if local(runtime).next().is_some() {
-        html.push_str(" data-live-src='/providers/live' data-live-every='5'");
-    }
-    html.push('>');
-    if memory.models.is_empty() {
-        html.push_str("<p class='provider-empty'>No text models configured. Add one to enable Control compaction or local generation.</p>");
-    }
-    for model in &memory.models {
-        let adapter = model.cli.map_or("Local endpoint", |backend| backend.label());
-        let id = crate::escape(&model.id);
-        let compactor = if memory.settings.enabled && memory.settings.model.as_deref() == Some(model.id.as_str()) { "<span class='model-default'>Compactor</span>" } else { "" };
-        html.push_str(&format!("<article class='model-row summary-model'><div class='model-card-heading'><div class='model-name'><h4>{id}</h4><span class='model-provider'>{} · {adapter} · {}</span></div>{compactor}<form method='post' action='/providers'><input type='hidden' name='action' value='text-remove'><input type='hidden' name='id' value='{id}'><button class='provider-secondary' aria-label='Remove text model {id}'>Remove</button></form></div><dl class='model-metadata'><div><dt>Context tokens</dt><dd>{}</dd></div><div><dt>Output reserve</dt><dd>{} tokens</dd></div></dl>{}<details class='model-revision'><summary>Weights / runtime revision</summary><code>{}</code></details><details class='model-revision text-edit'><summary aria-label='Edit text model {id}'>Edit</summary><form method='post' action='/providers'><input type='hidden' name='action' value='text-edit'><input type='hidden' name='id' value='{id}'>{}<button class='primary'>Save text model</button></form></details></article>", crate::escape(&model.model), capabilities(model), model.limits.context_tokens, model.limits.output_tokens, live_slot(model), crate::escape(&model.revision), text_fields(Some(model))));
-    }
-    html.push_str(&format!("</div><details class='model-add'><summary>+ New text model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='text-add'>{}<button class='primary'>Add text model</button></form></details></section>", text_fields(None)));
+    let mut html = String::new();
     html.push_str("<section class='provider-section' aria-labelledby='compaction-heading'><h3 id='compaction-heading'>Memory Tree model</h3><p class='provider-description'>Zipper-style memory: recent turns stay verbatim at the focus, older history folds into fixed summary blocks that get coarser with distance. Opt in per DM; originals stay recallable in the Memory Tree.</p><form class='compaction-settings' method='post' action='/providers'><input type='hidden' name='action' value='compaction'>");
     html.push_str(&format!("<label class='summary-toggle'><input name='enabled' type='checkbox'{}><span><strong>Automatic summaries</strong><small>Use Control compaction for the DMs listed below.</small></span></label><div class='provider-fields'><label>Summary model<select name='model'><option value=''>Select a summary model</option>",if memory.settings.enabled {" checked"}else{""}));
     for model in &memory.models { html.push_str(&format!("<option value='{}'{}>{}</option>",crate::escape(&model.id),if Some(&model.id)==memory.settings.model.as_ref(){" selected"}else{""},crate::escape(&model.id))); }
@@ -453,7 +498,7 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
             models.push(parse(get("id"),cli)?);
         }
         "text-edit" => {
-            let index = models.iter().position(|m|m.id==get("id")).ok_or("This text model changed. Reload the list.")?;
+            let index = models.iter().position(|m|m.id==get("id")).ok_or("This model changed. Reload the list.")?;
             models[index] = parse(get("id"),models[index].cli)?;
         }
         "text-remove" => { models.retain(|m|m.id!=get("id")); }
@@ -470,6 +515,10 @@ fn save_text(state: &mut crate::State, fields: &HashMap<String,String>, save: im
     }
     if models.iter().enumerate().any(|(at,m)|models[..at].iter().any(|other|other.id!=m.id && same_target(other,m))) {
         return Err("Another entry already uses this endpoint and model ID. Edit that entry instead: one entry serves summaries, generation and agent turns.");
+    }
+    let default = Model::captured(state.runtime.backend, state.runtime.configured_model());
+    if default.backend == crate::backend::Backend::Local && !local_default(&models, &default) {
+        return Err(LOCAL_DEFAULT);
     }
     apply_text(state,models,settings,save)
 }
@@ -500,7 +549,10 @@ pub fn save_with(
     if fields.get("action").is_some_and(|a|a.starts_with("text-") || a == "compaction") {
         return save_text(state, fields, save);
     }
-    let backend = fields.get("provider").and_then(|id| hosted(id)).ok_or("This provider adapter is not connected. The model was not changed.")?;
+    let action = fields.get("action").map(String::as_str).unwrap_or("use");
+    let local = action == "select" && fields.get("provider").is_some_and(|id| id == crate::backend::Backend::Local.id());
+    let backend = if local { Some(crate::backend::Backend::Local) } else { fields.get("provider").and_then(|id| hosted(id)) }
+        .ok_or("This provider adapter is not connected. The model was not changed.")?;
     let model = fields.get("model").map(|s| s.trim()).unwrap_or("");
     if !crate::usage::valid_model(model) {
         return Err("Enter a model ID of 1–100 letters, digits, dots, hyphens, underscores, colons or slashes.");
@@ -516,7 +568,7 @@ pub fn save_with(
         model: state.runtime.configured_model(),
         ..Default::default()
     };
-    match fields.get("action").map(String::as_str).unwrap_or("use") {
+    match action {
         "capacity"=>{
             let index=models.iter().position(|m|m.same(&entry)).ok_or("Model is not configured")?;
             let context=fields.get("context_tokens").map(|s|s.trim()).unwrap_or("");
@@ -531,7 +583,10 @@ pub fn save_with(
             };
         }
         "select" => {
-            if !models.iter().any(|m|m.same(&entry)) {
+            if local && !local_default(&state.runtime.compaction.models, &entry) {
+                return Err("This local model no longer serves tool calls. Reload the list.");
+            }
+            if !local && !models.iter().any(|m|m.same(&entry)) {
                 return Err("This model is no longer configured. Reload the list.");
             }
             selected = entry;
