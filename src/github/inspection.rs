@@ -335,7 +335,8 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
     Ok(result)
 }
 
-pub(super) fn http(stream: &mut impl Write, shared: &Arc<Mutex<State>>, request: &Value) {
+/// The `/mcp` reply; the caller frames it.
+pub(crate) fn mcp(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Input {
@@ -352,15 +353,7 @@ pub(super) fn http(stream: &mut impl Write, shared: &Arc<Mutex<State>>, request:
             .map_err(|_| fail("Expected chat_id and a bounded query"))
             .and_then(|input| execute(shared, Caller::Chat(&input.chat_id), input.query))
     };
-    let response = json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(result)});
-    let _ = control_http::respond(
-        stream,
-        "200 OK",
-        "application/json",
-        response.to_string().as_bytes(),
-        "",
-        control_http::Policy::Restricted,
-    );
+    control_mcp::reply(&id, crate::toolbox::result(result))
 }
 
 #[cfg(test)]

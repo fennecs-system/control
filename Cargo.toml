@@ -20,6 +20,7 @@ required-features = ["tui"]
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 control-context = { path = "crates/context" }
+control-mcp = { path = "crates/mcp" }
 control-http = { path = "crates/http" }
 control-ai = { path = "crates/ai" }
 control-core = { path = "crates/core", features = ["serde"] }
@@ -51,5 +52,5 @@ control = { path = ".", default-features = false, features = ["test-isolation"] 
 
 
 [workspace]
-members = ["crates/context", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/delivery", "crates/diff", "crates/url-names", "crates/ingress", "crates/client", "crates/tui", "crates/discord"]
+members = ["crates/context", "crates/mcp", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/delivery", "crates/diff", "crates/url-names", "crates/ingress", "crates/client", "crates/tui", "crates/discord"]
 exclude = ["web"]

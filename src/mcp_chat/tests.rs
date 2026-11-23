@@ -289,3 +289,39 @@ fn design_ask_in_a_named_chat_never_pauses_a_turn() {
     remote.state.runtime.action("/retry-run", &[("id".to_owned(), run_id.clone())].into());
     assert_eq!(remote.state.runtime.runs.iter().find(|r| r.id == run_id).unwrap().status, "cancelled");
 }
+
+/// Pins the chat bridge's envelopes, including malformed input.
+#[test]
+fn chat_bridge_envelopes_are_pinned() {
+    let mut connect = || -> io::Result<Local> { Ok(Local::new()) };
+    let mut connection = None;
+    let init = dispatch(&mut connect, &mut connection, &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}));
+    assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
+    assert_eq!(init["result"]["capabilities"], json!({"tools":{}}));
+    assert_eq!(init["result"]["serverInfo"], json!({"name":"control-chat","version":env!("CARGO_PKG_VERSION")}));
+    assert!(init["result"]["instructions"].as_str().unwrap().starts_with("Drive Control chats as the local operator"));
+    assert_eq!(init.as_object().unwrap().len(), 3);
+    for (request, expected) in [
+        (json!({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}), None),
+        (json!({"jsonrpc":"2.0","id":3,"method":"ping"}), Some(json!({"jsonrpc":"2.0","id":3,"result":{}}))),
+        (json!({"jsonrpc":"1.0","id":4,"method":"ping"}), Some(json!({"jsonrpc":"2.0","id":4,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}}))),
+        (json!({"id":5,"method":"tools/list"}), Some(json!({"jsonrpc":"2.0","id":5,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}}))),
+        (json!({"jsonrpc":"2.0","id":6,"method":"resources/list"}), Some(json!({"jsonrpc":"2.0","id":6,"error":{"code":-32601,"message":"Method not found"}}))),
+        (json!({"jsonrpc":"2.0","method":"ping"}), Some(json!({"jsonrpc":"2.0","id":null,"result":{}}))),
+        (json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nope"}}),
+            Some(json!({"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"Unknown tool. This bridge serves chat tools only."}],"isError":true}}))),
+        (json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"chats_list","arguments":[]}}),
+            Some(json!({"jsonrpc":"2.0","id":8,"result":{"content":[{"type":"text","text":"Arguments must be an object."}],"isError":true}}))),
+    ] {
+        let response = dispatch(&mut connect, &mut connection, &request);
+        match expected {
+            Some(expected) => assert_eq!(response, expected, "{request}"),
+            None => assert_eq!(response["result"]["protocolVersion"], "2025-11-25"),
+        }
+    }
+    let listed = dispatch(&mut connect, &mut connection, &json!({"jsonrpc":"2.0","id":9,"method":"tools/list"}));
+    assert_eq!(listed, json!({"jsonrpc":"2.0","id":9,"result":{"tools":definitions(false, control::permissions::read().mcp_approvals)}}));
+    let ok = dispatch(&mut connect, &mut connection, &json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"chats_list"}}));
+    assert_eq!(ok["result"]["content"][0]["type"], "text");
+    assert_eq!((ok["result"]["isError"].clone(), ok["result"].as_object().unwrap().len()), (json!(false), 2));
+}
