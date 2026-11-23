@@ -47,7 +47,8 @@
           inference = { type = "app"; program = "${inference}/bin/control-inference"; };
           codex = { type = "app"; program = "${pkgs.codex}/bin/codex"; };
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-          builder = { type = "app"; program = "${pkgs.darwin.linux-builder}/bin/create-builder"; };
+          # 8 GiB: the stock 3 GiB VM cannot compile large Rust crates (Grok Build's shell crate).
+          builder = { type = "app"; program = "${pkgs.darwin.linux-builder.override { modules = [ { virtualisation.darwin-builder.memorySize = 8192; } ]; }}/bin/create-builder"; };
         });
       packages = eachSystem (pkgs:
         let
