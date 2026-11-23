@@ -176,19 +176,25 @@ fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive
         session(&shared, &key, &cancel, connection, link)
     })
 }
-/// Hands one relayed stream to [`handle`] through a private loopback pair, so
-/// the request head can be read before any upstream exists.
+/// Hands one relayed stream to [`handle`].
 fn session(shared: &Arc<Mutex<State>>, key: &Key, cancel: &AtomicBool, connection: Incoming, link: Arc<Transport>) {
+    bridge(connection, link, |client| {
+        let _ = handle(shared, key, cancel, client);
+    });
+}
+/// Hands one relayed stream to `serve` through a private loopback pair, so a
+/// request head can be read before any upstream exists.
+pub(super) fn bridge(connection: Incoming, link: Arc<Transport>, serve: impl FnOnce(TcpStream)) {
     let Ok((client, relayed)) = pair() else {
         link.reject(connection);
         return;
     };
     if link.attach(connection, relayed).is_ok() {
-        let _ = handle(shared, key, cancel, client);
+        serve(client);
     }
 }
 /// A connected loopback pair. Only our own connection is accepted.
-fn pair() -> io::Result<(TcpStream, TcpStream)> {
+pub(super) fn pair() -> io::Result<(TcpStream, TcpStream)> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let near = TcpStream::connect(listener.local_addr()?)?;
     let local = near.local_addr()?;
@@ -293,7 +299,7 @@ fn parse(head: &[u8]) -> Result<Request, String> {
         forward: Some(forward),
     })
 }
-fn respond(client: &mut TcpStream, status: &str, body: &str) -> io::Result<()> {
+pub(super) fn respond(client: &mut impl Write, status: &str, body: &str) -> io::Result<()> {
     client.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
 }
 fn denied(host: &str, port: u16) -> String {
