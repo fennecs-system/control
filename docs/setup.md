@@ -18,6 +18,7 @@ after `--`:
 | --- | --- |
 | `--claude` | Claude Code image; selects Claude `sonnet` on a fresh node ([Claude](CLAUDE.md)). |
 | `--grok` | Grok Build image, built from xAI's published source ([Grok](GROK.md)). The node default is unchanged. |
+| `--antigravity` | Antigravity CLI image, Google's release binary pinned by hash ([Antigravity](ANTIGRAVITY.md)). The node default is unchanged. |
 | `--full` | Nix, Node/npm, JDK, Python and curl in worker images ([worker profiles](WORKER-PROFILES.md)). |
 | `--browser` | Offline Firefox capture image ([web access](WEB-ACCESS.md)). |
 | `--build-environment` | [Offline Rust/WASM build image](BUILD-ENVIRONMENTS.md) for self-improvement. |
@@ -78,7 +79,7 @@ model/tool check and uses model quota.
 `control` below means `./target/release/control` or an installed copy.
 `control config init` creates private configuration from a template without
 overwriting existing files; `control config path` prints the directory.
-`--source-root PATH` sets the improvement source and `--provider codex|claude|grok`
+`--source-root PATH` sets the improvement source and `--provider codex|claude|grok|antigravity`
 initializes a fresh model library; both preserve existing choices.
 
 | Location or setting | Purpose |
@@ -88,7 +89,7 @@ initializes a fresh model library; both preserve existing choices.
 | `state.json` + `state.log` | Node state: a snapshot plus one JSON line per save ([inspect with jq](HISTORY.md#inspecting-the-state)). Copy both, or stop Control first (a clean stop folds the log into `state.json`). |
 | `CONTROL_CONFIG_DIR` / `CONTROL_STATE_DIR` | Absolute directory overrides. |
 | `worker-image-id` | Codex worker image ID. |
-| `claude-image-id`, `grok-image-id`, `browser-image-id`, `solver-image-id` | Optional image IDs. |
+| `claude-image-id`, `grok-image-id`, `antigravity-image-id`, `browser-image-id`, `solver-image-id` | Optional image IDs. |
 | `build-image-id` / `CONTROL_BUILD_IMAGE` | Optional offline build-tool image. |
 | `model.json` | Saved models and default; managed in the web UI. |
 | `source-root` / `CONTROL_SOURCE_ROOT` | Absolute source path for `/improve`. |

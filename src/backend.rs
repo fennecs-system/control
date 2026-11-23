@@ -9,6 +9,7 @@ pub enum Backend {
     Codex,
     Claude,
     Grok,
+    Antigravity,
     /// An operator-configured private inference endpoint, named by its text
     /// model ID. Text generation is available; agent turns are not yet.
     Local,
@@ -89,7 +90,7 @@ pub(crate) struct TextCall<'a> {
     pub model: &'a str,
 }
 impl Backend {
-    pub(crate) const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Grok, Self::Local];
+    pub(crate) const ALL: [Self; 5] = [Self::Codex, Self::Claude, Self::Grok, Self::Antigravity, Self::Local];
     /// The backends that run a pinned CLI image and can be the node default.
     pub(crate) fn hosted() -> impl Iterator<Item = Self> {
         Self::ALL.into_iter().filter(|backend| backend.default_capable())
@@ -99,6 +100,7 @@ impl Backend {
             Self::Codex => &crate::codex::Codex,
             Self::Claude => &crate::claude::Claude,
             Self::Grok => &crate::grok::Grok,
+            Self::Antigravity => &crate::antigravity::Antigravity,
             Self::Local => &crate::local_agent::Local,
         }
     }

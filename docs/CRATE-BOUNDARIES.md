@@ -35,27 +35,27 @@ delivery.
 ## Agent backends
 
 A backend is one way to run an agent turn: the Codex CLI, the Claude Code CLI,
-the Grok Build CLI, or a local endpoint whose tool loop Control runs itself. `Backend`
+the Grok Build CLI, the Antigravity CLI, or a local endpoint whose tool loop Control runs itself. `Backend`
 (`src/backend.rs`) stays the closed tag persisted with each run and attempt.
 What a backend supplies is the `Agent` trait beside it: identity and default
 model, pinned image, credential readiness, the offline isolation probe, the
 bounded text call and its decoder, and the names it keeps private in a
 workspace. `Backend::agent()` is the only dispatch; `src/codex.rs`,
-`src/claude.rs`, `src/grok.rs` and `src/local_agent.rs` each implement it. `src/worker.rs`
+`src/claude.rs`, `src/grok.rs`, `src/antigravity.rs` and `src/local_agent.rs` each implement it. `src/worker.rs`
 holds generic execution only.
 
 The trait's signatures name only `std` and `control_ai`, so each implementation
 can move to its own crate without a cycle: `control-codex`, `control-claude`,
-`control-grok`, `control-local`, and later ones such as `control-antigravity`. A backend gets
+`control-grok`, `control-antigravity`, `control-local`. A backend gets
 what it needs from the host as arguments and never names application state.
 This is one trait and plain crates, not a plugin runtime: backends are linked
 into the binary and adding one adds a variant.
 
 Still open before the crates can move:
 
-- Running a turn. Claude and Grok share one supervisor (`claude::supervise`),
+- Running a turn. Claude, Grok and Antigravity share one supervisor (`claude::supervise`),
   its container flags (`claude::base`) and the host shell, which belong in a
-  module of their own before either moves. `worker::execute` matches on the backend and each `execute`
+  module of their own before any of them moves. `worker::execute` matches on the backend and each `execute`
   takes `&mut Attempt` and the shared state handle for cancellation, tool
   pumping, activity records and attempt control. Those need a narrow host
   context first.
@@ -71,24 +71,24 @@ Backends should differ by model, not by what the harness gives them. These are
 the places they differ today. Each is a named fact on `Agent` or listed here so
 it can be evened out on purpose; do not add to the list.
 
-| Difference | Codex | Claude | Grok | Local |
-| --- | --- | --- | --- | --- |
-| Tool loop | its own CLI | its own CLI | its own CLI | Control's loop (`local_agent`), with its own step cap, thinking levels and in-turn compaction |
-| Shell (`host_shell`) | CLI's sandboxed shell inside the turn container | Control's shell tool in a separate offline container | same as Claude | Control's shell tool |
-| Turn context | captured context and policy prompt (`worker::render_prompt`) | its own shorter prompt (`claude::render_prompt`), no captured turn context | same as Codex | same as Codex |
-| Deferred tool list | search then call through MCP | same | every Control tool through Grok's `search_tool` and `use_tool` meta-tools: it has no way to list MCP tools directly | tools callable directly by name (`local` fact) |
-| Judge source (`review_mount`) | `/review` read-only beside a writable scratch `/workspace` | `/workspace` | `/workspace` | `/workspace` |
-| Main container mount (`mailbox`) | the workspace | a mailbox directory beside it | same as Claude | no agent container |
-| Isolation probe | canary-credential sandbox probe before every turn and text call | tool-isolation probe before every turn | same as Claude | none |
-| Login check | before the workspace is restored | inside the turn | inside the turn | no login |
-| Default turn limit | worker and bot limits | same | same | its own `local-turn-timeout-secs` (3600 s) |
-| Usage | reported at turn end only, so an accepted handoff waits up to 20 s for it | per model call | per model response, totals at the end | per model call |
-| Unfinished MCP call at exit | turn marked interrupted (`finish_codex_tools`) | not checked | not checked | not applicable |
-| Session memory (`own_memory`) | `--ephemeral` | `--no-session-persistence` | a fresh session whose files die with the container; `--no-memory` | Control's transcript |
-| Wording | failure text, the default provider label on a new attempt and the Usage page assume Codex | failure text is Codex's with the name replaced | failure text is Codex's with the name replaced, or Grok's own ending | generic |
-| Compaction | configured summary model | same | same | the chat's own local model unless configured |
-| Unexpected tools | not checked | stopped at start if the CLI lists a tool outside Control's | stopped if it lists or calls a tool outside the two meta-tools | not applicable |
-| Prompt delivery | standard input | standard input | a private file mounted read-only | request body |
+| Difference | Codex | Claude | Grok | Antigravity | Local |
+| --- | --- | --- | --- | --- | --- |
+| Tool loop | its own CLI | its own CLI | its own CLI | its own CLI | Control's loop (`local_agent`), with its own step cap, thinking levels and in-turn compaction |
+| Shell (`host_shell`) | CLI's sandboxed shell inside the turn container | Control's shell tool in a separate offline container | same as Claude | same as Claude | Control's shell tool |
+| Turn context | captured context and policy prompt (`worker::render_prompt`) | its own shorter prompt (`claude::render_prompt`), no captured turn context | same as Codex | same as Codex | same as Codex |
+| Deferred tool list | search then call through MCP | same | every Control tool through Grok's `search_tool` and `use_tool` meta-tools: it has no way to list MCP tools directly | every Control tool declared eagerly (`mcp_control_TOOL`): a lazy MCP tool is found by reading a schema file, which its file permission is denied | tools callable directly by name (`local` fact) |
+| Judge source (`review_mount`) | `/review` read-only beside a writable scratch `/workspace` | `/workspace` | `/workspace` | `/workspace` | `/workspace` |
+| Main container mount (`mailbox`) | the workspace | a mailbox directory beside it | same as Claude | same as Claude | no agent container |
+| Isolation probe | canary-credential sandbox probe before every turn and text call | tool-isolation probe before every turn | same as Claude | same as Claude | none |
+| Login check | before the workspace is restored | inside the turn | inside the turn | inside the turn | no login |
+| Default turn limit | worker and bot limits | same | same | same | its own `local-turn-timeout-secs` (3600 s) |
+| Usage | reported at turn end only, so an accepted handoff waits up to 20 s for it | per model call | per model response, totals at the end | per step, totals at the end | per model call |
+| Unfinished MCP call at exit | turn marked interrupted (`finish_codex_tools`) | not checked | not checked | not checked | not applicable |
+| Session memory (`own_memory`) | `--ephemeral` | `--no-session-persistence` | a fresh session whose files die with the container; `--no-memory` | a fresh conversation whose files die with the container; no flag turns persistence off | Control's transcript |
+| Wording | failure text, the default provider label on a new attempt and the Usage page assume Codex | failure text is Codex's with the name replaced | failure text is Codex's with the name replaced, or Grok's own ending | failure text is Codex's with the name replaced, its own sign-in wording, or the CLI's own ending | generic |
+| Compaction | configured summary model | same | same | same | the chat's own local model unless configured |
+| Unexpected tools | not checked | stopped at start if the CLI lists a tool outside Control's | stopped if it lists or calls a tool outside the two meta-tools | stopped if it calls a tool outside Control's or starts a subagent; it always lists its built-in tools, which its permission rules deny | not applicable |
+| Prompt delivery | standard input | standard input | a private file mounted read-only | a private file mounted read-only, sent as one stream-json message | request body |
 
 ## Client and server
 

@@ -31,8 +31,9 @@ let
     codex = pkgs.codex;
     claude = pkgs.claude-code;
     grok = import ../tools/grok/package.nix { inherit pkgs; };
+    antigravity = import ../tools/antigravity/package.nix { inherit pkgs; };
   }.${backend};
-  command = { codex = "codex"; claude = "claude"; grok = "grok"; }.${backend};
+  command = { codex = "codex"; claude = "claude"; grok = "grok"; antigravity = "agy"; }.${backend};
 in
 pkgs.dockerTools.buildLayeredImage {
   name = if backend == "codex" then "control-worker" else "control-${backend}";

@@ -61,6 +61,10 @@ preserves your saved models and selection.
 [Grok Build](docs/GROK.md) is a third backend: `nix run .#setup -- --grok`, then
 `control grok login`, and `/model grok:MODEL` in a chat.
 
+[Antigravity](docs/ANTIGRAVITY.md) is a fourth: `nix run .#setup -- --antigravity`, then
+`control antigravity login` (or a Gemini API key file), and
+`/model antigravity:MODEL`.
+
 Choose a saved model under **Manage → Models & providers**. **+ New model** adds
 another model; clicking its row selects it for new runs.
 
