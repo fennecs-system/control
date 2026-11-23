@@ -154,6 +154,7 @@ dependencies = [
  "control-http",
  "control-identity",
  "control-journal",
+ "control-mcp",
  "control-tui",
  "libc",
  "reqwest",
@@ -189,6 +190,7 @@ dependencies = [
  "control-context",
  "control-effect",
  "control-identity",
+ "control-mcp",
  "reqwest",
  "serde",
  "serde_json",
@@ -265,6 +267,13 @@ version = "0.1.0"
 dependencies = [
  "control-comonad",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "control-mcp"
+version = "0.1.0"
+dependencies = [
  "serde_json",
 ]
 

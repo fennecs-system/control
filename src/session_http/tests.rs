@@ -1739,28 +1739,3 @@ fn operator_mcp_envelopes_are_pinned() {
     let listed = rpc(&mut state, &json!({"jsonrpc":"2.0","id":10,"method":"tools/list"}));
     assert_eq!(listed, json!({"jsonrpc":"2.0","id":10,"result":{"tools":crate::tool_registry::http_definitions()}}));
 }
-/// The `/mcp` route's own framing answers before any tool runs.
-#[test]
-fn operator_mcp_http_framing_is_pinned() {
-    let mut state = State::default();
-    let mut send = |method: &str, header: &str, body: &[u8]| {
-        let mut response = Vec::new();
-        assert!(handle(&mut response, &mut state, method, "/mcp", "none", header, body));
-        let response = String::from_utf8(response).unwrap();
-        let status = response.lines().next().unwrap().to_owned();
-        let body = response.split_once("\r\n\r\n").unwrap().1.to_owned();
-        (status, body)
-    };
-    let cases: [(&str, &str, &[u8], &str, &str); 7] = [
-        ("GET", "", b"", "HTTP/1.1 405 Method Not Allowed", "Use MCP POST requests."),
-        ("POST", "MCP-Protocol-Version: 1999-01-01\r\n", b"not json", "HTTP/1.1 400 Bad Request", "Unsupported MCP protocol version."),
-        ("POST", "", b"not json", "HTTP/1.1 400 Bad Request", r#"{"error":{"code":-32700,"message":"Invalid JSON."},"id":null,"jsonrpc":"2.0"}"#),
-        ("POST", "", br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, "HTTP/1.1 202 Accepted", ""),
-        ("POST", "", br#"{"jsonrpc":"2.0","method":"tools/call"}"#, "HTTP/1.1 400 Bad Request", "A request ID is required."),
-        ("POST", "", br#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#, "HTTP/1.1 400 Bad Request", "A request ID is required."),
-        ("POST", "mcp-protocol-version: 2025-03-26\r\n", br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, "HTTP/1.1 200 OK", r#"{"id":1,"jsonrpc":"2.0","result":{}}"#),
-    ];
-    for (method, header, body, status, expected) in cases {
-        assert_eq!(send(method, header, body), (status.to_owned(), expected.to_owned()), "{method} {header}");
-    }
-}

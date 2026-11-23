@@ -11,6 +11,7 @@ fixture = []
 control-config = { path = "../config" }
 control-identity = { path = "../identity" }
 control-context = { path = "../context" }
+control-mcp = { path = "../mcp" }
 control-effect = { path = "../effect" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }

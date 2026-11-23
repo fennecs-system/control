@@ -295,15 +295,22 @@ fn lenses_opt_runs_in_and_the_prompt_frames_packages_as_evidence() {
 #[test]
 fn operator_http_serves_package_calls_and_leaves_other_mcp_requests_alone() {
     let shared = shared();
-    let mut output = Vec::new();
+    // Other requests reach the operator MCP, which declines package tools.
+    let operator = |method: &str, body: &[u8]| {
+        let mut output = Vec::new();
+        assert!(crate::mcp_http::handle(&mut output, &shared, method, "/mcp", "", body));
+        String::from_utf8(output).unwrap()
+    };
     let other = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.chats.list","arguments":{}}}).to_string();
-    assert!(!http(&mut output, &shared, "POST", "/mcp", other.as_bytes()));
-    assert!(!http(&mut output, &shared, "GET", "/mcp", b"control.package.read"));
+    assert!(operator("POST", other.as_bytes()).contains(r#""structuredContent":{"data":[]}"#));
+    assert!(operator("GET", b"control.package.read").starts_with("HTTP/1.1 405"));
     let unknown = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.package.delete","arguments":{}}}).to_string();
-    assert!(!http(&mut output, &shared, "POST", "/mcp", unknown.as_bytes()));
-    assert!(output.is_empty());
+    assert!(operator("POST", unknown.as_bytes()).contains(r#""isError":true"#));
+    let unacknowledged = json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control.packages.search","arguments":{}}}).to_string();
+    assert!(operator("POST", unacknowledged.as_bytes()).ends_with("A request ID is required."));
+    let mut output = Vec::new();
     let search = json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"control.packages.search","arguments":{}}}).to_string();
-    assert!(http(&mut output, &shared, "POST", "/mcp", search.as_bytes()));
+    assert!(crate::mcp_http::handle(&mut output, &shared, "POST", "/mcp", "", search.as_bytes()));
     let text = String::from_utf8(output).unwrap();
     assert!(text.starts_with("HTTP/1.1 200") && text.contains("\"id\":7") && text.contains("\"isError\":false"));
     // Import and revoke are hidden from the external-harness stdio bridge.

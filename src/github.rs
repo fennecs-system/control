@@ -865,6 +865,28 @@ pub fn panel(state: &State, chat: &str) -> String {
         }
     html
 }
+/// The `/mcp` reply for `control_github_open_pr`; the caller frames it.
+pub(crate) fn mcp_open_pr(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    if id.is_null() || request["jsonrpc"] != "2.0" {
+        return control_mcp::error(&id, control_mcp::INVALID_REQUEST, "Publication requires an acknowledged JSON-RPC request");
+    }
+    let result = serde_json::from_value::<Input>(request["params"]["arguments"].clone())
+        .map_err(|_| fail("Expected run_id, title and optional body"))
+        .and_then(|input| {
+            let chat = shared
+                .lock()
+                .map_err(|_| fail("State unavailable"))?
+                .runtime
+                .runs
+                .iter()
+                .find(|r| r.id == input.run_id)
+                .and_then(|r| r.chat_id.clone())
+                .ok_or_else(|| fail("Run not found"))?;
+            open(shared, &chat, input)
+        });
+    control_mcp::reply(&id, crate::toolbox::result(result))
+}
 pub fn http(
     stream: &mut impl Write,
     shared: &Arc<Mutex<State>>,
@@ -872,47 +894,6 @@ pub fn http(
     path: &str,
     body: &[u8],
 ) -> bool {
-    if path == "/mcp" && method == "POST" {
-        let Ok(request) = serde_json::from_slice::<Value>(body) else {
-            return false;
-        };
-        if request["method"] == "tools/call" && request["params"]["name"] == "control_github_write" {
-            operations::http(stream, shared, &request);
-            return true;
-        }
-        if request["method"] == "tools/call" && request["params"]["name"] == "control_github_read" {
-            inspection::http(stream, shared, &request);
-            return true;
-        }
-        if request["method"] != "tools/call"
-            || request["params"]["name"] != "control_github_open_pr"
-        {
-            return false;
-        }
-        let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let value = if id.is_null() || request["jsonrpc"] != "2.0" {
-            crate::toolbox::protocol_error(&id, -32600, "Publication requires an acknowledged JSON-RPC request")
-        } else {
-            let result = serde_json::from_value::<Input>(request["params"]["arguments"].clone())
-                .map_err(|_| fail("Expected run_id, title and optional body"))
-                .and_then(|input| {
-                    let chat = shared
-                        .lock()
-                        .map_err(|_| fail("State unavailable"))?
-                        .runtime
-                        .runs
-                        .iter()
-                        .find(|r| r.id == input.run_id)
-                        .and_then(|r| r.chat_id.clone())
-                        .ok_or_else(|| fail("Run not found"))?;
-                    open(shared, &chat, input)
-                });
-            json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(result)})
-        };
-        let body = value.to_string();
-        let _ = control_http::respond(stream, "200 OK", "application/json", body.as_bytes(), "", control_http::Policy::Restricted);
-        return true;
-    }
     let Some(chat) = path
         .strip_prefix("/dm/")
         .and_then(|s| s.strip_suffix("/github"))

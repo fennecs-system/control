@@ -458,7 +458,7 @@ fn dispatch<R: Remote>(connect: &mut impl FnMut() -> io::Result<R>, connection: 
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let result = match request["method"].as_str().unwrap_or("") {
         _ if request["jsonrpc"] != "2.0" => Err((-32600, "Invalid JSON-RPC request".to_owned())),
-        "initialize" => Ok(json!({"protocolVersion":control_context::tool_policy::negotiate(request["params"]["protocolVersion"].as_str()),"capabilities":{"tools":{}},"serverInfo":{"name":"control-chat","version":env!("CARGO_PKG_VERSION")},
+        "initialize" => Ok(json!({"protocolVersion":control_mcp::negotiate(request["params"]["protocolVersion"].as_str()),"capabilities":{"tools":{}},"serverInfo":{"name":"control-chat","version":env!("CARGO_PKG_VERSION")},
             "instructions":"Drive Control chats as the local operator: chats_list, chat_create, chat_send, chat_read. chat_open raises folder requests and control_design_ask asks the operator a decision (its answer appears in that chat); decisions stay with the operator unless enabled in Manage → Permissions (then chat_decide)."})),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools":definitions(false, control::permissions::read().mcp_approvals)})),

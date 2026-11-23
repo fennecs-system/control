@@ -179,11 +179,11 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
         return Value::Null;
     }
     let id = req.get("id").cloned().unwrap_or(Value::Null);
-    if let Some(fault) = crate::toolbox::request_fault(req) {
+    if let Some(fault) = control_mcp::request_fault(req) {
         return fault;
     }
     if !matches!(req["method"].as_str(), Some("initialize" | "ping" | "tools/list" | "tools/call")) {
-        return crate::toolbox::protocol_error(&id, -32601, "Unsupported room method.");
+        return control_mcp::error(&id, -32601, "Unsupported room method.");
     }
     let result = (|| -> Result<Value, std::borrow::Cow<'static, str>> {
         let run = state
@@ -219,7 +219,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
         } };
         match req["method"].as_str().unwrap_or("") {
             "initialize" => Ok(
-                json!({"protocolVersion":control_context::tool_policy::MCP_LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}),
+                json!({"protocolVersion":control_mcp::LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}),
             ),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools":worker_definitions(crate::delegation::is_judge(run))})),
@@ -302,8 +302,8 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
     })();
     match result {
         Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-        Err(message) if req["method"] == "tools/call" => crate::toolbox::tool_error(&id, &message),
-        Err(message) => crate::toolbox::protocol_error(&id, -32602, &message),
+        Err(message) if req["method"] == "tools/call" => control_mcp::tool_error(&id, &message),
+        Err(message) => control_mcp::error(&id, -32602, &message),
     }
 }
 
@@ -351,7 +351,7 @@ pub fn checkpoint(
         }
         if let Some(mailbox) = mailbox { state.runtime.runs[run_index].attempts.last_mut().unwrap().turn_mailbox = mailbox; }
         if let Some(bots) = bots { state.bots = bots; }
-        return crate::toolbox::tool_error(&envelope["request"]["id"], "Could not save room update. Try again.");
+        return control_mcp::tool_error(&envelope["request"]["id"], "Could not save room update. Try again.");
     }
     response
 }

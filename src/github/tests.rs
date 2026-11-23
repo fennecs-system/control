@@ -461,7 +461,7 @@ fn github_mcp_envelopes_are_pinned() {
     let shared = Arc::new(Mutex::new(State::default()));
     let send = |body: Value| {
         let mut output = Vec::new();
-        let served = http(&mut output, &shared, "POST", "/mcp", body.to_string().as_bytes());
+        let served = crate::mcp_http::handle(&mut output, &shared, "POST", "/mcp", "", body.to_string().as_bytes());
         let text = String::from_utf8(output).unwrap();
         (served, text.split_once("\r\n\r\n").map(|(_, body)| serde_json::from_str::<Value>(body).unwrap()))
     };
@@ -478,6 +478,9 @@ fn github_mcp_envelopes_are_pinned() {
     ] {
         assert_eq!(send(body.clone()), (true, expected), "{body}");
     }
-    assert_eq!(send(json!({"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"name":"control_github_write"}})), (false, None));
-    assert_eq!(send(json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"control.chats.list"}})), (false, None));
+    // Anything else reaches the operator MCP.
+    let (_, listed) = send(json!({"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"name":"control_github_write"}}));
+    assert!(listed.unwrap()["result"]["tools"].is_array());
+    let (_, chats) = send(json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"control.chats.list"}}));
+    assert_eq!(chats.unwrap()["result"]["structuredContent"]["data"], json!([]));
 }

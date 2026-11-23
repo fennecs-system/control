@@ -17,7 +17,7 @@ fn direct(envelope: &Value) -> Result<std::borrow::Cow<'_, Value>, Value> {
     match deferred::unwrap(envelope) {
         Ok(Some(rewritten)) => Ok(std::borrow::Cow::Owned(rewritten)),
         Ok(None) => Ok(std::borrow::Cow::Borrowed(envelope)),
-        Err(message) => Err(crate::toolbox::tool_error(&envelope["request"]["id"], &message)),
+        Err(message) => Err(control_mcp::tool_error(&envelope["request"]["id"], &message)),
     }
 }
 fn rpc_at(
@@ -135,13 +135,13 @@ fn dispatch_raw(
     let Some(id) = request.get("id") else {
         return Value::Null;
     };
-    if let Some(fault) = crate::toolbox::request_fault(request) {
+    if let Some(fault) = control_mcp::request_fault(request) {
         return fault;
     }
     // Every tools/call failure past the protocol checks is a tool result.
     let call = request["method"] == "tools/call";
-    let error = |message: &str| if call { crate::toolbox::tool_error(id, message) }
-        else { crate::toolbox::protocol_error(id, -32602, message) };
+    let error = |message: &str| if call { control_mcp::tool_error(id, message) }
+        else { control_mcp::error(id, -32602, message) };
     if crate::shutdown::requested() { return error("Control is stopping; no new tools may run."); }
     let Ok(mut state) = shared.lock() else {
         return error(
@@ -182,7 +182,7 @@ fn dispatch_raw(
     let (claude, judge) = (facts.shell, facts.judge);
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => {
-            json!({"protocolVersion":control_context::tool_policy::MCP_LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
+            json!({"protocolVersion":control_mcp::LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
         }
         "ping" => json!({}),
         // The role's core schemas; the rest are in the prompt's deferred index.
@@ -445,7 +445,7 @@ fn dispatch_raw(
                 return error("Tool is not allowed for this worker. Next: call control_tool_search {} to list the tools this session may call.");
             }
         }
-        _ => return crate::toolbox::protocol_error(id, -32601, "Unsupported worker method"),
+        _ => return control_mcp::error(id, -32601, "Unsupported worker method"),
     };
     json!({"jsonrpc":"2.0","id":id,"result":result})
 }

@@ -54,6 +54,7 @@ mod lifecycle;
 mod attempt_control;
 mod recovery;
 mod mcp_chat;
+mod mcp_http;
 mod mcp_stdio;
 mod navigation;
 #[cfg(test)]
@@ -379,14 +380,13 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     if permissions_page::http(&mut stream, method, path, &data[header_end..header_end + length]) { return; }
     if services::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
     if web_access::http(&mut stream, &state, method, path, &data[header_end..header_end + length]) { return; }
+    if mcp_http::handle(&mut stream,&state,method,path,&header,&data[header_end..header_end+length]) {return;}
     if github::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if projects::http(&mut stream,&state,method,path,query,&data[header_end..header_end+length]) {return;}
-    if packages::http(&mut stream,&state,method,path,&data[header_end..header_end+length]) {return;}
     if tools_http::handle(
         &mut stream,
         method,
         target,
-        &header,
         &data[header_end..header_end + length],
     ) {
         return;
