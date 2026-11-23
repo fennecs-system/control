@@ -415,17 +415,11 @@ pub fn handle(
         return true;
     }
     if path == "/bots/graveyard" && method == "GET" {
-        // The scroll loader's next page: rows only, no page shell.
+        // The scroll loader's next page: rows only, no page shell. The server
+        // serves it before taking the lock; a caller holding state gets the
+        // same bytes.
         let query = crate::graveyard::Query::from(&crate::fields(query));
-        let graves = crate::graveyard::dead(state, &query.search);
-        let _ = control_http::respond(
-            stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            crate::graveyard::rows(&graves, &query).as_bytes(),
-            "",
-            control_http::Policy::Embedded,
-        );
+        let _ = crate::graveyard::NEXT_PAGE.reply(state, query).write(stream);
         return true;
     }
     if path == "/dms" && method == "GET" {

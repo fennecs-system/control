@@ -277,16 +277,39 @@ fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> 
         .map(String::as_str)
         .unwrap_or("general");
     if view == "agents" {
-        return render_with_content(
-            state,
-            view,
-            lens,
-            channel,
-            Some(bots::page(state, &graveyard::Query::from(query))),
-        );
+        return shell(view, &bots::page(state, &graveyard::Query::from(query)));
     }
     render(state, view, lens, channel)
 }
+/// `GET /?view=agents`, the Bots page, served by [`BOTS_PAGE`].
+struct BotsPage {
+    query: graveyard::Query,
+    /// A lens the request chose, which the response remembers in a cookie.
+    lens: Option<String>,
+}
+impl BotsPage {
+    fn of(method: &str, path: &str, query: &HashMap<String, String>) -> Option<Self> {
+        (method == "GET" && path == "/" && query.get("view").is_some_and(|view| view == "agents")).then(|| Self {
+            query: graveyard::Query::from(query),
+            lens: query.get("lens").cloned(),
+        })
+    }
+}
+const BOTS_PAGE: Read<BotsPage, (bots::Page, String)> = Read {
+    view: |state, BotsPage { query, lens }| {
+        let cookie = lens.map_or_else(String::new, |lens| {
+            lens_ui::cookie(lens_ui::selected(&state.lens_library, "", Some(&lens)))
+        });
+        (bots::Page::of(state, &query), cookie)
+    },
+    render: |(page, cookie)| Reply {
+        status: "200 OK",
+        mime: "text/html; charset=utf-8",
+        body: web_assets::with_client(&shell("agents", &page.render())),
+        extra: cookie,
+        policy: control_http::Policy::Client,
+    },
+};
 /// `GET /` with its response policy. The Bots page's process tree is a
 /// pan/zoom canvas run by the Rust/WASM client, which also refreshes the
 /// Models page's live server statistics; other views run no script.
@@ -611,6 +634,15 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
     }
     if let Some(page) = session_http::ChatPage::of(method, path, &header) {
         read_response(&mut stream, &state, &session_http::CHAT_PAGES, page);
+        return;
+    }
+    if let Some(page) = BotsPage::of(method, path, &query) {
+        read_response(&mut stream, &state, &BOTS_PAGE, page);
+        return;
+    }
+    if method == "GET" && path == "/bots/graveyard" {
+        let page = graveyard::Query::from(&query);
+        read_response(&mut stream, &state, &graveyard::NEXT_PAGE, page);
         return;
     }
     state_response(&mut stream, &state, |mut stream, state| {
