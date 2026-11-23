@@ -8,6 +8,7 @@ pub enum Backend {
     #[default]
     Codex,
     Claude,
+    Grok,
     /// An operator-configured private inference endpoint, named by its text
     /// model ID. Text generation is available; agent turns are not yet.
     Local,
@@ -66,6 +67,11 @@ pub(crate) trait Agent: Sync {
     fn probe_workspace(&self) -> &'static str {
         "sandbox-probe/workspace"
     }
+    /// Difference: it renders its own shorter prompt and takes no captured
+    /// turn context (Claude). Others get Control's shared framing.
+    fn own_prompt(&self) -> bool {
+        false
+    }
     /// Whether the backend keeps its own session memory or controls between
     /// turns. None does yet: every CLI runs ephemeral and each
     /// turn starts from Control's captured context, so nothing reads this.
@@ -83,7 +89,7 @@ pub(crate) struct TextCall<'a> {
     pub model: &'a str,
 }
 impl Backend {
-    pub(crate) const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Local];
+    pub(crate) const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Grok, Self::Local];
     /// The backends that run a pinned CLI image and can be the node default.
     pub(crate) fn hosted() -> impl Iterator<Item = Self> {
         Self::ALL.into_iter().filter(|backend| backend.default_capable())
@@ -92,6 +98,7 @@ impl Backend {
         match self {
             Self::Codex => &crate::codex::Codex,
             Self::Claude => &crate::claude::Claude,
+            Self::Grok => &crate::grok::Grok,
             Self::Local => &crate::local_agent::Local,
         }
     }

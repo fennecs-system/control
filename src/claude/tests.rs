@@ -152,7 +152,7 @@ fn failures_name_the_result_subtype_and_bad_tools_abort_early() {
     let flag = std::sync::atomic::AtomicBool::new(false);
     let bad = init.replace("mcp__control__control_workspace_run", "Bash");
     assert!(
-        capture_with(bad.as_bytes(), |_| {}, |_| {}, &flag).0
+        capture_with(bad.as_bytes(), control_ai::claude::Claude::new(&control_context::worker_mcp_names()), "Claude", |_| {}, |_| {}, &flag).0
             .unwrap_err()
             .to_string()
             .contains("tool configuration")
