@@ -1,7 +1,7 @@
 [package]
 name = "control"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 default-run = "control"
 
 [features]
@@ -55,3 +55,6 @@ control = { path = ".", default-features = false, features = ["test-isolation"] 
 [workspace]
 members = ["crates/context", "crates/mcp", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/delivery", "crates/diff", "crates/url-names", "crates/ingress", "crates/client", "crates/tui", "crates/discord", "crates/isolation"]
 exclude = ["web"]
+
+[workspace.package]
+edition = "2024"

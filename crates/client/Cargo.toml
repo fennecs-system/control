@@ -1,7 +1,7 @@
 [package]
 name = "control-client"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [features]
 # Lets the terminal's tests build a `Hive` against a local fixture server.

@@ -2,6 +2,7 @@
 //! crates that clients and the server both use; only the binary composes the
 //! clients. See docs/CRATE-BOUNDARIES.md.
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Each client-side crate (and the root) with the only crates that may depend on it.
@@ -22,15 +23,20 @@ fn violations(graph: &[(String, Vec<String>)]) -> Vec<(&str, &str)> {
         .collect()
 }
 
-/// Workspace packages and the workspace crates each one names.
-fn workspace() -> Vec<(String, Vec<String>)> {
+/// `cargo metadata` for the root workspace, without resolving dependencies.
+fn metadata() -> Value {
     let output = Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--no-deps", "--offline", "--manifest-path"])
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .output()
         .expect("cargo metadata runs");
     assert!(output.status.success(), "cargo metadata failed: {}", String::from_utf8_lossy(&output.stderr));
-    let metadata: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON");
+    serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON")
+}
+
+/// Workspace packages and the workspace crates each one names.
+fn workspace() -> Vec<(String, Vec<String>)> {
+    let metadata = metadata();
     let names = |value: &Value| value.as_array().into_iter().flatten().filter_map(|item| item["name"].as_str().map(str::to_owned)).collect::<Vec<_>>();
     let members = names(&metadata["packages"]);
     metadata["packages"]
@@ -61,4 +67,34 @@ fn the_rule_rejects_a_leaf_depending_on_a_client() {
         ("control".to_owned(), vec!["control".to_owned(), "control-client".to_owned()]),
     ];
     assert_eq!(violations(&graph), [("control-delivery", "control-client"), ("control-client", "control")]);
+}
+
+#[test]
+fn every_workspace_package_is_on_edition_2024() {
+    let metadata = metadata();
+    let other_editions = metadata["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|package| package["edition"] != "2024")
+        .map(|package| format!("{} ({})", package["name"], package["edition"]))
+        .collect::<Vec<_>>();
+    assert_eq!(other_editions, Vec::<String>::new());
+}
+
+/// Standalone manifests are their own workspaces and cannot inherit the edition.
+#[test]
+fn standalone_manifests_are_on_edition_2024() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tools = std::fs::read_dir(root.join("tools")).expect("tools directory is readable");
+    let other_editions = tools
+        .filter_map(|entry| entry.ok().map(|entry| entry.path().join("Cargo.toml")))
+        .chain([root.join("web/Cargo.toml")])
+        .filter(|manifest| manifest.is_file())
+        .filter(|manifest| {
+            let text = std::fs::read_to_string(manifest).expect("manifest is readable");
+            !text.lines().any(|line| line.trim() == r#"edition = "2024""#)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(other_editions, Vec::<PathBuf>::new());
 }

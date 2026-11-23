@@ -1,7 +1,7 @@
 [package]
 name = "control-tui"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
 control-client = { path = "../client" }
