@@ -252,6 +252,36 @@ arbitrary downloaded code safe.
   [ports](../src/ports/tests/auto_tests.rs),
   `private_unlisted_loopback_and_privately_resolving_targets_stay_pending`.
 
+## Key-injecting relay (not yet wired to backends)
+
+The [key-injecting relay](PORTS.md#key-injecting-relay) is built and tested but
+no backend uses it yet. Today an API-key account's key file is still mounted
+read-only into its CLI's container. Once a backend switches over, these hold
+for its API-key accounts:
+
+- **True by construction.** The key is never in the container's files,
+  environment, arguments, memory, mounts or `/proc`, and the container has no
+  network. It holds a per-attempt placeholder that is useless off the relay
+  and after its attempt ends.
+- **Relay defences.** The request head is parsed once into typed parts. The
+  relay rejects duplicate `Host` or `Content-Length`, folded headers, bare CR or
+  LF, non-ASCII header names, absolute-form targets, `..` or encoded `/` in
+  paths, and `Transfer-Encoding`. Each backend reaches one fixed origin,
+  resolved on the host, over an allow-list of routes. The relay never follows
+  redirects, serves one request per connection and has head, idle and total
+  timeouts.
+- **What remains.** A compromised CLI can call the allow-listed routes as the
+  account during its attempt, within the attempt's bounds. A provider that
+  echoed the key back in a response would reach the container, since the relay
+  does not rewrite responses. Host compromise is out of scope, as everywhere.
+
+Evidence: [inject](../src/ports/inject/tests.rs),
+`request_smuggling_shapes_are_refused`,
+`no_outbound_head_ever_contains_the_inbound_placeholder`;
+[inject_edge](../src/ports/inject_edge/tests.rs),
+`the_provider_gets_the_key_and_the_client_never_does`,
+`the_audit_log_holds_metadata_only_and_stays_bounded`.
+
 ## Guidance is not enforcement
 
 Instructions to avoid secrets, ignore prompt injection, prefer Rust, ask design

@@ -186,6 +186,68 @@ Services with different owner chats need access to both exact service
 generations; the saved route captures that grant. A shared actor, root task or
 guessed port ID grants nothing.
 
+## Key-injecting relay
+
+Not yet used by any backend: no turn runs through it, and API-key accounts
+still mount their key file as before. The relay is built and tested so the
+next change can switch the CLIs to it one backend at a time.
+
+The aim is that an API key never enters a container. A CLI turn with an
+API-key account gets a per-attempt placeholder instead of its key and no
+network (`--network=none`). Its only way out is this relay, reached over the
+same `listen-multi` stdio relay as ports. On the host, the relay checks each
+request against its backend's fixed rule and the attempt's placeholder, then
+adds the real key and sends the request over TLS to the provider's fixed
+origin. The CLI's base URL points at the relay over plain HTTP on container
+loopback.
+
+- **Pure core** (`src/ports/inject.rs`). It parses the request head once into
+  typed parts and refuses ambiguous heads. That covers duplicate `Host` or
+  `Content-Length`, folded headers, bare CR or LF, whitespace before a colon,
+  non-ASCII or empty header names, and absolute- or authority-form targets.
+  Also `..` or `%2e` segments, encoded `/` or `\`, any `Transfer-Encoding`,
+  `Upgrade`, any version but HTTP/1.1, a missing `Content-Length` on `POST`,
+  heads over 16 KiB and bodies over 32 MiB. `plan` then checks the placeholder
+  and the route and returns the outbound head as data. That head has `Host` rewritten and the credential,
+  `Proxy-*`, hop-by-hop and framing headers removed. It ends with
+  `Connection: close` and a slot for the key. The core never sees the key.
+  Refusals answer 400, 403, 411, 413 or 431.
+- **Edge** (`src/ports/inject_edge.rs`). It reads one head within ten seconds,
+  connects to the rule's origin (the name is resolved on the host), and writes
+  the planned head with the key spliced in. The key is read per request from
+  the account's private key file and cleared after that write. The edge then
+  forwards exactly `Content-Length` body bytes and copies the response back
+  chunk by chunk as it arrives, so server-sent events are not buffered. It
+  serves one request per connection, never follows redirects, and enforces idle
+  and total time limits. Each attempt also has a budget: at most 8 requests in
+  flight, a per-minute request cap and a total byte allowance. A refused
+  request gets 429.
+
+Every placeholder must be the attempt's own. That holds in `Authorization:
+Bearer`, `x-api-key` and `x-goog-api-key`, wherever one is present. A
+placeholder anywhere else in the head is refused rather than forwarded.
+
+| Backend | Origin | Allowed routes | Key header |
+| --- | --- | --- | --- |
+| Codex | `api.openai.com` | `POST /v1/responses`, `GET /v1/models` (`client_version=`) | `Authorization: Bearer` |
+| Claude | `api.anthropic.com` | `POST /v1/messages`, `POST /v1/messages/count_tokens` (`beta=true`), `GET /v1/models` (`beta=true`, `limit=`) | `x-api-key` |
+| Antigravity | `generativelanguage.googleapis.com` | `POST /v1beta/models/{model}:streamGenerateContent` (`alt=sse`), `:generateContent`, `:countTokens` | `x-goog-api-key` |
+| Grok | `api.x.ai` | `POST /v1/responses`, `POST /v1/chat/completions`, `GET /v1/api-key`, `GET /v1/models` | `Authorization: Bearer` |
+
+Everything else gets 403, including any other query parameter. Claude Code
+sends its key in both `Authorization` and `x-api-key`. Both must hold the
+placeholder, both are stripped, and the key goes in `x-api-key` alone, the
+header Anthropic takes API keys in. A Gemini `key=` query parameter is
+dropped.
+
+Each request, relayed or refused, appends one line to
+`<state>/secrets-audit.jsonl` (mode 0600). The line holds `time`, `attempt`,
+`account`, `method`, `host`, `route_class` (the route template),
+`status`, `bytes_in`, `bytes_out`, `ms` and `refusal`. It never holds headers,
+bodies, query strings, the placeholder or the key. Lines older than 30 days
+are dropped when the log is appended to, and the oldest go first once it would
+pass 4 MiB.
+
 ## Waiting for a decision
 
 Do not poll a pending request. Its `next` field says to hand off with:
@@ -260,6 +322,18 @@ unapproved hosts, plain HTTP only to port 80, revocation refusing new requests
 and closing open tunnels, proxy settings present only with approved egress, the
 usage text and the reserved port. The ignored `proxy_relay_benchmark` compares
 tunnel throughput and round-trip latency with the raw relay path.
+
+`src/ports/inject/tests.rs` and `src/ports/inject_edge/tests.rs` cover the
+key-injecting relay:
+
+- every refusal and smuggling shape, and each backend's allow-list;
+- that no outbound head carries the placeholder;
+- against a loopback fake provider and a TLS provider with a test CA, that the
+  provider gets the key and never the placeholder, and the client never gets
+  the key, error responses included;
+- that events reach the client before the provider finishes;
+- each bound's status, and audit lines that hold metadata only and are pruned;
+- two interleaved streams through the multiplex transport.
 
 Two ignored live tests in `src/ports/tests/live_tests.rs` need
 `CONTROL_QA_SERVICE_IMAGE` (an immutable image ID) and `CONTROL_QA_CONTROL_BIN`,

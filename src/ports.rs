@@ -2,6 +2,13 @@
 mod decisions;
 mod guidance;
 mod ingress_guard;
+// The key-injecting relay: built and tested, not yet used by any backend.
+#[allow(dead_code)]
+mod inject;
+#[allow(dead_code)]
+mod inject_edge;
+#[allow(dead_code)]
+mod inject_keys;
 pub(crate) use guidance::{Requests, egress_hint, wait_topic};
 mod multiplex;
 mod proxy;
