@@ -291,6 +291,35 @@ fn assert_secret(spec: &RunSpec, backend: Backend, name: &str, target: &str) {
         "the login path is not passed as an argument or variable"
     );
 }
+/// A refreshable sign-in arrives as its own folder, writable, at `target`,
+/// with the CLI pointed at it by `variable`, and nowhere else.
+fn assert_folder(spec: &RunSpec, folder: &std::path::Path, name: &str, target: &str, variable: (&str, &str)) {
+    let canonical = |path: &std::path::Path| fs::canonicalize(path).unwrap();
+    let [secret] = spec.secrets.as_slice() else {
+        panic!("one secret: {:?}", spec.secrets)
+    };
+    assert_eq!(
+        (secret.name.as_str(), secret.target.as_str(), secret.access),
+        (name, target, Access::ReadWrite)
+    );
+    assert_eq!(canonical(&secret.source), canonical(folder));
+    assert!(
+        spec.env.iter().any(|(n, v)| (n.as_str(), v.as_str()) == variable),
+        "{:?}",
+        spec.env
+    );
+    assert_eq!(
+        control_agent::cli::secrets_private(spec),
+        Ok(()),
+        "beneath the private home"
+    );
+    let source = folder.display().to_string();
+    assert!(
+        !spec.env.iter().any(|(_, value)| value.contains(&source))
+            && !spec.argv.iter().any(|word| word.contains(&source)),
+        "the login path is not passed as an argument or variable"
+    );
+}
 /// The handoff was accepted, the reply is the turn's, its usage was recorded
 /// and the workspace was published as the chat's new checkpoint.
 fn assert_finished(finished: &Finished, tokens: (u64, u64, u64)) {
@@ -390,11 +419,13 @@ fn a_claude_attempt_runs_from_probe_to_published_workspace() {
     let finished = attempt(Backend::Claude, |spec| cli(spec, &before, &after, &[]));
     let turn = finished.turn();
     assert_eq!(turn.image.as_str(), IMAGE);
-    assert_secret(
+    // Control's own default sign-in is refreshable: its folder, writable.
+    assert_folder(
         turn,
-        Backend::Claude,
+        credential(Backend::Claude).parent().unwrap(),
         "claude/credentials",
-        "/home/agent/.claude/.credentials.json",
+        "/home/agent/.claude-login",
+        ("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/home/agent/.claude-login"),
     );
     // The CLI sees only its mailbox; the workspace is reached through tools.
     assert_eq!(
@@ -435,7 +466,13 @@ fn a_grok_attempt_runs_from_probe_to_published_workspace() {
     let finished = attempt(Backend::Grok, |spec| cli(spec, &before, &after, &[]));
     let turn = finished.turn();
     assert_eq!(turn.image.as_str(), IMAGE);
-    assert_secret(turn, Backend::Grok, "grok/auth.json", "/home/agent/.grok/auth.json");
+    assert_folder(
+        turn,
+        credential(Backend::Grok).parent().unwrap(),
+        "grok/auth.json",
+        "/home/agent/.grok-login",
+        ("GROK_AUTH_PATH", "/home/agent/.grok-login/auth.json"),
+    );
     assert_eq!(
         fs::canonicalize(host(turn, "/workspace")).unwrap(),
         finished.root.join("grok-mailbox")
@@ -586,6 +623,7 @@ fn each_sandbox_probe_writes_and_removes_a_fresh_result_name() {
         path: root.join("unused"),
         uid: owner.uid(),
         gid: owner.gid(),
+        write: control_agent::Write::ReadOnly,
     };
     let engine = Scripted::new(|call: &Call| match call {
         Call::Spawn(spec) => Answer::Run(probe(spec)),
@@ -691,57 +729,129 @@ fn an_unready_engine_blocks_before_any_container_or_workspace() {
     assert!(!runtime::workspace(&generation).unwrap().exists());
 }
 
-/// Two accounts of one backend launch with their own logins: each turn mounts
-/// its account's file and never the other's, and the backend is told nothing
-/// about accounts.
+/// Accounts of one backend launch with their own logins: each turn mounts
+/// only its account's own folder (or, for Codex, its own file), no account's
+/// mount lies inside another's, and the backend is told nothing about
+/// accounts. Named accounts and Control's own default sign-ins are writable;
+/// the operator's own Codex sign-in is not.
 #[test]
-fn two_accounts_of_one_backend_launch_with_different_credential_mounts() {
+fn accounts_of_one_backend_each_mount_only_their_own_login() {
     let (before, after) = claude_stream();
     let turn = |spec: &RunSpec| cli(spec, &before, &after, &[(".control-result", REPLY)]);
-    for backend in [Backend::Claude, Backend::Codex] {
-        let target = match backend {
-            Backend::Codex => ("codex/auth.json", "/home/agent/.codex/auth.json"),
-            _ => ("claude/credentials", "/home/agent/.claude/.credentials.json"),
+    let names =
+        ["default", "isolated-b", "isolated-c"].map(|name| crate::accounts::AccountName::try_from(name).unwrap());
+    for backend in [Backend::Claude, Backend::Grok, Backend::Codex] {
+        let finished: Vec<Finished> = names
+            .iter()
+            .map(|name| attempt_on(backend, name.as_str(), turn))
+            .collect();
+        let canonical = |path: &std::path::Path| fs::canonicalize(path).unwrap();
+        // What each account's turn should mount: Codex rewrites its file in
+        // place, Claude and Grok replace theirs inside their folder.
+        let own = |name: &crate::accounts::AccountName| {
+            let file = credential_on(backend, name);
+            match backend {
+                Backend::Codex => canonical(&file),
+                _ => canonical(file.parent().unwrap()),
+            }
         };
-        let default = attempt_on(backend, "default", turn);
-        let second = attempt_on(backend, "second", turn);
-        let name = crate::accounts::AccountName::try_from("second").unwrap();
-        let mounted = |finished: &Finished| {
-            let [secret] = finished.turn().secrets.as_slice() else {
-                panic!("one secret: {:?}", finished.turn().secrets)
-            };
-            assert_eq!((secret.name.as_str(), secret.target.as_str()), target);
-            assert_eq!(secret.access, Access::ReadOnly);
-            fs::canonicalize(&secret.source).unwrap()
-        };
-        let canonical = |path: PathBuf| fs::canonicalize(path).unwrap();
-        assert_eq!(mounted(&default), canonical(credential(backend)));
-        assert_eq!(mounted(&second), canonical(credential_on(backend, &name)));
-        assert_ne!(mounted(&default), mounted(&second));
-        for finished in [&default, &second] {
-            let other = if std::ptr::eq(finished, &default) {
-                credential_on(backend, &name)
-            } else {
-                credential(backend)
-            };
-            let spec = finished.turn();
-            let other = other.display().to_string();
-            assert!(
-                spec.mounts
-                    .iter()
-                    .all(|m| !matches!(&m.source, Source::Bind(p) if p.display().to_string() == other))
-                    && spec.secrets.iter().all(|s| s.source.display().to_string() != other)
-                    && !spec
-                        .argv
+        let mounted: Vec<_> = finished
+            .iter()
+            .zip(&names)
+            .map(|(finished, name)| {
+                let spec = finished.turn();
+                let [secret] = spec.secrets.as_slice() else {
+                    panic!("{backend:?}: one secret: {:?}", spec.secrets)
+                };
+                let writable = !(backend == Backend::Codex && name.is_implicit());
+                assert_eq!(
+                    secret.access,
+                    if writable { Access::ReadWrite } else { Access::ReadOnly },
+                    "{backend:?}+{name}"
+                );
+                assert_eq!(control_agent::cli::secrets_private(spec), Ok(()));
+                assert_eq!(canonical(&secret.source), own(name), "{backend:?}+{name}");
+                assert_eq!(finished.attempt.account, *name, "the attempt records its account");
+                canonical(&secret.source)
+            })
+            .collect();
+        for (i, mine) in mounted.iter().enumerate() {
+            for (j, theirs) in mounted.iter().enumerate().filter(|(j, _)| *j != i) {
+                assert!(
+                    !mine.starts_with(theirs) && !theirs.starts_with(mine),
+                    "{backend:?}: {mine:?} and {theirs:?} overlap"
+                );
+                let spec = finished[i].turn();
+                let other = theirs.display().to_string();
+                assert!(
+                    spec.mounts
                         .iter()
-                        .chain(spec.env.iter().map(|(_, v)| v))
-                        .any(|w| w.contains("second")),
-                "{backend:?}: neither turn sees the other's login nor its account's name"
-            );
+                        .all(|m| !matches!(&m.source, Source::Bind(p) if p.display().to_string() == other))
+                        && spec.secrets.iter().all(|s| canonical(&s.source) != *theirs)
+                        && !spec
+                            .argv
+                            .iter()
+                            .chain(spec.env.iter().map(|(_, v)| v))
+                            .any(|w| w.contains("isolated")),
+                    "{backend:?}: account {i} sees account {j}'s login or an account's name"
+                );
+            }
         }
-        assert_eq!(second.attempt.account, name, "the attempt records its account");
-        assert!(default.attempt.account.is_implicit());
     }
+    // Test binaries share the configuration folder: leave no named account behind.
+    for backend in [Backend::Claude, Backend::Grok, Backend::Codex] {
+        for name in &names[1..] {
+            fs::remove_dir_all(crate::logins::directory(backend, name).unwrap()).unwrap();
+        }
+    }
+}
+
+/// A refreshable sign-in survives the turn as the CLI rewrote it, and nothing
+/// else does: not what the CLI wrote beside it, and not what an earlier login
+/// left there.
+#[test]
+fn only_the_refreshed_sign_in_outlives_a_turn_in_its_folder() {
+    let (before, after) = claude_stream();
+    let name = crate::accounts::AccountName::try_from("swept").unwrap();
+    let folder = credential_on(Backend::Claude, &name).parent().unwrap().to_path_buf();
+    // An earlier login kept its whole configuration folder here (PR #368).
+    fs::create_dir_all(folder.join("projects/-workspace")).unwrap();
+    fs::write(folder.join(".claude.json"), "{}").unwrap();
+    // The stand-in CLI refreshes its sign-in by rename, as Claude does, and
+    // writes a session and settings beside it, as a CLI pointed here might.
+    const REFRESH: &str = r#"set -eu
+f=$1; shift
+printf refreshed > "$f/.credentials.json.tmp.0123abcd"
+mv "$f/.credentials.json.tmp.0123abcd" "$f/.credentials.json"
+printf session > "$f/projects/-workspace/session.jsonl"
+printf '{}' > "$f/settings.json"
+exec "$@""#;
+    let finished = attempt_on(Backend::Claude, name.as_str(), |spec| {
+        let stub = cli(spec, &before, &after, &[]);
+        let source = spec.secrets[0].source.clone();
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(REFRESH)
+            .arg("sh")
+            .arg(source)
+            .arg(stub.get_program())
+            .args(stub.get_args());
+        command
+    });
+    assert_finished(&finished, (45, 30, 2));
+    let mut left: Vec<_> = fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, [".credentials.json"]);
+    assert_eq!(
+        fs::read_to_string(folder.join(".credentials.json")).unwrap(),
+        "refreshed"
+    );
+    // Test binaries share the configuration folder: leave no account behind.
+    fs::remove_dir_all(&folder).unwrap();
 }
 
 /// A usage limit on one account cools it: the run fails with the provider's
@@ -892,6 +1002,13 @@ fn assert_key_unreadable(backend: Backend, target: &str, turn: impl Fn(&RunSpec)
     );
     assert_eq!(fs::canonicalize(&secret.source).unwrap(), key);
     let directory = fs::canonicalize(&directory).unwrap();
+    // A key is never writable, in the turn or in any other container.
+    assert!(
+        spawned
+            .iter()
+            .all(|spec| spec.secrets.iter().all(|s| s.access == Access::ReadOnly)),
+        "{backend:?}: an API-key account mounts nothing writable"
+    );
     spawned.iter().for_each(|spec| {
         let shown = format!("{:?}{:?}", spec.argv, spec.env);
         assert!(!shown.contains(&canary), "{backend:?}: {} names the key", spec.name);

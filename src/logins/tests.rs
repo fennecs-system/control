@@ -146,3 +146,119 @@ fn an_api_key_account_is_located_by_its_kind_and_reported_from_metadata() {
     fs::remove_dir_all(super::directory(Backend::Claude, &keyed).unwrap()).unwrap();
     fs::remove_dir_all(directory).unwrap();
 }
+
+/// Only a subscription in a folder Control owns may be written back; the
+/// operator's own sign-in and every key or cloud credential stay read-only,
+/// wherever they are.
+#[test]
+fn only_a_subscription_control_keeps_is_refreshable() {
+    use crate::accounts::Owner;
+    for (kind, owner, write) in [
+        (AccountKind::Subscription, Owner::Control, Write::Refreshable),
+        (AccountKind::Subscription, Owner::Operator, Write::ReadOnly),
+        (AccountKind::ApiKey, Owner::Control, Write::ReadOnly),
+        (AccountKind::ApiKey, Owner::Operator, Write::ReadOnly),
+        (AccountKind::Cloud, Owner::Control, Write::ReadOnly),
+        (AccountKind::Cloud, Owner::Operator, Write::ReadOnly),
+    ] {
+        assert_eq!(write_policy(kind, owner), write, "{kind:?} {owner:?}");
+    }
+    // The table: Codex's default is the operator's own; every other default
+    // and every named account is in Control's folder.
+    let owners = |backend: Backend| -> Vec<Owner> {
+        crate::accounts::default_for(backend)
+            .secret
+            .0
+            .iter()
+            .map(crate::accounts::Location::owner)
+            .collect()
+    };
+    assert_eq!(owners(Backend::Codex), [Owner::Operator; 3]);
+    assert_eq!(owners(Backend::Claude), [Owner::Operator, Owner::Control]);
+    assert_eq!(owners(Backend::Antigravity), [Owner::Control]);
+    let second = AccountName::try_from("second").unwrap();
+    let named = super::account(&Store::default(), Backend::Codex, &second);
+    assert_eq!(
+        named
+            .secret
+            .0
+            .iter()
+            .map(crate::accounts::Location::owner)
+            .collect::<Vec<_>>(),
+        [Owner::Control]
+    );
+}
+
+#[test]
+fn a_located_login_carries_the_policy_and_a_key_is_never_writable() {
+    let name = AccountName::try_from("policy").unwrap();
+    let subscription = super::account(&Store::default(), Backend::Grok, &name);
+    let directory = super::directory(Backend::Grok, &name).unwrap();
+    private_directory(&directory).unwrap();
+    private_file(&directory.join("auth.json"), "").unwrap();
+    assert_eq!(locate(&subscription).unwrap().write(), Write::Refreshable);
+    let keyed = Store::default()
+        .add(crate::accounts::Entry {
+            backend: Backend::Grok,
+            name: name.clone(),
+            kind: AccountKind::ApiKey,
+            cap: None,
+            enabled: true,
+            label: None,
+        })
+        .unwrap();
+    crate::config::write_in(&directory, "xai-api-key", b"k").unwrap();
+    let key = locate(&super::account(&keyed, Backend::Grok, &name)).unwrap();
+    assert_eq!((key.form(), key.write()), (Form::ApiKey, Write::ReadOnly));
+    fs::remove_dir_all(directory).unwrap();
+}
+
+/// A sign-in failure names the one command that recovers that account.
+#[test]
+fn a_sign_in_failure_names_the_command_for_its_account() {
+    let entry = |name: &str, kind| crate::accounts::Entry {
+        backend: Backend::Claude,
+        name: AccountName::try_from(name).unwrap(),
+        kind,
+        cap: None,
+        enabled: true,
+        label: None,
+    };
+    let store = Store::default()
+        .add(entry("work", AccountKind::Subscription))
+        .and_then(|store| store.add(entry("metered", AccountKind::ApiKey)))
+        .unwrap();
+    let failure = |backend: Backend, account: &str| {
+        let account = super::account(&store, backend, &AccountName::try_from(account).unwrap());
+        control_agent::Failure::Provider {
+            agent: backend.agent().name(),
+            cause: control_agent::Cause::AuthRejected,
+        }
+        .message(&control_agent::SignIn::from(sign_in_command(&account)))
+    };
+    for (backend, account, command) in [
+        (Backend::Claude, "work", "control claude login --account work"),
+        (Backend::Claude, "metered", "control claude key --account metered"),
+        (Backend::Claude, "default", "control claude login"),
+        (Backend::Codex, "default", "codex login (on the host)"),
+    ] {
+        let message = failure(backend, account);
+        assert!(
+            message.contains(&format!("Sign in again with {command} and submit a new run.")),
+            "{message}"
+        );
+    }
+    // Each account's line in `control accounts list` and `check` names it too.
+    let lines = report(Backend::Claude, &store);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("sign in again with control claude login --account work")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.ends_with("sign in again with control claude key --account metered"))
+    );
+}

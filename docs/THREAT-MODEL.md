@@ -39,8 +39,10 @@ arbitrary downloaded code safe.
   `workers_discover_only_captured_packages_and_read_them_as_evidence`,
   `revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts`.
 
-- **Credentials and executable code.** Codex credentials are read-only mounts
-  into its account-bearing harness. Its inner execution sandbox denies credential
+- **Credentials and executable code.** A Codex sign-in is mounted into its
+  account-bearing harness beneath a mode-0700 home: the operator's own
+  `~/.codex/auth.json` read-only, a named account's `auth.json` writable (see
+  **Writable sign-ins** below). Its inner execution sandbox denies credential
   paths and network access; a canary/PID-namespace probe must pass before real
   credentials are mounted. Its seccomp profile and relaxed masked-path setting
   support that inner sandbox; the probe is required, not an optional fallback.
@@ -58,7 +60,7 @@ arbitrary downloaded code safe.
 - **The model inside a vendor CLI and its credential.** Claude, Grok and
   Antigravity keep their login in the turn container, readable by the uid the
   CLI runs as. Enforced by construction: the model's commands run in the
-  separate credential-free shell container; the login is read-only beneath a
+  separate credential-free shell container; the login is beneath a
   mode-0700 home owned by the CLI's uid, so no other uid in the container
   reaches it (Docker Desktop and OrbStack show a bind-mounted file as owned by
   whoever reads it, so the file's own mode protects nothing there), and a turn
@@ -75,13 +77,43 @@ arbitrary downloaded code safe.
   no-new-privileges (setuid and `unshare(CLONE_NEWUSER)` were refused in the
   pinned images, as root and as the CLI uid), so separating it would need
   `SETUID`/`SETGID`, which Control does not grant; it reads and writes only
-  fixed mailbox paths. `control claude|grok|antigravity check` runs a
+  fixed mailbox paths. `control codex|claude|grok|antigravity check` runs a
+  fake-credential canary|grok|antigravity check` runs a
   fake-credential canary in the turn's own container, one line per assertion.
   Evidence: `control_agent::cli::canary` and `secrets_private` tests, each
   backend's `…beneath_the_private_home_of_the_cli_uid` test,
   `nothing_after_a_forbidden_call_reaches_activity` in
   [streams.rs](../crates/ai/tests/streams.rs), and
   [ANTIGRAVITY.md](ANTIGRAVITY.md) for Antigravity's offline checks.
+
+- **Writable sign-ins.** A subscription sign-in in Control's own folder (every
+  named account, and the Claude, Grok and Antigravity defaults) is mounted
+  writable so a token the CLI refreshes is kept; the operator's own Codex
+  sign-in and every API key and cloud credential stay read-only. The host
+  decides this from who owns the location and the account's kind
+  (`crate::logins::write_policy`); a key cannot be granted writable
+  (`Granted::refreshable` makes only sign-ins). Each account has exactly one
+  folder, `<config>/accounts/BACKEND/NAME/`, and a turn mounts only its own:
+  Codex's and Antigravity's file alone, Claude's and Grok's folder, which
+  holds nothing but the sign-in (the CLI is pointed there by
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR` / `GROK_AUTH_PATH`, so its sessions,
+  settings and caches stay on the in-memory home, and the host removes
+  anything else after each turn and login). The writable mount is still
+  beneath the CLI's mode-0700 home and the model's shell still has no secret,
+  so a compromised CLI can do one more thing than before: overwrite or delete
+  its own account's sign-in. That costs availability for that account (fix:
+  `control BACKEND login --account NAME`, named in the failure), not
+  disclosure: it could already read that sign-in, and it reaches no other
+  account's folder, nothing persists in the folder but credential files, and
+  the operator's own Codex sign-in is unwritable. `control BACKEND check`'s
+  canary asserts the CLI uid may write a refreshable mount and not a read-only
+  one, and no other uid may write either. Several turns on one account share
+  one sign-in, as two terminals do; Grok and Claude lock refreshes in that
+  folder, Codex re-reads `auth.json` before refreshing but takes no lock.
+  Evidence: `accounts_of_one_backend_each_mount_only_their_own_login` and
+  `only_the_refreshed_sign_in_outlives_a_turn_in_its_folder` in
+  `src/worker/tests/attempts.rs`, `only_a_subscription_control_keeps_is_refreshable`
+  in `src/logins/tests.rs`, and each backend's refreshable-sign-in test.
 
 - **API keys.** A key is in one private file and reaches a turn only as a
   typed read-only secret mount in the CLI's own container: never in an
@@ -219,6 +251,36 @@ arbitrary downloaded code safe.
   `folder_access_is_never_automatic`;
   [ports](../src/ports/tests/auto_tests.rs),
   `private_unlisted_loopback_and_privately_resolving_targets_stay_pending`.
+
+## Key-injecting relay (not yet wired to backends)
+
+The [key-injecting relay](PORTS.md#key-injecting-relay) is built and tested but
+no backend uses it yet. Today an API-key account's key file is still mounted
+read-only into its CLI's container. Once a backend switches over, these hold
+for its API-key accounts:
+
+- **True by construction.** The key is never in the container's files,
+  environment, arguments, memory, mounts or `/proc`, and the container has no
+  network. It holds a per-attempt placeholder that is useless off the relay
+  and after its attempt ends.
+- **Relay defences.** The request head is parsed once into typed parts. The
+  relay rejects duplicate `Host` or `Content-Length`, folded headers, bare CR or
+  LF, non-ASCII header names, absolute-form targets, `..` or encoded `/` in
+  paths, and `Transfer-Encoding`. Each backend reaches one fixed origin,
+  resolved on the host, over an allow-list of routes. The relay never follows
+  redirects, serves one request per connection and has head, idle and total
+  timeouts.
+- **What remains.** A compromised CLI can call the allow-listed routes as the
+  account during its attempt, within the attempt's bounds. A provider that
+  echoed the key back in a response would reach the container, since the relay
+  does not rewrite responses. Host compromise is out of scope, as everywhere.
+
+Evidence: [inject](../src/ports/inject/tests.rs),
+`request_smuggling_shapes_are_refused`,
+`no_outbound_head_ever_contains_the_inbound_placeholder`;
+[inject_edge](../src/ports/inject_edge/tests.rs),
+`the_provider_gets_the_key_and_the_client_never_does`,
+`the_audit_log_holds_metadata_only_and_stays_bounded`.
 
 ## Guidance is not enforcement
 

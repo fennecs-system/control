@@ -169,10 +169,13 @@ dependencies = [
  "libc",
  "reqwest",
  "ring",
+ "rustls",
  "scraper",
  "serde",
  "serde_json",
  "tokio",
+ "webpki-roots 1.0.9",
+ "zeroize",
 ]
 
 [[package]]

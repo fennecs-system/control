@@ -193,7 +193,10 @@ fn run(
         evidence.extend_from_slice(detail.as_bytes());
         return Err(io::Error::other(match control_agent::classify(&evidence) {
             None => "CLI summary failed; check login/model availability".into(),
-            Some(cause) => cause.message(backend.agent().name()),
+            Some(cause) => cause.message(
+                backend.agent().name(),
+                &control_agent::SignIn::from(crate::logins::sign_in_command(&crate::accounts::default_for(backend))),
+            ),
         }));
     }
     let result = result?;

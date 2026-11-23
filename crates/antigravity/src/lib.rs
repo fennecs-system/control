@@ -2,9 +2,9 @@
 //! denied, its only tools are Control's over MCP, and executable work runs in
 //! separate offline containers through the host shell tool.
 use control_agent::{
-    Agent, Cause, Checked, Command, Failure, Form, Granted, Host, ImagePin, Login, Node, Outcome, Runs, TextCall, Turn,
-    Turns,
-    cli::{self, Cli, Delivery, Ending, Probe},
+    Agent, Cause, Checked, Command, Failure, Form, Granted, Host, ImagePin, Keeps, Login, Node, Outcome, Runs,
+    TextCall, Turn, Turns,
+    cli::{self, Canary, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Stream, Streams, Tmpfs, User};
 use serde_json::{Value, json};
@@ -129,6 +129,7 @@ const CLI: Cli = Cli {
     mailbox: MAILBOX,
     no_login: "Antigravity login unavailable. Run control antigravity login or save a Gemini API key; no other login on this host is used.",
     delivery: Delivery::File,
+    keeps: KEEPS,
     capture: |reader, update, progress, bad_tools| {
         cli::capture_with(
             reader,
@@ -168,6 +169,15 @@ const TOKEN: &str = "/home/agent/.gemini/antigravity-cli/antigravity-oauth-token
 /// The same file as `control antigravity login` saved it, in the login directory.
 pub const SAVED: &str = "login/gemini/antigravity-cli/antigravity-oauth-token";
 const KEY: &str = "/home/agent/.control-key/gemini-api-key";
+/// How the CLI writes its refreshed Google token back, as far as is known: its
+/// token store is closed source (`authstore.fileStore.save` in 1.5.14), and
+/// offline it neither refreshed nor rewrote a fake expired token, so the
+/// method is unconfirmed. The token file sits in `~/.gemini/antigravity-cli/`
+/// with the CLI's caches, skills and per-turn settings, so only the file is
+/// mounted: an in-place rewrite is kept; a replacement by rename fails on the
+/// mounted file and the refreshed token stays in memory for the turn, as it
+/// did read-only (docs/ANTIGRAVITY.md).
+const KEEPS: Keeps = Keeps::InPlace;
 const ADC: &str = "/home/agent/.config/gcloud/application_default_credentials.json";
 
 fn fail(message: &str) -> io::Error {
@@ -303,14 +313,18 @@ fn canary(isolation: &dyn Isolation, node: &str, root: &Path, image: &str) -> io
     let mailbox = root.join(MAILBOX);
     fs::create_dir_all(&mailbox)?;
     let name = format!("control-antigravity-probe-{}-canary", std::process::id());
-    [(Form::ApiKey, KEY), (Form::Session, TOKEN), (Form::CloudDefault, ADC)]
-        .into_iter()
-        .try_for_each(|(form, target)| {
-            cli::canary_check(isolation, root, form, target, |login| {
-                let private = prepare(root, login, Some(&mcp_config(login.form())), Some(""))?;
-                turn_container(&name, node, login, &private, &mailbox, image, "canary")
-            })
+    [
+        (Canary::ReadOnly(Form::ApiKey), KEY),
+        (Canary::Refreshable(KEEPS), TOKEN),
+        (Canary::ReadOnly(Form::CloudDefault), ADC),
+    ]
+    .into_iter()
+    .try_for_each(|(login, target)| {
+        cli::canary_check(isolation, root, login, target, |login| {
+            let private = prepare(root, login, Some(&mcp_config(login.form())), Some(""))?;
+            turn_container(&name, node, login, &private, &mailbox, image, "canary")
         })
+    })
 }
 /// Lists models with the saved login, without a workspace.
 fn check_container(name: &str, node: &str, login: &Granted, private: &Path, image: &str) -> io::Result<RunSpec> {
@@ -322,9 +336,7 @@ fn login_secret(spec: RunSpec, login: &Granted) -> io::Result<RunSpec> {
     match login.form() {
         Form::ApiKey => login.mount(spec, "antigravity/api-key", KEY),
         Form::CloudDefault => login.mount(spec.env("AGY_ADC_AUTH", "true"), "antigravity/adc", ADC),
-        // Read-only like every backend's login. That a token refresh then
-        // stays in memory is unconfirmed until a real sign-in (docs/ANTIGRAVITY.md).
-        Form::Session => login.mount(spec, "antigravity/google-token", TOKEN),
+        Form::Session => login.mount_session(spec, "antigravity/google-token", TOKEN, KEEPS),
     }
 }
 /// A fixed message for a failure the shared classifier knows (a usage limit, a

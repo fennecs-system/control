@@ -51,10 +51,12 @@ mounts the login and prints one PASS or FAIL line per reader: the CLI uid can
 read it; another uid cannot, directly or through `/proc/1/root`, and it is not
 in the environment. Run it after any image update. `login` runs Claude's own interactive sign-in inside the image; never paste
 codes or credentials into chat. The login lives under `~/.config/control/claude/`.
-Control checks its metadata and mounts only `.credentials.json`, read-only, into
-task runs, so runs cannot modify it. It never extracts a macOS Keychain entry.
-`CONTROL_CLAUDE_AUTH_FILE` can point to another absolute, private credential file.
-Repeat `login` when the session expires.
+Control checks its metadata and mounts that folder, writable, at
+`/home/agent/.claude-login` (`CLAUDE_SECURESTORAGE_CONFIG_DIR`), so a token Claude
+refreshes is kept; only the sign-in, its lock and Claude's in-flight copies stay
+there after a turn (docs/LOCAL-MODELS.md). It never extracts a macOS Keychain entry.
+`CONTROL_CLAUDE_AUTH_FILE` can point to another absolute, private credential
+file, which is mounted read-only. Repeat `login` when the session expires.
 
 An Anthropic API key instead (billed per use): `control accounts add claude NAME
 --kind api-key`, then `pbpaste | control claude key --account NAME`. The key is

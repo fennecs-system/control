@@ -100,8 +100,10 @@ names `State`, `Attempt` or a root module.
 
 Backends never locate credentials. The host (`src/logins.rs`) finds the one
 implicit account per backend at the path its backend used to look at itself,
-checks its metadata and hands it in as a `Granted` (form, path, owner); the
-backend only decides where its container mounts it, read-only. Login and
+checks its metadata and hands it in as a `Granted` (form, path, owner, and
+whether it may be written back, which the host decides); the backend only
+decides where its container mounts it and how its CLI saves a refreshed
+sign-in (`Keeps`). Login and
 check subcommands receive the account directory the same way.
 
 Claude, Grok and Antigravity share `control_agent::cli`: the base container,
