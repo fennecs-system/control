@@ -386,7 +386,7 @@ pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
         .find(|session| session.id == chat)
         .ok_or("Chat not found.")?;
     crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
-    let team = crate::chat::tree(state, chat);
+    let team = crate::chat::Lineage::of(&state.chats).tree(chat);
     let root = team
         .iter()
         .copied()

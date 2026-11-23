@@ -681,8 +681,9 @@ fn requester<'a>(runs: &'a [crate::runtime::Run], port: &'a Port) -> &'a str {
 }
 /// The facts the approval policy decides on.
 fn facts<'a>(state: &'a State, port: &'a Port) -> crate::auto_approval::PortFacts<'a> {
-    let root = crate::chat::team_root(state, requester(&state.runtime.runs, port));
-    let in_task = |chat: &str| crate::chat::team_root(state, chat) == root;
+    let lineage = crate::chat::Lineage::of(&state.chats);
+    let root = lineage.team_root(requester(&state.runtime.runs, port));
+    let in_task = |chat: &str| lineage.team_root(chat) == root;
     crate::auto_approval::PortFacts {
         actor: &port.actor,
         ingress: port.direction == Direction::Ingress,
@@ -969,15 +970,16 @@ pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> 
             .find(|run| run.id == port.origin_run)
             .and_then(|run| run.chat_id.as_deref())
     };
+    let lineage = crate::chat::Lineage::of(&state.chats);
     state
         .ports
         .iter()
         .filter(|port| {
             port.status == Status::Pending
                 && port.actor == chat.actor
-                && (crate::chat::within(state, &port.chat, id)
+                && (lineage.within(&port.chat, id)
                     || runs.contains(port.origin_run.as_str())
-                    || requester(port).is_some_and(|c| crate::chat::within(state, c, id)))
+                    || requester(port).is_some_and(|c| lineage.within(c, id)))
         })
         .collect()
 }

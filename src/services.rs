@@ -166,12 +166,14 @@ pub(crate) fn direct(service: &Service, node: &NodeId, run: &crate::runtime::Run
 /// A teammate in the same task tree (its top-level chat and every chat
 /// spawned beneath it), with the same actor and node. Judges never qualify.
 pub(crate) fn teammate(state: &State, service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
+    let lineage = crate::chat::Lineage::of(&state.chats);
     service.resource.owner.node == *node
         && service.actor == run.actor
         && !crate::delegation::is_judge(run)
-        && run.chat_id.as_deref().is_some_and(|chat| {
-            crate::chat::team_root(state, chat) == crate::chat::team_root(state, service.resource.owner.chat.as_str())
-        })
+        && run
+            .chat_id
+            .as_deref()
+            .is_some_and(|chat| lineage.team_root(chat) == lineage.team_root(service.resource.owner.chat.as_str()))
 }
 /// The index of service `id` that `run` may act on.
 fn target(state: &State, node: &NodeId, run: &crate::runtime::Run, id: &str) -> io::Result<usize> {

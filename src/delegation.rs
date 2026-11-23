@@ -186,7 +186,7 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
     let Some(chat) = run.chat_id.as_deref() else {
         return Ok(());
     };
-    let tree = chat::tree(state, chat);
+    let tree = chat::Lineage::of(&state.chats).tree(chat);
     let cutoff = now.saturating_sub(SPAWN_WINDOW_MS);
     let mine = |candidate: &runtime::Run| candidate.chat_id.as_deref().is_some_and(|id| tree.contains(id));
     let automatic = |kind: &RunKind| kind.speaker() == control_context::agent_policy::MessageSpeaker::Control;
@@ -260,7 +260,7 @@ pub(crate) fn refusal(state: &State, chat: Option<&str>, message: &'static str) 
     let advisor = chat.and_then(|chat| {
         state
             .bots
-            .team_advisor(chat::team_root(state, chat))
+            .team_advisor(chat::Lineage::of(&state.chats).team_root(chat))
             .filter(|advisor| *advisor != chat)
     });
     match (message.strip_suffix(REPORT), advisor) {

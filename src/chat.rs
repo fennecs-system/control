@@ -8,8 +8,10 @@ use control_context::commands::{self, Kind};
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 mod activity;
+mod lineage;
 pub(crate) use activity::changed as activity_changed;
 use activity::{agent_activity, command_html};
+pub(crate) use lineage::Lineage;
 
 pub use crate::application::conversations::{Message, Session};
 pub fn selected_lenses(session: &Session) -> Vec<String> {
@@ -139,47 +141,6 @@ pub fn rejected(page: &str, error: &str, draft: &str) -> String {
     format!("{}{}{}", &page[..start], escape(draft), &page[end..])
 }
 pub use crate::application::valid_id;
-/// Whether `chat` is `ancestor` or was spawned from it, directly or through children.
-pub(crate) fn within(state: &State, chat: &str, ancestor: &str) -> bool {
-    lineage(state, chat).any(|id| id == ancestor)
-}
-/// Every chat under the top-level chat that `chat` was spawned from, itself included.
-pub(crate) fn tree<'a>(state: &'a State, chat: &'a str) -> std::collections::HashSet<&'a str> {
-    let parents = state
-        .chats
-        .iter()
-        .map(|session| (session.id.as_str(), session.parent_chat.as_deref()))
-        .collect::<std::collections::HashMap<_, _>>();
-    let top = |id: &'a str| {
-        std::iter::successors(Some(id), |id| parents.get(id).copied().flatten())
-            .take(64)
-            .last()
-            .unwrap_or(id)
-    };
-    let root = top(chat);
-    std::iter::once(chat)
-        .chain(parents.keys().copied().filter(|id| top(id) == root))
-        .collect()
-}
-fn lineage<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a str> {
-    std::iter::successors(Some(chat), |id| {
-        state
-            .chats
-            .iter()
-            .find(|session| session.id == *id)
-            .and_then(|session| session.parent_chat.as_deref())
-    })
-    .take(64)
-}
-/// The top-level chat of `chat`'s task tree: itself when it has no lead.
-pub(crate) fn team_root<'a>(state: &'a State, chat: &'a str) -> &'a str {
-    lineage(state, chat).last().unwrap_or(chat)
-}
-/// Every chat in `chat`'s task tree: its top-level chat and all chats spawned
-/// beneath it.
-pub(crate) fn team<'a>(state: &'a State, chat: &'a str) -> std::collections::HashSet<&'a str> {
-    subtree(state, [team_root(state, chat)])
-}
 /// Latest task in scheduler order. Design answers are appended later but keep
 /// the interrupted task's queue position; append order is not continuation order.
 pub(crate) fn latest_task(state: &State, chat: &str, actor: &Actor) -> Option<usize> {
@@ -526,7 +487,7 @@ fn attach_room(state: &mut State, id: &str, option: &str) -> Result<String, &'st
         }
         "off" => None,
         name if crate::rooms::valid(name) => {
-            Some(crate::rooms::for_task(name, lineage(state, id).last().unwrap_or(id))?)
+            Some(crate::rooms::for_task(name, Lineage::of(&state.chats).team_root(id))?)
         }
         _ => return Err("Use /room general, /room engineering, /room research or /room off."),
     };
@@ -735,7 +696,11 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
         let actor = session.actor.clone();
         let target = target.trim();
         if target == "all" {
-            let chats = subtree(state, [id]).into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let chats = Lineage::of(&state.chats)
+                .subtree([id])
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             let runs = state
                 .runtime
                 .runs
@@ -1165,7 +1130,7 @@ fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
 /// Folder (`/open`) requests awaiting the operator in `root`'s same-actor
 /// tree. Each is approved or dismissed in its own chat.
 fn pending_folders(state: &State, root: &str, actor: &Actor) -> Vec<Value> {
-    let tree = subtree(state, [root]);
+    let tree = Lineage::of(&state.chats).subtree([root]);
     state
         .chats
         .iter()
@@ -1201,7 +1166,7 @@ pub fn pending_requests(state: &State) -> Value {
         .chain(folders);
     let mut roots = Vec::new();
     for chat in chats {
-        let root = lineage(state, chat).last().unwrap_or(chat);
+        let root = Lineage::of(&state.chats).team_root(chat);
         if !roots.contains(&root) {
             roots.push(root);
         }
@@ -1533,7 +1498,7 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
         .iter()
         .filter(|c| {
             c.actor == session.actor
-                && within(state, &c.id, id)
+                && Lineage::of(&state.chats).within(&c.id, id)
                 && c.project.as_ref().is_some_and(|p| p.pending || p.grant.is_none())
         })
         .collect::<Vec<_>>();
@@ -1712,27 +1677,6 @@ pub(crate) fn cancelled_after(state: &State, run: &crate::runtime::Run) -> bool 
         .and_then(|session| session.cancelled_through)
         .is_some_and(|through| run.queue_order <= through)
 }
-pub(crate) fn subtree<'a>(
-    state: &'a State,
-    roots: impl IntoIterator<Item = &'a str>,
-) -> std::collections::HashSet<&'a str> {
-    let mut chats = roots.into_iter().collect::<std::collections::HashSet<_>>();
-    loop {
-        let before = chats.len();
-        for session in &state.chats {
-            if session
-                .parent_chat
-                .as_deref()
-                .is_some_and(|parent| chats.contains(parent))
-            {
-                chats.insert(session.id.as_str());
-            }
-        }
-        if chats.len() == before {
-            return chats;
-        }
-    }
-}
 /// Everything a chat command may change, restored together when the command or
 /// its save fails, whichever transport delivered it.
 pub(crate) struct Checkpoint {
@@ -1761,7 +1705,7 @@ impl Checkpoint {
                 .collect(),
             runs: state.runtime.runs.len(),
             pending: {
-                let chats = subtree(state, targets.iter().copied());
+                let chats = Lineage::of(&state.chats).subtree(targets.iter().copied());
                 crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| {
                     run.chat_id.as_deref().is_some_and(|chat| chats.contains(chat))
                 })
@@ -1785,7 +1729,7 @@ impl Checkpoint {
                 })
                 .collect(),
             cancelled: {
-                let chats = subtree(state, targets.iter().copied());
+                let chats = Lineage::of(&state.chats).subtree(targets.iter().copied());
                 state
                     .chats
                     .iter()

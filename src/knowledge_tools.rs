@@ -349,7 +349,7 @@ pub fn local(
 /// operator requests (`pending_knowledge`). Decided only through [`review_action`].
 pub(crate) fn pending_json(state: &State, chat: &str) -> Vec<Value> {
     state.collective.proposals.iter().enumerate().filter(|(_, p)| p.status == "pending")
-        .filter_map(|(index, p)| p.source.as_ref().filter(|s| crate::chat::within(state, &s.chat, chat)).map(|s| (index, p, s)))
+        .filter_map(|(index, p)| p.source.as_ref().filter(|s| crate::chat::Lineage::of(&state.chats).within(&s.chat, chat)).map(|s| (index, p, s)))
         .map(|(index, p, s)| json!({"claim_id":format!("claim:{index}"),"chat_id":s.chat,"claim":p.claim,"evidence":p.evidence,"scope":p.scope,"validity":p.validity,
             "summary":format!("{}\nEvidence: {}\nScope: {}\nRecheck when: {}", p.claim, p.evidence, p.scope, p.validity)}))
         .collect()

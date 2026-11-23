@@ -14,7 +14,8 @@ fn chats(state: &State, id: &str, team: bool) -> io::Result<Vec<String>> {
         .ok_or_else(|| fail("Chat not found."))?;
     identity::authorize(&session.actor, Action::Task).map_err(fail)?;
     Ok(if team {
-        crate::chat::subtree(state, [id])
+        crate::chat::Lineage::of(&state.chats)
+            .subtree([id])
             .into_iter()
             .map(str::to_owned)
             .collect()

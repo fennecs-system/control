@@ -74,7 +74,7 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
             .chat_id
             .as_deref()
             .zip(root.chat_id.as_deref())
-            .is_some_and(|(chat, top)| crate::chat::within(state, chat, top));
+            .is_some_and(|(chat, top)| crate::chat::Lineage::of(&state.chats).within(chat, top));
     if !related {
         return None;
     }
