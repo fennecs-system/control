@@ -487,8 +487,10 @@ pub fn ask_operator(
     .into_run(
         run_id.clone(),
         order,
-        state.runtime.backend,
-        (state.runtime.backend == crate::backend::Backend::Local).then(|| state.runtime.configured_model()),
+        crate::providers::Target {
+            model: (state.runtime.backend == crate::backend::Backend::Local).then(|| state.runtime.configured_model()),
+            ..state.runtime.default_target()
+        },
     );
     let question = Question::ask(run_id.clone(), ASKED, input, at);
     let id = question.id.clone();
@@ -810,9 +812,8 @@ pub fn answer(
     // Capture continuation inputs, not diagnostic histories or previous attempts.
     let actor = run.actor.clone();
     let action = run.action;
-    let backend = run.backend;
+    let target = run.target.clone();
     let persona = crate::delegation::lineage(run);
-    let model = run.model.clone();
     let context = run.context.clone();
     let lenses = run.lenses.clone();
     let queue_order = run.queue_order;
@@ -841,10 +842,9 @@ pub fn answer(
         return Err(error);
     }
     let next = state.runtime.runs.last_mut().unwrap();
-    next.backend = backend;
+    next.target = target;
     next.resource_grants = resources;
     next.persona = Some(persona);
-    next.model = model;
     next.context = context;
     next.lenses = lenses;
     next.chat_id = Some(chat_id.into());

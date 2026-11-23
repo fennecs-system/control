@@ -44,8 +44,9 @@ pub struct Delegation {
     pub input: Input,
     pub nonce: String,
     pub generation: String,
-    pub backend: crate::backend::Backend,
-    pub model: String,
+    /// The child's target, admitted when the delegation was requested.
+    #[serde(flatten)]
+    pub target: crate::providers::Target,
     pub child: Option<String>,
     pub continuation: Option<String>,
 }
@@ -256,7 +257,11 @@ const REPORT: &str = " Report the blocker to the operator, or continue an existi
 /// a team with an approved advisor to that advisor for its second opinion
 /// (members may ask it; see `application::messages`), not to the operator.
 /// Every other refusal is unchanged.
-pub(crate) fn refusal(state: &State, chat: Option<&str>, message: &'static str) -> std::borrow::Cow<'static, str> {
+pub(crate) fn refusal(
+    state: &State,
+    chat: Option<&str>,
+    message: std::borrow::Cow<'static, str>,
+) -> std::borrow::Cow<'static, str> {
     let advisor = chat.and_then(|chat| {
         state
             .bots
@@ -265,11 +270,16 @@ pub(crate) fn refusal(state: &State, chat: Option<&str>, message: &'static str) 
     });
     match (message.strip_suffix(REPORT), advisor) {
         (Some(limit), Some(advisor)) => format!("{limit} For a second opinion ask your team's advisor: control_agent_message {{\"chat_id\":\"{advisor}\",\"text\":\"<question>\"}}. Or continue an existing child with control_agent_message.").into(),
-        _ => message.into(),
+        _ => message,
     }
 }
 
-pub fn request(state: &mut State, id: &str, nonce: &str, input: Input) -> Result<Value, &'static str> {
+pub fn request(
+    state: &mut State,
+    id: &str,
+    nonce: &str,
+    input: Input,
+) -> Result<Value, std::borrow::Cow<'static, str>> {
     request_with_save(state, id, nonce, input, crate::storage::save)
 }
 fn request_with_save(
@@ -278,14 +288,14 @@ fn request_with_save(
     nonce: &str,
     input: Input,
     save: impl FnOnce(&State) -> std::io::Result<()>,
-) -> Result<Value, &'static str> {
+) -> Result<Value, std::borrow::Cow<'static, str>> {
     if input.objective.trim().is_empty()
         || input.objective.chars().count() > 2000
         || nonce.is_empty()
         || nonce.len() > 128
         || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
-        return Err("Expected a task of 1–2000 characters and a valid request identity.");
+        return Err("Expected a task of 1–2000 characters and a valid request identity.".into());
     }
     let index = state
         .runtime
@@ -301,7 +311,7 @@ fn request_with_save(
         .find(|c| Some(&c.id) == run.chat_id.as_ref() && c.actor == run.actor)
         .ok_or("Conversation actor mismatch.")?;
     if chat.id.is_empty() {
-        return Err("Delegation requires a conversation.");
+        return Err("Delegation requires a conversation.".into());
     }
     let generation = run
         .attempts
@@ -316,34 +326,26 @@ fn request_with_save(
                 json!({"status":"pausing","instruction":"Stop work. Control resumes you automatically after the child finishes."}),
             )
         } else {
-            Err("This attempt already delegated work.")
+            Err("This attempt already delegated work.".into())
         };
     }
     if run.question.as_ref().is_some_and(|q| q.pending()) {
-        return Err("Answer the pending design question before delegation.");
+        return Err("Answer the pending design question before delegation.".into());
     }
     budget(state, run, input.role)?;
-    let selected = crate::providers::selection::resolve(
-        &state.runtime,
-        run.backend,
-        &run.model.clone().unwrap_or_else(|| run.backend.default_model()),
-        input.model.as_deref(),
-    )?;
-    let backend = selected.backend;
-    let model = selected.model;
+    let target = crate::providers::selection::resolve(&state.runtime, &run.target, input.model.as_deref())?;
     let previous = state.runtime.runs[index].delegation.clone();
     state.runtime.runs[index].delegation = Some(Delegation {
         input,
         nonce: nonce.into(),
         generation,
-        backend,
-        model,
+        target,
         child: None,
         continuation: None,
     });
     if save(state).is_err() {
         state.runtime.runs[index].delegation = previous;
-        return Err("Could not persist delegation; no child was admitted.");
+        return Err("Could not persist delegation; no child was admitted.".into());
     }
     Ok(
         json!({"status":"pausing","instruction":"Stop work. Control resumes you automatically after the child finishes."}),
@@ -444,8 +446,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let next = state.runtime.runs.last_mut().unwrap();
         next.chat_id = parent.chat_id.clone();
         next.resource_grants = resources;
-        next.backend = parent.backend;
-        next.model = parent.model.clone();
+        next.target = parent.target.clone();
         next.context = parent.context.clone();
         next.lenses = parent.lenses.clone();
         next.persona = Some(lineage(&parent));
@@ -496,7 +497,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let child_chat = state.chats.last_mut().unwrap();
         child_chat.actor = parent.actor.clone();
         child_chat.parent_chat = parent.chat_id.clone();
-        child_chat.model = Some(crate::providers::Model::captured(d.backend, d.model.clone()));
+        child_chat.model = Some(d.target.choice());
         child_chat.lenses = parent.lenses.clone();
         child_chat.room = room;
         child_chat.title = d.input.objective.chars().take(60).collect();
@@ -526,8 +527,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let child = state.runtime.runs.last_mut().unwrap();
         child.chat_id = Some(id);
         child.resource_grants = resources;
-        child.backend = d.backend;
-        child.model = Some(d.model);
+        child.target = d.target;
         child.context = parent.context.clone();
         child.lenses = parent.lenses.clone();
         child.persona = Some(Persona {

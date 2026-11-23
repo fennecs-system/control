@@ -49,12 +49,12 @@ pub struct Record {
     pub question: Option<crate::design::Question>,
     #[serde(default)]
     pub continuation: crate::history::Spilled<Option<crate::design::Continuation>>,
-    #[serde(default)]
-    pub backend: crate::backend::Backend,
+    /// Backend, captured account and model, saved as the flat `backend`,
+    /// `account` and `model` fields of older records.
+    #[serde(flatten)]
+    pub target: crate::providers::Target,
     #[serde(default)]
     pub queue_order: u64,
-    #[serde(default)]
-    pub model: Option<String>,
     #[serde(default)]
     pub context: crate::history::Spilled<Option<control_context::Resolved>>,
     #[serde(default)]
@@ -95,7 +95,7 @@ impl Submission {
         queue_order: u64,
         grants: Vec<crate::services::Grant>,
     ) -> Run {
-        let mut run = self.into_run(id, queue_order, origin.backend, origin.model.clone());
+        let mut run = self.into_run(id, queue_order, origin.target.clone());
         run.chat_id = Some(chat.into());
         run.context = origin.context.clone();
         run.lenses = origin.lenses.clone();
@@ -104,13 +104,7 @@ impl Submission {
         run
     }
 
-    pub(crate) fn into_run(
-        self,
-        id: String,
-        queue_order: u64,
-        backend: crate::backend::Backend,
-        model: Option<String>,
-    ) -> Run {
+    pub(crate) fn into_run(self, id: String, queue_order: u64, target: crate::providers::Target) -> Run {
         Record {
             bot_turn: None,
             resource_grants: Vec::new(),
@@ -121,9 +115,8 @@ impl Submission {
             delegation: None,
             question: None,
             continuation: None.into(),
-            backend,
+            target,
             queue_order,
-            model,
             context: None.into(),
             lenses: None,
             chat_id: None,

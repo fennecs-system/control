@@ -13,8 +13,15 @@ fn request(objective: &str) -> Submission {
 #[test]
 fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
     for model in [None, Some("captured-model".to_owned())] {
-        let mut origin =
-            request("original").into_run("origin".into(), 4, crate::backend::Backend::Claude, model.clone());
+        let mut origin = request("original").into_run(
+            "origin".into(),
+            4,
+            crate::providers::Target {
+                backend: crate::backend::Backend::Claude,
+                model: model.clone(),
+                ..Default::default()
+            },
+        );
         origin.status = "completed".into();
         origin.result = "old result".to_owned().into();
         origin.attempts.push(Default::default());
@@ -42,8 +49,8 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
         .unwrap();
         origin.resource_grants = vec![stale];
         let run = request("continue").into_continuation(&origin, "chat", "next".into(), 9, vec![current.clone()]);
-        assert_eq!(run.model, model);
-        assert_eq!(run.backend, origin.backend);
+        assert_eq!(run.target.model, model);
+        assert_eq!(run.target.backend, origin.target.backend);
         assert_eq!(*run.context, *origin.context);
         assert_eq!(run.lenses, origin.lenses);
         assert_eq!(run.persona, origin.persona);
@@ -65,7 +72,7 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
 
 #[test]
 fn continuations_establish_lineage_when_the_origin_has_no_persona() {
-    let origin = request("original").into_run("origin".into(), 1, Default::default(), None);
+    let origin = request("original").into_run("origin".into(), 1, Default::default());
     let run = request("continue").into_continuation(&origin, "chat", "next".into(), 2, Vec::new());
     let persona = run.persona.clone().unwrap();
     assert_eq!(persona.root, "origin");

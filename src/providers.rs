@@ -1,10 +1,15 @@
 //! Operator-managed model selection; unsupported adapters never silently fall back.
 use std::collections::HashMap;
 
+/// A model choice: a catalogue entry, or what a chat selected for its future
+/// turns. Its account is a choice too (a pool stays a pool); [`Target`] is
+/// what a run captures from it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
     pub(crate) backend: crate::backend::Backend,
+    #[serde(default, skip_serializing_if = "crate::accounts::AccountChoice::is_default")]
+    pub(crate) account: crate::accounts::AccountChoice,
     pub(crate) model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capacity: Option<control_context::turn_context::Capacity>,
@@ -13,6 +18,7 @@ impl Model {
     pub(crate) fn captured(backend: crate::backend::Backend, model: String) -> Self {
         Self {
             backend,
+            account: Default::default(),
             model,
             capacity: None,
         }
@@ -21,6 +27,72 @@ impl Model {
         self.backend == other.backend && self.model == other.model
     }
 }
+impl std::fmt::Display for Model {
+    /// `backend[+account]:model`, the account only when it is not the default.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        shown(f, self.backend, self.account.suffix(), &self.model)
+    }
+}
+fn shown(
+    f: &mut std::fmt::Formatter<'_>,
+    backend: crate::backend::Backend,
+    account: Option<&str>,
+    model: &str,
+) -> std::fmt::Result {
+    match account {
+        Some(account) => write!(f, "{}+{account}:{model}", backend.id()),
+        None => write!(f, "{}:{model}", backend.id()),
+    }
+}
+/// What a run executes on: backend, the concrete account captured at
+/// admission, and model (none: the backend's default model). Runs, follow-ups,
+/// spawn seeds and delegations copy it as one value, so no part can be left
+/// behind, and a later change of default never re-points captured work.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Target {
+    #[serde(default)]
+    pub(crate) backend: crate::backend::Backend,
+    #[serde(default, skip_serializing_if = "crate::accounts::AccountName::is_implicit")]
+    pub(crate) account: crate::accounts::AccountName,
+    #[serde(default)]
+    pub(crate) model: Option<String>,
+}
+impl Target {
+    /// The model it runs, naming the backend default when none was captured.
+    pub(crate) fn model_or_default(&self) -> String {
+        self.model.clone().unwrap_or_else(|| self.backend.default_model())
+    }
+    /// The captured model as a status line shows it: the model ID, or the
+    /// whole `backend+account:model` when the account is not the implicit one.
+    pub(crate) fn shown_model(&self) -> Option<String> {
+        let model = self.model.as_ref()?;
+        Some(if self.account.is_implicit() {
+            model.clone()
+        } else {
+            self.to_string()
+        })
+    }
+    /// The choice a child chat keeps for its later turns: this backend, model
+    /// and account. The implicit account is kept as the default choice, so
+    /// nodes without accounts save exactly what they saved before.
+    pub(crate) fn choice(&self) -> Model {
+        Model {
+            account: if self.account.is_implicit() {
+                crate::accounts::AccountChoice::Default
+            } else {
+                crate::accounts::AccountChoice::Named(self.account.clone())
+            },
+            ..Model::captured(self.backend, self.model_or_default())
+        }
+    }
+}
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let account = (!self.account.is_implicit()).then(|| self.account.as_str());
+        shown(f, self.backend, account, &self.model_or_default())
+    }
+}
+pub(crate) mod accounts;
 pub(crate) mod selection;
 /// The hosted CLI backend an operator named; local endpoints are not one.
 fn hosted(id: &str) -> Option<crate::backend::Backend> {
@@ -310,7 +382,13 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
         let id = entry.backend.id();
         let label = entry.backend.label();
         let selected = entry.backend == runtime.backend && entry.model == runtime.configured_model();
-        let marker = if selected { DEFAULT_MARK } else { "" };
+        // The default runs on its backend's default account; name it when it is not the implicit one.
+        let account = runtime.accounts.default_name(entry.backend);
+        let marker = match (selected, account.is_implicit()) {
+            (false, _) => String::new(),
+            (true, true) => DEFAULT_MARK.to_owned(),
+            (true, false) => format!("<span class='model-default'>Default · {id}+{account}</span>"),
+        };
         let capacity = entry.capacity;
         html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{model}'>{model}</span><span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary aria-label='Edit {label} model {model}'>Edit</summary><div class='model-edit-body'><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model ID<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Save model</button></form>"));
         html.push_str(&format!("<form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><h4>Context capacity</h4><p class='provider-description'>Leave context tokens empty to use the provider policy. Instructions that cannot fit are reported, never truncated.</p><div class='provider-fields'><label>Context tokens<input name='context_tokens' type='number' min='1' placeholder='Unknown' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool token reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label></div><p class='provider-description'>Input bytes conservatively count as tokens.</p><button class='primary'>Save capacity</button></form></div></details></section>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));

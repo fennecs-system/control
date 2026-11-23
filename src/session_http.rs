@@ -46,7 +46,7 @@ fn respond_chat(stream: &mut impl Write, status: &str, html: &str, extra: &str) 
     );
 }
 
-fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
+fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, std::borrow::Cow<'static, str>> {
     change_with_save(state, name, arguments, storage::save)
 }
 // Both native forms and the WASM composer use the same checkpointed command.
@@ -128,7 +128,7 @@ fn send_message(
                     state,
                     lens,
                     id,
-                    message,
+                    &message,
                     fields.get("message").map(String::as_str).unwrap_or(""),
                     header,
                 ),
@@ -142,7 +142,7 @@ pub(crate) fn change_with_save(
     name: &str,
     arguments: &Value,
     save: impl FnOnce(&State) -> std::io::Result<()>,
-) -> Result<Value, &'static str> {
+) -> Result<Value, std::borrow::Cow<'static, str>> {
     let related = if name == "control.chat.send" {
         arguments["message"]
             .as_str()
@@ -173,10 +173,11 @@ pub(crate) fn change_with_save(
                     arguments["name"].as_str(),
                     crate::projects::Requester::Agent { run: None },
                 )
+                .map_err(Into::into)
             } else if crate::tool_registry::lookup(name)
                 .is_some_and(|tool| tool.route == crate::tool_registry::Route::Room)
             {
-                crate::rooms::tool(state, name, arguments)
+                crate::rooms::tool(state, name, arguments).map_err(Into::into)
             } else {
                 chat::tool(state, name, arguments)
             }
@@ -189,15 +190,15 @@ fn transact(
     state: &mut State,
     id: Option<&str>,
     related: Option<&str>,
-    operation: impl FnOnce(&mut State) -> Result<Value, &'static str>,
+    operation: impl FnOnce(&mut State) -> Result<Value, std::borrow::Cow<'static, str>>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
-) -> Result<Value, &'static str> {
+) -> Result<Value, std::borrow::Cow<'static, str>> {
     let targets: std::collections::HashSet<_> = id.into_iter().chain(related).collect();
     let checkpoint = crate::chat::Checkpoint::capture(state, &targets);
     let result = operation(state);
     if result.is_err() || save(state).is_err() {
         checkpoint.restore(state);
-        return result.and(Err("Could not save the chat. Try again."));
+        return result.and(Err("Could not save the chat. Try again.".into()));
     }
     result
 }
@@ -217,25 +218,32 @@ impl control_mcp::Tools for Operator<'_> {
     }
     fn call(&mut self, call: control_mcp::Call<'_>) -> Value {
         let (state, name, arguments) = (&mut *self.0, call.name, call.arguments);
-        let result = if crate::knowledge_tools::known(name) {
-            crate::knowledge_tools::local(state, name, arguments, storage::save)
+        let result: Result<Value, std::borrow::Cow<'static, str>> = if crate::knowledge_tools::known(name) {
+            crate::knowledge_tools::local(state, name, arguments, storage::save).map_err(Into::into)
         } else if crate::tool_registry::checkpoint(name) {
             change(state, name, arguments)
         } else {
             match crate::tool_registry::lookup(name).map(|tool| tool.route) {
-                Some(crate::tool_registry::Route::Artifacts) => crate::artifacts::tool(state, name, arguments),
-                Some(crate::tool_registry::Route::Room) => crate::rooms::tool(state, name, arguments),
+                Some(crate::tool_registry::Route::Artifacts) => {
+                    crate::artifacts::tool(state, name, arguments).map_err(Into::into)
+                }
+                Some(crate::tool_registry::Route::Room) => {
+                    crate::rooms::tool(state, name, arguments).map_err(Into::into)
+                }
                 Some(crate::tool_registry::Route::Lens) => {
                     crate::lens_library::tool(crate::lens_library::Sources::of(state), name, arguments)
+                        .map_err(Into::into)
                 }
                 // Served by `mcp_http` before the state lock is taken.
-                Some(crate::tool_registry::Route::Package) => Err("Package tools are served by the HTTP MCP endpoint."),
+                Some(crate::tool_registry::Route::Package) => {
+                    Err("Package tools are served by the HTTP MCP endpoint.".into())
+                }
                 _ => chat::tool(state, name, arguments),
             }
         };
         match result {
             Ok(value) => control_mcp::data(&value),
-            Err(message) => control_mcp::failure(message),
+            Err(message) => control_mcp::failure(&message),
         }
     }
 }
@@ -384,7 +392,7 @@ pub fn handle(
             Err(message) => {
                 let html = chat::rejected(
                     &chat::landing_mode(state, lens, fields.get("design_context").map(String::as_str), false),
-                    message,
+                    &message,
                     text.map(String::as_str).unwrap_or(""),
                 );
                 respond_chat(
@@ -432,7 +440,7 @@ pub fn handle(
             Err(message) => respond_chat(
                 stream,
                 "400 Bad Request",
-                &chat_page(state, lens, id, message, "", header),
+                &chat_page(state, lens, id, &message, "", header),
                 "",
             ),
         }

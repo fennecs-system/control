@@ -85,6 +85,7 @@ pub fn load() -> io::Result<State> {
         // Persist the merged library so model.json shows one entry per model.
         crate::providers::save_settings(&state.runtime)?;
     }
+    state.runtime.accounts = crate::providers::accounts::read()?;
     state.runtime.execution = crate::scheduler::load_limits()?;
     // Journal lines from a save that never happened are dropped, then
     // journal-backed run text is read back before anything uses it.

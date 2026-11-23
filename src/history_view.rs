@@ -201,7 +201,7 @@ impl Filter {
     fn matches(&self, run: &Run) -> bool {
         self.status.is_none_or(|outcome| outcome.matches(run))
             && self.kind.is_none_or(|kind| run.kind == kind)
-            && (self.model.is_empty() || run.model.as_deref() == Some(self.model.as_str()))
+            && (self.model.is_empty() || run.target.model.as_deref() == Some(self.model.as_str()))
     }
     /// The page URL with these filters (never cursors) and `extra` pairs.
     fn href(&self, extra: &[(&str, &str)]) -> String {
@@ -413,7 +413,7 @@ fn models(state: &State) -> BTreeSet<&str> {
         .iter()
         .rev()
         .take(MODEL_TURNS)
-        .filter_map(|run| run.model.as_deref())
+        .filter_map(|run| run.target.model.as_deref())
     {
         if models.len() == MODELS {
             break;
@@ -586,7 +586,7 @@ fn dm_row(state: &State, row: &Row, summary: Option<&Summary>, found: Option<&Ma
         Some((chat, callsign)) => {
             let model = summary
                 .latest
-                .and_then(|run| run.model.as_deref())
+                .and_then(|run| run.target.model.as_deref())
                 .or_else(|| chat.model.as_ref().map(|model| model.model.as_str()));
             let who = [
                 chat.persona.as_deref().map(|persona| format!("persona {persona}")),
@@ -729,7 +729,7 @@ fn turn_list<'a>(runs: impl Iterator<Item = &'a Run>) -> String {
 fn turn_row(run: &Run) -> String {
     let chat = run.chat_id.as_deref().filter(|id| crate::chat::valid_id(id));
     let when = started(run).map(when).unwrap_or_else(|| "—".to_owned());
-    let model = run.model.as_deref().unwrap_or("—");
+    let model = run.target.shown_model().unwrap_or_else(|| "—".to_owned());
     let usage = crate::runtime::usage(run);
     let tokens = tokens(run).map(compact).unwrap_or_else(|| "—".to_owned());
     let elapsed: u64 = run.attempts.iter().map(|attempt| attempt.elapsed_ms).sum();
@@ -770,7 +770,7 @@ fn turn_row(run: &Run) -> String {
         escape(status_label(run)),
         escape(&clip(&run.objective, 300)),
         escape(&clip(&run.objective, 90)),
-        escape(model),
+        escape(&model),
         escape(usage.trim_start_matches(" · ")),
         links.join(""),
     )

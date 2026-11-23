@@ -226,7 +226,7 @@ fn adding_selecting_and_editing_keep_the_library_and_selection_separate() {
     save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.configured_model(), "opus");
     assert_eq!(state.runtime.models.len(), 2);
-    assert_eq!(state.runtime.runs[0].model.as_deref(), Some("sonnet"));
+    assert_eq!(state.runtime.runs[0].target.model.as_deref(), Some("sonnet"));
     fields.insert("action".into(), "select".into());
     fields.insert("model".into(), "unknown-model".into());
     assert!(
@@ -247,17 +247,17 @@ fn backend_selection_is_captured_and_failed_settings_do_not_reroute_runs() {
     assert_eq!(state.runtime.backend, Backend::Codex);
     save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     state.runtime.enqueue("Claude task".into(), RunKind::Task, "test");
-    assert_eq!(state.runtime.runs[0].backend, Backend::Codex);
-    assert_eq!(state.runtime.runs[1].backend, Backend::Claude);
+    assert_eq!(state.runtime.runs[0].target.backend, Backend::Codex);
+    assert_eq!(state.runtime.runs[1].target.backend, Backend::Claude);
     let mut restored: crate::State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    assert_eq!(restored.runtime.runs[1].backend, Backend::Claude);
+    assert_eq!(restored.runtime.runs[1].target.backend, Backend::Claude);
     let id = restored.runtime.runs[1].id.clone();
     restored.runtime.runs[1].status = "failed".into();
     restored
         .runtime
         .action("/retry-run", &HashMap::from([("id".into(), id)]));
-    assert_eq!(restored.runtime.runs[1].backend, Backend::Claude);
-    assert_eq!(restored.runtime.runs[1].model.as_deref(), Some("sonnet"));
+    assert_eq!(restored.runtime.runs[1].target.backend, Backend::Claude);
+    assert_eq!(restored.runtime.runs[1].target.model.as_deref(), Some("sonnet"));
 }
 #[test]
 fn model_settings_persist_atomically_and_runs_keep_their_selected_model() {
@@ -273,8 +273,8 @@ fn model_settings_persist_atomically_and_runs_keep_their_selected_model() {
     assert_eq!(state.runtime.configured_model(), "test-model-one");
     save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     state.runtime.enqueue("Second".into(), RunKind::Task, "test");
-    assert_eq!(state.runtime.runs[0].model.as_deref(), Some("test-model-one"));
-    assert_eq!(state.runtime.runs[1].model.as_deref(), Some("test-model-two"));
+    assert_eq!(state.runtime.runs[0].target.model.as_deref(), Some("test-model-one"));
+    assert_eq!(state.runtime.runs[1].target.model.as_deref(), Some("test-model-two"));
     let checkpoint = serde_json::to_value(&state).unwrap();
     assert!(checkpoint["runtime"].get("model").is_none());
     assert_eq!(checkpoint["runtime"]["runs"][0]["model"], "test-model-one");
@@ -604,7 +604,10 @@ fn agent_models_group_integrations_and_local_and_summary_only_entries_sit_apart(
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Inspect this fixture", "test").unwrap();
     assert_eq!(
-        (state.runtime.runs[0].backend, state.runtime.runs[0].model.as_deref()),
+        (
+            state.runtime.runs[0].target.backend,
+            state.runtime.runs[0].target.model.as_deref()
+        ),
         (crate::backend::Backend::Local, Some("qwen-agent"))
     );
     assert_eq!(
@@ -674,4 +677,54 @@ fn local_endpoint_cards_carry_a_live_statistics_line_read_only_while_open() {
     assert!(live_http(&mut response, &state, "GET", "/providers/live"));
     let text = String::from_utf8_lossy(&response);
     assert!(text.starts_with("HTTP/1.1 200") && text.ends_with("{}"), "{text}");
+}
+
+/// Selections saved before accounts existed load and save back unchanged:
+/// nothing about accounts is written unless an account is chosen.
+#[test]
+fn todays_saved_selections_load_and_save_unchanged() {
+    // model.json: a library entry with capacity and one without.
+    let models = r#"[{"backend":"codex","model":"gpt-6.1-sol"},{"backend":"claude","model":"opus","capacity":{"context_tokens":200000,"output_tokens":2048,"overhead_tokens":4096}}]"#;
+    let loaded: Vec<Model> = serde_json::from_str(models).unwrap();
+    assert!(loaded.iter().all(|m| m.account.is_default()));
+    assert_eq!(serde_json::to_string(&loaded).unwrap(), models);
+    let settings = format!(r#"{{"models":{models},"backend":"claude","model":"opus"}}"#);
+    let settings: Settings = serde_json::from_str(&settings).unwrap();
+    let saved: Settings = serde_json::from_slice(&serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+    assert_eq!(saved.models, settings.models);
+
+    // State: a chat's selection, a run and its attempt, in today's saved form.
+    let mut state = crate::State::default();
+    state
+        .runtime
+        .models
+        .push(Model::captured(crate::backend::Backend::Claude, "reviewer".into()));
+    let chat = crate::chat::create(&mut state);
+    crate::chat::send(&mut state, &chat, "/model claude:reviewer", "test").unwrap();
+    crate::chat::send(&mut state, &chat, "Inspect this fixture", "test").unwrap();
+    let mut attempt = crate::usage::Attempt::new();
+    attempt.backend = crate::backend::Backend::Claude;
+    attempt.model = "reviewer".into();
+    state.runtime.runs[0].attempts.push(attempt);
+    let today = serde_json::to_value(&state).unwrap();
+    assert_eq!(
+        today["chats"][0]["model"],
+        serde_json::json!({"backend":"claude","model":"reviewer"})
+    );
+    let run = &today["runtime"]["runs"][0];
+    assert_eq!((&run["backend"], &run["model"]), (&"claude".into(), &"reviewer".into()));
+    assert_eq!(run["attempts"][0]["backend"], "claude");
+    assert!(!today.to_string().contains("\"account\""), "{today}");
+    let restored: crate::State = serde_json::from_value(today.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&restored).unwrap(), today);
+    let run = &restored.runtime.runs[0];
+    assert!(run.target.account.is_implicit() && run.attempts[0].account.is_implicit());
+    // A record from before `target` existed reads as the same target.
+    let mut old = today["runtime"]["runs"][0].clone();
+    old.as_object_mut().unwrap().remove("model");
+    let record: crate::application::runs::Record = serde_json::from_value(old).unwrap();
+    assert_eq!(
+        (record.target.backend, record.target.model),
+        (crate::backend::Backend::Claude, None)
+    );
 }

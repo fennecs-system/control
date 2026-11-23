@@ -5,7 +5,7 @@ fn requested() -> (State, String, String) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Run the server", "test").unwrap();
-    state.runtime.runs[0].model = Some("captured-model".into());
+    state.runtime.runs[0].target.model = Some("captured-model".into());
     let origin = state.runtime.runs[0].id.clone();
     (state, chat, origin)
 }
@@ -40,7 +40,12 @@ fn decisions_wait_for_the_turn_then_resume_with_its_context() {
     };
     let run = state.runtime.runs.last().unwrap();
     assert_eq!(
-        (run.id.as_str(), run.kind, run.chat_id.as_deref(), run.model.as_deref()),
+        (
+            run.id.as_str(),
+            run.kind,
+            run.chat_id.as_deref(),
+            run.target.model.as_deref()
+        ),
         (
             id.as_str(),
             RunKind::PortDecision,

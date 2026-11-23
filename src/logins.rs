@@ -2,6 +2,7 @@
 //! host and handed to a turn as a [`Granted`] value. Metadata only: no
 //! credential is ever read. There is one implicit account per backend, at
 //! exactly the path its backend used to locate itself.
+use crate::accounts::{Location, Roots};
 use crate::backend::Backend;
 use control_agent::{Form, Granted};
 use control_isolation::User;
@@ -27,19 +28,41 @@ pub(crate) fn directory(backend: Backend) -> io::Result<PathBuf> {
     Ok(crate::config::directory().map_err(fail)?.join(backend.id()))
 }
 
+/// Where the implicit account's login is, from the one table of locations
+/// (`crate::providers::accounts`), with the location that matched. Tests
+/// never see the operator's home or `CODEX_HOME`: only `CONTROL_*` overrides
+/// count, and the home is the test root.
+fn implicit(backend: Backend) -> io::Result<Option<(Location, PathBuf)>> {
+    let config = crate::config::directory().map_err(fail)?;
+    #[cfg(test)]
+    let home = Some(crate::config::test_root());
+    #[cfg(not(test))]
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let variable = |name: &str| {
+        (!cfg!(test) || name.starts_with("CONTROL_"))
+            .then(|| std::env::var_os(name))
+            .flatten()
+            .map(PathBuf::from)
+    };
+    let secret = crate::accounts::default_for(backend).secret;
+    let roots = Roots {
+        config: &config,
+        home: home.as_deref(),
+        variable: &variable,
+    };
+    Ok(secret.resolve(&roots).map(|(location, path)| (location.clone(), path)))
+}
+
 /// The backend's login for a turn or text call.
 pub(crate) fn locate(backend: Backend) -> io::Result<Granted> {
     match backend {
         Backend::Codex => codex().map_err(fail),
-        Backend::Claude => file(
-            backend,
-            "CONTROL_CLAUDE_AUTH_FILE",
-            ".credentials.json",
-            "Claude",
-            "claude",
-        ),
-        Backend::Grok => file(backend, "CONTROL_GROK_AUTH_FILE", "auth.json", "Grok", "grok"),
-        Backend::Antigravity => antigravity(&directory(backend)?),
+        Backend::Claude => file(backend, "Claude", "claude"),
+        Backend::Grok => file(backend, "Grok", "grok"),
+        Backend::Antigravity => match implicit(backend)? {
+            Some((_, directory)) => antigravity(&directory),
+            None => Err(fail("Antigravity has no login location")),
+        },
         Backend::Local => Err(fail("Local endpoints use no provider login")),
     }
 }
@@ -56,22 +79,23 @@ pub(crate) fn ready(backend: Backend) -> Result<(), String> {
 
 /// A CLI's own sign-in file: an explicit absolute path, or the file in the
 /// backend's private login directory.
-fn file(backend: Backend, variable: &str, name: &str, label: &str, command: &str) -> io::Result<Granted> {
-    let path = if let Some(path) = std::env::var_os(variable) {
-        let path = PathBuf::from(path);
-        if !path.is_absolute() {
+fn file(backend: Backend, label: &str, command: &str) -> io::Result<Granted> {
+    let path = match implicit(backend)? {
+        Some((Location::Variable { .. }, path)) if !path.is_absolute() => {
             return Err(fail(&format!("{label} credential path must be absolute")));
         }
-        path
-    } else {
-        let directory = directory(backend)?;
-        let meta = fs::symlink_metadata(&directory)?;
-        if !meta.is_dir() || meta.mode() & 0o077 != 0 {
-            return Err(fail(&format!(
-                "{label} login directory must be private and not a symlink"
-            )));
+        Some((Location::Variable { .. }, path)) => path,
+        Some((_, path)) => {
+            let directory = path.parent().ok_or_else(|| fail("Invalid login location"))?;
+            let meta = fs::symlink_metadata(directory)?;
+            if !meta.is_dir() || meta.mode() & 0o077 != 0 {
+                return Err(fail(&format!(
+                    "{label} login directory must be private and not a symlink"
+                )));
+            }
+            path
         }
-        directory.join(name)
+        None => return Err(fail(&format!("{label} has no login location"))),
     };
     let meta = fs::symlink_metadata(&path).map_err(|_| {
         fail(&format!(
@@ -88,18 +112,12 @@ fn file(backend: Backend, variable: &str, name: &str, label: &str, command: &str
 
 /// Codex's `auth.json`. Tests resolve only an explicit credential path or one
 /// under the test node directory, never the operator's `CODEX_HOME`/`~/.codex`.
-#[cfg(test)]
+/// Codex's `auth.json`: its override, `CODEX_HOME`, else `~/.codex`.
 pub(crate) fn codex_path() -> Result<PathBuf, &'static str> {
-    Ok(std::env::var_os("CONTROL_CODEX_AUTH_FILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| crate::config::test_root().join("codex/auth.json")))
-}
-#[cfg(not(test))]
-pub(crate) fn codex_path() -> Result<PathBuf, &'static str> {
-    std::env::var_os("CONTROL_CODEX_AUTH_FILE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CODEX_HOME").map(|p| PathBuf::from(p).join("auth.json")))
-        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".codex/auth.json")))
+    implicit(Backend::Codex)
+        .ok()
+        .flatten()
+        .map(|(_, path)| path)
         .ok_or("Cannot locate Codex auth.json. Sign in with codex login on the host.")
 }
 fn codex() -> Result<Granted, &'static str> {

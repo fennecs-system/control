@@ -135,8 +135,8 @@ fn pause_survives_reload_and_answer_keeps_authority_and_workspace_baseline() {
     assert_eq!(next.objective, "JSON");
     assert_eq!(next.actor, state.runtime.runs[0].actor);
     assert_eq!(next.action, state.runtime.runs[0].action);
-    assert_eq!(next.backend, state.runtime.runs[0].backend);
-    assert_eq!(next.model, state.runtime.runs[0].model);
+    assert_eq!(next.target.backend, state.runtime.runs[0].target.backend);
+    assert_eq!(next.target.model, state.runtime.runs[0].target.model);
     assert_eq!(next.continuation.as_ref().unwrap().checkpoint, "paused-workspace");
     assert_eq!(
         next.continuation.as_ref().unwrap().published_parent.as_deref(),
@@ -195,7 +195,7 @@ fn answering_a_design_question_preserves_the_existing_team_budget() {
             serde_json::from_value(serde_json::json!({"objectives":["A new task"]})).unwrap(),
             |_| panic!("design continuation must not allocate a fresh team"),
         ),
-        Err("Configured per-root agent budget exhausted.")
+        Err("Configured per-root agent budget exhausted.".into())
     );
 }
 

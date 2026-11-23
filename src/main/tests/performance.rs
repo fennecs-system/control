@@ -474,7 +474,7 @@ pub(crate) fn history_fixture(dms: usize, turns: usize) -> State {
         turn.chat_id = Some(id(index % dms));
         turn.kind = [RunKind::Chat, RunKind::BotWake, RunKind::PortDecision][index % 3];
         turn.status = if index % 20 == 0 { "failed" } else { "completed" }.into();
-        turn.model = Some(["gpt-5", "claude"][index % 2].into());
+        turn.target.model = Some(["gpt-5", "claude"][index % 2].into());
         *turn.objective = format!("Turn {index}: check the ore counts <&>");
         turn.attempts.push(Attempt {
             started_unix: 1_700_000_000 + index as u64 * 13,
