@@ -88,7 +88,7 @@ fn publication() -> Publication {
         tree: None,
         commit: None,
         url: None,
-        status: "preparing".into(),
+        status: PublicationStatus::Preparing,
         title: "Reviewable change".into(),
         body: "Synthetic verification".into(),
     }
@@ -178,7 +178,7 @@ fn publication_preserves_mode_and_creates_only_a_draft_without_overwriting() {
     assert!(
         saved
             .iter()
-            .any(|p| p.commit.as_deref() == Some(COMMIT) && p.status == "preparing")
+            .any(|p| p.commit.as_deref() == Some(COMMIT) && p.status == PublicationStatus::Preparing)
     );
 }
 #[test]

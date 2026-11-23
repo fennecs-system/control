@@ -3,7 +3,7 @@
 use crate::runtime::RunStatus;
 use crate::{
     State,
-    collective::Knowledge,
+    collective::{Knowledge, ProposalStatus},
     identity::{self, Actor},
 };
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,7 @@ fn records<'a>(
     let accepted = proposals
         .iter()
         .enumerate()
-        .filter(|(_, p)| p.status == "accepted")
+        .filter(|(_, p)| p.status == ProposalStatus::Accepted)
         .map(|(index, p)| Record {
             id: format!("claim:{index}"),
             title: &p.claim,
@@ -260,7 +260,7 @@ fn propose(
         .collective
         .proposals
         .iter()
-        .any(|p| p.status != "rejected" && p.claim.eq_ignore_ascii_case(&input.claim))
+        .any(|p| p.status.is_standing() && p.claim.eq_ignore_ascii_case(&input.claim))
     {
         return Err("That claim already exists; review the existing entry");
     }
@@ -270,7 +270,7 @@ fn propose(
         evidence: input.evidence,
         scope: input.scope,
         validity: input.validity,
-        status: "pending".into(),
+        status: ProposalStatus::Pending,
         source: Some(source),
     });
     if save(state).is_err() {
@@ -358,7 +358,7 @@ pub fn local(
 /// Pending worker proposals from `chat` and the chats spawned below it, as
 /// operator requests (`pending_knowledge`). Decided only through [`review_action`].
 pub(crate) fn pending_json(proposals: &[Knowledge], lineage: crate::chat::Lineage<'_>, chat: &str) -> Vec<Value> {
-    proposals.iter().enumerate().filter(|(_, p)| p.status == "pending")
+    proposals.iter().enumerate().filter(|(_, p)| p.status == ProposalStatus::Pending)
         .filter_map(|(index, p)| p.source.as_ref().filter(|s| lineage.within(&s.chat, chat)).map(|s| (index, p, s)))
         .map(|(index, p, s)| json!({"claim_id":format!("claim:{index}"),"chat_id":s.chat,"claim":p.claim,"evidence":p.evidence,"scope":p.scope,"validity":p.validity,
             "summary":format!("{}\nEvidence: {}\nScope: {}\nRecheck when: {}", p.claim, p.evidence, p.scope, p.validity)}))
@@ -368,7 +368,7 @@ pub(crate) fn pending_json(proposals: &[Knowledge], lineage: crate::chat::Lineag
 pub(crate) fn pending_chats(proposals: &[Knowledge]) -> impl Iterator<Item = &str> {
     proposals
         .iter()
-        .filter(|p| p.status == "pending")
+        .filter(|p| p.status == ProposalStatus::Pending)
         .filter_map(|p| p.source.as_ref().map(|s| s.chat.as_str()))
 }
 /// The in-chat request panel: the same `/review` form as Knowledge → Review.
@@ -396,11 +396,11 @@ pub fn review_action(
             .get("id")
             .and_then(|id| id.parse::<usize>().ok())
             .and_then(|index| state.collective.proposals.get(index))
-            .is_some_and(|p| p.status == "pending");
+            .is_some_and(|p| p.status == ProposalStatus::Pending);
         if !pending
             || !fields
                 .get("decision")
-                .is_some_and(|d| d == "accepted" || d == "rejected")
+                .is_some_and(|d| ProposalStatus::parse(d).is_decision())
         {
             return Err(STALE);
         }

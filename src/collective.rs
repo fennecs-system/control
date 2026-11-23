@@ -17,13 +17,54 @@ pub struct Collective {
 fn is_zero(value: &u64) -> bool {
     *value == 0
 }
+crate::application::status_text::status_enum! {
+    /// A knowledge proposal's review state, saved as its lowercase name.
+    pub(crate) enum ProposalStatus {
+        Pending = "pending",
+        Accepted = "accepted",
+        Rejected = "rejected",
+    }
+}
+impl ProposalStatus {
+    /// An operator's review outcome, as opposed to a state a review starts from.
+    pub fn is_decision(&self) -> bool {
+        match self {
+            Self::Accepted | Self::Rejected => true,
+            Self::Pending | Self::Unrecognised(_) => false,
+        }
+    }
+    /// Not rejected: the claim still blocks a duplicate.
+    pub fn is_standing(&self) -> bool {
+        match self {
+            Self::Rejected => false,
+            Self::Pending | Self::Accepted | Self::Unrecognised(_) => true,
+        }
+    }
+}
+crate::application::status_text::status_enum! {
+    /// An authority request's state, saved as its lowercase name.
+    enum RequestStatus {
+        Pending = "pending",
+        Approved = "approved",
+        Denied = "denied",
+    }
+}
+impl RequestStatus {
+    /// An operator's decision, as opposed to a state a decision starts from.
+    fn is_decision(&self) -> bool {
+        match self {
+            Self::Approved | Self::Denied => true,
+            Self::Pending | Self::Unrecognised(_) => false,
+        }
+    }
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Knowledge {
     pub claim: String,
     pub evidence: String,
     pub scope: String,
     pub validity: String,
-    pub status: String,
+    pub status: ProposalStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::knowledge_tools::Source>,
 }
@@ -33,7 +74,7 @@ struct Request {
     resource: String,
     purpose: String,
     authority: String,
-    status: String,
+    status: RequestStatus,
 }
 
 fn value(f: &HashMap<String, String>, key: &str) -> String {
@@ -94,7 +135,7 @@ impl Collective {
                 } else if self
                     .proposals
                     .iter()
-                    .any(|p| p.status != "rejected" && p.claim.to_lowercase() == claim.to_lowercase())
+                    .any(|p| p.status.is_standing() && p.claim.to_lowercase() == claim.to_lowercase())
                 {
                     self.notice = "That claim already exists. Review the existing record instead.".into();
                 } else {
@@ -103,20 +144,20 @@ impl Collective {
                         evidence,
                         scope,
                         validity,
-                        status: "pending".into(),
+                        status: ProposalStatus::Pending,
                         source: None,
                     });
                 }
                 "/?view=knowledge"
             }
             "/review" => {
-                let decision = value(f, "decision");
+                let decision = ProposalStatus::parse(&value(f, "decision"));
                 if let Some(p) = value(f, "id")
                     .parse::<usize>()
                     .ok()
                     .and_then(|id| self.proposals.get_mut(id))
-                    && p.status == "pending"
-                    && ["accepted", "rejected"].contains(&decision.as_str())
+                    && p.status == ProposalStatus::Pending
+                    && decision.is_decision()
                 {
                     p.status = decision;
                 }
@@ -137,19 +178,19 @@ impl Collective {
                         resource,
                         purpose,
                         authority,
-                        status: "pending".into(),
+                        status: RequestStatus::Pending,
                     });
                 }
                 "/?view=authority"
             }
             "/decide" => {
-                let decision = value(f, "decision");
+                let decision = RequestStatus::parse(&value(f, "decision"));
                 if let Some(r) = value(f, "id")
                     .parse::<usize>()
                     .ok()
                     .and_then(|id| self.requests.get_mut(id))
-                    && r.status == "pending"
-                    && ["approved", "denied"].contains(&decision.as_str())
+                    && r.status == RequestStatus::Pending
+                    && decision.is_decision()
                 {
                     r.status = decision;
                 }
@@ -170,7 +211,7 @@ impl Collective {
                     h.push_str("<div class='empty'>No entries to review.</div>");
                 }
                 for (id, p) in self.proposals.iter().enumerate() {
-                    h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Evidence</dt><dd>{}</dd><dt>Scope</dt><dd>{}</dd><dt>Recheck when</dt><dd>{}</dd></dl>", escape(&p.status), escape(&p.claim), escape(&p.evidence), escape(&p.scope), escape(&p.validity)));
+                    h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Evidence</dt><dd>{}</dd><dt>Scope</dt><dd>{}</dd><dt>Recheck when</dt><dd>{}</dd></dl>", escape(p.status.as_str()), escape(&p.claim), escape(&p.evidence), escape(&p.scope), escape(&p.validity)));
                     if let Some(source) = &p.source {
                         h.push_str(&format!(
                             "<p class='muted'>From <a href='/dm/{}'>chat</a> · run {}</p>",
@@ -178,7 +219,7 @@ impl Collective {
                             escape(source.run.as_deref().unwrap_or("local operator"))
                         ));
                     }
-                    if p.status == "pending" {
+                    if p.status == ProposalStatus::Pending {
                         h.push_str(&format!("<form method='post' action='/review' class='actions'><input type='hidden' name='id' value='{id}'><button class='primary' name='decision' value='accepted'>Accept entry</button><button name='decision' value='rejected'>Reject</button></form>"));
                     }
                     h.push_str("</article>");
@@ -201,8 +242,8 @@ impl Collective {
                     h.push_str("<div class='empty'>No pending requests.</div>");
                 }
                 for (id, r) in self.requests.iter().enumerate() {
-                    h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Resource</dt><dd>{}</dd><dt>Purpose</dt><dd>{}</dd><dt>Route</dt><dd>{} {}</dd></dl>", escape(&r.status), escape(&r.capability), escape(&r.resource), escape(&r.purpose), escape(&r.authority), if r.authority == "judge" { "· manual review" } else { "· local operator" }));
-                    if r.status == "pending" {
+                    h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Resource</dt><dd>{}</dd><dt>Purpose</dt><dd>{}</dd><dt>Route</dt><dd>{} {}</dd></dl>", escape(r.status.as_str()), escape(&r.capability), escape(&r.resource), escape(&r.purpose), escape(&r.authority), if r.authority == "judge" { "· manual review" } else { "· local operator" }));
+                    if r.status == RequestStatus::Pending {
                         h.push_str(&format!("<form method='post' action='/decide' class='actions'><input type='hidden' name='id' value='{id}'><button class='primary' name='decision' value='approved'>Record approval</button><button name='decision' value='denied'>Deny</button></form>"));
                     }
                     h.push_str("</article>");

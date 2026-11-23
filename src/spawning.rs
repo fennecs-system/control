@@ -673,8 +673,8 @@ fn owned_ids(state: &State, index: usize, batch_index: usize) -> std::collection
         for run in state.runtime.runs.iter() {
             if selected.contains(run.id().as_str()) && run.actor == actor && run.action == action {
                 for next in [
-                    run.delegation.as_ref().and_then(|d| d.continuation.as_ref()),
-                    run.question.as_ref().and_then(|q| q.continuation.as_ref()),
+                    run.delegation.as_ref().and_then(|d| d.state().continuation()),
+                    run.question.as_ref().and_then(|q| q.continuation.as_deref()),
                 ]
                 .into_iter()
                 .flatten()
@@ -682,7 +682,7 @@ fn owned_ids(state: &State, index: usize, batch_index: usize) -> std::collection
                     if state.runtime.runs.get(next).is_some_and(|candidate| {
                         candidate.actor == actor && candidate.action == action && candidate.chat_id == run.chat_id
                     }) {
-                        selected.insert(next.clone());
+                        selected.insert(next.to_owned());
                     }
                 }
             }

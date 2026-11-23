@@ -32,7 +32,7 @@ fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
             command_hash: "hash".into(),
             container_id: Some("a".repeat(64)),
             url: Some("http://preview.localhost:1234/".into()),
-            status: "preparing".into(),
+            status: PreviewStatus::Preparing,
             stopped: Arc::default(),
         };
         state.previews.push(preview.clone());
@@ -41,12 +41,12 @@ fn launch_fences_never_leave_a_running_record_or_link_for_later_saves() {
         });
         let running = active && !stopping && save_ok && launched;
         assert_eq!(result.is_ok(), running);
-        assert_eq!(state.previews[0].status == "running", running);
+        assert_eq!(state.previews[0].status == PreviewStatus::Running, running);
         assert_eq!(links(&state.previews, &chat).contains("Open preview"), running);
         assert_eq!(preview.stopped.load(Ordering::Relaxed), !running);
         // An unrelated later save cannot revive a fenced service.
         let saved: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-        assert_eq!(saved.previews[0].status == "running", running);
+        assert_eq!(saved.previews[0].status == PreviewStatus::Running, running);
         assert_eq!(saved.previews[0].container_id, preview.container_id);
     }
 }
@@ -239,7 +239,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     assert_eq!(restarted.previews[0].url.as_deref(), Some(url.as_str()));
     // Simulate the old process releasing its listener, then restore only
     // durable intent and the verified existing container into a fresh node.
-    state.lock().unwrap().previews[0].status = "restoring".into();
+    state.lock().unwrap().previews[0].status = PreviewStatus::Unrecognised("restoring".into());
     state.lock().unwrap().previews[0].stopped.store(true, Ordering::Relaxed);
     let start = Instant::now();
     loop {
@@ -267,7 +267,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     );
     stop(&state, &chat, id).unwrap();
     stop(&state, &chat, id).unwrap();
-    assert_eq!(state.lock().unwrap().previews[0].status, "stopped");
+    assert_eq!(state.lock().unwrap().previews[0].status, PreviewStatus::Stopped);
     state.lock().unwrap().runtime.runs[0].status = RunStatus::Running;
     let replacement = super::start(
         &state,
