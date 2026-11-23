@@ -2294,3 +2294,43 @@ mod reconcile_profile;
 mod recovery;
 #[path = "tests/timeout.rs"]
 mod timeout;
+#[test]
+fn approval_state_reads_every_saved_decision_and_acknowledgement() {
+    let approval = |decision: Decision, acknowledged: bool| Approval {
+        id: "bot".into(),
+        chat: "chat".into(),
+        requester: "lead".into(),
+        origin: "origin".into(),
+        every_minutes: None,
+        room: false,
+        decision,
+        acknowledged,
+    };
+    let cases = [
+        (Decision::Pending, false, ApprovalState::Pending),
+        // Impossible: only a decided approval is acknowledged. Read as pending,
+        // as every reader checked the decision first.
+        (Decision::Pending, true, ApprovalState::Pending),
+        (Decision::Approved, false, ApprovalState::Decided),
+        (Decision::Approved, true, ApprovalState::Acknowledged),
+        (Decision::Denied, false, ApprovalState::Decided),
+        (Decision::Denied, true, ApprovalState::Acknowledged),
+    ];
+    for (decision, acknowledged, state) in cases {
+        assert_eq!(
+            approval(decision, acknowledged).state(),
+            state,
+            "{decision:?} {acknowledged}"
+        );
+    }
+    // A pending approval cannot be acknowledged; a decided one can.
+    let mut pending = approval(Decision::Pending, false);
+    pending.acknowledge();
+    assert_eq!(pending.state(), ApprovalState::Pending);
+    assert!(!pending.acknowledged);
+    for decision in [Decision::Approved, Decision::Denied] {
+        let mut decided = approval(decision, false);
+        decided.acknowledge();
+        assert_eq!(decided.state(), ApprovalState::Acknowledged);
+    }
+}
