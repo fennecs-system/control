@@ -57,7 +57,7 @@ pub(super) fn fixture() -> (State, String) {
     crate::chat::send(&mut state, &chat, "Research the source", "test").unwrap();
     let run = &mut state.runtime.runs[0];
     run.status = "running".into();
-    run.model = Some("captured-model".into());
+    run.target.model = Some("captured-model".into());
     run.attempts.push(crate::usage::Attempt {
         workspace_id: Some("attempt-one".into()),
         ..Default::default()
@@ -293,7 +293,7 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         run,
         "automatic notifications must retain the original team's budget"
     );
-    assert_eq!(state.runtime.runs[1].model.as_deref(), Some("captured-model"));
+    assert_eq!(state.runtime.runs[1].target.model.as_deref(), Some("captured-model"));
     assert!(!state.runtime.runs[1].objective.contains("A concise discovery"));
     let delivered = state.collective.room_watches[0].delivered.clone();
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
@@ -489,8 +489,11 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
         },
         nonce: "delegation".into(),
         generation: "attempt-one".into(),
-        backend: parent.backend,
-        model: parent.model.clone().unwrap(),
+        target: crate::providers::Target {
+            backend: parent.target.backend,
+            model: Some(parent.target.model.clone().unwrap()),
+            ..Default::default()
+        },
         child: None,
         continuation: None,
     });
@@ -525,8 +528,8 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     assert_eq!(restored.runtime.runs.len(), count + 1);
     let notification = restored.runtime.runs.last().unwrap();
     assert_eq!(notification.kind, RunKind::RoomNotification);
-    assert_eq!(notification.model, state.runtime.runs[0].model);
-    assert_eq!(notification.backend, state.runtime.runs[0].backend);
+    assert_eq!(notification.target.model, state.runtime.runs[0].target.model);
+    assert_eq!(notification.target.backend, state.runtime.runs[0].target.backend);
     assert_eq!(notification.context, state.runtime.runs[0].context);
     assert_eq!(notification.actor, state.runtime.runs[0].actor);
     assert_eq!(notification.persona.as_ref().unwrap().root, root);
@@ -553,7 +556,7 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
             }),
             2 => state.runtime.runs[first].question.as_mut().unwrap().generation = "stale-generation".into(),
             3 => state.runtime.runs[leaf].chat_id = Some("sibling-chat".into()),
-            4 => state.runtime.runs[leaf].model = Some("different-model".into()),
+            4 => state.runtime.runs[leaf].target.model = Some("different-model".into()),
             5 => {
                 let target = state.runtime.runs[first].id.clone();
                 state.runtime.runs[leaf].status = "continued".into();

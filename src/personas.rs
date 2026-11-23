@@ -209,7 +209,11 @@ pub(crate) fn select(state: &mut State, chat: &str, persona: Option<&str>) -> Re
 }
 /// Applies a root DM's selected persona to its newly queued run: the captured
 /// purpose and standing, and its body when the DM has no explicit model.
-pub(crate) fn apply_to_root(state: &mut State, chat: &str, run_index: usize) -> Result<(), &'static str> {
+pub(crate) fn apply_to_root(
+    state: &mut State,
+    chat: &str,
+    run_index: usize,
+) -> Result<(), std::borrow::Cow<'static, str>> {
     let Some(id) = state
         .chats
         .iter()
@@ -229,8 +233,7 @@ pub(crate) fn apply_to_root(state: &mut State, chat: &str, run_index: usize) -> 
     let body = if !explicit && !bundle.model.is_empty() {
         Some(crate::providers::selection::resolve(
             &state.runtime,
-            run.backend,
-            &run.model.clone().unwrap_or_else(|| run.backend.default_model()),
+            &run.target,
             Some(&bundle.model),
         )?)
     } else {
@@ -238,8 +241,7 @@ pub(crate) fn apply_to_root(state: &mut State, chat: &str, run_index: usize) -> 
     };
     let run = &mut state.runtime.runs[run_index];
     if let Some(body) = body {
-        run.backend = body.backend;
-        run.model = Some(body.model);
+        run.target = body;
     }
     run.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Worker,

@@ -37,7 +37,7 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
     send(&mut state, &chat, "Original task", "test").unwrap();
     let origin = &mut state.runtime.runs[0];
     origin.status = "completed".into();
-    origin.model = Some("model-a".into());
+    origin.target.model = Some("model-a".into());
     origin.lenses = Some(vec!["lens-a".into()]);
     let origin_id = origin.id.clone();
     let grant = |id: &str| {
@@ -58,7 +58,7 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
         (Some(chat.as_str()), "Follow up", "queued")
     );
     assert_eq!(
-        (run.model.as_deref(), run.lenses.clone()),
+        (run.target.model.as_deref(), run.lenses.clone()),
         (Some("model-a"), Some(vec!["lens-a".to_owned()]))
     );
     assert_eq!(
@@ -104,7 +104,7 @@ fn profile_continuation_admission() {
         state.runtime.enqueue("original".into(), RunKind::Task, "fixture");
         let mut origin = state.runtime.runs.pop().unwrap();
         origin.status = "completed".into();
-        origin.model = Some("captured-model".into());
+        origin.target.model = Some("captured-model".into());
         origin.chat_id = Some("chat".into());
         state.runtime.runs = (0..retained)
             .map(|index| {
@@ -151,7 +151,7 @@ fn long_unicode_messages_reach_runs_and_reject_overflow_without_changes() {
     assert_eq!(state.chats[0].messages[0].text, text);
     assert_eq!(state.runtime.runs[0].objective.as_str(), text);
     for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
-        state.runtime.runs[0].backend = backend;
+        state.runtime.runs[0].target.backend = backend;
         assert!(prompt(&state, &state.runtime.runs[0].id).unwrap().contains(&text));
     }
     let before = serde_json::to_vec(&state).unwrap();
@@ -300,7 +300,7 @@ fn explicit_spawn_inherits_snapshot_without_workspace_authority_or_recursion() {
     assert!(child.fork_context.as_ref().unwrap().contains("Parent task"));
     assert_eq!(state.runtime.runs[1].action, Action::Task);
     assert_eq!(state.runtime.runs[1].objective, "/improve inspect this");
-    assert_eq!(state.runtime.runs[1].model.as_deref(), Some("parent-model"));
+    assert_eq!(state.runtime.runs[1].target.model.as_deref(), Some("parent-model"));
     assert_eq!(child.lenses, state.runtime.runs[1].lenses);
     assert!(
         transcript(&state, &parent)
@@ -950,7 +950,10 @@ fn chats_show_callsigns_and_every_client_sees_the_same_rename() {
         crate::navigation::conversations(&state, &chat).contains("<span class='conversation-title'>player1</span>")
     );
     // Invalid names change nothing.
-    assert_eq!(send(&mut state, &chat, "/rename", "test"), Err("Usage: /rename NAME"));
+    assert_eq!(
+        send(&mut state, &chat, "/rename", "test"),
+        Err("Usage: /rename NAME".into())
+    );
     assert!(
         tool(
             &mut state,

@@ -46,8 +46,8 @@ impl Facts {
             judge,
             // An approved advisor is a judge whose one extra effect is evidence notes.
             advisor: judge && standing.approved,
-            shell: run.backend.agent().host_shell(),
-            local: run.backend == crate::backend::Backend::Local,
+            shell: run.target.backend.agent().host_shell(),
+            local: run.target.backend == crate::backend::Backend::Local,
             rooms: chat.is_some_and(|chat| chat.actor == run.actor),
             standing,
         }

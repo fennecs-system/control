@@ -921,7 +921,7 @@ fn checkpoint_prepared(
     let mut attempt = crate::usage::Attempt::new();
     attempt.explicit_timeout_seconds = crate::config::configured_worker_deadline().map(|d| d.as_secs());
     attempt.bot_timeout_seconds = crate::config::bot_turn_deadline();
-    if run.backend == crate::backend::Backend::Local {
+    if run.target.backend == crate::backend::Backend::Local {
         attempt.local_timeout_seconds = crate::config::local_turn_deadline();
     }
     attempt.context_trace = captured.map(Box::new);
@@ -931,14 +931,15 @@ fn checkpoint_prepared(
     attempt.project = project.as_ref().and_then(|p| p.grant.clone());
     attempt.project_parent = project_parent;
     attempt.project_base = project_base;
-    attempt.backend = run.backend;
-    attempt.provider = run.backend.label().into();
-    attempt.image = run.backend.image();
+    attempt.backend = run.target.backend;
+    attempt.account = run.target.account.clone();
+    attempt.provider = run.target.backend.label().into();
+    attempt.image = run.target.backend.image();
     attempt.node_id = crate::config::node_id().ok();
     attempt.parent_artifact = parent;
     attempt.workspace_id = Some(format!("{}-attempt-{}", run.id, run.attempts.len() + 1));
     attempt.omitted_history = omitted_history;
-    attempt.model = run.model.clone().unwrap_or_else(|| run.backend.default_model());
+    attempt.model = run.target.model_or_default();
     run.attempts.push(attempt);
     let chat_id = run.chat_id.clone();
     let previous_revision = state

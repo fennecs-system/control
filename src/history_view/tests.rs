@@ -13,7 +13,7 @@ fn turn<'a>(state: &'a mut State, chat: Option<&str>, kind: RunKind, status: &st
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = chat.map(Into::into);
     run.status = status.into();
-    run.model = Some(model.into());
+    run.target.model = Some(model.into());
     run
 }
 fn filter(query: &str) -> Filter {

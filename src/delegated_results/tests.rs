@@ -78,8 +78,11 @@ pub(crate) fn fixture() -> State {
         },
         nonce: "n".into(),
         generation: "parent-attempt-1".into(),
-        backend: Backend::Codex,
-        model: "dev".into(),
+        target: crate::providers::Target {
+            backend: Backend::Codex,
+            model: Some("dev".into()),
+            ..Default::default()
+        },
         child: Some("child".into()),
         continuation: Some("resumed".into()),
     });

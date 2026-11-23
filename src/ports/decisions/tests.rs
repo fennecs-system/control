@@ -68,14 +68,14 @@ fn approval_waits_for_turn_and_wakes_once_with_captured_provider() {
     let (mut state, chat) = approved();
     advance(&mut state, |_| panic!("active turn must not queue another run")).unwrap();
     state.runtime.runs[0].status = "completed".into();
-    state.runtime.runs[0].model = Some("captured-model".into());
+    state.runtime.runs[0].target.model = Some("captured-model".into());
     let before = serde_json::to_vec(&state).unwrap();
     assert!(advance(&mut state, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 2);
     assert_eq!(state.runtime.runs[1].chat_id.as_deref(), Some(chat.as_str()));
-    assert_eq!(state.runtime.runs[1].model.as_deref(), Some("captured-model"));
+    assert_eq!(state.runtime.runs[1].target.model.as_deref(), Some("captured-model"));
     assert_eq!(state.runtime.runs[1].kind, RunKind::PortDecision);
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     advance(&mut restored, |_| panic!("acknowledged decisions must not replay")).unwrap();

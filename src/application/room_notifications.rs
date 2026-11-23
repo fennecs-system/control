@@ -69,8 +69,7 @@ pub(crate) fn queue(
             .max()
             .unwrap_or(0)
             .saturating_add(1),
-        origin.backend,
-        origin.model.clone(),
+        origin.target.clone(),
     );
     run.chat_id = Some(chat.into());
     run.context = origin.context.clone();

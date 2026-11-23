@@ -28,8 +28,8 @@ fn active(action: Action) -> State {
     let run = &mut s.runtime.runs[0];
     run.chat_id = Some(id);
     run.status = "running".into();
-    run.backend = Backend::Codex;
-    run.model = Some("dev-model".into());
+    run.target.backend = Backend::Codex;
+    run.target.model = Some("dev-model".into());
     run.attempts.push(Attempt {
         workspace_id: Some("parent-attempt-1".into()),
         parent_artifact: Some(
@@ -85,11 +85,11 @@ fn explicit_reviewer_model_is_captured_without_changing_parent_or_granting_autho
     task.model = Some("claude:reviewer".into());
     request_with_save(&mut state, &id, "selected", task, |_| Ok(())).unwrap();
     let parent = &state.runtime.runs[0];
-    assert_eq!(parent.backend, Backend::Codex);
-    assert_eq!(parent.model.as_deref(), Some("dev-model"));
+    assert_eq!(parent.target.backend, Backend::Codex);
+    assert_eq!(parent.target.model.as_deref(), Some("dev-model"));
     let delegation = parent.delegation.as_ref().unwrap();
-    assert_eq!(delegation.backend, Backend::Claude);
-    assert_eq!(delegation.model, "reviewer");
+    assert_eq!(delegation.target.backend, Backend::Claude);
+    assert_eq!(delegation.target.model.as_deref(), Some("reviewer"));
     assert_eq!(delegation.input.role, Role::Judge);
 }
 #[test]
@@ -158,8 +158,8 @@ fn judge_inherits_captured_model_and_has_task_ceiling() {
     reconcile(&mut s, |_| Ok(())).unwrap();
     let child = &s.runtime.runs[1];
     assert!(is_judge(child));
-    assert_eq!(child.backend, Backend::Codex);
-    assert_eq!(child.model.as_deref(), Some("dev-model"));
+    assert_eq!(child.target.backend, Backend::Codex);
+    assert_eq!(child.target.model.as_deref(), Some("dev-model"));
     assert_eq!(child.action, Action::Task);
     assert_eq!(s.chats[1].workspace.as_deref(), Some("immutable-paused-source"));
     assert!(!s.chats[1].improve_mode);
@@ -179,8 +179,8 @@ fn all_children_keep_parent_selection_and_failures_resume_the_parent() {
                 json!([{"backend":"codex","model":"unrelated"},{"backend":"claude","model":"expired-alternate"}]),
             )
             .unwrap();
-            s.runtime.runs[0].backend = backend;
-            s.runtime.runs[0].model = Some("captured-parent-model".into());
+            s.runtime.runs[0].target.backend = backend;
+            s.runtime.runs[0].target.model = Some("captured-parent-model".into());
             pause(&mut s, role);
             s.runtime.backend = if backend == Backend::Codex {
                 Backend::Claude
@@ -189,15 +189,15 @@ fn all_children_keep_parent_selection_and_failures_resume_the_parent() {
             };
             s.runtime.model = Some("changed-default".into());
             reconcile(&mut s, |_| Ok(())).unwrap();
-            assert_eq!(s.runtime.runs[1].backend, backend);
-            assert_eq!(s.runtime.runs[1].model.as_deref(), Some("captured-parent-model"));
+            assert_eq!(s.runtime.runs[1].target.backend, backend);
+            assert_eq!(s.runtime.runs[1].target.model.as_deref(), Some("captured-parent-model"));
             s.runtime.runs[1].status = "failed".into();
             s.runtime.runs[1].result = "Synthetic authentication failure; refresh the parent provider login".into();
             reconcile(&mut s, |_| Ok(())).unwrap();
             assert_eq!(s.runtime.runs[0].status, "continued");
             let resumed = &s.runtime.runs[2];
-            assert_eq!(resumed.backend, backend);
-            assert_eq!(resumed.model.as_deref(), Some("captured-parent-model"));
+            assert_eq!(resumed.target.backend, backend);
+            assert_eq!(resumed.target.model.as_deref(), Some("captured-parent-model"));
             assert!(
                 resumed
                     .continuation

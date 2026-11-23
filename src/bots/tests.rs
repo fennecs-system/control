@@ -84,9 +84,9 @@ fn model_selection_does_not_wake_a_bot_but_is_captured_on_its_next_callback() {
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
     let runs = bot_runs(&state);
     assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].backend, crate::backend::Backend::Claude);
-    assert_eq!(runs[0].model.as_deref(), Some("reviewer"));
-    assert_eq!(state.runtime.runs[0].backend, crate::backend::Backend::Codex);
+    assert_eq!(runs[0].target.backend, crate::backend::Backend::Claude);
+    assert_eq!(runs[0].target.model.as_deref(), Some("reviewer"));
+    assert_eq!(state.runtime.runs[0].target.backend, crate::backend::Backend::Codex);
 }
 fn bot_runs(state: &State) -> Vec<&crate::runtime::Run> {
     state.runtime.runs.iter().filter(|run| run.bot_turn.is_some()).collect()

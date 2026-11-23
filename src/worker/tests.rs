@@ -186,7 +186,7 @@ fn admission_captures_the_local_turn_limit_only_for_local_attempts() {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Set up", "test").unwrap();
-        state.runtime.runs[0].backend = backend;
+        state.runtime.runs[0].target.backend = backend;
         checkpoint_next(&mut state, |_| Ok(())).unwrap();
         let attempt = &state.runtime.runs[0].attempts[0];
         assert_eq!(attempt.local_timeout_seconds, expected, "{backend:?}");
@@ -424,7 +424,7 @@ fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() 
             let mut state = State::default();
             let chat = crate::chat::create(&mut state);
             crate::chat::send(&mut state, &chat, "Build", "test").unwrap();
-            state.runtime.runs[0].backend = backend;
+            state.runtime.runs[0].target.backend = backend;
             checkpoint_next(&mut state, |_| Ok(())).unwrap();
             let id = state.runtime.runs[0].id.clone();
             let mut mailbox = Mailbox::default();
@@ -1419,7 +1419,7 @@ fn failed_discord_design_answer_restores_question_and_delivery_checkpoint() {
             &mut state,
             &id,
             "fixture-answer".into(),
-            |state| crate::chat::send(state, &id, "2", "test"),
+            |state| crate::chat::send(state, &id, "2", "test").map_err(crate::chat::fixed),
             |_| Err(std::io::Error::other("disk full"))
         )
         .is_err()
@@ -1430,7 +1430,7 @@ fn failed_discord_design_answer_restores_question_and_delivery_checkpoint() {
             &mut state,
             &id,
             "fixture-answer".into(),
-            |state| crate::chat::send(state, &id, "2", "test"),
+            |state| crate::chat::send(state, &id, "2", "test").map_err(crate::chat::fixed),
             |_| Ok(())
         )
         .is_ok()
@@ -1451,7 +1451,7 @@ fn failed_discord_bot_commands_leave_no_bot_or_inbox() {
             &mut state,
             &id,
             "fixture-bot".into(),
-            |state| crate::chat::send(state, &id, "/bot on", "test"),
+            |state| crate::chat::send(state, &id, "/bot on", "test").map_err(crate::chat::fixed),
             |_| Err(std::io::Error::other("disk full"))
         )
         .is_err()
@@ -1463,7 +1463,7 @@ fn failed_discord_bot_commands_leave_no_bot_or_inbox() {
             &mut state,
             &id,
             "fixture-bot".into(),
-            |state| crate::chat::send(state, &id, "/bot on", "test"),
+            |state| crate::chat::send(state, &id, "/bot on", "test").map_err(crate::chat::fixed),
             |_| Ok(())
         )
         .is_ok()
@@ -1598,7 +1598,7 @@ fn failed_discord_cancel_checkpoint_preserves_run_and_retryable_delivery() {
                 &mut state,
                 &id,
                 "fixture-message".into(),
-                |state| crate::chat::send(state, &id, "/cancel", "test"),
+                |state| crate::chat::send(state, &id, "/cancel", "test").map_err(crate::chat::fixed),
                 |_| Err(std::io::Error::other("disk full"))
             )
             .is_err()
@@ -1609,7 +1609,7 @@ fn failed_discord_cancel_checkpoint_preserves_run_and_retryable_delivery() {
                 &mut state,
                 &id,
                 "fixture-message".into(),
-                |state| crate::chat::send(state, &id, "/cancel", "test"),
+                |state| crate::chat::send(state, &id, "/cancel", "test").map_err(crate::chat::fixed),
                 |_| Ok(())
             )
             .is_ok()

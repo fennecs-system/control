@@ -31,7 +31,7 @@ fn future_human_and_agent_posts_wake_repeatedly_without_self_echoes() {
         let run = state.runtime.runs.last().unwrap();
         assert_eq!(run.source, "room-listener");
         assert_eq!(run.chat_id.as_deref(), Some(chat.as_str()));
-        assert_eq!(run.model.as_deref(), Some("captured-model"));
+        assert_eq!(run.target.model.as_deref(), Some("captured-model"));
         assert_eq!(run.persona.as_ref().unwrap().root, state.runtime.runs[0].id);
         // An active turn cannot receive a second queued listener response.
         tick(&mut state, now + 1);

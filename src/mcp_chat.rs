@@ -107,7 +107,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "chat_create",
         write: true,
-        description: "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
+        description: "Create a DM as the local operator, optionally with a title, model (as /model accepts, e.g. codex:MODEL, codex+ACCOUNT:MODEL or claude:opus), genes (lens IDs; its DNA) and persona. Returns its ID. Send the prompt with chat_send.",
         schema: || json!({"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":32},"model":{"type":"string","maxLength":128},"genes":{"type":"array","items":{"type":"string"},"maxItems":32},"persona":{"type":"string","maxLength":128}}}),
     },
     Tool {
@@ -119,7 +119,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "chat_model",
         write: true,
-        description: "Select the model for a chat's future turns (as /model does); active turns keep theirs. Omit model to list the configured choices.",
+        description: "Select the model for a chat's future turns (as /model does: BACKEND:MODEL, BACKEND+ACCOUNT:MODEL, or BACKEND+*:MODEL for any enabled account); active turns keep theirs. Omit model to list the configured choices.",
         schema: || json!({"type":"object","properties":{"id":{"type":"string","description":ID},"model":{"type":"string","maxLength":128}},"required":["id"]}),
     },
     Tool {

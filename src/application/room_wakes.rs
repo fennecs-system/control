@@ -73,7 +73,7 @@ pub(crate) fn continuation_leaf(history: &[Run], origin: usize, runs: &HashMap<&
         let next = &history[next_index];
         let lineage = crate::delegation::lineage(run);
         if next.kind!=kind || next.continuation.is_none() || next.chat_id!=run.chat_id
-            || next.actor!=run.actor || next.action!=run.action || next.backend!=run.backend || next.model!=run.model
+            || next.actor!=run.actor || next.action!=run.action || next.target!=run.target
             || next.context!=run.context || next.lenses!=run.lenses
             || next.persona.as_ref().is_some_and(|persona|persona!=&lineage)
             || (next.persona.is_none() && (run.persona.is_some() || kind==RunKind::DelegationResult))

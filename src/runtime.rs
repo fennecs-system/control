@@ -27,6 +27,9 @@ pub struct Runtime {
     pub compaction: crate::compaction::Memory,
     #[serde(skip)]
     pub backend: crate::backend::Backend,
+    /// `<config>/accounts.json`; empty: each backend has only its implicit account.
+    #[serde(skip)]
+    pub accounts: crate::accounts::Store<crate::backend::Backend>,
     // Read old checkpoints for migration; new configuration belongs in the home directory.
     #[serde(skip_serializing)]
     pub model: Option<String>,
@@ -143,6 +146,14 @@ impl Runtime {
             .map(str::to_owned)
             .unwrap_or_else(|| self.backend.default_model())
     }
+    /// What new work runs on: the node default model on its backend's default account.
+    pub(crate) fn default_target(&self) -> crate::providers::Target {
+        crate::providers::Target {
+            backend: self.backend,
+            account: self.accounts.default_name(self.backend),
+            model: Some(self.configured_model()),
+        }
+    }
     pub fn enqueue(&mut self, objective: String, kind: RunKind, source: &str) {
         let action = if kind == RunKind::SelfImprovement {
             Action::Improve
@@ -186,8 +197,7 @@ impl Runtime {
                     .max()
                     .unwrap_or(0)
                     .saturating_add(1),
-                self.backend,
-                Some(self.configured_model()),
+                self.default_target(),
             ),
         );
         self.notice = "Run queued.".into();
@@ -310,10 +320,10 @@ fn run_record(run: &Run) -> String {
         escape(&run.source),
         escape(&run.objective),
         escape(&run.id),
-        escape(run.backend.label()),
-        run.model
-            .as_ref()
-            .map(|m| format!(" · {}", escape(m)))
+        escape(run.target.backend.label()),
+        run.target
+            .shown_model()
+            .map(|m| format!(" · {}", escape(&m)))
             .unwrap_or_default(),
         usage(run)
     );

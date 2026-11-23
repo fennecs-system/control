@@ -39,6 +39,10 @@ pub struct Attempt {
     pub project_base: Option<String>,
     pub project_checkpoint: Option<String>,
     pub backend: crate::backend::Backend,
+    /// The account its run captured at admission, kept with its usage so it
+    /// can be accounted per account. Absent: the implicit `default` account.
+    #[serde(skip_serializing_if = "crate::accounts::AccountName::is_implicit")]
+    pub account: crate::accounts::AccountName,
     pub image: Option<String>,
     pub node_id: Option<String>,
     pub parent_artifact: Option<String>,

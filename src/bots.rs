@@ -1341,8 +1341,8 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     };
     let mut follow_up = crate::chat::FollowUp::from(state, latest);
     if let Some(selected) = &session.model {
-        follow_up.backend = selected.backend;
-        follow_up.model = Some(selected.model.clone());
+        follow_up.target = crate::providers::selection::admit(&state.runtime, selected)
+            .map_err(|_| "This bot's account is no longer available; choose another with /model.")?;
     }
     let recovery = (latest.kind.prompt_role() == control_context::agent_policy::PromptRole::Wake
         && latest.status == "completed"

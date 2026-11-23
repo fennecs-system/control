@@ -174,7 +174,7 @@ fn attempt(backend: Backend, turn: impl Fn(&RunSpec) -> Command + Sync) -> Finis
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Build a stone castle", "test").unwrap();
-    state.runtime.runs[0].backend = backend;
+    state.runtime.runs[0].target.backend = backend;
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let attempt = &mut state.runtime.runs[0].attempts[0];
     attempt.image = Some(IMAGE.into());

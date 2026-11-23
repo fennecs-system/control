@@ -179,7 +179,7 @@ fn shared_local_summaries_feed_both_cli_chat_projections() {
     for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         state.runtime.backend = backend;
         let id = state.runtime.runs.last().unwrap().id.clone();
-        state.runtime.runs.last_mut().unwrap().backend = backend;
+        state.runtime.runs.last_mut().unwrap().target.backend = backend;
         let prompt = crate::chat::prompt(&state, &id).unwrap();
         assert!(prompt.contains("LOCAL SUMMARY SENTINEL"));
         assert!(prompt.contains("Continue the task"));
@@ -627,7 +627,7 @@ fn memory_and_compact_are_answered_in_the_dm_and_kept_out_of_history() {
     }
     assert_eq!(
         crate::chat::send(&mut state, &chat, "/compact now", "web"),
-        Err(command::USAGE)
+        Err(command::USAGE.into())
     );
     assert!(
         status(&state, &chat)["summary"]

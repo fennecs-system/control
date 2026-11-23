@@ -121,8 +121,7 @@ pub(super) fn reconcile(
         .unwrap_or(parent);
     // The parent's authority, lineage and grants; the chat's latest model settings.
     let mut follow_up = chat::FollowUp::from(state, parent);
-    follow_up.backend = latest.backend;
-    follow_up.model = latest.model.clone();
+    follow_up.target = latest.target.clone();
     follow_up.context = latest.context.clone();
     follow_up.lenses = latest.lenses.clone();
     let mut summaries = Vec::new();

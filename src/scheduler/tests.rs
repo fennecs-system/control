@@ -44,8 +44,11 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
         },
         nonce: "n".into(),
         generation: "g".into(),
-        backend: crate::backend::Backend::Codex,
-        model: "test".into(),
+        target: crate::providers::Target {
+            backend: crate::backend::Backend::Codex,
+            model: Some("test".into()),
+            ..Default::default()
+        },
         child: Some("b".into()),
         continuation: None,
     });
