@@ -261,8 +261,8 @@ impl Receipt {
         value
     }
 }
-pub(super) fn live_attempt(state: &State, run: &str, attempt: &str) -> bool {
-    state.runtime.runs.iter().any(|r| {
+pub(super) fn live_attempt(runs: &[crate::runtime::Run], run: &str, attempt: &str) -> bool {
+    runs.iter().any(|r| {
         r.id == run
             && r.status == "running"
             && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt)
@@ -469,13 +469,15 @@ pub(super) fn hash(value: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-pub(super) fn owned(state: &State, run: &str, generation: &str, node: &NodeId, service: &str) -> io::Result<usize> {
-    let (active, _) = caller(state, run, generation)?;
-    state
-        .services
-        .iter()
-        .position(|s| s.resource.id.as_str() == service && accessible(state, s, node, active))
-        .ok_or_else(|| fail("Service is not owned by this chat or its team"))
+pub(super) fn owned(
+    authority: ServiceAuthority<'_>,
+    run: &str,
+    generation: &str,
+    node: &NodeId,
+    service: &str,
+) -> io::Result<usize> {
+    let (active, _) = caller(authority.runs, run, generation)?;
+    target(authority, node, active, service)
 }
 pub(super) fn exec(
     shared: &Arc<Mutex<State>>,
@@ -601,7 +603,13 @@ fn wait_until(
         let limit = {
             let Ok(state) = shared.lock() else { return last };
             // An ended run or replaced attempt stops waiting with what it saw.
-            let Ok(index) = owned(&state, waiter.run, waiter.generation, waiter.node, waiter.service_id) else {
+            let Ok(index) = owned(
+                ServiceAuthority::of(&state),
+                waiter.run,
+                waiter.generation,
+                waiter.node,
+                waiter.service_id,
+            ) else {
                 return last;
             };
             let service = &state.services[index];
@@ -667,7 +675,7 @@ pub(super) fn status(
     input: Handle,
 ) -> io::Result<Value> {
     let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let index = owned(&state, run, generation, node, &input.service_id)?;
+    let index = owned(ServiceAuthority::of(&state), run, generation, node, &input.service_id)?;
     lookup(&state.services[index], &input.execution_id)?
         .map(|recorded| recorded.summary())
         .ok_or_else(|| fail("Service command not found"))
@@ -755,7 +763,7 @@ pub(super) fn admit_work(
     if !(1..=1800).contains(&work.timeout_seconds) {
         return Err(fail("timeout_seconds must be 1–1800"));
     }
-    let index = owned(state, run, generation, node, &work.service_id)?;
+    let index = owned(ServiceAuthority::of(state), run, generation, node, &work.service_id)?;
     let id = identity(&work.service_id, run, generation, nonce)?;
     let digest = work.digest;
     let service = &state.services[index];
@@ -805,13 +813,13 @@ pub(super) fn admit_work(
         .flatten();
     let receipt = evict.and_then(|i| {
         let e = &state.services[index].executions[i];
-        live_attempt(state, &e.run, &e.attempt).then(|| Receipt::from_execution(e))
+        live_attempt(&state.runtime.runs, &e.run, &e.attempt).then(|| Receipt::from_execution(e))
     });
     let old_receipts = if receipt.is_some() && state.services[index].command_receipts.len() >= MAX_RECEIPTS {
         let retained = state.services[index]
             .command_receipts
             .iter()
-            .filter(|r| live_attempt(state, &r.run, &r.attempt))
+            .filter(|r| live_attempt(&state.runtime.runs, &r.run, &r.attempt))
             .cloned()
             .collect::<Vec<_>>();
         if retained.len() >= MAX_RECEIPTS {
@@ -1073,9 +1081,8 @@ pub(crate) fn probe(
 /// A snapshot of service `id` that `usable` accepts, to probe without the
 /// state lock. Observations and score probes check the service each time
 /// they run, not when they were declared.
-pub(crate) fn probe_target(state: &State, id: &str, usable: impl Fn(&Service) -> bool) -> Option<Service> {
-    state
-        .services
+pub(crate) fn probe_target(services: &[Service], id: &str, usable: impl Fn(&Service) -> bool) -> Option<Service> {
+    services
         .iter()
         .find(|service| service.resource.id.as_str() == id && usable(service))
         .map(Service::binding_snapshot)

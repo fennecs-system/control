@@ -134,7 +134,7 @@ pub(crate) fn command(
         .ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
     let actor = session.actor.clone();
-    let team = crate::chat::team(state, chat);
+    let team = crate::chat::Lineage::of(&state.chats).team(chat);
     let live = state
         .services
         .iter()

@@ -44,7 +44,8 @@ fn captured_documents_are_immutable_and_unselected_notes_are_not_readable() {
     let run = state.runtime.runs.iter().find(|run| run.id == id).unwrap();
     assert!(
         read(
-            &state,
+            &state.documents,
+            &state.collective.proposals,
             Some(run),
             "control_knowledge_read",
             &json!({"id":"document:unselected"})
@@ -52,7 +53,8 @@ fn captured_documents_are_immutable_and_unselected_notes_are_not_readable() {
         .is_err()
     );
     let first = read(
-        &state,
+        &state.documents,
+        &state.collective.proposals,
         Some(run),
         "control_knowledge_read",
         &json!({"id":"document:selected","offset":13,"limit":5}),
@@ -63,7 +65,8 @@ fn captured_documents_are_immutable_and_unselected_notes_are_not_readable() {
     assert_eq!(first["revision"], 2);
     assert_eq!(first["admitted"], false);
     let last = read(
-        &state,
+        &state.documents,
+        &state.collective.proposals,
         Some(run),
         "control_knowledge_read",
         &json!({"id":"document:selected","offset":18}),
@@ -73,7 +76,8 @@ fn captured_documents_are_immutable_and_unselected_notes_are_not_readable() {
     assert!(last["next_offset"].is_null());
     assert_eq!(
         read(
-            &state,
+            &state.documents,
+            &state.collective.proposals,
             None,
             "control.knowledge.read",
             &json!({"id":"document:selected"})
@@ -82,7 +86,14 @@ fn captured_documents_are_immutable_and_unselected_notes_are_not_readable() {
         "New live body"
     );
     assert_eq!(
-        read(&state, Some(run), "control.knowledge.search", &json!({"query":"live"})).unwrap()["results"]
+        read(
+            &state.documents,
+            &state.collective.proposals,
+            Some(run),
+            "control.knowledge.search",
+            &json!({"query":"live"})
+        )
+        .unwrap()["results"]
             .as_array()
             .unwrap()
             .len(),
@@ -128,7 +139,16 @@ fn proposal_checkpoint_retries_provenance_and_operator_admission() {
         )
         .is_err()
     );
-    assert!(read(&state, None, "control.knowledge.read", &json!({"id":"claim:0"})).is_err());
+    assert!(
+        read(
+            &state.documents,
+            &state.collective.proposals,
+            None,
+            "control.knowledge.read",
+            &json!({"id":"claim:0"})
+        )
+        .is_err()
+    );
     let fields = [("id".into(), "0".into()), ("decision".into(), "accepted".into())]
         .into_iter()
         .collect();
@@ -137,7 +157,14 @@ fn proposal_checkpoint_retries_provenance_and_operator_admission() {
     review_action(&mut state, "/review", &fields, |_| Ok(())).unwrap();
     let serialized = serde_json::to_vec(&state).unwrap();
     let restored: State = serde_json::from_slice(&serialized).unwrap();
-    let accepted = read(&restored, None, "control.knowledge.read", &json!({"id":"claim:0"})).unwrap();
+    let accepted = read(
+        &restored.documents,
+        &restored.collective.proposals,
+        None,
+        "control.knowledge.read",
+        &json!({"id":"claim:0"}),
+    )
+    .unwrap();
     assert_eq!(accepted["admitted"], true);
     assert_eq!(accepted["evidence"], "artifact:checked-result");
     assert_eq!(accepted["source"]["run"], id);
@@ -155,13 +182,31 @@ fn validation_bounds_and_authority_fail_closed() {
         json!({"query":"x".repeat(201)}),
         json!({"query":"x","extra":true}),
     ] {
-        assert!(read(&state, None, "control.knowledge.search", &args).is_err());
+        assert!(
+            read(
+                &state.documents,
+                &state.collective.proposals,
+                None,
+                "control.knowledge.search",
+                &args
+            )
+            .is_err()
+        );
     }
     for args in [
         json!({"id":"document:selected","limit":4001}),
         json!({"id":"document:selected","offset":32001}),
     ] {
-        assert!(read(&state, None, "control.knowledge.read", &args).is_err());
+        assert!(
+            read(
+                &state.documents,
+                &state.collective.proposals,
+                None,
+                "control.knowledge.read",
+                &args
+            )
+            .is_err()
+        );
     }
     let mut args = input();
     args["claim"] = json!("x".repeat(281));
@@ -247,12 +292,20 @@ fn multiword_search_is_order_independent_and_requires_every_term() {
         "  REPEATER   delay  ",
         "café repeater",
     ] {
-        let value = read(&state, None, "control.knowledge.search", &json!({"query":query})).unwrap();
+        let value = read(
+            &state.documents,
+            &state.collective.proposals,
+            None,
+            "control.knowledge.search",
+            &json!({"query":query}),
+        )
+        .unwrap();
         assert_eq!(value["results"].as_array().unwrap().len(), 1, "{query}");
         assert_eq!(value["results"][0]["id"], "document:selected");
     }
     let missing = read(
-        &state,
+        &state.documents,
+        &state.collective.proposals,
         None,
         "control.knowledge.search",
         &json!({"query":"repeater missing"}),
@@ -272,7 +325,14 @@ fn search_result_count_and_proposal_storage_are_bounded() {
             saved_at: None,
         });
     }
-    let results = read(&state, None, "control.knowledge.search", &json!({"query":"match"})).unwrap();
+    let results = read(
+        &state.documents,
+        &state.collective.proposals,
+        None,
+        "control.knowledge.search",
+        &json!({"query":"match"}),
+    )
+    .unwrap();
     assert_eq!(results["results"].as_array().unwrap().len(), 10);
     assert!(results.to_string().len() < 4000);
     for index in 0..MAX_PROPOSALS {

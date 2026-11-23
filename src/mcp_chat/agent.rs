@@ -54,7 +54,8 @@ pub(crate) struct Scoped<'a> {
 }
 impl Scoped<'_> {
     fn team(&self, state: &State) -> HashSet<String> {
-        crate::chat::subtree(state, [self.own.as_str()])
+        crate::chat::Lineage::of(&state.chats)
+            .subtree([self.own.as_str()])
             .into_iter()
             .map(str::to_owned)
             .collect()

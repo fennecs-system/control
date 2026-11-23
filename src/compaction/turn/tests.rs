@@ -76,14 +76,17 @@ fn compacted_steps_join_the_tree_and_recall_returns_their_verbatim_excerpts() {
     );
     let state = shared.lock().unwrap();
     let actor = state.chats[0].actor.clone();
-    let listing = listing(&state, &chat, &actor);
+    let listing = listing(&state.runtime.compaction, &chat, &actor);
     assert_eq!(listing[0]["roots"].as_array().unwrap().len(), 1, "{listing}");
     assert_eq!(listing[0]["roots"][0]["key"], parent.as_str());
     assert_eq!(listing[0]["attempt"], generation.as_str());
-    assert!(locate(&state, &chat, &actor, &parent).is_some() && locate(&state, &chat, &actor, &first).is_none());
+    assert!(
+        locate(&state.runtime.compaction, &chat, &actor, &parent).is_some()
+            && locate(&state.runtime.compaction, &chat, &actor, &first).is_none()
+    );
     // Another conversation sees none of it.
-    assert!(locate(&state, "other", &actor, &parent).is_none());
-    assert!(plan(&state, &chat, &actor, " ", 4096).is_err());
+    assert!(locate(&state.runtime.compaction, "other", &actor, &parent).is_none());
+    assert!(plan(&state.runtime.compaction, &chat, &actor, " ", 4096).is_err());
     drop(state);
     // The agent's own tool: list, search, then read the hit verbatim.
     use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost};

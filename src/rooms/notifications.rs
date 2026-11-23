@@ -422,7 +422,8 @@ pub fn reconcile(state: &mut State, mut save: impl FnMut(&State) -> std::io::Res
                 let watch = &state.collective.room_watches[index];
                 // Preserve grants acquired after the original wake was armed.
                 let from = crate::chat::latest_task(state, &watch.chat, &watch.actor).unwrap_or(origin_index);
-                let grants = crate::services::grants(state, &state.runtime.runs[from]);
+                let grants =
+                    crate::services::grants(crate::services::ServiceAuthority::of(state), &state.runtime.runs[from]);
                 let target = state.chats.iter().position(|chat| chat.id == watch.chat).unwrap();
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

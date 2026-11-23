@@ -225,7 +225,9 @@ impl control_mcp::Tools for Operator<'_> {
             match crate::tool_registry::lookup(name).map(|tool| tool.route) {
                 Some(crate::tool_registry::Route::Artifacts) => crate::artifacts::tool(state, name, arguments),
                 Some(crate::tool_registry::Route::Room) => crate::rooms::tool(state, name, arguments),
-                Some(crate::tool_registry::Route::Lens) => crate::lens_library::tool(state, name, arguments),
+                Some(crate::tool_registry::Route::Lens) => {
+                    crate::lens_library::tool(crate::lens_library::Sources::of(state), name, arguments)
+                }
                 // Served by `mcp_http` before the state lock is taken.
                 Some(crate::tool_registry::Route::Package) => Err("Package tools are served by the HTTP MCP endpoint."),
                 _ => chat::tool(state, name, arguments),

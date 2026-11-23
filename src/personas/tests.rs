@@ -389,7 +389,7 @@ fn soul_documents_become_the_first_instruction() {
     });
     let document = state.documents.last().cloned().unwrap();
     let saved = edit(&mut state, "worker", |d| d.soul = document.id.clone());
-    let captured = capture(&state, "worker").unwrap();
+    let captured = capture(&state.personas, &state.documents, "worker").unwrap();
     assert_eq!(captured.soul, Some((document.id.clone(), document.revision)));
     assert_eq!(saved.revision, 2);
     assert!(captured.prompt().starts_with(&format!(

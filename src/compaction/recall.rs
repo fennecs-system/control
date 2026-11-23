@@ -254,7 +254,7 @@ fn route(state: &State, chat: &str, actor: &crate::identity::Actor, read: Read) 
             },
         )?;
         return Ok(Next::Search(super::turn::plan(
-            state,
+            &state.runtime.compaction,
             chat,
             actor,
             query,
@@ -264,7 +264,7 @@ fn route(state: &State, chat: &str, actor: &crate::identity::Actor, read: Read) 
     if let Some((generation, root)) = read
         .root
         .as_deref()
-        .and_then(|key| super::turn::locate(state, chat, actor, key))
+        .and_then(|key| super::turn::locate(&state.runtime.compaction, chat, actor, key))
     {
         prepare(
             state,
@@ -291,7 +291,10 @@ fn route(state: &State, chat: &str, actor: &crate::identity::Actor, read: Read) 
             generation,
         ));
     }
-    let turns = read.root.is_none().then(|| super::turn::listing(state, chat, actor));
+    let turns = read
+        .root
+        .is_none()
+        .then(|| super::turn::listing(&state.runtime.compaction, chat, actor));
     Ok(Next::Tree(prepare(state, chat, read)?, turns))
 }
 /// Run a planned read outside the lock: disk reads only, no model calls.
