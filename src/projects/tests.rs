@@ -41,7 +41,16 @@ impl Drop for Fixture {
 }
 fn command(directory: &Path, args: &[&str]) -> std::process::Output {
     let output = Command::new("git")
-        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"])
+        // Fixture commits must not leave detached maintenance in the source
+        // either: the import copies and clones it right after.
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "maintenance.auto=false",
+        ])
         .arg("-C")
         .arg(directory)
         .args(args)
@@ -55,6 +64,36 @@ fn command(directory: &Path, args: &[&str]) -> std::process::Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+/// Flaked approvals on macOS CI: `git commit` in `seed` detached `git
+/// maintenance run --auto`, which created and removed `objects/maintenance.lock`
+/// while the import was still syncing and moving the new repository (ENOENT).
+/// Git traces the spawn before the commit returns, so this needs no timing.
+#[test]
+fn import_git_starts_no_background_maintenance() {
+    let fixture = Fixture::new();
+    let repository = fixture.source();
+    fs::write(repository.join("code.txt"), "code").unwrap();
+    let trace = fixture.0.join("trace.txt");
+    let git = |args: &[&str]| {
+        let args = [&["-C", repository.to_str().unwrap()], args].concat();
+        let args = args.iter().map(std::ffi::OsStr::new).collect::<Vec<_>>();
+        git_output(&args, &[("GIT_TRACE", trace.as_os_str())]).unwrap();
+    };
+    git(&["init"]);
+    git(&["add", "--all"]);
+    git(&[
+        "-c",
+        "user.name=Control",
+        "-c",
+        "user.email=control@localhost",
+        "commit",
+        "-m",
+        "baseline",
+    ]);
+    let trace = fs::read_to_string(trace).unwrap();
+    assert!(trace.contains("commit"), "{trace}");
+    assert!(!trace.contains("maintenance"), "{trace}");
 }
 #[test]
 fn project_request_is_only_intent_and_cannot_replace_an_approved_grant() {
