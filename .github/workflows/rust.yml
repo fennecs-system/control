@@ -70,6 +70,13 @@ jobs:
           path: web/dist
           # Exact matches only: the server embeds these assets into its binary.
           key: wasm-v1-${{ matrix.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix', '.github/workflows/rust.yml', 'web/**', '!web/target/**', '!web/dist/**', 'crates/context/**', '!crates/context/target/**', '.cargo/**') }}
+      - name: Formatting
+        # Standalone tools/*/main.rs programs have no manifest, so cargo fmt misses them.
+        run: |
+          nix develop --command cargo fmt --all --check
+          nix develop --command cargo fmt --check --manifest-path web/Cargo.toml
+          nix develop --command cargo fmt --check --manifest-path tools/code-metrics/Cargo.toml
+          nix develop --command sh -c "rustfmt --check tools/*/main.rs"
       - name: Check setup app
         run: nix run .#setup -- --help
       - name: Rust tests
