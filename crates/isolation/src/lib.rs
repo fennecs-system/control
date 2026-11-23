@@ -16,6 +16,9 @@ use std::{
 };
 
 mod docker;
+/// Pinned engine argument vectors for launch-site tests.
+#[cfg(any(test, feature = "testing"))]
+pub mod golden;
 mod observed;
 #[cfg(any(test, feature = "testing"))]
 pub mod scripted;

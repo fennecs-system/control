@@ -181,3 +181,47 @@ fn the_reader_treats_a_missing_file_as_no_accounts() {
     assert!(read::<Test>(&directory).is_err());
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn a_reference_resolves_to_its_first_available_location() {
+    let secret = SecretRef(vec![
+        Location::Variable {
+            name: "OVERRIDE",
+            join: None,
+        },
+        Location::Variable {
+            name: "TOOL_HOME",
+            join: Some(RelativePath::try_from("auth.json").unwrap()),
+        },
+        Location::Home(RelativePath::try_from(".tool/auth.json").unwrap()),
+        Location::Config(RelativePath::try_from("tool/auth.json").unwrap()),
+    ]);
+    let config = Path::new("/config");
+    let resolve = |set: &[(&str, &str)], home: Option<&Path>| {
+        let variable = |name: &str| set.iter().find(|(n, _)| *n == name).map(|(_, v)| PathBuf::from(v));
+        secret
+            .resolve(&Roots {
+                config,
+                home,
+                variable: &variable,
+            })
+            .map(|(_, path)| path)
+    };
+    let home = Some(Path::new("/home/op"));
+    assert_eq!(resolve(&[], None), Some(PathBuf::from("/config/tool/auth.json")));
+    assert_eq!(resolve(&[], home), Some(PathBuf::from("/home/op/.tool/auth.json")));
+    assert_eq!(
+        resolve(&[("TOOL_HOME", "/t")], home),
+        Some(PathBuf::from("/t/auth.json"))
+    );
+    let both = [("TOOL_HOME", "/t"), ("OVERRIDE", "/o/file")];
+    assert_eq!(resolve(&both, home), Some(PathBuf::from("/o/file")));
+    assert_eq!(
+        SecretRef(Vec::new()).resolve(&Roots {
+            config,
+            home,
+            variable: &|_| None
+        }),
+        None
+    );
+}

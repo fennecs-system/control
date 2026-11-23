@@ -453,7 +453,7 @@ fn integrations() -> String {
         .map(|backend| {
             // The product name: the label without its vendor.
             let name = backend.label().rsplit(" / ").next().unwrap_or_default();
-            let login = backend.agent().credentials_ready().is_ok();
+            let login = crate::logins::ready(backend).is_ok();
             format!(
                 "<div class='record'><h3>{name}</h3><p>{} · {}</p></div>",
                 if backend.image().is_some() {

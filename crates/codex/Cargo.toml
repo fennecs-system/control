@@ -1,0 +1,17 @@
+[package]
+name = "control-codex"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+control-agent = { path = "../agent" }
+control-ai = { path = "../ai" }
+control-context = { path = "../context" }
+control-effect = { path = "../effect" }
+control-isolation = { path = "../isolation" }
+serde_json = "1"
+ring = "0.17.14"
+libc = "0.2"
+
+[dev-dependencies]
+control-isolation = { path = "../isolation", features = ["testing"] }

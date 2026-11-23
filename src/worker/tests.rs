@@ -1,10 +1,32 @@
 use super::*;
-use crate::codex::{
-    Credentials, PERMISSIONS, SANDBOX_PROBE_TIMED_OUT, capture_codex, container_spec, container_spec_scoped,
-    finish_codex_tools, mount_path, offline_probe, permissions, probe_detail, probe_nonce, sandbox_verdict,
-    tail_reader,
-};
 use crate::runtime::RunKind;
+use control_agent::{
+    SANDBOX_PROBE_WAIT,
+    cli::{HANDOFF_GRACE, handoff_grace_over},
+};
+use control_codex::{
+    Credentials, PERMISSIONS, SANDBOX_PROBE_TIMED_OUT, UNKNOWN_FAILURE, capture_codex, container_spec,
+    container_spec_scoped, mount_path, offline_probe, permissions, probe_detail, probe_nonce, read_report,
+    sandbox_verdict, tail_reader,
+};
+
+/// The Codex exit check as the host applies it to the attempt.
+fn finish_codex_tools(
+    attempt: &mut crate::usage::Attempt,
+    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    generation: &str,
+    host_finished: bool,
+    unfinished: bool,
+) -> Result<(), (&'static str, String)> {
+    let result = control_codex::finish_codex_tools(host_finished, unfinished).map(|()| String::new());
+    crate::agent_host::finish(
+        control_agent::Outcome::Launched { result, usage: None },
+        attempt,
+        bridge,
+        generation,
+    )
+    .map(drop)
+}
 use control_effect::sync::Recv;
 use std::{
     path::PathBuf,
@@ -25,7 +47,7 @@ fn test_builds_never_resolve_operator_node_directories() {
         assert_eq!(crate::config::directory(), Ok(root.join("config")));
     }
     if std::env::var_os("CONTROL_CODEX_AUTH_FILE").is_none() {
-        assert_eq!(Credentials::path(), Ok(root.join("codex/auth.json")));
+        assert_eq!(crate::logins::codex_path(), Ok(root.join(".codex/auth.json")));
     }
     let operator = crate::config::operator_directories();
     let helpers = [
@@ -48,10 +70,13 @@ fn test_builds_never_resolve_operator_node_directories() {
             "runtime::workspace",
             crate::runtime::workspace("run").map_err(std::io::Error::other),
         ),
-        ("codex credentials", Credentials::path().map_err(std::io::Error::other)),
+        (
+            "codex credentials",
+            crate::logins::codex_path().map_err(std::io::Error::other),
+        ),
     ];
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        let credentials = Credentials::path().unwrap();
+        let credentials = crate::logins::codex_path().unwrap();
         assert!(
             !credentials.starts_with(home.join(".codex")),
             "Codex credentials resolved {}",
@@ -74,7 +99,7 @@ fn a_slow_sandbox_probe_is_reported_apart_from_an_isolation_failure() {
     let exited = |code: i32| Recv::Item(Ok(std::process::ExitStatus::from_raw(code << 8)));
     assert_eq!(sandbox_verdict(Recv::Elapsed, || true), Err(SANDBOX_PROBE_TIMED_OUT));
     assert!(SANDBOX_PROBE_TIMED_OUT.contains(&format!("after {} s", SANDBOX_PROBE_WAIT.as_secs())));
-    assert!(crate::claude::PROBE_TIMED_OUT.contains(&format!("after {} s", SANDBOX_PROBE_WAIT.as_secs())));
+    assert!(control_claude::PROBE_TIMED_OUT.contains(&format!("after {} s", SANDBOX_PROBE_WAIT.as_secs())));
     assert_eq!(sandbox_verdict(exited(0), || true), Ok(()));
     let failed = sandbox_verdict(exited(0), || false).unwrap_err();
     assert!(
@@ -1907,7 +1932,8 @@ fn live_offline_probe_passes_on_consecutive_runs() {
     // other one while each probe recreated the same result name.
     let image = std::env::var("CONTROL_QA_IMAGE").expect("Set CONTROL_QA_IMAGE to a pinned image ID");
     for run in 0..6 {
-        offline_probe(crate::engine::isolation(), &image).unwrap_or_else(|reason| panic!("probe {run}: {reason}"));
+        offline_probe(&crate::agent_host::NODE, crate::engine::isolation(), &image)
+            .unwrap_or_else(|reason| panic!("probe {run}: {reason}"));
     }
 }
 
@@ -1971,7 +1997,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
     );
     assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "immutable-source");
     assert_eq!(fs::read_to_string(scratch.join("result")).unwrap(), "scratch-ok");
-    let result=crate::claude::shell_scoped(crate::engine::isolation(), &image,&format!("control-judge-claude-qa-{}",std::process::id()),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
+    let result=crate::host_shell::shell_scoped(crate::engine::isolation(), &image,&format!("control-judge-claude-qa-{}",std::process::id()),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
     assert_eq!(result["exit_code"], 0);
     assert_eq!(result["stdout"], "immutable-source");
     assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "immutable-source");
@@ -2011,6 +2037,7 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
 
 #[test]
 fn diagnostics_return_fixed_messages_without_echoing_secret_text() {
+    let worker_failure = |bytes: &[u8]| control_codex::diagnose(bytes).message();
     let failure = worker_failure(b"401 Unauthorized bearer fake-secret-for-test");
     assert!(failure.contains("authentication was rejected"));
     assert!(!failure.contains("fake-secret-for-test"));
@@ -2032,7 +2059,7 @@ fn a_usage_limit_reported_only_in_the_event_stream_is_named() {
     );
     let (_, _, reported) = capture_codex(stream.as_bytes(), |_| {});
     assert_eq!(
-        reported,
+        reported.map(|cause| cause.message("Codex")).as_deref(),
         Some("The signed-in Codex account reached a usage or rate limit.")
     );
     // Only the provider's error events count, and unknown ones stay unknown.
@@ -2058,12 +2085,12 @@ fn mounts_reject_csv_injection_and_reports_reject_symlinks() {
     fs::write(&file, b"harmless-canary").unwrap();
     use std::os::unix::fs::{PermissionsExt, symlink};
     fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(Credentials::validate(&file).is_err());
+    assert!(crate::logins::codex_validate(&file).is_err());
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(Credentials::validate(&file).is_ok());
+    assert!(crate::logins::codex_validate(&file).is_ok());
     let link = root.join("report-link");
     symlink(&file, &link).unwrap();
-    assert!(Credentials::validate(&link).is_err());
+    assert!(crate::logins::codex_validate(&link).is_err());
     assert!(read_report(&link).is_err());
     fs::remove_dir_all(root).unwrap();
 }

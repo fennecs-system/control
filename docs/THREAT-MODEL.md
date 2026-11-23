@@ -50,8 +50,9 @@ arbitrary downloaded code safe.
   containers have no external network or host daemon sockets; brokered search and
   GitHub are separate network capabilities. Evidence:
   [worker.rs](../src/worker.rs),
-  `credentials_are_readonly_mounts_and_never_environment_values`, `sandbox_probe`;
-  [claude.rs](../src/claude.rs),
+  `credentials_are_readonly_mounts_and_never_environment_values`,
+  [control-codex](../crates/codex/src/lib.rs) `sandbox_probe`;
+  [host_shell.rs](../src/host_shell.rs),
   `live_offline_workspace_isolated_and_persistent_across_processes`.
 
 - **Malicious builds and base-image integrity.** Pinned Nix images run non-root

@@ -5,6 +5,10 @@ pub const CODE_LANGUAGE_GUIDANCE: &str = concat!(
     "granted tool containers, never as host services or in shared images."
 );
 
+/// Always-on environment essentials. The detail is read on demand
+/// (`control_guidance` topic `environment`).
+pub const ENVIRONMENT_CORE: &str = "Images and shared caches are immutable and network is scoped; read control_guidance topic environment before Nix builds, extra toolchains or network use.";
+
 /// Always-on team essentials for a room-linked chat: direct requests, claims,
 /// what to post, and authority. The detail is read on demand (topic `rooms`).
 pub const ROOM_COMMUNICATION_GUIDANCE: &str = concat!(

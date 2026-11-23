@@ -47,7 +47,7 @@ impl Facts {
             // An approved advisor is a judge whose one extra effect is evidence notes.
             advisor: judge && standing.approved,
             shell: run.target.backend.agent().host_shell(),
-            local: run.target.backend == crate::backend::Backend::Local,
+            local: run.target.backend.runs_control_loop(),
             rooms: chat.is_some_and(|chat| chat.actor == run.actor),
             standing,
         }
@@ -61,7 +61,7 @@ fn name(tool: &Value) -> &str {
 pub(crate) fn offered(facts: &Facts) -> Vec<Value> {
     let mut tools = crate::tool_registry::worker_definitions(facts.improve);
     if facts.shell {
-        let mut shell = crate::claude::definition();
+        let mut shell = crate::host_shell::definition();
         if facts.judge {
             shell["description"] = json!(
                 "Inspect source and run verification in a credential-free offline container. /workspace is read-only; use /tmp for scratch outputs. Bounded output and 25-second deadline."

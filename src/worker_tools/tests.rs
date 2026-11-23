@@ -123,7 +123,7 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     let mut room_read = None;
     let mut bad_post = None;
     while Instant::now() < deadline {
-        pump(&shared, &run, &workspace, false);
+        pump_at(&shared, &run, &workspace, &workspace, false);
         while let Ok(line) = replies.try_recv() {
             let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
             for value in value.as_array().cloned().unwrap_or_else(|| vec![value]) {
@@ -1090,11 +1090,11 @@ fn live_mailbox_survives_sustained_wake_driven_traffic() {
             }
         }
     });
-    let wake = crate::mailbox_wake::MailboxWake::new(&workspace);
+    let wake = control_agent::mailbox_wake::MailboxWake::new(&workspace);
     let deadline = Instant::now() + Duration::from_secs(600);
     let mut observed = 0i64;
     while Instant::now() < deadline && observed <= calls {
-        pump(&shared, &run, &workspace, false);
+        pump_at(&shared, &run, &workspace, &workspace, false);
         while let Ok(line) = replies.try_recv() {
             let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
             assert_eq!(value["id"], json!(observed), "{value}");

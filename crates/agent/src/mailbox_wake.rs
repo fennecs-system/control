@@ -7,13 +7,13 @@ use std::{
     time::Duration,
 };
 
-pub(crate) struct MailboxWake {
+pub struct MailboxWake {
     descriptor: Option<OwnedFd>,
     #[cfg(target_os = "macos")]
     _directory: Option<std::fs::File>,
 }
 impl MailboxWake {
-    pub(crate) fn new(directory: &Path) -> Self {
+    pub fn new(directory: &Path) -> Self {
         Self::open(directory).unwrap_or_else(|_| Self {
             descriptor: None,
             #[cfg(target_os = "macos")]
@@ -70,7 +70,11 @@ impl MailboxWake {
             descriptor: Some(descriptor),
         })
     }
-    pub(crate) fn wait(&self, maximum: Duration) {
+    /// Whether kernel notifications are active; otherwise each wait sleeps its bound.
+    pub fn notifies(&self) -> bool {
+        self.descriptor.is_some()
+    }
+    pub fn wait(&self, maximum: Duration) {
         let Some(fd) = &self.descriptor else {
             std::thread::sleep(maximum);
             return;

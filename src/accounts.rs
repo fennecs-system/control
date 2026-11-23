@@ -252,6 +252,32 @@ pub enum Location {
 /// needs none. A reference only, never contents.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SecretRef(pub Vec<Location>);
+/// The roots a [`SecretRef`] is resolved against, supplied by the host so the
+/// resolution itself is pure (and tests can supply their own).
+pub struct Roots<'a> {
+    pub config: &'a Path,
+    pub home: Option<&'a Path>,
+    /// An environment variable's value, when the host lets it count.
+    pub variable: &'a dyn Fn(&str) -> Option<PathBuf>,
+}
+impl SecretRef {
+    /// The first location whose root is available, with the path it names.
+    /// Nothing is checked on disk.
+    pub fn resolve(&self, roots: &Roots<'_>) -> Option<(&Location, PathBuf)> {
+        self.0.iter().find_map(|location| {
+            let path = match location {
+                Location::Variable { name, join } => {
+                    let value = (roots.variable)(name)?;
+                    join.as_ref().map_or_else(|| value.clone(), |join| value.join(&join.0))
+                }
+                Location::Home(path) => roots.home?.join(&path.0),
+                Location::Config(path) => roots.config.join(&path.0),
+                Location::Path(path) => path.0.clone(),
+            };
+            Some((location, path))
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account<B> {
