@@ -283,8 +283,8 @@ fn interrupt_active(state: &mut State) -> bool {
                     }
                 }
                 for job in &mut attempt.command_jobs {
-                    if ["preparing", "running", "stopping"].contains(&job.status.as_str()) {
-                        job.status = "interrupted".into();
+                    if job.status.is_active() {
+                        job.status = crate::command_jobs::JobStatus::Interrupted;
                         if let Some(activity) = attempt.activity.iter_mut().find(|a| a.id == format!("job-{}", job.id))
                         {
                             activity.status = "interrupted".into();

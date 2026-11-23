@@ -475,11 +475,7 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
                 let Some(attempt) = run.attempts.last() else {
                     return error("No active attempt");
                 };
-                if attempt
-                    .command_jobs
-                    .iter()
-                    .any(|job| ["preparing", "running", "stopping"].contains(&job.status.as_str()))
-                {
+                if attempt.command_jobs.iter().any(|job| job.status.is_active()) {
                     return error(
                         "An asynchronous workspace command owns this attempt; await or cancel it before running another command",
                     );

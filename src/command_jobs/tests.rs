@@ -110,7 +110,7 @@ fn checkpoint_barrier_fails_closed_for_unconfirmed_writer() {
         profile: crate::worker_profile::Profile::Lite,
         deadline_unix: now() + 100,
         container_id: None,
-        status: "preparing".into(),
+        status: super::JobStatus::Preparing,
         output: String::new(),
         exit_code: None,
     });
@@ -123,7 +123,7 @@ fn checkpoint_barrier_fails_closed_for_unconfirmed_writer() {
     );
     assert_eq!(
         state.lock().unwrap().runtime.runs[0].attempts[0].command_jobs[0].status,
-        "stopping"
+        super::JobStatus::Stopping
     );
 }
 #[test]
@@ -140,7 +140,7 @@ fn immutable_job_identity_and_isolation_are_checked_before_adoption() {
         profile: crate::worker_profile::Profile::Lite,
         deadline_unix: 0,
         container_id: Some("b".repeat(64)),
-        status: "running".into(),
+        status: super::JobStatus::Running,
         output: String::new(),
         exit_code: None,
     };
@@ -478,7 +478,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     assert!(locked.runtime.runs[0].attempts[1].activity.is_empty());
     assert_eq!(
         locked.runtime.runs[0].attempts[0].command_jobs.last().unwrap().status,
-        "cancelled"
+        super::JobStatus::Cancelled
     );
     drop(locked);
     assert!(!workspace.join("after-stale").exists());
@@ -499,7 +499,7 @@ fn command_create_vectors_are_pinned() {
         profile: crate::worker_profile::Profile::Lite,
         deadline_unix: 0,
         container_id: None,
-        status: "running".into(),
+        status: super::JobStatus::Running,
         output: String::new(),
         exit_code: None,
     };
