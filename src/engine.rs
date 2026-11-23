@@ -1,36 +1,24 @@
-//! The only place Control invokes the container engine. Docker is the sole
-//! backend today; callers use these entry points instead of naming the CLI so
-//! another backend can replace this module behind a typed interface later.
-// Shared with standalone tools (the browser), which also include it.
-#[allow(clippy::duplicate_mod)]
-#[path = "../tools/engine-cli.rs"]
-mod engine_cli;
+//! The root's entry to the container engine. Container launches are typed
+//! [`control_isolation::RunSpec`]s carried out by the [`isolation`] backend;
+//! the remaining operations below still pass engine arguments and move behind
+//! that interface in later steps.
 pub(crate) mod ephemeral;
+use control_isolation::{Docker, Isolation};
 use std::{io, process::Command, time::Duration};
 
+/// The node's isolation backend. Entry points take it from here and hand it
+/// down, so tests can supply another.
+pub(crate) fn isolation() -> &'static dyn Isolation {
+    &Docker
+}
 /// The engine CLI with the caller's environment.
 pub(crate) fn cli() -> Command {
-    engine_cli::command()
+    Docker::cli()
 }
 /// The engine CLI with only engine connection settings from the environment;
 /// used for containers that run model or workspace code.
 pub(crate) fn scrubbed() -> Command {
-    let mut command = cli();
-    command.env_clear();
-    for name in [
-        "PATH",
-        "HOME",
-        "DOCKER_HOST",
-        "DOCKER_CONTEXT",
-        "DOCKER_CONFIG",
-        "DOCKER_CERT_PATH",
-        "DOCKER_TLS_VERIFY",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    command
+    Docker::scrubbed()
 }
 pub fn ready() -> bool {
     // A cold Docker Desktop or colima engine can take well over 5 s to answer `info`.
@@ -146,3 +134,5 @@ fn parse_top(text: &str, limit: usize) -> Vec<Process> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) mod golden;

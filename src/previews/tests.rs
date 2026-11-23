@@ -296,3 +296,59 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     );
     stop(&state, &chat, id).unwrap();
 }
+
+#[test]
+fn preview_launch_vector_is_pinned() {
+    use crate::engine::golden::{fill, pin};
+    let mut arguments = run_arguments("control-ws-1-preview", "node-1", "sha256:img", 501, 20, "/golden/workspace", "cargo run");
+    // The wrapper embeds the port forwarder's source; pin its frame, not the source.
+    let wrapper = arguments.iter_mut().find(|word| word.starts_with("set -eu\nexec 2>&1\n")).unwrap();
+    assert!(wrapper.contains(include_str!("../../tools/port-forward/main.rs")));
+    *wrapper = wrapper.replace(include_str!("../../tools/port-forward/main.rs"), "{forwarder}");
+    pin(&arguments, &fill(GOLDEN, &[]));
+}
+const GOLDEN: &[&str] = &[
+    "run",
+    "--detach",
+    "--pull=never",
+    "--init",
+    "--name",
+    "control-ws-1-preview",
+    "--label",
+    "dev.control.node=node-1",
+    "--label",
+    "dev.control.attempt=control-ws-1-preview",
+    "--label",
+    "dev.control.purpose=preview",
+    "--network",
+    "none",
+    "--user",
+    "501:20",
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--pids-limit=128",
+    "--memory=1g",
+    "--cpus=2",
+    "--log-driver=local",
+    "--log-opt=max-size=1m",
+    "--log-opt=max-file=2",
+    "--tmpfs",
+    "/tmp:rw,exec,nosuid,nodev,size=512m",
+    "--tmpfs",
+    "/home/agent:rw,nosuid,uid=501,gid=20,size=64m",
+    "--env",
+    "HOME=/home/agent",
+    "--env",
+    "CARGO_TARGET_DIR=/tmp/target",
+    "--mount",
+    "type=bind,src=/golden/workspace,dst=/workspace,readonly",
+    "--workdir",
+    "/workspace",
+    "sha256:img",
+    "bash",
+    "-c",
+    "set -eu\nexec 2>&1\ncat > /tmp/control-port-forward.rs <<'CONTROL_FORWARD_SOURCE'\n{forwarder}\nCONTROL_FORWARD_SOURCE\nrustc --edition=2024 /tmp/control-port-forward.rs -o /tmp/control-port-forward\nexec bash -c \"$1\"",
+    "control-preview",
+    "cargo run",
+];

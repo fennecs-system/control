@@ -1,8 +1,8 @@
 //! CLI effect interpreter. No workspace admission, Control tools or bot wakes.
 use super::*;
+use control_isolation::{Stream, Streams};
 use std::{
     io::Write,
-    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -52,8 +52,9 @@ pub(super) fn call(
         "owner.json",
         &serde_json::to_vec(&lease).map_err(io::Error::other)?,
     )?;
-    let mut command = backend.agent().text_command(&crate::backend::TextCall { image: &image, name: &name, workspace: &workspace, node: &node, model: &endpoint.model })?;
-    let result = run(&mut command, backend, endpoint, system, input, || {
+    let spec = backend.agent().text_run(&crate::backend::TextCall { image: &image, name: &name, workspace: &workspace, node: &node, model: &endpoint.model })?;
+    let child = crate::engine::isolation().spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))?;
+    let result = run(child, backend, endpoint, system, input, || {
         crate::lifecycle::stop_resource(&name, &node, &image, &workspace).map_err(io::Error::other)
     });
     // Preserve failed-call scratch for diagnosis; no raw transcript/credential is copied.
@@ -112,18 +113,13 @@ pub(super) fn recover() -> io::Result<()> {
 }
 
 fn run(
-    command: &mut std::process::Command,
+    mut child: std::process::Child,
     backend: crate::backend::Backend,
     endpoint: &Endpoint,
     system: &str,
     input: &str,
     stop: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Response> {
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
     let mut stderr = child.stderr.take().unwrap();
     let diagnostics = std::thread::spawn(move || {
         let mut kept = Vec::new();

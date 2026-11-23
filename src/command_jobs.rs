@@ -263,6 +263,42 @@ fn create(job: &Job) -> io::Result<String> {
         .to_str()
         .filter(|s| !s.contains([',', '\n', '\r']))
         .ok_or_else(|| fail("Invalid workspace mount"))?;
+    let scratch = if job.read_only {
+        use std::os::unix::fs::DirBuilderExt;
+        let scratch = crate::runtime::workspace(&job.generation)
+            .map_err(fail)?
+            .parent()
+            .unwrap()
+            .join("command-scratch")
+            .join(&job.id);
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&scratch)?;
+        if !fs::symlink_metadata(&scratch)?.is_dir() {
+            return Err(fail("Invalid command scratch directory"));
+        }
+        let scratch = scratch.canonicalize()?;
+        Some(scratch
+            .to_str()
+            .filter(|s| !s.contains([',', '\n', '\r']))
+            .ok_or_else(|| fail("Invalid scratch mount"))?
+            .to_owned())
+    } else {
+        None
+    };
+    let arguments = create_arguments(job, path, meta.uid(), meta.gid(), scratch.as_deref());
+    let text =
+        crate::engine::query(&arguments.iter().map(String::as_str).collect::<Vec<_>>())?;
+    let id = text.trim();
+    if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(fail("Invalid command container identity"));
+    }
+    Ok(id.to_owned())
+}
+/// The engine `create` request for one command; `scratch` is the build target
+/// a read-only command writes to.
+fn create_arguments(job: &Job, path: &str, uid: u32, gid: u32, scratch: Option<&str>) -> Vec<String> {
     let name = job.name();
     let mut arguments: Vec<String> = [
         "create",
@@ -276,7 +312,7 @@ fn create(job: &Job) -> io::Result<String> {
         "--label",
         "dev.control.purpose=command",
         "--user",
-        &format!("{}:{}", meta.uid(), meta.gid()),
+        &format!("{uid}:{gid}"),
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         if job.build_environment {
@@ -300,9 +336,7 @@ fn create(job: &Job) -> io::Result<String> {
         "/tmp:rw,exec,nosuid,nodev,size=1g",
         "--tmpfs",
         &format!(
-            "/home/agent:rw,nosuid,nodev,uid={},gid={},size=128m",
-            meta.uid(),
-            meta.gid()
+            "/home/agent:rw,nosuid,nodev,uid={uid},gid={gid},size=128m"
         ),
         "--env",
         "HOME=/home/agent",
@@ -326,26 +360,7 @@ fn create(job: &Job) -> io::Result<String> {
     .map(str::to_owned)
     .collect();
     if job.profile.readonly_root() { arguments.push("--read-only".into()); }
-    if job.read_only {
-        use std::os::unix::fs::DirBuilderExt;
-        let scratch = crate::runtime::workspace(&job.generation)
-            .map_err(fail)?
-            .parent()
-            .unwrap()
-            .join("command-scratch")
-            .join(&job.id);
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&scratch)?;
-        if !fs::symlink_metadata(&scratch)?.is_dir() {
-            return Err(fail("Invalid command scratch directory"));
-        }
-        let scratch = scratch.canonicalize()?;
-        let scratch = scratch
-            .to_str()
-            .filter(|s| !s.contains([',', '\n', '\r']))
-            .ok_or_else(|| fail("Invalid scratch mount"))?;
+    if let Some(scratch) = scratch {
         arguments.extend([
             "--mount".into(),
             format!("type=bind,src={scratch},dst=/build-target"),
@@ -363,13 +378,7 @@ fn create(job: &Job) -> io::Result<String> {
         .into_iter()
         .map(str::to_owned),
     );
-    let text =
-        crate::engine::query(&arguments.iter().map(String::as_str).collect::<Vec<_>>())?;
-    let id = text.trim();
-    if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(fail("Invalid command container identity"));
-    }
-    Ok(id.to_owned())
+    arguments
 }
 #[derive(Clone, Deserialize)]
 struct Inspection {
