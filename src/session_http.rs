@@ -352,6 +352,69 @@ pub(crate) const CHAT_PAGES: crate::Read<ChatPage, ChatView> = crate::Read {
     },
 };
 
+/// `GET /dms`: the New DM page, or the DM the browser remembers.
+pub(crate) struct Dms {
+    /// The remembered DM, unless the request asks for a new one.
+    recent: Option<String>,
+    /// The lens the request names (`lens_ui::requested`); the view keeps it
+    /// only when the library has it.
+    lens: String,
+    discuss: Option<String>,
+    improve: bool,
+    picker_open: bool,
+}
+impl Dms {
+    pub(crate) fn of(query: &std::collections::HashMap<String, String>, header: &str, lens: String) -> Self {
+        let fresh = ["new", "discuss", "improve"].iter().any(|key| query.contains_key(*key));
+        Self {
+            recent: cookie(header, "control_recent_chat")
+                .filter(|id| !fresh && chat::valid_id(id))
+                .map(str::to_owned),
+            lens,
+            discuss: query.get("discuss").cloned(),
+            improve: query.get("improve").is_some_and(|v| v == "1"),
+            picker_open: picker_open(header),
+        }
+    }
+}
+pub(crate) enum DmsView {
+    Recent(String),
+    New { landing: chat::Landing, picker_open: bool },
+}
+pub(crate) const DMS: crate::Read<Dms, DmsView> = crate::Read {
+    view: |state, dms| match dms.recent.filter(|id| chat::viewable(&state.chats, id).is_ok()) {
+        Some(id) => DmsView::Recent(id),
+        None => DmsView::New {
+            landing: chat::Landing::of(
+                state,
+                crate::lens_ui::known(&state.lens_library, &dms.lens),
+                dms.discuss.as_deref(),
+                dms.improve,
+            ),
+            picker_open: dms.picker_open,
+        },
+    },
+    render: |view| match view {
+        DmsView::Recent(id) => crate::Reply {
+            status: "303 See Other",
+            mime: "text/plain",
+            body: String::new(),
+            extra: format!("Location: /dm/{id}\r\n"),
+            policy: control_http::Policy::Embedded,
+        },
+        DmsView::New { landing, picker_open } => crate::Reply {
+            status: "200 OK",
+            mime: "text/html; charset=utf-8",
+            body: crate::web_assets::with_client(&session_page(
+                &crate::shell("session-list", &landing.render()),
+                picker_open,
+            )),
+            extra: String::new(),
+            policy: control_http::Policy::Chat,
+        },
+    },
+};
+
 /// The operator MCP: `/mcp` over HTTP and the chat bridge's in-process calls.
 pub fn rpc(state: &mut State, request: &Value) -> Value {
     control_mcp::serve(&OPERATOR, request, &mut Operator(state))
@@ -401,33 +464,10 @@ pub fn handle(
         return true;
     }
     if path == "/dms" && method == "GET" {
-        let query = crate::fields(query);
-        if !query.contains_key("new") && !query.contains_key("discuss") && !query.contains_key("improve") {
-            let recent = cookie(header, "control_recent_chat").filter(|id| chat::valid_id(id));
-            if let Some(id) = recent.filter(|id| chat::viewable(&state.chats, id).is_ok()) {
-                let _ = control_http::respond(
-                    stream,
-                    "303 See Other",
-                    "text/plain",
-                    b"",
-                    &format!("Location: /dm/{id}\r\n"),
-                    control_http::Policy::Embedded,
-                );
-                return true;
-            }
-        }
-        let html = chat::landing_mode(
-            state,
-            lens,
-            query.get("discuss").map(String::as_str),
-            query.get("improve").is_some_and(|v| v == "1"),
-        );
-        respond_chat(
-            stream,
-            "200 OK",
-            &session_page(&crate::shell("session-list", &html), picker_open(header)),
-            "",
-        );
+        // The server serves this before taking the lock; a caller holding
+        // state gets the same bytes.
+        let landing = Dms::of(&crate::fields(query), header, lens.to_owned());
+        let _ = DMS.reply(state, landing).write(stream);
         return true;
     }
     if ["/dms", "/improve"].contains(&path) && method == "POST" {

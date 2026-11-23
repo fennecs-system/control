@@ -640,6 +640,12 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         read_response(&mut stream, &state, &BOTS_PAGE, page);
         return;
     }
+    if method == "GET" && path == "/dms" {
+        let lens = lens_ui::requested(&header, query.get("lens").map(String::as_str)).to_owned();
+        let dms = session_http::Dms::of(&query, &header, lens);
+        read_response(&mut stream, &state, &session_http::DMS, dms);
+        return;
+    }
     if method == "GET" && path == history_view::PATH {
         read_response(
             &mut stream,

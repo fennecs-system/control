@@ -98,31 +98,58 @@ pub fn landing(state: &State, lens: &str, topic: Option<&str>) -> String {
     landing_mode(state, lens, topic, false)
 }
 pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: bool) -> String {
-    let discussion = topic
-        .and_then(design_topic)
-        .filter(|_| identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok());
-    let (context, mut draft) = discussion
-        .map(|(_, label)| {
-            (
-                format!("<p class='muted'>Discussing the design of {label}.</p>"),
-                format!("Let’s discuss the design of {label}."),
-            )
-        })
-        .unwrap_or_default();
-    if improve && identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok() {
-        draft = format!("/improve {draft}");
+    Landing::of(state, lens, topic, improve).render()
+}
+/// What the New DM page shows, copied out of state so it renders after the
+/// state lock is released.
+pub struct Landing {
+    picker: crate::navigation::Picker,
+    /// Gene ids and names, alternating.
+    genes: crate::texts::Texts,
+    /// The browser's lens when the library has it: the gene shown chosen.
+    lens: Option<String>,
+    /// The design topic being discussed: its key and label.
+    discussion: Option<(&'static str, &'static str)>,
+    /// Whether the draft starts with `/improve`.
+    improve: bool,
+    /// What the local operator may do: run tasks, and improve Control.
+    task: bool,
+    may_improve: bool,
+}
+impl Landing {
+    pub fn of(state: &State, lens: &str, topic: Option<&str>, improve: bool) -> Self {
+        let may_improve = identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok();
+        Self {
+            picker: crate::navigation::Picker::of(&state.chats, ""),
+            genes: crate::lens_library::names(&state.lens_library),
+            lens: state.lens_library.get(lens).map(|_| lens.to_owned()),
+            discussion: topic.and_then(design_topic).filter(|_| may_improve),
+            improve: improve && may_improve,
+            task: identity::authorize(&Actor::LocalOperator, Action::Task).is_ok(),
+            may_improve,
+        }
     }
-    let mut html = format!(
-        "<section class='conversation'><div class='conversation-heading'>{}<h2>New DM</h2></div>",
-        crate::navigation::Picker::of(&state.chats, "").button()
-    );
-    let selected = if state.lens_library.get(lens).is_some() {
-        vec![lens.into()]
-    } else {
-        Vec::new()
-    };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&crate::lens_library::names(&state.lens_library),&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
-    html
+    pub fn render(&self) -> String {
+        let discussion = self.discussion;
+        let (context, mut draft) = discussion
+            .map(|(_, label)| {
+                (
+                    format!("<p class='muted'>Discussing the design of {label}.</p>"),
+                    format!("Let’s discuss the design of {label}."),
+                )
+            })
+            .unwrap_or_default();
+        if self.improve {
+            draft = format!("/improve {draft}");
+        }
+        let mut html = format!(
+            "<section class='conversation'><div class='conversation-heading'>{}<h2>New DM</h2></div>",
+            self.picker.button()
+        );
+        let selected = self.lens.iter().cloned().collect::<Vec<_>>();
+        html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu_for(self.task, self.may_improve),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&self.genes,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
+        html
+    }
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
 pub fn rejected(page: &str, error: &str, draft: &str) -> String {
