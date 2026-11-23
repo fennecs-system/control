@@ -89,7 +89,7 @@ fn next(run: &runtime::Run) -> Option<&str> {
     run.question
         .as_ref()
         .and_then(|q| q.continuation.as_deref())
-        .or_else(|| run.delegation.as_ref().and_then(|d| d.continuation.as_deref()))
+        .or_else(|| run.delegation.as_ref().and_then(|d| d.state().continuation()))
 }
 fn same_scope(caller: &runtime::Run, other: &runtime::Run) -> bool {
     caller.actor == other.actor
@@ -190,7 +190,7 @@ pub(crate) fn scope<'a>(
         if let Some((delegated, child)) = from
             .delegation
             .as_ref()
-            .and_then(|d| d.child.as_deref().map(|child| (d, child)))
+            .and_then(|d| d.state().child().map(|child| (d, child)))
         {
             if !from.attempts.last().is_some_and(|a| {
                 a.status == crate::usage::AttemptStatus::Waiting

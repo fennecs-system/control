@@ -154,7 +154,7 @@ fn proposal_checkpoint_retries_provenance_and_operator_admission() {
         .into_iter()
         .collect();
     assert!(review_action(&mut state, "/review", &fields, |_| Err(io::Error::other("full"))).is_err());
-    assert_eq!(state.collective.proposals[0].status, "pending");
+    assert_eq!(state.collective.proposals[0].status, ProposalStatus::Pending);
     review_action(&mut state, "/review", &fields, |_| Ok(())).unwrap();
     let serialized = serde_json::to_vec(&state).unwrap();
     let restored: State = serde_json::from_slice(&serialized).unwrap();
@@ -438,7 +438,7 @@ fn a_proposal_is_an_operator_request_decided_only_through_review() {
         String::from_utf8(out).unwrap()
     };
     assert!(review(&mut state, "id=0&decision=rejected&response=json").starts_with("HTTP/1.1 200"));
-    assert_eq!(state.collective.proposals[0].status, "rejected");
+    assert_eq!(state.collective.proposals[0].status, ProposalStatus::Rejected);
     assert!(crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
     // A stale or double decision is refused from either surface.
     let again = review(&mut state, "id=0&decision=accepted&response=json");
@@ -447,5 +447,5 @@ fn a_proposal_is_an_operator_request_decided_only_through_review() {
         "{again}"
     );
     assert!(review(&mut state, "id=0&decision=accepted").starts_with("HTTP/1.1 409"));
-    assert_eq!(state.collective.proposals[0].status, "rejected");
+    assert_eq!(state.collective.proposals[0].status, ProposalStatus::Rejected);
 }

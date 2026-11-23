@@ -5,6 +5,7 @@ pub(crate) mod approval_resume;
 pub(crate) mod conversations;
 pub(crate) mod messages;
 pub(crate) mod runs;
+pub(crate) mod status_text;
 
 /// Captured caller identity, independent of tool catalogue or transport.
 pub struct AttemptRef<'a> {

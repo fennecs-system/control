@@ -674,7 +674,7 @@ fn blocked(on: &str, producer: &str, status: &str, waiting: &[(&str, &str)]) -> 
         room: "general".into(),
         on: on.into(),
         producer: Some(producer.into()),
-        status: status.into(),
+        status: crate::rooms::claims::StateName::parse(status),
         waiting: waiting
             .iter()
             .map(|(key, chat)| lifecycle::Waiter {
@@ -1156,7 +1156,7 @@ fn a_circular_wait_is_reported_without_looping() {
     );
     assert!(observed.iter().all(|neck| neck.cycle
         && neck.dependents == 2
-        && neck.status == "blocked"
+        && neck.status == crate::rooms::claims::StateName::Blocked
         && !neck.members.contains(&neck.owner)));
     assert!(
         advisor_runs(&state, &advisor)[0]

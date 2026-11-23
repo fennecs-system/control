@@ -2,7 +2,7 @@
 //! `control_bot::Supervisor` decides; this adapter feeds it room messages, turn
 //! completions and time, and interprets its turn requests as ordinary queued
 //! turns. Supervisor state, requested turns and queued runs share one checkpoint.
-mod lifecycle;
+pub(crate) mod lifecycle;
 mod pathology;
 mod tools;
 use crate::runtime::RunKind;
@@ -1728,7 +1728,7 @@ fn reconcile_with_wake_at(
         .bots
         .approvals
         .iter()
-        .any(|approval| approval.decision != Decision::Pending && !approval.acknowledged);
+        .any(|approval| approval.state() == ApprovalState::Decided);
     if state.bots.supervisor.definitions().next().is_none() && state.bots.requests.is_empty() && !resumable {
         state.bots.room_cursor = state.collective.posts.len();
         watch_events(state);
@@ -2069,6 +2069,17 @@ enum Decision {
     Denied,
 }
 
+/// What an approval's saved `decision` and `acknowledged` mean together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApprovalState {
+    /// Awaiting the operator. An acknowledgement saved on a pending approval
+    /// (no build writes one) is ignored: it stays pending.
+    Pending,
+    /// Decided; the requester has not been told yet.
+    Decided,
+    /// Decided and reported: the requester's next request replaces it.
+    Acknowledged,
+}
 /// An agent's request to run a chat as a bot. Granting it is the operator's
 /// decision; the request itself carries no authority.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2083,6 +2094,19 @@ struct Approval {
     acknowledged: bool,
 }
 impl Approval {
+    fn state(&self) -> ApprovalState {
+        match (self.decision, self.acknowledged) {
+            (Decision::Pending, _) => ApprovalState::Pending,
+            (Decision::Approved | Decision::Denied, false) => ApprovalState::Decided,
+            (Decision::Approved | Decision::Denied, true) => ApprovalState::Acknowledged,
+        }
+    }
+    /// Records that the requester was told; a pending approval cannot be.
+    fn acknowledge(&mut self) {
+        if self.decision != Decision::Pending {
+            self.acknowledged = true;
+        }
+    }
     fn summary(&self) -> Value {
         json!({"request_id":self.id,"chat_id":self.chat,"every_minutes":self.every_minutes,"room":self.room,
             "decision":match self.decision { Decision::Pending => "pending", Decision::Approved => "approved", Decision::Denied => "denied" }})
@@ -2410,7 +2434,7 @@ fn handle_with(
             state
                 .bots
                 .approvals
-                .retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
+                .retain(|a| a.state() != ApprovalState::Acknowledged);
             let approval = Approval {
                 id,
                 chat: chat_id,
@@ -2501,7 +2525,7 @@ pub(crate) fn persona_request(
     state
         .bots
         .approvals
-        .retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
+        .retain(|a| a.state() != ApprovalState::Acknowledged);
     state.bots.approvals.push(Approval {
         id: id.clone(),
         chat: chat.into(),
@@ -2628,7 +2652,7 @@ fn auto_decide(state: &mut State, id: &str, policy: &AutoApproval, now: Now) -> 
         .approvals
         .iter_mut()
         .filter(|a| a.id == id)
-        .for_each(|a| a.acknowledged = true);
+        .for_each(Approval::acknowledge);
     let what = format!(
         "persistent bot {} ({})",
         crate::callsigns::name_or_id(&state.chats, &approval.chat),
@@ -2648,7 +2672,7 @@ fn advance(state: &mut State) -> (bool, bool) {
         .bots
         .approvals
         .iter()
-        .filter(|a| a.decision != Decision::Pending && !a.acknowledged)
+        .filter(|a| a.state() == ApprovalState::Decided)
         .map(|a| a.requester.clone())
         .collect::<std::collections::BTreeSet<_>>();
     for requester in requesters {
@@ -2667,7 +2691,7 @@ fn advance(state: &mut State) -> (bool, bool) {
             .approvals
             .iter()
             .filter(mine)
-            .filter(|a| !a.acknowledged)
+            .filter(|a| a.state() == ApprovalState::Decided)
             .cloned()
             .collect::<Vec<_>>();
         let lines = decided
@@ -2719,7 +2743,7 @@ fn advance(state: &mut State) -> (bool, bool) {
             .iter_mut()
             .filter(|a| a.requester == requester && a.decision != Decision::Pending)
         {
-            approval.acknowledged = true;
+            approval.acknowledge();
         }
         changed = true;
     }

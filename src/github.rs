@@ -37,6 +37,14 @@ pub struct Source {
     pub commit: String,
     pub baseline: String,
 }
+crate::application::status_text::status_enum! {
+    /// How far a pull request publication got, saved as its snake_case name.
+    pub enum PublicationStatus {
+        Preparing = "preparing",
+        BranchCreated = "branch_created",
+        Opened = "opened",
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Publication {
     pub run: String,
@@ -48,7 +56,7 @@ pub struct Publication {
     pub tree: Option<String>,
     pub commit: Option<String>,
     pub url: Option<String>,
-    pub status: String,
+    pub status: PublicationStatus,
     pub title: String,
     pub body: String,
 }
@@ -692,7 +700,7 @@ fn finish(
     } else if existing["object"]["sha"].as_str() != publication.commit.as_deref() {
         return Err(io::Error::other("Publication branch changed; it was not overwritten"));
     }
-    publication.status = "branch_created".into();
+    publication.status = PublicationStatus::BranchCreated;
     checkpoint(publication)?;
     let owner = publication.repository.split('/').next().unwrap();
     let existing = api.request(
@@ -723,7 +731,7 @@ fn finish(
         return Err(io::Error::other("Invalid GitHub pull request destination"));
     }
     publication.url = Some(url.into());
-    publication.status = "opened".into();
+    publication.status = PublicationStatus::Opened;
     checkpoint(publication)?;
     Ok(url.into())
 }
@@ -772,7 +780,7 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
                 tree: None,
                 commit: None,
                 url: None,
-                status: "preparing".into(),
+                status: PublicationStatus::Preparing,
                 title: input.title.trim().into(),
                 body: input.body,
             };
@@ -816,7 +824,7 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
         Ok(())
     });
     match result {
-        Ok(url) => Ok(json!({"url":url,"status":"opened"})),
+        Ok(url) => Ok(json!({"url":url,"status":PublicationStatus::Opened})),
         Err(error) => Err(error),
     }
 }

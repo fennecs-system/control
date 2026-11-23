@@ -51,13 +51,52 @@ pub struct Delegation {
     pub child: Option<String>,
     pub continuation: Option<String>,
 }
+/// What a delegation's saved `child` and `continuation` mean together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DelegationState<'a> {
+    /// No child admitted yet: it holds a reservation in the per-root budget.
+    Requested,
+    /// The child was admitted and the parent waits for it.
+    Admitted { child: &'a str },
+    /// The parent continued as `continuation`. `child` is None only in a
+    /// saved shape no build writes; it reads as continued, so nothing
+    /// admits a child for it or reserves a slot.
+    Continued {
+        child: Option<&'a str>,
+        continuation: &'a str,
+    },
+}
+impl Delegation {
+    pub fn state(&self) -> DelegationState<'_> {
+        match (self.child.as_deref(), self.continuation.as_deref()) {
+            (None, None) => DelegationState::Requested,
+            (Some(child), None) => DelegationState::Admitted { child },
+            (child, Some(continuation)) => DelegationState::Continued { child, continuation },
+        }
+    }
+}
+impl<'a> DelegationState<'a> {
+    pub fn child(self) -> Option<&'a str> {
+        match self {
+            Self::Requested => None,
+            Self::Admitted { child } => Some(child),
+            Self::Continued { child, .. } => child,
+        }
+    }
+    pub fn continuation(self) -> Option<&'a str> {
+        match self {
+            Self::Requested | Self::Admitted { .. } => None,
+            Self::Continued { continuation, .. } => Some(continuation),
+        }
+    }
+}
 
 pub fn is_judge(run: &runtime::Run) -> bool {
     run.persona.as_ref().is_some_and(|p| p.role == Role::Judge)
 }
 pub fn pausing(run: &runtime::Run) -> bool {
     run.delegation.as_ref().is_some_and(|d| {
-        d.child.is_none()
+        d.state() == DelegationState::Requested
             && run
                 .attempts
                 .last()
@@ -145,7 +184,12 @@ pub(crate) fn budget_for(
                 .iter()
                 .map(crate::spawning::Batch::worker_reserved)
                 .sum::<usize>()
-                + usize::from(candidate.delegation.as_ref().is_some_and(|d| d.child.is_none()))
+                + usize::from(
+                    candidate
+                        .delegation
+                        .as_ref()
+                        .is_some_and(|d| d.state() == DelegationState::Requested),
+                )
         })
         .sum::<usize>();
     let delegated = children.iter().filter(|child| child.kind == RunKind::Delegated).count();
@@ -171,7 +215,7 @@ pub(crate) fn budget_for(
                     && candidate
                         .delegation
                         .as_ref()
-                        .is_some_and(|d| d.child.is_none() && d.input.role == Role::Judge)
+                        .is_some_and(|d| d.state() == DelegationState::Requested && d.input.role == Role::Judge)
             }))
     {
         return Err("One judge review is allowed per root task.");
@@ -210,7 +254,12 @@ fn spawn_rate(state: &State, run: &runtime::Run, additional: usize, now: u64) ->
             .iter()
             .map(crate::spawning::Batch::worker_pending)
             .sum::<usize>()
-            + usize::from(candidate.delegation.as_ref().is_some_and(|d| d.child.is_none()))
+            + usize::from(
+                candidate
+                    .delegation
+                    .as_ref()
+                    .is_some_and(|d| d.state() == DelegationState::Requested),
+            )
     };
     let pending = state
         .runtime
@@ -320,7 +369,7 @@ fn request_with_save(
         .and_then(|a| a.workspace_id.clone())
         .ok_or("No active attempt identity.")?;
     if let Some(d) = &run.delegation
-        && (d.generation == generation || d.child.is_some())
+        && (d.generation == generation || d.state() != DelegationState::Requested)
     {
         return if d.generation == generation && d.nonce == nonce && d.input == input {
             Ok(
@@ -358,11 +407,10 @@ fn request_with_save(
 pub fn reconcile(state: &mut State, save: impl FnOnce(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
     let Some(index) = state.runtime.runs.iter().position(|r| {
         r.status == RunStatus::Waiting
-            && r.delegation.as_ref().is_some_and(|d| {
-                d.continuation.is_none()
-                    && d.child
-                        .as_ref()
-                        .is_none_or(|id| leaf(state, id).map_or(true, |c| !c.status.is_active()))
+            && r.delegation.as_ref().is_some_and(|d| match d.state() {
+                DelegationState::Requested => true,
+                DelegationState::Admitted { child } => leaf(state, child).map_or(true, |c| !c.status.is_active()),
+                DelegationState::Continued { .. } => false,
             })
     }) else {
         return Ok(());
@@ -430,7 +478,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             "Conversation files changed while delegating. Start a new turn; child outputs remain retained.".into();
         return Ok(());
     }
-    if let Some(child_id) = d.child {
+    if let Some(child_id) = d.state().child().map(str::to_owned) {
         let child = leaf(state, &child_id)?.clone();
         if child.actor != parent.actor {
             return Err("Delegated child actor mismatch.");
@@ -578,7 +626,7 @@ pub(crate) fn leaf<'a>(state: &'a State, id: &str) -> Result<&'a runtime::Run, &
             .question
             .as_ref()
             .and_then(|q| q.continuation.as_deref())
-            .or_else(|| run.delegation.as_ref().and_then(|d| d.continuation.as_deref()))
+            .or_else(|| run.delegation.as_ref().and_then(|d| d.state().continuation()))
             .ok_or("Delegated continuation is missing; inspect retained state.")?;
     }
     Err("Delegated continuation limit reached; inspect retained state.")
