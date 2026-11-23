@@ -626,3 +626,54 @@ mod wait;
 fn started(mut command: Command) -> impl FnOnce(Streams) -> io::Result<Child> {
     move |streams| streams.apply(&mut command).spawn()
 }
+
+/// b1f5a87: a command still running at its timeout is stopped inside the
+/// service under its marker; the service itself keeps running.
+#[test]
+fn a_timed_out_probe_is_reaped_inside_a_service_that_keeps_running() {
+    use control_isolation::scripted::{Answer, Call, Scripted};
+    let (mut state, run, _, time) = crate::services::tests::fixture();
+    crate::services::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
+    let image = state.services[0].resource.image.as_str().to_owned();
+    let shared = Arc::new(Mutex::new(state));
+    let engine = Scripted::new(|call: &Call| match call {
+        // The command outlives its client; the reaper finds nothing left.
+        Call::Exec(spec) if spec.env.iter().any(|(name, _)| name == MARKER) => {
+            let mut command = Command::new("sleep");
+            command.arg("5");
+            Answer::Run(command)
+        }
+        _ => Answer::Model,
+    })
+    .image(&image, &[]);
+    for _ in 0..3 {
+        crate::services::drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
+    }
+    let service = shared.lock().unwrap().services[0].clone();
+    let container = service.resource.phase.container().expect("running").as_str().to_owned();
+    let output = probe(&engine, &service, "sleep 60", "owner-a", Duration::from_millis(200)).unwrap();
+    assert!(output.timed_out);
+    let calls = engine.calls();
+    let execs: Vec<_> = calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Exec(spec) => Some(spec),
+            _ => None,
+        })
+        .collect();
+    let [command, reaper] = execs.as_slice() else {
+        panic!("the command, then its reaper: {execs:?}")
+    };
+    let (_, marker) = command.env.iter().find(|(name, _)| name == MARKER).unwrap();
+    assert_eq!(reaper.container.as_str(), container);
+    assert!(
+        reaper.argv[2].contains(&format!("m={MARKER}={marker}")),
+        "{:?}",
+        reaper.argv
+    );
+    assert!(
+        !calls.iter().any(|call| matches!(call, Call::Kill(_) | Call::Remove(_))),
+        "the service is not stopped: {calls:?}"
+    );
+    assert!(engine.model().running(&container.as_str().into()));
+}
