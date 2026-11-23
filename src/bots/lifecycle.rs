@@ -15,7 +15,7 @@ use super::pathology::{self, Burn, Churn, Loop, Polling};
 use super::{Message, Reason};
 use crate::State;
 use crate::rooms::claims::graph::{Fast, Fx, Waits};
-use crate::rooms::claims::{self, Claim, Status};
+use crate::rooms::claims::{self, Claim, ClaimState, StateName, Status};
 use crate::runtime::RunStatus;
 use control_bot::{Source, Topic};
 use control_effect::machine::Machine;
@@ -121,7 +121,7 @@ pub struct Blocked {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer: Option<String>,
     /// working, blocked, done, abandoned, released or unclaimed.
-    pub status: String,
+    pub status: StateName,
     /// The newly blocked claims, bounded.
     pub waiting: Vec<Waiter>,
 }
@@ -134,21 +134,15 @@ pub struct Waiter {
 impl Blocked {
     fn of(state: &State, claim: &Claim) -> Self {
         let on = claim.blocked_on.clone().unwrap_or_default();
-        let (producer, status) = match claims::find(state, &claim.room, &on) {
-            Some(held) if held.abandoned && held.status != Status::Released => (Some(held.owner.clone()), "abandoned"),
-            Some(held) => match held.status {
-                Status::Working => (Some(held.owner.clone()), "working"),
-                Status::Blocked => (Some(held.owner.clone()), "blocked"),
-                Status::Done => (Some(held.owner.clone()), "done"),
-                Status::Released => (None, "released"),
-            },
-            None => (None, "unclaimed"),
-        };
+        let held = claims::find(state, &claim.room, &on);
+        let producer = held
+            .filter(|held| held.state() != ClaimState::Released)
+            .map(|held| held.owner.clone());
         Self {
             room: claim.room.clone(),
             on,
             producer,
-            status: status.into(),
+            status: StateName::from(held.map(Claim::state)),
             waiting: Vec::new(),
         }
     }
@@ -184,7 +178,7 @@ pub struct Bottleneck {
     pub key: String,
     pub owner: String,
     /// working, blocked or abandoned.
-    pub status: String,
+    pub status: StateName,
     /// The claim this one itself waits on, when blocked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_on: Option<String>,
@@ -238,14 +232,7 @@ pub(super) fn bottlenecks(state: &State, claims: &[&Claim], threshold: usize) ->
                     room: held.room.clone(),
                     key: held.key.clone(),
                     owner: held.owner.clone(),
-                    status: if held.abandoned {
-                        "abandoned"
-                    } else if held.status == Status::Blocked {
-                        "blocked"
-                    } else {
-                        "working"
-                    }
-                    .into(),
+                    status: StateName::from(Some(held.state())),
                     blocked_on: held.blocked_on.clone(),
                     open: seq.saturating_sub(held.incarnation),
                     idle: seq.saturating_sub(held.incarnation.max(held.advanced_at)),
@@ -541,7 +528,7 @@ impl Facts {
                 neck.room, neck.key, neck.owner, neck.status, neck.open, neck.idle, neck.dependents, neck.members.len()));
         }
         for blocked in &self.blocked {
-            let producer = blocked.producer.as_ref().map_or(blocked.status.clone(), |owner| {
+            let producer = blocked.producer.as_ref().map_or(blocked.status.to_string(), |owner| {
                 format!("owner {owner}, {}", blocked.status)
             });
             let keys = blocked
@@ -982,7 +969,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         .collective
         .claims
         .iter()
-        .filter(|claim| claim.status == Status::Working && !claim.abandoned)
+        .filter(|claim| claim.state() == ClaimState::Working)
     {
         let Some(&position) = member.get(claim.owner.as_str()) else {
             continue;
@@ -1010,7 +997,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         .collective
         .claims
         .iter()
-        .filter(|claim| claim.status == Status::Working && !claim.abandoned)
+        .filter(|claim| claim.state() == ClaimState::Working)
         .filter_map(|claim| member.get(claim.owner.as_str()).map(|&position| team_at[position]))
         .collect::<std::collections::HashSet<_>>();
     for chat in state.chats.iter().filter(|chat| chat.parent_chat.is_some()) {
@@ -1024,9 +1011,11 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
             && team.len() < FAILING
             && state.bots.persists(&chat.id)
             && !state.bots.advises(&chat.id)
-            && !state.collective.claims.iter().any(|claim| {
-                claim.owner == chat.id && !claim.abandoned && matches!(claim.status, Status::Working | Status::Blocked)
-            })
+            && !state
+                .collective
+                .claims
+                .iter()
+                .any(|claim| claim.owner == chat.id && claim.state().is_live())
             && !state
                 .watches
                 .iter()
@@ -1062,7 +1051,7 @@ pub(super) fn observe(state: &State) -> Vec<(String, Team, Facts)> {
         team.progress = team.progress.max(claim.advanced_at);
         team.revisions.add(claim.revision);
         team.done |= claim.status == Status::Done;
-        if claim.abandoned || !matches!(claim.status, Status::Working | Status::Blocked) {
+        if !claim.state().is_live() {
             continue;
         }
         team.open += 1;

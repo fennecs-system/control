@@ -4,7 +4,7 @@
 //! (critical path) and the parallel frontier are linear walks. Bottlenecks use
 //! the advisor's walk (`claims::graph`). Nothing is assigned or changed.
 use super::claims::{
-    self, Claim, Status,
+    self, Claim, ClaimState, StateName, Status,
     graph::{Fast, Waits},
 };
 use crate::State;
@@ -148,7 +148,7 @@ pub(crate) fn plan(state: &State, room: &str) -> Value {
             .then(a.0.cmp(b.0))
     });
     let bottlenecks = necks.iter().take(BOTTLENECKS).map(|(key, held, reach)| {
-        let mut neck = json!({"key":key,"owner":held.map(|claim| &claim.owner),"status":held.map_or("unclaimed", |claim| status(claim)),
+        let mut neck = json!({"key":key,"owner":held.map(|claim| &claim.owner),"status":StateName::from(held.map(|claim| claim.state())),
             "dependents":reach.dependents.len(),"members":reach.members.iter().take(LIST).collect::<Vec<_>>()});
         if reach.cycle { neck["cycle"] = json!(true); }
         neck
@@ -161,12 +161,10 @@ pub(crate) fn plan(state: &State, room: &str) -> Value {
             (
                 claim.key.as_str(),
                 Some(claim.owner.as_str()),
-                if claim.abandoned {
-                    "abandoned"
-                } else if claim.status == Status::Blocked {
-                    "resumable"
-                } else {
-                    "working"
+                match claim.state() {
+                    ClaimState::Abandoned => "abandoned",
+                    ClaimState::Blocked { .. } => "resumable",
+                    ClaimState::Working | ClaimState::Done | ClaimState::Released => "working",
                 },
             )
         })
@@ -200,7 +198,7 @@ pub(crate) fn plan(state: &State, room: &str) -> Value {
         .filter(|(chat, _)| {
             !open
                 .iter()
-                .any(|claim| claim.owner == chat.id && claim.status == Status::Working && !claim.abandoned)
+                .any(|claim| claim.owner == chat.id && claim.state() == ClaimState::Working)
         })
         .map(|(chat, callsign)| {
             let waiting = open
@@ -234,7 +232,7 @@ pub(crate) fn plan(state: &State, room: &str) -> Value {
         .iter()
         .take(LIST * 4)
         .map(|claim| {
-            let mut entry = json!({"key":claim.key,"owner":claim.owner,"status":status(claim)});
+            let mut entry = json!({"key":claim.key,"owner":claim.owner,"status":StateName::from(Some(claim.state()))});
             if let Some(on) = claim.blocked_on.as_deref() {
                 entry["blocked_on"] = json!(on);
             }
@@ -244,15 +242,5 @@ pub(crate) fn plan(state: &State, room: &str) -> Value {
     json!({"room":room,"open":open_list,"done":claims.len() - open.len(),"unclaimed":unclaimed.iter().take(LIST).collect::<Vec<_>>(),
         "cycles":cycles,"critical_path":critical,"bottlenecks":bottlenecks,"ready":ready,"available":available})
 }
-fn status(claim: &Claim) -> &'static str {
-    match claim.status {
-        Status::Done => "done",
-        Status::Released => "released",
-        _ if claim.abandoned => "abandoned",
-        Status::Working => "working",
-        Status::Blocked => "blocked",
-    }
-}
-
 #[cfg(test)]
 mod tests;

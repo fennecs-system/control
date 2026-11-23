@@ -1,7 +1,7 @@
 //! The claim dependency graph: blocked claims point at the claim key they need
 //! (`blocked_on`), so each claim has at most one outgoing edge. The advisor's
 //! bottleneck facts and the `control_room_plan` tool walk it the same way.
-use super::{Claim, Status};
+use super::{Claim, ClaimState};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -50,11 +50,8 @@ pub(crate) struct Reach<'a> {
 impl<'a> Waits<'a> {
     pub(crate) fn of(claims: impl IntoIterator<Item = &'a Claim>) -> Self {
         let mut waits = Self::default();
-        for claim in claims
-            .into_iter()
-            .filter(|claim| claim.status == Status::Blocked && !claim.abandoned)
-        {
-            if let Some(on) = claim.blocked_on.as_deref() {
+        for claim in claims {
+            if let ClaimState::Blocked { on: Some(on) } = claim.state() {
                 waits.0.entry((claim.room.as_str(), on)).or_default().push(claim);
             }
         }

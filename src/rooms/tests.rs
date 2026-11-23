@@ -745,3 +745,72 @@ fn room_envelopes_are_pinned() {
     );
     assert_eq!(listed["result"]["isError"], false);
 }
+#[test]
+fn claim_state_reads_every_saved_status_abandoned_and_blocked_on() {
+    use claims::{Claim, ClaimState, StateName, Status};
+    let claim = |status: Status, abandoned: bool, blocked_on: Option<&str>| Claim {
+        room: "general".into(),
+        key: "walls".into(),
+        owner: "chat".into(),
+        status,
+        blocked_on: blocked_on.map(str::to_owned),
+        note: String::new(),
+        revision: 1,
+        incarnation: 1,
+        abandoned,
+        blocked_at: 0,
+        advanced_at: 0,
+    };
+    // (status, abandoned, blocked_on) → state, and whether any build writes it.
+    let on = Some("base");
+    let cases = [
+        (Status::Working, false, None, ClaimState::Working, true),
+        // Impossible: blocked_on is only accepted with status=blocked.
+        (Status::Working, false, on, ClaimState::Working, false),
+        // Impossible: blocked requires a blocked_on key.
+        (Status::Blocked, false, None, ClaimState::Blocked { on: None }, false),
+        (Status::Blocked, false, on, ClaimState::Blocked { on }, true),
+        (Status::Done, false, None, ClaimState::Done, true),
+        (Status::Done, false, on, ClaimState::Done, false),
+        (Status::Released, false, None, ClaimState::Released, true),
+        (Status::Released, false, on, ClaimState::Released, false),
+        // Abandonment keeps the claim's status and blocked_on as they were.
+        (Status::Working, true, None, ClaimState::Abandoned, true),
+        (Status::Working, true, on, ClaimState::Abandoned, false),
+        (Status::Blocked, true, None, ClaimState::Abandoned, false),
+        (Status::Blocked, true, on, ClaimState::Abandoned, true),
+        // Impossible: only live claims are abandoned, and the owner's done
+        // update clears it. Read as done, as outcomes and the plan always did.
+        (Status::Done, true, None, ClaimState::Done, false),
+        (Status::Done, true, on, ClaimState::Done, false),
+        // The operator releasing an abandoned claim keeps abandoned and clears
+        // blocked_on: every reader treats it as released.
+        (Status::Released, true, None, ClaimState::Released, true),
+        (Status::Released, true, on, ClaimState::Released, false),
+    ];
+    assert_eq!(cases.len(), 4 * 2 * 2);
+    assert_eq!(cases.iter().filter(|case| case.4).count(), 7);
+    for (status, abandoned, blocked_on, state, _written) in cases {
+        let claim = claim(status, abandoned, blocked_on);
+        assert_eq!(
+            claim.state(),
+            state,
+            "{status:?} abandoned={abandoned} blocked_on={blocked_on:?}"
+        );
+        assert_eq!(
+            state.is_live(),
+            matches!(state, ClaimState::Working | ClaimState::Blocked { .. })
+        );
+    }
+    let named = [
+        (Some(ClaimState::Working), "working"),
+        (Some(ClaimState::Blocked { on }), "blocked"),
+        (Some(ClaimState::Done), "done"),
+        (Some(ClaimState::Abandoned), "abandoned"),
+        (Some(ClaimState::Released), "released"),
+        (None, "unclaimed"),
+    ];
+    for (state, name) in named {
+        assert_eq!(StateName::from(state).as_str(), name);
+    }
+}

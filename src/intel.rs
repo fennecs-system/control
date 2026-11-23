@@ -346,18 +346,17 @@ pub fn brief(state: &State, scope: Option<&str>, at: u64) -> Result<String, &'st
             continue;
         };
         let member = activity.entry(&claim.owner).or_default();
-        match claim.status {
-            crate::rooms::claims::Status::Done => member.done += 1,
-            crate::rooms::claims::Status::Working if !claim.abandoned => member.live.push((&claim.key, "working")),
-            crate::rooms::claims::Status::Blocked if !claim.abandoned => member.live.push((&claim.key, "blocked")),
-            _ => {}
+        use crate::rooms::claims::ClaimState;
+        match claim.state() {
+            ClaimState::Done => member.done += 1,
+            ClaimState::Working => member.live.push((&claim.key, "working")),
+            ClaimState::Blocked { .. } => member.live.push((&claim.key, "blocked")),
+            ClaimState::Released | ClaimState::Abandoned => {}
         }
-        match claim.status {
-            crate::rooms::claims::Status::Done => teams[index].done += 1,
-            crate::rooms::claims::Status::Working | crate::rooms::claims::Status::Blocked if !claim.abandoned => {
-                teams[index].open += 1
-            }
-            _ => {}
+        match claim.state() {
+            ClaimState::Done => teams[index].done += 1,
+            ClaimState::Working | ClaimState::Blocked { .. } => teams[index].open += 1,
+            ClaimState::Released | ClaimState::Abandoned => {}
         }
     }
     // A node brief lists teams active in the window: members, turns or a
