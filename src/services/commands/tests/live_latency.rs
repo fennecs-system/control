@@ -146,7 +146,8 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
                             let status = shared.lock().unwrap().services[0]
                                 .executions
                                 .iter()
-                                .find(|e| e.id == execution)
+                                // Tools return a short handle of the execution id.
+                                .find(|e| names(&e.id, &execution))
                                 .map(|e| e.status)
                                 .unwrap();
                             if started.is_none() && status != Status::Requested {
