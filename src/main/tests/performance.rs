@@ -221,14 +221,14 @@ fn operator_views() {
         {
             run.status = "waiting".into();
             run.question = Some(crate::design::Question {
-                id: format!("q-{index}"),
+                id: format!("q-{index}").into(),
                 generation: format!("g-{index}"),
                 nonce: format!("n-{index}"),
                 input: crate::design::parse_input(
                     serde_json::json!({"question":"Choose a route <&> λ","options":["Relay","Stop"]}),
                 )
                 .unwrap(),
-                answer: None,
+                status: crate::design::Status::Pending { asked_at: None },
                 continuation: None,
             });
         }

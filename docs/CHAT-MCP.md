@@ -48,6 +48,7 @@ Read tools have `readOnlyHint: true`.
 | `chat_cancel` | write | Cancels the current turn, or `run_id`. With `all: true` it cancels the whole task tree and its bots (`/cancel all`). |
 | `chat_stop_services` | write | Stops the chat's live services. `team: true` includes its spawned chats; `service_id` stops one. |
 | `control_design_ask` | write | The same decision tool Control's agents use: `question`, 2–4 `options`, optional zero-based `recommended`, plus an optional chat `id`. Returns the question ID. See [Asking the operator](#asking-the-operator). |
+| `control_design_withdraw` | write | Withdraws a pending question this caller asked: `question_id`, optional `reason` (up to 200 characters). See [Asking the operator](#asking-the-operator). |
 | `chat_decide` | write, opt-in | Decides a listed request, for the kinds enabled in Manage → Permissions. Only listed when at least one kind is enabled. |
 
 A typical run:
@@ -71,7 +72,8 @@ application functions under its state lock:
 - `control.chat.create`, `.send`, `.read`, `.lenses`, `.rename` and `.persona`;
 - `control.chats.list` and `control.requests.list`;
 - `control.project.request`;
-- `control.chat.ask` (`control_design_ask` for a caller with no run);
+- `control.chat.ask` (`control_design_ask` for a caller with no run) and
+  `control.chat.withdraw` (`control_design_withdraw`);
 - `control.services.list` and `control.services.stop`.
 
 `control.services.stop` makes the same stop transition as the services page.
@@ -132,6 +134,16 @@ Manage → Permissions, the TUI and the Discord notifications.
   `chat_read` on that DM shows it.
 - **Limits.** At most 8 operator-side questions can wait at once. Each also counts
   toward the 32 pending tasks.
+- **Withdrawing.** When a question becomes moot or is settled elsewhere,
+  `control_design_withdraw` with its ID (and an optional short reason) withdraws
+  it. It leaves every pending list, its Discord message stops offering actions,
+  and the DM keeps it in history as withdrawn, with who withdrew it and why. You
+  can withdraw only questions you asked here. An agent's question can be
+  withdrawn here only when question decisions are enabled in Manage →
+  Permissions; its paused task then ends like `/cancel` and never resumes on its
+  own. Nothing expires by itself: request lists show how long each question has
+  been open, and a restarted Discord bridge sends one "N decisions still open"
+  line instead of announcing them again.
 
 Asking never approves anything. It's only a question to you, and
 `chat_send` still refuses plain text to a DM that's waiting on a question.

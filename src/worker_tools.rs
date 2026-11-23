@@ -269,7 +269,7 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
                 request["params"]["name"].as_str(),
                 Some("control_agent_spawn_status" | "control_agent_spawn_cancel")
             ) {
-                if run.question.as_ref().is_some_and(|q| q.answer.is_none()) {
+                if run.question.as_ref().is_some_and(|q| q.pending()) {
                     return error("This attempt is pausing for a design answer.");
                 }
                 return match crate::spawning::manage(
@@ -322,7 +322,7 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
             }
             if request["params"]["name"] != "control_design_ask"
                 && run.question.as_ref().is_some_and(|q| {
-                    q.answer.is_none()
+                    q.pending()
                         && run
                             .attempts
                             .last()

@@ -330,7 +330,7 @@ fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
     child.status = "waiting".into();
     child.attempts[0].status = "waiting".into();
     child.attempts[0].artifact = Some("paused-child".into());
-    let question = child.question.as_ref().unwrap().id.clone();
+    let question = child.question.as_ref().unwrap().id.to_string();
     let other = chat::create(&mut state);
     // A UI-only parent link is not a delegation capability.
     state.chats.last_mut().unwrap().parent_chat = Some(parent_chat.clone());
@@ -418,7 +418,10 @@ fn parent_waits_for_child_design_and_delegation_continuations() {
                     options: vec!["A".into(), "B".into()],
                     recommended: None,
                 },
-                answer: Some("A".into()),
+                status: crate::design::Status::Answered {
+                    answer: "A".into(),
+                    asked_at: None,
+                },
                 continuation: Some(next_id),
             });
         } else {

@@ -325,10 +325,7 @@ pub fn request(
         .last()
         .filter(|a| a.workspace_id.as_deref() == Some(generation))
         .ok_or("Spawn request belongs to an inactive attempt.")?;
-    if delegation::is_judge(run)
-        || delegation::pausing(run)
-        || run.question.as_ref().is_some_and(|q| q.answer.is_none())
-    {
+    if delegation::is_judge(run) || delegation::pausing(run) || run.question.as_ref().is_some_and(|q| q.pending()) {
         return Err("Read-only or pausing attempts cannot spawn agents.");
     }
     if let Some(batch) = run

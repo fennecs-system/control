@@ -88,7 +88,10 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
         items.push(Pending {
             kind: Kind::Question,
             id: text(&question["question"]["id"]),
-            heading: Cow::Borrowed("Decision requested"),
+            heading: match question["age"].as_u64().filter(|seconds| *seconds >= 60) {
+                Some(seconds) => Cow::Owned(format!("Decision requested · open {}", age(seconds))),
+                None => Cow::Borrowed("Decision requested"),
+            },
             body: text(&question["summary"]),
             usage: None,
             loopback: false,
@@ -164,6 +167,15 @@ pub fn pending(view: &Value) -> Vec<Pending<'_>> {
         });
     }
     items
+}
+/// A coarse age for staleness: seconds, minutes, hours or days.
+pub fn age(seconds: u64) -> String {
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        3600..86400 => format!("{}h", seconds / 3600),
+        _ => format!("{}d", seconds / 86400),
+    }
 }
 /// Folder access is reviewed where the exact path is shown, not by reply.
 pub const FOLDER_USAGE: &str =

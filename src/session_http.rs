@@ -154,6 +154,8 @@ pub(crate) fn change_with_save(
             .map(str::to_owned)
     } else if name == "control.chat.ask" && arguments["id"].is_null() {
         crate::design::desk(state).map(str::to_owned)
+    } else if name == "control.chat.withdraw" {
+        crate::design::question_chat(state, arguments["question_id"].as_str().unwrap_or("")).map(str::to_owned)
     } else {
         None
     };

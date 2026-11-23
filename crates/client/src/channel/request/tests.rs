@@ -64,6 +64,7 @@ fn channel() -> Channel {
         hive: None,
         refreshed: None,
         revisions: Value::Null,
+        reopened: false,
         ledger: Ledger::default(),
     }
 }
