@@ -36,8 +36,31 @@ pub struct Input {
 }
 pub fn definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_preview_start","description":"Start one local preview for this approved project attempt in a credential-free Nix container. Bind your server to 0.0.0.0 at the given container port. The project is read-only; write build/cache files under /tmp (CARGO_TARGET_DIR=/tmp/target). No external network. Returns a separate-origin localhost URL. Service persists after the turn until stopped.","inputSchema":{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":16000},"port":{"type":"integer","minimum":1,"maximum":65535}},"required":["command","port"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
-        json!({"name":"control_preview_stop","description":"Stop this attempt's owned preview. Does not stop the agent or another chat's service.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
+        json!({
+            "name": "control_preview_start",
+            "description": concat!(
+                "Start one local preview for this approved project attempt in a credential-free Nix container. Bind ",
+                "your server to 0.0.0.0 at the given container port. The project is read-only; write build/cache ",
+                "files under /tmp (CARGO_TARGET_DIR=/tmp/target). No external network. Returns a separate-origin ",
+                "localhost URL. Service persists after the turn until stopped."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "minLength": 1, "maxLength": 16000},
+                    "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+                },
+                "required": ["command", "port"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+        }),
+        json!({
+            "name": "control_preview_stop",
+            "description": "Stop this attempt's owned preview. Does not stop the agent or another chat's service.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
+            "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+        }),
     ]
 }
 fn fail(message: impl Into<String>) -> io::Error {
@@ -522,13 +545,9 @@ pub fn stop(shared: &Arc<Mutex<State>>, chat: &str, id: &str) -> io::Result<()> 
     }
     crate::storage::save(&state)
 }
-pub fn links(state: &State, chat: &str) -> String {
+pub fn links(previews: &[Preview], chat: &str) -> String {
     let mut html = String::new();
-    for preview in state
-        .previews
-        .iter()
-        .filter(|p| p.chat == chat && p.status != "stopped")
-    {
+    for preview in previews.iter().filter(|p| p.chat == chat && p.status != "stopped") {
         let link = preview
             .url
             .as_ref()

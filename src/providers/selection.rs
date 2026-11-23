@@ -3,7 +3,15 @@ use super::Model;
 use crate::{backend::Backend, runtime::Runtime};
 
 pub(crate) fn schema() -> serde_json::Value {
-    serde_json::json!({"type":"string","maxLength":128,"description":"Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured model. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a private endpoint model declared tool-capable; text-only endpoints are refused for agent turns."})
+    serde_json::json!({
+        "type": "string",
+        "maxLength": 128,
+        "description": concat!(
+            "Optional configured model ID, e.g. claude:opus or codex:MODEL_ID. Omit to inherit the parent's captured ",
+            "model. Unknown/unavailable models never silently fall back to another provider. local:NAME selects a ",
+            "private endpoint model declared tool-capable; text-only endpoints are refused for agent turns."
+        )
+    })
 }
 
 /// Omission preserves a parent's captured choice even after configuration changes.
@@ -46,21 +54,24 @@ pub(crate) fn resolve(
     Ok(selected)
 }
 
-pub(crate) fn command(state: &mut crate::State, chat: &str, option: &str) -> Result<String, &'static str> {
-    let index = state.chats.iter().position(|c| c.id == chat).ok_or("Chat not found.")?;
-    crate::identity::authorize(&state.chats[index].actor, crate::identity::Action::Task)?;
+pub(crate) fn command(
+    session: &mut crate::chat::Session,
+    runtime: &Runtime,
+    option: &str,
+) -> Result<String, &'static str> {
+    crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
     let option = option.trim();
-    let current = state.chats[index]
+    let current = session
         .model
         .clone()
-        .unwrap_or_else(|| Model::captured(state.runtime.backend, state.runtime.configured_model()));
+        .unwrap_or_else(|| Model::captured(runtime.backend, runtime.configured_model()));
     if option.is_empty() {
         let selected = current;
         // Only selectable models are listed; text-only local models are named once,
         // apart, with the way to enable them.
-        let (agents, text): (Vec<_>, Vec<_>) = super::choices(&state.runtime)
+        let (agents, text): (Vec<_>, Vec<_>) = super::choices(runtime)
             .into_iter()
-            .partition(|m| super::agent_capable(&state.runtime, m));
+            .partition(|m| super::agent_capable(runtime, m));
         let names = |models: &[Model]| {
             models
                 .iter()
@@ -84,16 +95,16 @@ pub(crate) fn command(state: &mut crate::State, chat: &str, option: &str) -> Res
         ));
     }
     let selected = if option == "default" {
-        Model::captured(state.runtime.backend, state.runtime.configured_model())
+        Model::captured(runtime.backend, runtime.configured_model())
     } else {
-        resolve(&state.runtime, current.backend, &current.model, Some(option))?
+        resolve(runtime, current.backend, &current.model, Some(option))?
     };
     let reply = format!(
         "Future turns use {}:{}. Active attempts are unchanged.",
         selected.backend.id(),
         selected.model
     );
-    state.chats[index].model = Some(selected);
+    session.model = Some(selected);
     Ok(reply)
 }
 

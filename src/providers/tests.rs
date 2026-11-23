@@ -15,11 +15,11 @@ fn capacity_metadata_survives_selection_and_rolls_back_when_save_fails() {
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
     );
-    assert!(save_with(&mut state, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(save_with(&mut state.runtime, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert!(capacity(&state.runtime, crate::backend::Backend::Codex, &model).is_none());
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     fields.insert("action".into(), "select".into());
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     assert_eq!(
         capacity(&state.runtime, crate::backend::Backend::Codex, &model)
             .unwrap()
@@ -49,14 +49,14 @@ fn text_configuration_is_validated_and_failed_saves_restore_the_previous_setting
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
     );
     let before = state.runtime.compaction.settings.clone();
-    assert!(save_with(&mut state, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(save_with(&mut state.runtime, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert_eq!(state.runtime.compaction.settings, before);
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     assert!(state.runtime.compaction.settings.enabled);
     let mut invalid = fields;
     invalid.insert("leaf_entries".into(), "3".into());
     assert!(
-        save_with(&mut state, &invalid, |_| panic!(
+        save_with(&mut state.runtime, &invalid, |_| panic!(
             "invalid settings must not reach persistence"
         ))
         .is_err()
@@ -65,7 +65,12 @@ fn text_configuration_is_validated_and_failed_saves_restore_the_previous_setting
         ("action".into(), "text-remove".into()),
         ("id".into(), "local-qwen".into()),
     ]);
-    assert!(save_with(&mut state, &remove, |_| panic!("active compactor cannot disappear")).is_err());
+    assert!(
+        save_with(&mut state.runtime, &remove, |_| panic!(
+            "active compactor cannot disappear"
+        ))
+        .is_err()
+    );
 }
 #[test]
 fn fresh_claude_setup_selects_sonnet_and_reruns_preserve_the_library() {
@@ -202,12 +207,12 @@ fn adding_selecting_and_editing_keep_the_library_and_selection_separate() {
         ("provider".into(), "claude".into()),
         ("model".into(), "sonnet".into()),
     ]);
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.backend, Backend::Codex);
     assert_eq!(state.runtime.configured_model(), original);
     assert_eq!(state.runtime.models.len(), 2);
     fields.insert("action".into(), "select".into());
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     state
         .runtime
         .enqueue("Uses saved selection".into(), RunKind::Task, "test");
@@ -215,16 +220,21 @@ fn adding_selecting_and_editing_keep_the_library_and_selection_separate() {
     fields.insert("old_model".into(), "sonnet".into());
     fields.insert("model".into(), "opus".into());
     let previous_models = state.runtime.models.clone();
-    assert!(save_with(&mut state, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(save_with(&mut state.runtime, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert_eq!(state.runtime.models, previous_models);
     assert_eq!(state.runtime.configured_model(), "sonnet");
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.configured_model(), "opus");
     assert_eq!(state.runtime.models.len(), 2);
     assert_eq!(state.runtime.runs[0].model.as_deref(), Some("sonnet"));
     fields.insert("action".into(), "select".into());
     fields.insert("model".into(), "unknown-model".into());
-    assert!(save_with(&mut state, &fields, |_| panic!("unknown selection must not save")).is_err());
+    assert!(
+        save_with(&mut state.runtime, &fields, |_| panic!(
+            "unknown selection must not save"
+        ))
+        .is_err()
+    );
     assert_eq!(state.runtime.configured_model(), "opus");
 }
 #[test]
@@ -233,9 +243,9 @@ fn backend_selection_is_captured_and_failed_settings_do_not_reroute_runs() {
     let mut state = crate::State::default();
     state.runtime.enqueue("Codex task".into(), RunKind::Task, "test");
     let fields = HashMap::from([("provider".into(), "claude".into()), ("model".into(), "sonnet".into())]);
-    assert!(save_with(&mut state, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(save_with(&mut state.runtime, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert_eq!(state.runtime.backend, Backend::Codex);
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     state.runtime.enqueue("Claude task".into(), RunKind::Task, "test");
     assert_eq!(state.runtime.runs[0].backend, Backend::Codex);
     assert_eq!(state.runtime.runs[1].backend, Backend::Claude);
@@ -256,12 +266,12 @@ fn model_settings_persist_atomically_and_runs_keep_their_selected_model() {
         ("provider".into(), "codex".into()),
         ("model".into(), "test-model-one".into()),
     ]);
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     state.runtime.enqueue("First".into(), RunKind::Task, "test");
     fields.insert("model".into(), "test-model-two".into());
-    assert!(save_with(&mut state, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(save_with(&mut state.runtime, &fields, |_| Err(std::io::Error::other("disk full"))).is_err());
     assert_eq!(state.runtime.configured_model(), "test-model-one");
-    save_with(&mut state, &fields, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &fields, |_| Ok(())).unwrap();
     state.runtime.enqueue("Second".into(), RunKind::Task, "test");
     assert_eq!(state.runtime.runs[0].model.as_deref(), Some("test-model-one"));
     assert_eq!(state.runtime.runs[1].model.as_deref(), Some("test-model-two"));
@@ -269,10 +279,15 @@ fn model_settings_persist_atomically_and_runs_keep_their_selected_model() {
     assert!(checkpoint["runtime"].get("model").is_none());
     assert_eq!(checkpoint["runtime"]["runs"][0]["model"], "test-model-one");
     fields.insert("provider".into(), "anthropic".into());
-    assert!(save_with(&mut state, &fields, |_| panic!("must not persist unsupported adapter")).is_err());
+    assert!(
+        save_with(&mut state.runtime, &fields, |_| panic!(
+            "must not persist unsupported adapter"
+        ))
+        .is_err()
+    );
     fields.insert("provider".into(), "codex".into());
     fields.insert("model".into(), "--override\nsecret".into());
-    assert!(save_with(&mut state, &fields, |_| panic!("must not persist invalid ID")).is_err());
+    assert!(save_with(&mut state.runtime, &fields, |_| panic!("must not persist invalid ID")).is_err());
 }
 fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
@@ -307,9 +322,14 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
     let mut fields = edit_fields("local-qwen", "http://127.0.0.1:8081/v1");
     fields.push(("tools", "on"));
     // A failed save leaves the entry as it was.
-    assert!(save_with(&mut state, &form(&fields), |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(
+        save_with(&mut state.runtime, &form(&fields), |_| Err(std::io::Error::other(
+            "disk full"
+        )))
+        .is_err()
+    );
     assert!(!state.runtime.compaction.models[0].tools);
-    save_with(&mut state, &form(&fields), |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &form(&fields), |_| Ok(())).unwrap();
     let edited = &state.runtime.compaction.models[0];
     assert_eq!(
         (edited.id.as_str(), edited.tools, edited.timeout_seconds),
@@ -328,7 +348,7 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
         "existing identities are unchanged"
     );
     fields.push(("thinking", "low"));
-    save_with(&mut state, &form(&fields), |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &form(&fields), |_| Ok(())).unwrap();
     assert_eq!(state.runtime.compaction.models[0].thinking, Thinking::Low);
     assert!(
         serde_json::to_string(&state.runtime.compaction.models[0])
@@ -338,14 +358,14 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
     assert!(render(&state.runtime).contains("<option value='low' selected>low</option>"));
     *fields.last_mut().unwrap() = ("thinking", "maximal");
     assert!(
-        save_with(&mut state, &form(&fields), |_| panic!(
+        save_with(&mut state.runtime, &form(&fields), |_| panic!(
             "an unknown level must not persist"
         ))
         .is_err()
     );
     // Unticking the box makes it text-only again, without a re-add.
     save_with(
-        &mut state,
+        &mut state.runtime,
         &form(&edit_fields("local-qwen", "http://127.0.0.1:8081/v1")),
         |_| Ok(()),
     )
@@ -358,7 +378,7 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
         ("missing", "http://127.0.0.1:8081/v1"),
     ] {
         assert!(
-            save_with(&mut state, &form(&edit_fields(id, url)), |_| panic!(
+            save_with(&mut state.runtime, &form(&edit_fields(id, url)), |_| panic!(
                 "invalid edit must not persist"
             ))
             .is_err(),
@@ -367,7 +387,12 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
     }
     let mut bad = edit_fields("local-qwen", "http://127.0.0.1:8081/v1");
     bad[5] = ("context_tokens", "12");
-    assert!(save_with(&mut state, &form(&bad), |_| panic!("invalid limits must not persist")).is_err());
+    assert!(
+        save_with(&mut state.runtime, &form(&bad), |_| panic!(
+            "invalid limits must not persist"
+        ))
+        .is_err()
+    );
     assert_eq!(state.runtime.compaction.models, before);
     // A CLI entry keeps its adapter and cannot declare tool calls.
     let mut cli = crate::model_calls::tests::endpoint();
@@ -380,13 +405,13 @@ fn text_models_are_edited_in_place_and_validated_like_new_entries() {
     let mut fields = edit_fields("cli-summary", "");
     fields.push(("tools", "on"));
     assert!(
-        save_with(&mut state, &form(&fields), |_| panic!(
+        save_with(&mut state.runtime, &form(&fields), |_| panic!(
             "CLI tool declaration must not persist"
         ))
         .is_err()
     );
     fields.pop();
-    save_with(&mut state, &form(&fields), |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &form(&fields), |_| Ok(())).unwrap();
     assert_eq!(
         state.runtime.compaction.models[1].cli,
         Some(crate::backend::Backend::Codex)
@@ -404,14 +429,19 @@ fn one_entry_per_endpoint_model_and_roles_point_at_entries() {
     let mut add = edit_fields("qwen-agent", "http://127.0.0.1:8081/v1/");
     add[0] = ("action", "text-add");
     add.extend([("adapter", "endpoint"), ("tools", "on")]);
-    assert!(save_with(&mut state, &form(&add), |_| panic!("duplicate must not persist")).is_err());
+    assert!(
+        save_with(&mut state.runtime, &form(&add), |_| panic!(
+            "duplicate must not persist"
+        ))
+        .is_err()
+    );
     // A different model on another port is its own entry: a 7B compactor next to a 27B agent.
     let mut small = add.clone();
     small[1] = ("id", "qwen-small");
     small[2] = ("model", "qwen-7b");
     small[3] = ("url", "http://127.0.0.1:8082/v1");
     small.pop();
-    save_with(&mut state, &form(&small), |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &form(&small), |_| Ok(())).unwrap();
     assert_eq!(state.runtime.compaction.models.len(), 2);
 }
 #[test]
@@ -530,25 +560,25 @@ fn agent_models_group_integrations_and_local_and_summary_only_entries_sit_apart(
     // One click makes the local model the node default, saved without becoming a hosted entry.
     let pick = |provider: &str, model: &str| form(&[("action", "select"), ("provider", provider), ("model", model)]);
     assert!(
-        save_with(&mut state, &pick("local", "local-qwen"), |_| panic!(
+        save_with(&mut state.runtime, &pick("local", "local-qwen"), |_| panic!(
             "a text-only endpoint is not a default"
         ))
         .is_err()
     );
     assert!(
-        save_with(&mut state, &pick("local", "missing"), |_| panic!(
+        save_with(&mut state.runtime, &pick("local", "missing"), |_| panic!(
             "an unknown endpoint is not a default"
         ))
         .is_err()
     );
     let mut saved = Vec::new();
-    save_with(&mut state, &pick("local", "qwen-agent"), |state| {
+    save_with(&mut state.runtime, &pick("local", "qwen-agent"), |runtime| {
         saved = serde_json::to_vec(&Settings {
-            models: configured(&state.runtime),
-            backend: state.runtime.backend,
-            model: state.runtime.configured_model(),
-            text_models: state.runtime.compaction.models.clone(),
-            compaction: state.runtime.compaction.settings.clone(),
+            models: configured(runtime),
+            backend: runtime.backend,
+            model: runtime.configured_model(),
+            text_models: runtime.compaction.models.clone(),
+            compaction: runtime.compaction.settings.clone(),
         })
         .unwrap();
         Ok(())
@@ -584,17 +614,17 @@ fn agent_models_group_integrations_and_local_and_summary_only_entries_sit_apart(
     // The default cannot be removed or lose tool calls until another is chosen.
     let remove = form(&[("action", "text-remove"), ("id", "qwen-agent")]);
     assert_eq!(
-        save_with(&mut state, &remove, |_| panic!("the default must stay")),
+        save_with(&mut state.runtime, &remove, |_| panic!("the default must stay")),
         Err(LOCAL_DEFAULT)
     );
     let hosted = configured(&state.runtime)[0].model.clone();
     save_with(
-        &mut state,
+        &mut state.runtime,
         &form(&[("action", "select"), ("provider", "codex"), ("model", &hosted)]),
         |_| Ok(()),
     )
     .unwrap();
-    save_with(&mut state, &remove, |_| Ok(())).unwrap();
+    save_with(&mut state.runtime, &remove, |_| Ok(())).unwrap();
 }
 #[test]
 fn local_endpoint_cards_carry_a_live_statistics_line_read_only_while_open() {

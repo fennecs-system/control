@@ -375,9 +375,9 @@ fn only_completed_same_chat_improvements_can_be_published() {
         title: "Fixture".into(),
         body: String::new(),
     };
-    assert!(selected(&state, &chat, &input).is_ok());
+    assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_ok());
     state.runtime.runs[0].attempts[0].review_only = true;
-    assert!(selected(&state, &chat, &input).is_err());
+    assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());
     state.runtime.runs[0].attempts[0].review_only = false;
     state.runtime.runs[0].persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
@@ -386,17 +386,17 @@ fn only_completed_same_chat_improvements_can_be_published() {
         parent: Some("parent".into()),
         bundle: None,
     });
-    assert!(selected(&state, &chat, &input).is_err());
+    assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());
     state.runtime.runs[0].persona = None;
     let other = crate::chat::create(&mut state);
-    assert!(selected(&state, &other, &input).is_err());
+    assert!(selected(&state.chats, &state.runtime.runs, &other, &input).is_err());
     state.runtime.runs[0].action = Action::Task;
-    assert!(selected(&state, &chat, &input).is_err());
+    assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());
     state.runtime.runs[0].action = Action::Improve;
     state.runtime.runs[0].status = "running".into();
-    assert!(selected(&state, &chat, &input).is_err());
+    assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());
     state.chats[0].actor = Actor::Unknown;
-    assert!(selected(&state, &chat, &input).is_err());
+    assert!(selected(&state.chats, &state.runtime.runs, &chat, &input).is_err());
 }
 
 /// The source Git bound fails only a process that outlives it; a slow one under

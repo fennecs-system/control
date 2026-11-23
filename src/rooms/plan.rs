@@ -15,8 +15,19 @@ const LIST: usize = 16;
 const BOTTLENECKS: usize = 8;
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"control_room_plan","description":"Planning view of the team room's claims, for whoever steers or assigns work: open claims, dependency cycles, the critical path (longest blocked_on chain, producer first), bottlenecks (claims with the most transitive dependents), ready claims that can run in parallel now (working, resumable because their dependency is done, unclaimed inputs, abandoned), and members idle or only blocked who could take them. Use it to plan and assign instead of reconstructing the dependency graph from control_room_read. Read-only; omit room for the team room.","annotations":{"readOnlyHint":true,"openWorldHint":false},
-        "inputSchema":{"type":"object","properties":{"room":{"type":"string"}},"additionalProperties":false}})
+    json!({
+        "name": "control_room_plan",
+        "description": concat!(
+            "Planning view of the team room's claims, for whoever steers or assigns work: open claims, dependency ",
+            "cycles, the critical path (longest blocked_on chain, producer first), bottlenecks (claims with the most ",
+            "transitive dependents), ready claims that can run in parallel now (working, resumable because their ",
+            "dependency is done, unclaimed inputs, abandoned), and members idle or only blocked who could take them. ",
+            "Use it to plan and assign instead of reconstructing the dependency graph from control_room_read. ",
+            "Read-only; omit room for the team room."
+        ),
+        "annotations": {"readOnlyHint": true, "openWorldHint": false},
+        "inputSchema": {"type": "object", "properties": {"room": {"type": "string"}}, "additionalProperties": false}
+    })
 }
 
 /// Depth of a node's dependency chain, or `None` when it leads into a cycle.

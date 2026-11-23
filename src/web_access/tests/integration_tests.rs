@@ -19,14 +19,34 @@ fn operator_grants_persist_revoke_and_rollback_without_cross_chat_authority() {
     .unwrap();
     let mut state: State = serde_json::from_slice(&saved).unwrap();
     let url = Url::parse("https://example.com/page").unwrap();
-    assert!(permitted(&state, &chat, &Actor::LocalOperator, &url, 101).is_ok());
-    assert!(permitted(&state, &other, &Actor::LocalOperator, &url, 101).is_err());
-    assert!(permitted(&state, &chat, &Actor::LocalOperator, &url, 1000).is_err());
+    assert!(permitted(&state.chats, &state.web_grants, &chat, &Actor::LocalOperator, &url, 101).is_ok());
+    assert!(
+        permitted(
+            &state.chats,
+            &state.web_grants,
+            &other,
+            &Actor::LocalOperator,
+            &url,
+            101
+        )
+        .is_err()
+    );
+    assert!(
+        permitted(
+            &state.chats,
+            &state.web_grants,
+            &chat,
+            &Actor::LocalOperator,
+            &url,
+            1000
+        )
+        .is_err()
+    );
     let revoke = std::collections::HashMap::from([("revoke".into(), state.web_grants[0].id.clone())]);
     assert!(change_access(&mut state, &revoke, 101, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(state.web_grants.len(), 1);
     change_access(&mut state, &revoke, 101, |_| Ok(())).unwrap();
-    assert!(permitted(&state, &chat, &Actor::LocalOperator, &url, 101).is_err());
+    assert!(permitted(&state.chats, &state.web_grants, &chat, &Actor::LocalOperator, &url, 101).is_err());
 }
 #[test]
 fn worker_cannot_approve_destinations_and_bad_capture_fails_before_docker() {

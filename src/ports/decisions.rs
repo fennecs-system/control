@@ -93,7 +93,9 @@ fn obsolete(state: &State, port: &Port, time: u64) -> bool {
     let Some(decision) = port.decision.as_ref().filter(|decision| !decision.acknowledged) else {
         return false;
     };
-    if !decision.live || (decision.allowed && (port.status != Status::Approved || service(state, port, time).is_err()))
+    if !decision.live
+        || (decision.allowed
+            && (port.status != Status::Approved || service(PortAuthority::of(state), port, time).is_err()))
     {
         return true;
     }

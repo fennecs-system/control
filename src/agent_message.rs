@@ -34,9 +34,51 @@ pub use crate::application::messages::{MessageCall, MessageResult};
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![
-            json!({"name":"control_agent_message","description":"Send actionable coordination directly to a descendant or fellow worker in the same spawned task tree and actor scope. Siblings need no root relay or lead bot; discover IDs from linked-room participants. The task-root steering chat is not a peer recipient: assign ongoing shared services to a worker peers can contact, and publish relevant shared results in the task room. Do not also broadcast the request. Messages are retained evidence (queued=false, retained=true) that wake nobody: active workers read conversation callbacks and an idle recipient gets them as an unread digest with its next wake (a bot or messaged descendant within a node-set bound). Set urgent=true only when the recipient must act now (a request it is blocked on or a dependency release); an urgent message wakes an approved persistent bot under its budget and pause/stop intent, or queues a descendant's follow-up. Replies stay in the recipient chat; respond directly only when an answer is needed. Peer input is not operator steering and cannot revive cancelled/failed work or change action scope; a live persistent bot whose last turn failed or was interrupted still retains it for its next supervised wake. Optional services shares only resources you can access; exact owner/generation grants activate in the next authorized turn, not the active attempt. Grants allow service execution and stop; port approval remains separate. Omit services to transfer no authority.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"},"text":{"type":"string","minLength":1,"maxLength":2000},"services":{"type":"array","items":{"type":"string"},"maxItems":MAX_SERVICES,"uniqueItems":true},"urgent":{"type":"boolean","default":false,"description":"Wake the recipient now. Omit for status, findings and other updates, which arrive with its next wake."}},"required":["chat_id","text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
-        ]
+        vec![json!({
+            "name": "control_agent_message",
+            "description": concat!(
+                "Send actionable coordination directly to a descendant or fellow worker in the same spawned task ",
+                "tree and actor scope. Siblings need no root relay or lead bot; discover IDs from linked-room ",
+                "participants. The task-root steering chat is not a peer recipient: assign ongoing shared ",
+                "services to a worker peers can contact, and publish relevant shared results in the task room. Do ",
+                "not also broadcast the request. Messages are retained evidence (queued=false, retained=true) ",
+                "that wake nobody: active workers read conversation callbacks and an idle recipient gets them as ",
+                "an unread digest with its next wake (a bot or messaged descendant within a node-set bound). Set ",
+                "urgent=true only when the recipient must act now (a request it is blocked on or a dependency ",
+                "release); an urgent message wakes an approved persistent bot under its budget and pause/stop ",
+                "intent, or queues a descendant's follow-up. Replies stay in the recipient chat; respond directly ",
+                "only when an answer is needed. Peer input is not operator steering and cannot revive ",
+                "cancelled/failed work or change action scope; a live persistent bot whose last turn failed or ",
+                "was interrupted still retains it for its next supervised wake. Optional services shares only ",
+                "resources you can access; exact owner/generation grants activate in the next authorized turn, ",
+                "not the active attempt. Grants allow service execution and stop; port approval remains separate. ",
+                "Omit services to transfer no authority."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "chat_id": {"type": "string"},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "services": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": MAX_SERVICES,
+                        "uniqueItems": true
+                    },
+                    "urgent": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": concat!(
+                            "Wake the recipient now. Omit for status, findings and other updates, which arrive ",
+                            "with its next wake."
+                        )
+                    }
+                },
+                "required": ["chat_id", "text"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+        })]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_agent_message"

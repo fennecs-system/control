@@ -44,7 +44,7 @@ pub(crate) fn command_with(
     state: &mut State,
     chat: &str,
     option: &str,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&crate::runtime::Runtime) -> std::io::Result<()>,
 ) -> Result<String, &'static str> {
     let session = state.chats.iter().find(|c| c.id == chat).ok_or("Chat not found.")?;
     crate::identity::authorize(&session.actor, Action::Task)?;
@@ -94,7 +94,7 @@ pub(crate) fn command_with(
         settings.opted_out.push(chat.to_owned());
     }
     if settings != state.runtime.compaction.settings {
-        crate::providers::save_compaction(state, settings, save)?;
+        crate::providers::save_compaction(&mut state.runtime, settings, save)?;
     }
     let session = state.chats.iter().find(|c| c.id == chat).ok_or("Chat not found.")?;
     Ok(summary(state, session))

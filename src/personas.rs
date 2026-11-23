@@ -100,11 +100,8 @@ pub(crate) fn of(bots: &crate::bots::Bots, run: &crate::runtime::Run) -> Effecti
     Effective::builtin(id, approved)
 }
 /// The persona captured by `chat`'s latest run, if any.
-pub(crate) fn captured<'a>(state: &'a State, chat: &str) -> Option<&'a Captured> {
-    state
-        .runtime
-        .runs
-        .iter()
+pub(crate) fn captured<'a>(runs: &'a [crate::runtime::Run], chat: &str) -> Option<&'a Captured> {
+    runs.iter()
         .rev()
         .find(|run| run.chat_id.as_deref() == Some(chat))
         .and_then(|run| run.persona.as_ref())
@@ -114,7 +111,7 @@ pub(crate) fn captured<'a>(state: &'a State, chat: &str) -> Option<&'a Captured>
 /// than its team: its captured persona's visibility, else whether the root
 /// opted in to antibodies (pre-persona behaviour).
 pub(crate) fn observes_node(state: &State, chat: &str) -> bool {
-    match captured(state, chat) {
+    match captured(&state.runtime.runs, chat) {
         Some(bundle) => bundle.standing.sees == Sees::Node,
         None => crate::bots::antibody_offered_for(state, chat),
     }
@@ -123,7 +120,7 @@ pub(crate) fn observes_node(state: &State, chat: &str) -> bool {
 /// need the antibody gene on an operator-owned root, team observers one of the
 /// team-observer genes (each kind's own gene is checked where it starts). `None` for runs without a captured persona (their legacy gate applies).
 pub(crate) fn observer_offered(state: &State, chat: &str) -> Option<bool> {
-    captured(state, chat)
+    captured(&state.runtime.runs, chat)
         .filter(|b| b.standing.acts.read_only())
         .map(|bundle| match bundle.standing.sees {
             Sees::Node => crate::bots::antibody_offered_for(state, chat),
@@ -132,8 +129,8 @@ pub(crate) fn observer_offered(state: &State, chat: &str) -> Option<bool> {
 }
 /// The schedule `chat`'s persona asks for: the default `every_minutes` of a bot
 /// request for it.
-pub(crate) fn schedule(state: &State, chat: &str) -> Option<u64> {
-    captured(state, chat)?.behaviours.iter().find_map(|b| match b {
+pub(crate) fn schedule(runs: &[crate::runtime::Run], chat: &str) -> Option<u64> {
+    captured(runs, chat)?.behaviours.iter().find_map(|b| match b {
         Behaviour::Schedule { every_minutes } => Some(*every_minutes),
         _ => None,
     })
@@ -145,7 +142,7 @@ pub(crate) fn capture(state: &State, id: &str) -> Result<Captured, String> {
         .personas
         .get(id.trim())
         .ok_or_else(|| format!("Unknown persona: {id}. control.personas.list names them."))?;
-    Captured::of(definition, &crate::lens_library::inputs(state))
+    Captured::of(definition, &crate::lens_library::inputs(&state.documents))
 }
 
 /// Validate genes, SOUL.md and the library, then append `draft` as the next
@@ -168,7 +165,7 @@ pub(crate) fn save_with(
         tools.dedup();
     }
     crate::lens_library::resolve(state, &draft.lenses)?;
-    Captured::of(&draft, &crate::lens_library::inputs(state))?;
+    Captured::of(&draft, &crate::lens_library::inputs(&state.documents))?;
     let mut candidate = state.personas.clone();
     candidate.definitions.push(draft.clone());
     candidate.validate()?;
@@ -476,7 +473,6 @@ pub(crate) fn handle(
     method: &str,
     path: &str,
     query: &HashMap<String, String>,
-    lens: &str,
     body: &[u8],
 ) -> bool {
     if path == "/personas" && method == "GET" {
@@ -499,7 +495,7 @@ pub(crate) fn handle(
             stream,
             "200 OK",
             "text/html; charset=utf-8",
-            crate::render(state, "persona-page", lens, &content).as_bytes(),
+            crate::shell("persona-page", &content).as_bytes(),
             "",
             control_http::Policy::Page,
         );
@@ -531,7 +527,7 @@ pub(crate) fn handle(
                     stream,
                     "409 Conflict",
                     "text/html; charset=utf-8",
-                    crate::render(state, "persona-page", lens, &html).as_bytes(),
+                    crate::shell("persona-page", &html).as_bytes(),
                     "",
                     control_http::Policy::Page,
                 );

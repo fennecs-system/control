@@ -122,8 +122,8 @@ fn model_listing_separates_text_only_local_models_from_selectable_ones() {
         .compaction
         .models
         .push(crate::model_calls::tests::endpoint());
-    let chat = crate::chat::create(&mut state);
-    let listing = command(&mut state, &chat, "").unwrap();
+    crate::chat::create(&mut state);
+    let listing = command(&mut state.chats[0], &state.runtime, "").unwrap();
     let (configured, text) = listing.split_once("Text-only").unwrap();
     assert!(!configured.contains("local-qwen"), "{listing}");
     assert!(
@@ -131,7 +131,7 @@ fn model_listing_separates_text_only_local_models_from_selectable_ones() {
         "{listing}"
     );
     state.runtime.compaction.models[0].tools = true;
-    let listing = command(&mut state, &chat, "").unwrap();
+    let listing = command(&mut state.chats[0], &state.runtime, "").unwrap();
     assert!(
         listing.contains("local:local-qwen") && !listing.contains("Text-only"),
         "{listing}"

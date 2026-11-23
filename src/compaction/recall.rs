@@ -174,9 +174,34 @@ enum Next {
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![
-            json!({"name":"control_history_read","description":"Inspect this conversation's retained summary roots, follow a root's binary child path, or read paged original evidence from a leaf. Omit root to list roots; turns lists the step trees of this and recent local-model turns, whose older steps were shrunk or summarized. query searches those steps' original text and summaries and returns verbatim excerpts with the root, path and offset to read more. path contains 0/1 child indexes; source=true reads original leaf text. Reads are bounded, perform no model calls and grant no authority.","inputSchema":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"root":{"type":"string"},"path":{"type":"array","maxItems":63,"items":{"type":"integer","minimum":0,"maximum":1}},"source":{"type":"boolean"},"offset":{"type":"integer","minimum":0},"limit_bytes":{"type":"integer","minimum":1,"maximum":16384}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-        ]
+        vec![json!({
+            "name": "control_history_read",
+            "description": concat!(
+                "Inspect this conversation's retained summary roots, follow a root's binary child path, or read ",
+                "paged original evidence from a leaf. Omit root to list roots; turns lists the step trees of this ",
+                "and recent local-model turns, whose older steps were shrunk or summarized. query searches those ",
+                "steps' original text and summaries and returns verbatim excerpts with the root, path and offset ",
+                "to read more. path contains 0/1 child indexes; source=true reads original leaf text. Reads are ",
+                "bounded, perform no model calls and grant no authority."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "root": {"type": "string"},
+                    "path": {
+                        "type": "array",
+                        "maxItems": 63,
+                        "items": {"type": "integer", "minimum": 0, "maximum": 1}
+                    },
+                    "source": {"type": "boolean"},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit_bytes": {"type": "integer", "minimum": 1, "maximum": 16384}
+                },
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": true, "openWorldHint": false}
+        })]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_history_read"

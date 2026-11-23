@@ -319,10 +319,8 @@ fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
         .map(|s| s.resource.owner.chat.as_str())
         .collect::<HashSet<_>>();
     let stopped = stopped_list(&services, &busy);
-    let page = crate::render(
-        &state,
+    let page = crate::shell(
         "tool-page",
-        "none",
         &format!(
             "<h2>Persistent services</h2><div data-live-src='/tools/services/live' data-live-refresh>{compute}{empty}{cards}{stopped}</div>"
         ),

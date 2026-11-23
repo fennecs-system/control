@@ -20,6 +20,10 @@ impl crate::backend::Agent for Antigravity {
     fn label(&self) -> &'static str {
         "Google / Antigravity CLI"
     }
+    /// Its credential names: never mounted in a workspace today, and never published if one appears there.
+    fn private_names(&self) -> &'static [&'static str] {
+        &[".gemini", "gemini-api-key", "adc.json", "antigravity-oauth-token"]
+    }
     fn name(&self) -> &'static str {
         "Antigravity"
     }

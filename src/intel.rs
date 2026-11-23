@@ -544,7 +544,7 @@ pub(crate) fn notify(
     let tree = Tree::new(state);
     let own = tree.root(chat);
     if !crate::lens_library::offers(
-        state,
+        &state.lens_library,
         &crate::chat::selected_lenses(
             state
                 .chats
@@ -646,8 +646,43 @@ pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
         vec![
-            json!({"name":"control_intel_brief","description":"Read a Markdown intel brief for the last 24 hours: per team its goal, progress (claims and score probe changes), cost in tokens, pathologies observed by the host (stalls, repeated failures, repetition loops, polling, harness churn, cost burn) and requests waiting on the operator. Without chat_id it covers your own team; an approved antibody may name any chat to read that team, or omit chat_id to read the whole node. Read-only.","inputSchema":{"type":"object","properties":{"chat_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-            json!({"name":"control_operator_notify","description":"Send the operator one short notice through their messaging channels (for example a Discord DM). No decision is requested; a reply goes to your task tree's steering chat. Use it only for what a team's lead is not fixing or what needs the operator: a team working against its goal, cost burn, a stuck team or a request waiting on the operator. team names the top-level chat it concerns. Opt-in (the root chat's lenses must offer operator.notify) and rate-limited per node; an identical notice is refused.","inputSchema":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":NOTICE_CHARS},"team":{"type":"string"}},"required":["text"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}}),
+            json!({
+                "name": "control_intel_brief",
+                "description": concat!(
+                    "Read a Markdown intel brief for the last 24 hours: per team its goal, progress (claims and score ",
+                    "probe changes), cost in tokens, pathologies observed by the host (stalls, repeated failures, ",
+                    "repetition loops, polling, harness churn, cost burn) and requests waiting on the operator. ",
+                    "Without chat_id it covers your own team; an approved antibody may name any chat to read that ",
+                    "team, or omit chat_id to read the whole node. Read-only."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"chat_id": {"type": "string"}},
+                    "additionalProperties": false
+                },
+                "annotations": {"readOnlyHint": true, "openWorldHint": false}
+            }),
+            json!({
+                "name": "control_operator_notify",
+                "description": concat!(
+                    "Send the operator one short notice through their messaging channels (for example a Discord DM). ",
+                    "No decision is requested; a reply goes to your task tree's steering chat. Use it only for what a ",
+                    "team's lead is not fixing or what needs the operator: a team working against its goal, cost ",
+                    "burn, a stuck team or a request waiting on the operator. team names the top-level chat it ",
+                    "concerns. Opt-in (the root chat's lenses must offer operator.notify) and rate-limited per node; ",
+                    "an identical notice is refused."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "minLength": 1, "maxLength": NOTICE_CHARS},
+                        "team": {"type": "string"}
+                    },
+                    "required": ["text"],
+                    "additionalProperties": false
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true}
+            }),
         ]
     }
     fn known(&self, name: &str) -> bool {

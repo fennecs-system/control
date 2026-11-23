@@ -202,6 +202,24 @@ pub struct Input {
     #[serde(default)]
     peer_port_id: Option<ResourceId>,
 }
+/// What a port's authority is checked against: the port grants, the services
+/// they bind and the chats that own them. Read-only borrows, so a check can
+/// neither reach the rest of `State` nor change anything.
+#[derive(Clone, Copy)]
+pub(crate) struct PortAuthority<'a> {
+    ports: &'a [Port],
+    services: &'a [Service],
+    chats: &'a [crate::chat::Session],
+}
+impl<'a> PortAuthority<'a> {
+    pub(crate) fn of(state: &'a State) -> Self {
+        Self {
+            ports: &state.ports,
+            services: &state.services,
+            chats: &state.chats,
+        }
+    }
+}
 fn accessible(state: &State, port: &Port, run: &crate::runtime::Run, node: &NodeId) -> bool {
     port.node == *node
         && port.actor == run.actor
@@ -212,12 +230,16 @@ fn accessible(state: &State, port: &Port, run: &crate::runtime::Run, node: &Node
                 && crate::services::accessible(state, service, node, run)
         })
 }
-fn service<'a>(state: &'a State, port: &Port, time: u64) -> io::Result<&'a Service> {
+fn service<'a>(authority: PortAuthority<'a>, port: &Port, time: u64) -> io::Result<&'a Service> {
     identity::authorize(&port.actor, Action::Task).map_err(io::Error::other)?;
-    if !state.chats.iter().any(|c| c.id == port.chat && c.actor == port.actor) {
+    if !authority
+        .chats
+        .iter()
+        .any(|c| c.id == port.chat && c.actor == port.actor)
+    {
         return Err(io::Error::other("Port owner no longer has this chat"));
     }
-    state
+    authority
         .services
         .iter()
         .find(|s| {
@@ -229,9 +251,9 @@ fn service<'a>(state: &'a State, port: &Port, time: u64) -> io::Result<&'a Servi
         })
         .ok_or_else(|| io::Error::other("Port service ownership, generation or lifetime changed"))
 }
-fn peer_endpoint(state: &State, port: &Port, time: u64) -> io::Result<SocketAddr> {
+fn peer_endpoint(authority: PortAuthority<'_>, port: &Port, time: u64) -> io::Result<SocketAddr> {
     let id = port.peer.as_ref().ok_or_else(|| io::Error::other("Not a peer route"))?;
-    let peer = state
+    let peer = authority
         .ports
         .iter()
         .find(|p| {
@@ -243,7 +265,7 @@ fn peer_endpoint(state: &State, port: &Port, time: u64) -> io::Result<SocketAddr
         })
         .ok_or_else(|| io::Error::other("Peer ingress is not accessible to this route"))?;
     let peer_service =
-        authorized(state, peer, time).map_err(|e| io::Error::other(format!("Peer ingress unavailable: {e}")))?;
+        authorized(authority, peer, time).map_err(|e| io::Error::other(format!("Peer ingress unavailable: {e}")))?;
     // Persist the exact authority admitted for this route. A service outlives
     // its model run; sharing an actor or a delegation root is not authority.
     if !port
@@ -258,13 +280,13 @@ fn peer_endpoint(state: &State, port: &Port, time: u64) -> io::Result<SocketAddr
         _ => Err(io::Error::other("Peer ingress is not ready yet")),
     }
 }
-fn peer_listening(state: &State, port: &Port) -> bool {
+fn peer_listening(ports: &[Port], port: &Port) -> bool {
     port.peer
         .as_ref()
-        .is_none_or(|id| state.ports.iter().any(|p| &p.id == id && p.ready))
+        .is_none_or(|id| ports.iter().any(|p| &p.id == id && p.ready))
 }
-fn authorized(state: &State, port: &Port, time: u64) -> io::Result<Service> {
-    let current = state
+fn authorized(authority: PortAuthority<'_>, port: &Port, time: u64) -> io::Result<Service> {
+    let current = authority
         .ports
         .iter()
         .find(|p| p.id == port.id && p.status == Status::Approved && p.approval == port.approval)
@@ -279,14 +301,14 @@ fn authorized(state: &State, port: &Port, time: u64) -> io::Result<Service> {
     {
         return Err(io::Error::other("Port approval expired"));
     }
-    let service = service(state, current, time)?;
+    let service = service(authority, current, time)?;
     if approval.expires > service.resource.lease.expires() {
         return Err(io::Error::other("Port lease exceeds service lease"));
     }
     match current.direction {
         Direction::Ingress if approval.pinned.is_none() && current.peer.is_none() => {}
         Direction::Egress if current.peer.is_some() => {
-            if current.target.is_some() || approval.pinned != Some(peer_endpoint(state, current, time)?) {
+            if current.target.is_some() || approval.pinned != Some(peer_endpoint(authority, current, time)?) {
                 return Err(io::Error::other("Peer ingress endpoint changed"));
             }
         }
@@ -389,7 +411,7 @@ fn admit(
                 && p.service != input.service_id
                 && accessible(state, p, run, &node)
         }).ok_or_else(||io::Error::other("peer_port_id must be an active ingress of another owned or explicitly granted service. If a lead created the service after spawning you, ask it to send control_agent_message with services:[service_id]. The grant applies to your queued follow-up turn; port approval remains separate."))?;
-        self::service(state,port,now()).map(Service::grant)
+        self::service(PortAuthority::of(state),port,now()).map(Service::grant)
     }).transpose()?;
     let owner = service.resource.owner.chat.as_str();
     let (active, owned) = state
@@ -590,7 +612,7 @@ fn approve(
         .position(|p| p.id.as_str() == id && p.status == Status::Pending)
         .ok_or_else(|| io::Error::other("Pending request not found"))?;
     let port = &state.ports[index];
-    let service = service(state, port, time)?;
+    let service = service(PortAuthority::of(state), port, time)?;
     let expires = match seconds {
         -1 => service.resource.lease.expires(),
         1..=3600 => time
@@ -602,7 +624,7 @@ fn approve(
     match port.direction {
         Direction::Ingress if pinned.is_none() => {}
         Direction::Egress if port.peer.is_some() => {
-            if pinned.is_none() || pinned != Some(peer_endpoint(state, port, time)?) {
+            if pinned.is_none() || pinned != Some(peer_endpoint(PortAuthority::of(state), port, time)?) {
                 return Err(io::Error::other(
                     "Peer ingress endpoint changed; review the request again",
                 ));
@@ -637,28 +659,29 @@ fn approve(
 }
 /// What every approval checks first: the pending request, a snapshot of its
 /// service and, for a peer route, the peer ingress endpoint.
-fn review(state: &State, id: &str) -> io::Result<(Port, Service, Option<SocketAddr>)> {
-    let p = state
+fn review(authority: PortAuthority<'_>, id: &str) -> io::Result<(Port, Service, Option<SocketAddr>)> {
+    let p = authority
         .ports
         .iter()
         .find(|p| p.id.as_str() == id && p.status == Status::Pending)
         .ok_or_else(|| io::Error::other("Pending port not found"))?;
-    let peer = p.peer.is_some().then(|| peer_endpoint(state, p, now())).transpose()?;
-    Ok((p.clone(), service(state, p, now())?.binding_snapshot(), peer))
+    let peer = p
+        .peer
+        .is_some()
+        .then(|| peer_endpoint(authority, p, now()))
+        .transpose()?;
+    Ok((p.clone(), service(authority, p, now())?.binding_snapshot(), peer))
 }
 /// The chat whose agent asked: the requesting run's chat, else the owner.
-fn requester<'a>(state: &'a State, port: &'a Port) -> &'a str {
-    state
-        .runtime
-        .runs
-        .iter()
+fn requester<'a>(runs: &'a [crate::runtime::Run], port: &'a Port) -> &'a str {
+    runs.iter()
         .find(|run| run.id == port.origin_run)
         .and_then(|run| run.chat_id.as_deref())
         .unwrap_or(&port.chat)
 }
 /// The facts the approval policy decides on.
 fn facts<'a>(state: &'a State, port: &'a Port) -> crate::auto_approval::PortFacts<'a> {
-    let root = crate::chat::team_root(state, requester(state, port));
+    let root = crate::chat::team_root(state, requester(&state.runtime.runs, port));
     let in_task = |chat: &str| crate::chat::team_root(state, chat) == root;
     crate::auto_approval::PortFacts {
         actor: &port.actor,
@@ -722,7 +745,7 @@ fn auto_approve(
         let Verdict::Approve(rule) = classify(policy, &Request::Port(facts(&state, port))) else {
             return None;
         };
-        let (request, service, peer) = review(&state, id).ok()?;
+        let (request, service, peer) = review(PortAuthority::of(&state), id).ok()?;
         (rule, request, service, peer)
     };
     verify(&service, &request.container).ok()?;
@@ -749,7 +772,7 @@ fn auto_approve(
     approve(&mut state, id, -1, loopback, pinned, now(), |_| Ok(())).ok()?;
     // The tool result carries the decision, so no decision turn follows.
     state.ports[index].decision = Some(decisions::Receipt::settled(true));
-    let chat = requester(&state, &old).to_owned();
+    let chat = requester(&state.runtime.runs, &old).to_owned();
     crate::auto_approval::record(&mut state, policy, "port", id, &chat, describe(&old), rule);
     if save(&state).is_err() {
         state.ports[index] = old;
@@ -763,19 +786,18 @@ fn auto_approve(
     Some(value)
 }
 /// Open ports, one line each, for the Permissions page.
-pub(crate) fn overview(state: &State) -> Vec<String> {
-    state
-        .ports
+pub(crate) fn overview(ports: &[Port], decisions: &[crate::auto_approval::Record]) -> Vec<String> {
+    ports
         .iter()
         .filter(|p| p.status != Status::Stopped)
         .map(|p| {
-            let auto = crate::auto_approval::rule(state, p.id.as_str())
+            let auto = crate::auto_approval::rule(decisions, p.id.as_str())
                 .map(|rule| format!(" <span class='tag'>auto · {}</span>", crate::escape(&rule)))
                 .unwrap_or_default();
             format!(
                 "<p>{} · {} · {:?}{auto}</p>",
                 crate::escape(&p.name.0),
-                route(state, p),
+                route(ports, p),
                 p.status
             )
         })
@@ -836,8 +858,10 @@ pub(crate) fn http_with_save(
                     return Err(e);
                 }
             } else {
-                let (request, service, peer) =
-                    review(&*shared.lock().map_err(|_| io::Error::other("State unavailable"))?, id)?;
+                let (request, service, peer) = review(
+                    PortAuthority::of(&*shared.lock().map_err(|_| io::Error::other("State unavailable"))?),
+                    id,
+                )?;
                 if request.node.as_str() != crate::config::node_id().map_err(io::Error::other)? {
                     return Err(io::Error::other("Port belongs to another node"));
                 }
@@ -864,16 +888,14 @@ pub(crate) fn http_with_save(
         }
         let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let ports=state.ports.iter().rev().filter(|p|p.status!=Status::Stopped).take(MAX_PORTS).map(|p|{
-            let detail=route(&state,p);
+            let detail=route(&state.ports,p);
             let action=if p.status==Status::Pending{format!("<label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label><p class='muted'>Access ends when this service stops. You can revoke it at any time.</p>{}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button>",if p.target.is_some(){"<label><input type='checkbox' name='loopback' value='yes'> Allow this exact literal loopback target</label>"}else{""})}else{"<button name='revoke' value='yes'>Revoke</button>".into()};
             let address=p.approval.as_ref().filter(|a|a.host_port!=0).map(|a|format!(" · 127.0.0.1:{}",a.host_port)).unwrap_or_default();
-            let auto=crate::auto_approval::rule(&state,p.id.as_str()).map(|rule|format!("<span class='tag'>auto · {}</span>",crate::escape(&rule))).unwrap_or_default();
+            let auto=crate::auto_approval::rule(&state.auto_decisions,p.id.as_str()).map(|rule|format!("<span class='tag'>auto · {}</span>",crate::escape(&rule))).unwrap_or_default();
             format!("<article>{auto}<h3>{}</h3><p>{detail}{address}</p><p>{:?} · {} · {} · {}</p><p>{}</p><form class='decision-form' method='post' action='/tools/ports'><input type='hidden' name='id' value='{}'>{action}</form></article>",crate::escape(&p.name.0),p.status,crate::escape(&p.chat),if p.ready{"ready"}else{"waiting"},crate::escape(p.service.as_str()),crate::escape(&p.diagnostic),crate::escape(p.id.as_str()))
         }).collect::<String>();
-        Ok(crate::render(
-            &state,
+        Ok(crate::shell(
             "tool-page",
-            "none",
             &format!(
                 "<h2>TCP ports</h2>{ports}<p class='muted'>Request a named service port from a DM. Access remains limited to this service and lease.</p>"
             ),
@@ -961,9 +983,8 @@ pub(crate) fn pending_for_chat<'a>(state: &'a State, id: &str) -> Vec<&'a Port> 
 }
 
 /// Owning chats of every pending port request, for the node-wide view.
-pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
-    state
-        .ports
+pub(crate) fn pending_chats(ports: &[Port]) -> impl Iterator<Item = &str> {
+    ports
         .iter()
         .filter(|port| port.status == Status::Pending)
         .map(|port| port.chat.as_str())
@@ -983,7 +1004,7 @@ pub(crate) fn pending_json(state: &State, id: &str) -> Vec<Value> {
         .collect()
 }
 
-fn route(state: &State, port: &Port) -> String {
+fn route(ports: &[Port], port: &Port) -> String {
     match (&port.target, &port.peer) {
         (Some(target), _) => format!(
             "Service :{} → {}:{}",
@@ -992,7 +1013,7 @@ fn route(state: &State, port: &Port) -> String {
             target.port
         ),
         (None, Some(peer)) => {
-            let ingress = state.ports.iter().find(|p| &p.id == peer);
+            let ingress = ports.iter().find(|p| &p.id == peer);
             format!(
                 "Service :{} → peer ingress {} (service {} :{})",
                 port.service_port,
@@ -1006,7 +1027,7 @@ fn route(state: &State, port: &Port) -> String {
 }
 pub(crate) fn pending_panel(state: &State, id: &str) -> String {
     pending_for_chat(state,id).into_iter().map(|port| {
-        let detail=route(state,port);
+        let detail=route(&state.ports,port);
         let loopback=if port.target.as_ref().is_some_and(|target|target.host.parse::<IpAddr>().is_ok_and(|ip|ip.is_loopback())) {
             "<label><input type='checkbox' name='loopback' value='yes' required> Allow this exact loopback target</label>"
         }else{""};
@@ -1014,10 +1035,10 @@ pub(crate) fn pending_panel(state: &State, id: &str) -> String {
     }).collect()
 }
 
-pub(crate) fn decision_revision(state: &State) -> u64 {
+pub(crate) fn decision_revision(ports: &[Port]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for port in &state.ports {
+    for port in ports {
         (&port.id, &port.status).hash(&mut hash);
     }
     hash.finish()
@@ -1027,7 +1048,7 @@ fn live_service(shared: &Arc<Mutex<State>>, port: &Port, cancel: &AtomicBool) ->
         return Err(io::Error::other("Port is stopping"));
     }
     let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-    authorized(&state, port, now())
+    authorized(PortAuthority::of(&state), port, now())
 }
 fn receipt(shared: &Arc<Mutex<State>>, port: &Port, ready: bool, diagnostic: &str) {
     if let Ok(mut state) = shared.lock()
@@ -1349,7 +1370,7 @@ fn ingress(shared: Arc<Mutex<State>>, mut port: Port, cancel: Arc<AtomicBool>) -
     let assigned = listener.local_addr()?.port();
     if port.approval.as_ref().unwrap().host_port == 0 {
         let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        authorized(&state, &port, now())?;
+        authorized(PortAuthority::of(&state), &port, now())?;
         let index = state.ports.iter().position(|p| p.id == port.id).unwrap();
         state.ports[index].approval.as_mut().unwrap().host_port = assigned;
         if let Err(error) = crate::storage::save(&state) {
@@ -1409,13 +1430,13 @@ enum Intent {
     Serve,
     Stop,
 }
-fn intent(state: &State, port: &Port, node: &NodeId, time: u64) -> Intent {
+fn intent(authority: PortAuthority<'_>, port: &Port, node: &NodeId, time: u64) -> Intent {
     if &port.node != node {
         return Intent::Stop;
     }
     match port.status {
-        Status::Pending if service(state, port, time).is_ok() => Intent::Wait,
-        Status::Approved if authorized(state, port, time).is_ok() => Intent::Serve,
+        Status::Pending if service(authority, port, time).is_ok() => Intent::Wait,
+        Status::Approved if authorized(authority, port, time).is_ok() => Intent::Serve,
         _ => Intent::Stop,
     }
 }
@@ -1449,7 +1470,7 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> JoinHandle<()> {
                 let _ = decisions::advance(&mut state, crate::storage::save);
                 let time = now();
                 for port in state.ports.iter().filter(|p| p.status != Status::Stopped) {
-                    match intent(&state, port, &node, time) {
+                    match intent(PortAuthority::of(&state), port, &node, time) {
                         Intent::Serve => {
                             let key = proxy::Key::of(port);
                             if port.direction == Direction::Egress && port.target.is_some() && !proxied.contains(&key) {
