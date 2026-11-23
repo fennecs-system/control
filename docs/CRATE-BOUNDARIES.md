@@ -29,12 +29,24 @@ generic invariant that existing interfaces cannot express.
 | `control-client` | The loopback MCP client (`Hive`) and typed operator operations, operator decisions, the live-update follower, chat navigation, GitHub commands and the chat-app channel core. Also the contracts the server writes or answers: the outbox delivery feed, user-facing URL names and diff previews. Talks to the server only over HTTP/MCP and node files. |
 | `control-tui` | The terminal interface behind `control tui` and `control-harness`. Depends on `control-client`; owns ratatui and crossterm. |
 | `control-discord` | The Discord bridge (`control discord`, `control-discord`): gateway, components, delivery and the per-DM routing. Depends on `control-client`. |
+| `control-isolation` | Containers as data: `RunSpec` (image, program, user, mounts, secrets, tmpfs, limits, seccomp, network, logs, input) and the `Isolation` trait that carries one out, with the `Docker` backend. `std` and Serde only. |
 
 The `control` library (`src/lib.rs`) keeps only build information and the
 operator's permission policy, which the server alone uses. Discord follows typed
 delivery events from the outbox (`crates/client/src/outbox.rs`) and reads no
 other application state except which inbound DMs were accepted. Authorization
 and DM binding are rechecked at delivery.
+
+## Isolation
+
+`control-isolation` is the only place a container's shape is decided: callers
+build a `RunSpec` and hand it to an `Isolation` handle, and `Docker` renders it
+to one `docker run` argument vector in a pure function. Credentials are a
+separate `secrets` field, so every secret that enters a container is typed and
+listed in one place. Agent turn, text, probe, login and tool containers launch
+this way today; services, command jobs, previews, watches, lifecycle queries and
+image inspection still pass engine arguments through `src/engine.rs` and move
+behind the trait in later steps.
 
 ## Agent backends
 
@@ -48,7 +60,7 @@ workspace. `Backend::agent()` is the only dispatch; `src/codex.rs`,
 `src/claude.rs`, `src/grok.rs`, `src/antigravity.rs` and `src/local_agent.rs` each implement it. `src/worker.rs`
 holds generic execution only.
 
-The trait's signatures name only `std` and `control_ai`, so each implementation
+The trait's signatures name only `std`, `control_ai` and `control_isolation`, so each implementation
 can move to its own crate without a cycle: `control-codex`, `control-claude`,
 `control-grok`, `control-antigravity`, `control-local`. A backend gets
 what it needs from the host as arguments and never names application state.
