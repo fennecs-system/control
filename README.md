@@ -1,17 +1,17 @@
 # Control
 
 A bot harness for agents, tools and knowledge, built with Rust, WASM
-and Nix. Chat in a UI, in a terminal or through Discord; run Codex or Claude
-in isolated containers and keep their work between turns. 
+and Nix. Chat in a UI, in a terminal or through Discord; run Codex, Claude,
+Grok or Antigravity in isolated containers and keep their work between turns.
 
 ## Install
 
 For a local NixOS machine, see the [NixOS deployment guide](docs/NIXOS.md)
 for one-command setup and an optional systemd user service.
 
-On macOS, you need **Nix with flakes, Git, a running Linux container engine, and a
-Linux Nix builder** matching your Mac's architecture. See [setup](docs/setup.md)
-if you need a builder or want the individual build steps.
+On macOS, you need **Nix with flakes, Git, a running Linux container engine, and an
+`aarch64-linux` Nix builder** (Apple Silicon only; `nix run .#builder` starts one).
+See [setup](docs/setup.md) for the builder or the individual build steps.
 
 ```sh
 git clone https://github.com/fennecs-system/control.git
@@ -47,7 +47,7 @@ services get a private writable Nix store/database; the pinned base and model
 CLI container remain read-only. Local Nix builds work offline; remote packages
 still need separate scoped network access. See [worker profiles](docs/WORKER-PROFILES.md).
 
-## Claude and Codex
+## Model backends
 
 Codex is the default. To start with Claude inside Control:
 
@@ -69,7 +69,7 @@ preserves your saved models and selection.
 Choose a saved model under **Manage → Models & providers**. **+ New model** adds
 another model; clicking its row selects it for new runs.
 
-[Local text models and compaction](docs/LOCAL-MODELS.md) describes independent
+[Local models and compaction](docs/LOCAL-MODELS.md) describes independent
 local summarizers for Codex/Claude chats, configurable history windows and the
 web/TUI summary-tree inspector. It also covers bounded local text generation for
 agents (`control_model_generate`) and local-model agent turns (`/model
@@ -109,10 +109,10 @@ Run `./result/bin/control <command>`:
 | `tui` | Start a fresh terminal chat; `--resume ID` opens an existing one. Tab completes `/` commands; `/help` lists commands and shortcuts. Enter sends; Ctrl+Q quits. See [terminal development](docs/TERMINAL.md). |
 | `doctor` | Check local prerequisites and sandbox isolation without calling a model. |
 | `config init` / `config path` | Initialize or locate private configuration. |
-| `mcp` | Serve local tools to an external MCP client. |
+| `mcp` / `mcp --chat` | Serve local tools to an external MCP client, or [drive chats](docs/CHAT-MCP.md) as the local operator. |
 | `discord --enable` | Listen for configured Discord DMs. [Setup →](docs/setup.md#discord) |
 | `browser capture FILE [WIDTH HEIGHT]` | Capture an offline HTML preview. |
-| `--help` | List commands, including Claude and offline federation helpers. |
+| `--help` | List commands, including Claude, Grok, Antigravity and offline federation helpers. |
 
 Web, TUI and operator MCP chats accept messages up to 20,000 Unicode characters.
 Discord messages and shared room posts keep their separate 2,000-character limits.
