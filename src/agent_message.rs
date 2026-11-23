@@ -163,12 +163,9 @@ fn transact(
     save: impl FnOnce(&State) -> io::Result<()>,
     wake: impl FnOnce(),
 ) -> io::Result<MessageResult> {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+    let stamp = crate::ids::stamp();
     let id = format!("{stamp:x}-{}", state.runtime.runs.len());
-    let at_ms = u64::try_from(stamp / 1_000_000).unwrap_or(u64::MAX);
+    let at_ms = stamp / 1_000_000;
     transact_at(state, attempt, call, (id, at_ms), archive, save, wake)
 }
 fn prepare(state: &State, attempt: &AttemptRef<'_>, call: MessageCall, id: String) -> io::Result<operation::Decision> {

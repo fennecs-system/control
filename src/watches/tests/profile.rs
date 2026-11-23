@@ -87,7 +87,7 @@ fn notification_observe_profile() {
     }
     // Context: the follower also appends every frame to its spool. Same
     // calls as `append`, in a scratch directory rather than Control's state.
-    let path = std::env::temp_dir().join(format!("control-salience-profile-{}.log", std::process::id()));
+    let path = crate::test_support::scratch("control-salience-profile").with_extension("log");
     let sample = &frames[..frames.len().min(20_000)];
     let start = Instant::now();
     for frame in sample {

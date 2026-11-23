@@ -172,7 +172,7 @@ fn live_docker_enforces_all_shapes_without_changing_image_capabilities() {
         request(&mut state, &run, time, "probe", Some(shape)).unwrap();
         let service = &mut state.services[0];
         service.resource.image = image.clone().try_into().unwrap();
-        service.resource.owner.node = format!("qa-shapes-{}-{time}", std::process::id()).try_into().unwrap();
+        service.resource.owner.node = crate::test_support::unique("qa-shapes").try_into().unwrap();
         service.profile = profile;
         service.resource.phase = Phase::Creating;
         struct Cleanup {

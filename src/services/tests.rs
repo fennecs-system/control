@@ -1069,11 +1069,7 @@ fn live_fenced_paused_service_can_be_stopped_without_restart() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let profile = crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap();
     let (mut state, run, _, time) = fixture();
-    let node = format!(
-        "fenced-qa-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    );
+    let node = crate::test_support::unique("fenced-qa");
     let mut request = input("sleep infinity");
     request.lease_seconds = -1;
     admit_profile(
@@ -1141,11 +1137,7 @@ fn live_workspace_survives_restart_exit_cleanup_and_container_replacement() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let profile = crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap();
     let (mut state, run, _, time) = fixture();
-    let node = format!(
-        "storage-qa-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    );
+    let node = crate::test_support::unique("storage-qa");
     admit_profile(
         &mut state,
         Request {
@@ -1286,11 +1278,7 @@ fn live_service_survives_server_restart_and_expires_without_control() {
     };
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let binary = std::fs::canonicalize(std::env::var("CONTROL_QA_CONTROL_BIN").unwrap()).unwrap();
-    let root = std::env::temp_dir().join(format!(
-        "control-services-live-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    ));
+    let root = crate::test_support::scratch("control-services-live");
     fs::create_dir(&root).unwrap();
     let state_dir = root.join("state");
     let config = root.join("config");

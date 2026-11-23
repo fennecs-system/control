@@ -3,7 +3,7 @@ use crate::backend::Backend;
 use std::process::{Command, Stdio};
 #[test]
 fn command_admission_survives_reload_without_replaying_an_effect() {
-    let root = std::env::temp_dir().join(format!("control-claude-intent-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-claude-intent");
     fs::create_dir_all(root.join("workspace")).unwrap();
     let workspace = root.join("workspace");
     claim(&workspace, "request-1").unwrap();
@@ -34,7 +34,7 @@ fn live_shutdown_stops_offline_workspace_command() {
         return;
     }
     let image = Backend::Claude.image().expect("pinned Claude image");
-    let name = format!("control-shell-shutdown-{}", std::process::id());
+    let name = crate::test_support::unique("control-shell-shutdown");
     let root = std::env::temp_dir().join(&name);
     fs::create_dir(&root).unwrap();
     let root = root.canonicalize().unwrap();
@@ -117,7 +117,7 @@ fn live_shutdown_stops_offline_workspace_command() {
 #[ignore = "requires the pinned Claude image and a Linux container engine; no credentials or model calls"]
 fn live_offline_workspace_isolated_and_persistent_across_processes() {
     let image = Backend::Claude.image().expect("Configure claude-image-id");
-    let root = std::env::temp_dir().join(format!("control-claude-offline-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-claude-offline");
     fs::create_dir_all(&root).unwrap();
     control_agent::cli::probe(
         &crate::agent_host::NODE,
@@ -125,7 +125,7 @@ fn live_offline_workspace_isolated_and_persistent_across_processes() {
         &image,
         "fixture-node",
         &root,
-        &format!("control-claude-probe-{}", std::process::id()),
+        &crate::test_support::unique("control-claude-probe"),
         &control_claude::PROBE,
     )
     .unwrap();

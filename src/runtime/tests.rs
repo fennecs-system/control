@@ -74,10 +74,7 @@ fn retry_does_not_repeat_completed_work() {
 }
 #[test]
 fn snapshots_exclude_secrets_and_symlinks() {
-    let root = std::env::temp_dir().join(format!(
-        "control-snapshot-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    ));
+    let root = crate::test_support::scratch("control-snapshot");
     let source = root.join("source");
     let dest = root.join("dest");
     fs::create_dir_all(source.join("src")).unwrap();

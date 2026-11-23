@@ -967,14 +967,7 @@ fn consumed_steering_does_not_launch_twice_and_racing_input_stays_queued() {
 }
 #[test]
 fn reports_keep_valid_utf8_prefixes_but_reject_malformed_files_and_links() {
-    let root = std::env::temp_dir().join(format!(
-        "control-report-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::test_support::scratch("control-report");
     fs::create_dir(&root).unwrap();
     let path = root.join("report");
     for character in ["é", "猫", "🐶"] {
@@ -1826,13 +1819,7 @@ fn failed_checkpoint_preserves_queue_and_dispatches_after_recovery() {
 }
 #[test]
 fn user_workspace_has_no_control_source_or_configuration() {
-    let root = std::env::temp_dir().join(format!(
-        "control-user-scope-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::test_support::scratch("control-user-scope");
     let baseline = root.join("baseline");
     let workspace = root.join("workspace");
     prepare_workspace(Workspace::User, &baseline, &workspace).unwrap();
@@ -1842,7 +1829,7 @@ fn user_workspace_has_no_control_source_or_configuration() {
 }
 #[test]
 fn source_workspace_snapshots_required_build_inputs_and_explains_failures() {
-    let root = std::env::temp_dir().join(format!("control-source-workspace-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-source-workspace");
     let source = root.join("source");
     fs::create_dir_all(source.join("src")).unwrap();
     fs::create_dir_all(source.join("hosting")).unwrap();
@@ -1949,14 +1936,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
     use std::os::unix::fs::MetadataExt;
     let image = std::env::var("CONTROL_QA_IMAGE").expect("Set CONTROL_QA_IMAGE to a pinned image ID");
     assert!(runtime::pinned_image(&image));
-    let root = std::env::temp_dir().join(format!(
-        "control-judge-qa-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root = crate::test_support::scratch("control-judge-qa");
     let source = root.join("source");
     let scratch = root.join("scratch");
     fs::create_dir_all(&source).unwrap();
@@ -1971,7 +1951,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
     fs::write(&auth.path, b"{}").unwrap();
     let policy = root.join("seccomp.json");
     fs::write(&policy, include_bytes!("../../hosting/worker-seccomp.json")).unwrap();
-    let name = format!("control-judge-codex-qa-{}", std::process::id());
+    let name = crate::test_support::unique("control-judge-codex-qa");
     let spec = permissions(container_spec_scoped(
         &image,
         &name,
@@ -2003,7 +1983,7 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
     );
     assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "immutable-source");
     assert_eq!(fs::read_to_string(scratch.join("result")).unwrap(), "scratch-ok");
-    let result=crate::host_shell::shell_scoped(crate::engine::isolation(), &image,&format!("control-judge-claude-qa-{}",std::process::id()),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
+    let result=crate::host_shell::shell_scoped(crate::engine::isolation(), &image,&crate::test_support::unique("control-judge-claude-qa"),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
     assert_eq!(result["exit_code"], 0);
     assert_eq!(result["stdout"], "immutable-source");
     assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "immutable-source");
@@ -2085,7 +2065,7 @@ fn a_usage_limit_reported_only_in_the_event_stream_is_named() {
 fn mounts_reject_csv_injection_and_reports_reject_symlinks() {
     assert!(mount_path(Path::new("/tmp/auth,readonly=false")).is_err());
     assert!(mount_path(Path::new("relative/auth.json")).is_err());
-    let root = std::env::temp_dir().join(format!("control-credentials-test-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-credentials-test");
     fs::create_dir_all(&root).unwrap();
     let file = root.join("auth.json");
     fs::write(&file, b"harmless-canary").unwrap();

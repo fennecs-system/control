@@ -25,13 +25,7 @@ fn pending_project_files_survive_uncertain_unwind_but_not_ordinary_rejection() {
 }
 impl Fixture {
     fn new() -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "control-project-test-{}-{}-{}",
-            std::process::id(),
-            nonce(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
+        let path = crate::test_support::scratch("control-project-test");
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -636,19 +630,33 @@ fn wait_for_import(id: &str) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
-/// Holds approval attachment until the test opens it, standing in for a slow copy.
-static GATE: (Mutex<bool>, std::sync::Condvar) = (Mutex::new(false), std::sync::Condvar::new());
-fn gated_save(_: &State) -> io::Result<()> {
-    let (open, changed) = &GATE;
-    let mut open = open.lock().unwrap();
-    while !*open {
-        open = changed.wait(open).unwrap();
+/// Chats whose imports wait after copying and before attaching, standing in for
+/// a slow copy. Keyed by chat so parallel tests never hold each other's imports,
+/// and waiting outside the state lock so the test can still read the chat.
+static HELD: (Mutex<Vec<String>>, std::sync::Condvar) = (Mutex::new(Vec::new()), std::sync::Condvar::new());
+pub(super) fn hold(chat: &str) {
+    let (held, changed) = &HELD;
+    let mut held = held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    while held.iter().any(|c| c == chat) {
+        held = changed.wait(held).unwrap_or_else(std::sync::PoisonError::into_inner);
     }
-    Ok(())
 }
-fn open_gate() {
-    *GATE.0.lock().unwrap() = true;
-    GATE.1.notify_all();
+/// Holds `chat`'s imports until dropped, also when the test fails.
+struct Held(String);
+impl Held {
+    fn new(chat: &str) -> Self {
+        HELD.0.lock().unwrap().push(chat.into());
+        Self(chat.into())
+    }
+}
+impl Drop for Held {
+    fn drop(&mut self) {
+        HELD.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|c| *c != self.0);
+        HELD.1.notify_all();
+    }
 }
 fn no_save(_: &State) -> io::Result<()> {
     Ok(())
@@ -689,14 +697,15 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     let shared = Arc::new(Mutex::new(initial));
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
-    // The attachment is held open, yet approval answers immediately.
+    // The import is held before attaching, yet approval answers immediately.
+    let held = Held::new(&id);
     let response = exchange(
         &shared,
         "POST",
         &page,
         "",
         &format!("request={request}&approve=yes"),
-        gated_save,
+        no_save,
     );
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
     assert!(
@@ -711,7 +720,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
         &page,
         "",
         &format!("request={request}&approve=yes"),
-        gated_save,
+        no_save,
     );
     assert!(repeated.starts_with("HTTP/1.1 303"), "{repeated}");
     assert_eq!(
@@ -751,7 +760,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
         );
         assert!(state.chats[0].project.as_ref().unwrap().needs_approval());
     }
-    open_gate();
+    drop(held);
     wait_for_import(&id);
     let done = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(done.starts_with("HTTP/1.1 303"), "{done}");
@@ -778,7 +787,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
         &page,
         "",
         &format!("request={request}&approve=yes"),
-        gated_save,
+        no_save,
     );
     assert!(
         response.contains(&format!("location: /dm/{id}/project?importing={request}\r\n")),

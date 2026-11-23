@@ -5,7 +5,7 @@ use crate::runtime::RunStatus;
 #[ignore = "requires the pinned Nix worker image and local Linux engine; offline, no credentials or model calls"]
 fn live_owned_resource_stop_and_mismatch_preserves_unrelated_writer() {
     let image = crate::runtime::worker_image().expect("pinned worker image");
-    let name = format!("control-lifecycle-fixture-{}", std::process::id());
+    let name = crate::test_support::unique("control-lifecycle-fixture");
     let workspace = std::env::temp_dir().join(&name);
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.canonicalize().unwrap();

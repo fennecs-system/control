@@ -36,16 +36,7 @@ pub(super) fn hydrate(state: &State, mut job: Job) -> Job {
     job
 }
 pub(super) fn scratch() -> std::path::PathBuf {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
-        "control-summary-{}-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
+    crate::test_support::scratch("control-summary")
 }
 #[test]
 fn bounded_tree_survives_restart_and_is_scoped_to_model_revision_and_sources() {

@@ -41,7 +41,7 @@ fn absent_or_untrusted_image_metadata_cannot_select_host_paths() {
 #[ignore = "requires CONTROL_QA_BUILD_IMAGE, a locally installed pinned build image; no models or credentials"]
 fn live_image_metadata_matches_source_and_rejects_changed_locks_and_symlinks() {
     let image = std::env::var("CONTROL_QA_BUILD_IMAGE").unwrap();
-    let root = std::env::temp_dir().join(format!("control-build-readiness-{}", std::process::id()));
+    let root = crate::test_support::scratch("control-build-readiness");
     std::fs::create_dir(&root).unwrap();
     struct Fixture(std::path::PathBuf);
     impl Drop for Fixture {

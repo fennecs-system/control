@@ -77,7 +77,7 @@ fn text_configuration_is_validated_and_failed_saves_restore_the_previous_setting
 fn fresh_claude_setup_selects_sonnet_and_reruns_preserve_the_library() {
     use crate::backend::Backend;
     use std::os::unix::fs::PermissionsExt;
-    let directory = std::env::temp_dir().join(format!("control-model-init-{}", std::process::id()));
+    let directory = crate::test_support::scratch("control-model-init");
     std::fs::create_dir(&directory).unwrap();
     initialize_in(&directory, Backend::Claude).unwrap();
     let path = directory.join("model.json");
