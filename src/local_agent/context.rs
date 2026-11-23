@@ -282,15 +282,11 @@ impl Lens {
     /// The lines the agent marked in `block`'s original steps (replies and
     /// reasoning), newest within the bound.
     fn marks(&self, block: Block, messages: &[Value], steps: &[Range<usize>]) -> Vec<String> {
-        let mut lines = Vec::new();
-        for index in block.start as usize..(block.end() as usize).min(steps.len()) {
-            lines.extend(self.reasoned.get(&index).into_iter().flatten().cloned());
-            for message in &messages[steps[index].clone()] {
-                if message["role"] == "assistant" {
-                    lines.extend(marked(message["content"].as_str().unwrap_or("")).map(str::to_owned));
-                }
-            }
-        }
+        let lines = (block.start as usize..(block.end() as usize).min(steps.len())).flat_map(|index| {
+            let assistant = messages[steps[index].clone()].iter().filter(|message| message["role"] == "assistant");
+            self.reasoned.get(&index).into_iter().flatten().cloned()
+                .chain(assistant.flat_map(|message| marked(message["content"].as_str().unwrap_or("")).map(str::to_owned)))
+        }).collect();
         newest(lines)
     }
     /// Messages for `block`: its folded node, else its steps, verbatim when

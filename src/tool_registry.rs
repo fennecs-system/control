@@ -96,12 +96,11 @@ fn session_definitions() -> Vec<Value> {
 pub fn entries() -> &'static [Entry] {
     static CATALOG: OnceLock<Vec<Entry>> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let mut entries = Vec::new();
-        for definition in session_definitions() {
+        let mut entries: Vec<_> = session_definitions().into_iter().map(|definition| {
             let mut registered = entry(definition);
             registered.definition["annotations"]["readOnlyHint"] = json!(!registered.checkpoint);
-            entries.push(registered);
-        }
+            registered
+        }).collect();
         entries.push(entry(crate::projects::definition(false)));
         entries.extend(crate::knowledge_tools::definitions().into_iter().map(entry));
         entries.push(entry(crate::github::definition()));

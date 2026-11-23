@@ -98,22 +98,21 @@ pub fn dead<'a>(state: &'a State, search: &str) -> Vec<Grave<'a>> {
     }
     let needle = search.to_lowercase();
     let callsigns = crate::callsigns::all(&state.chats);
-    let mut graves = Vec::new();
-    for (chat, callsign) in state.chats.iter().zip(callsigns) {
+    let mut graves: Vec<_> = state.chats.iter().zip(callsigns).filter_map(|(chat, callsign)| {
         let bot = bots.contains(chat.id.as_str());
         let run = latest.get(chat.id.as_str()).copied();
         // An agent chat that never ran has nothing to remember.
         if !(bot || (chat.parent_chat.is_some() && run.is_some())) || crate::bots::defined(state, &chat.id)
             || run.is_some_and(|(_, run)| crate::application::runs::status::active(&run.status)) {
-            continue;
+            return None;
         }
         let name = crate::callsigns::label(chat, callsign);
         if !needle.is_empty() && !name.to_lowercase().contains(&needle) && !chat.title.to_lowercase().contains(&needle) {
-            continue;
+            return None;
         }
         let stopped = run.and_then(|(_, run)| run.attempts.last()).map(|attempt| attempt.started_unix.saturating_add(attempt.elapsed_ms / 1000));
-        graves.push(Grave { chat, name, bot, reason: Reason::of(run.map(|(_, run)| run), bot), stopped, order: run.map_or(0, |(index, _)| index + 1) });
-    }
+        Some(Grave { chat, name, bot, reason: Reason::of(run.map(|(_, run)| run), bot), stopped, order: run.map_or(0, |(index, _)| index + 1) })
+    }).collect();
     graves.sort_unstable_by_key(|grave| std::cmp::Reverse((grave.stopped, grave.order)));
     graves
 }
