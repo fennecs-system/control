@@ -239,9 +239,21 @@ impl fmt::Display for SelectionError {
                     .map(AccountName::as_str)
                     .collect::<Vec<_>>()
                     .join(", ");
-                match refusal.why {
-                    Unusable::Missing => write!(f, "{backend} has no account {}.", refusal.name)?,
-                    Unusable::Disabled => write!(f, "Account {backend}+{} is disabled.", refusal.name)?,
+                match &refusal.why {
+                    Unusable::Missing(name) => write!(f, "{backend} has no account {name}.")?,
+                    Unusable::Disabled(name) => write!(f, "Account {backend}+{name} is disabled.")?,
+                    Unusable::Mixed(mixed) => {
+                        let kinds = mixed
+                            .0
+                            .iter()
+                            .map(|kind| kind.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" and ");
+                        write!(
+                            f,
+                            "{backend}+* would mix {kinds} accounts, which bill differently, so it is refused. Name one account, e.g. {backend}+NAME:MODEL."
+                        )?
+                    }
                 }
                 write!(f, " Accounts of {backend}: {existing}.")
             }

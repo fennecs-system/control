@@ -56,7 +56,7 @@ pub(super) fn call(
     let login = backend
         .agent()
         .login()
-        .map(|_| crate::logins::locate(backend, &crate::accounts::AccountName::implicit()))
+        .map(|_| crate::logins::locate(&crate::accounts::default_for(backend)))
         .transpose()?;
     let spec = backend.agent().text_run(
         &crate::agent_host::NODE,

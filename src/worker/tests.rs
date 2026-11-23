@@ -2085,12 +2085,12 @@ fn mounts_reject_csv_injection_and_reports_reject_symlinks() {
     fs::write(&file, b"harmless-canary").unwrap();
     use std::os::unix::fs::{PermissionsExt, symlink};
     fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(crate::logins::codex_validate(&file).is_err());
+    assert!(crate::logins::codex_validate(&file, control_agent::Form::Session).is_err());
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(crate::logins::codex_validate(&file).is_ok());
+    assert!(crate::logins::codex_validate(&file, control_agent::Form::Session).is_ok());
     let link = root.join("report-link");
     symlink(&file, &link).unwrap();
-    assert!(crate::logins::codex_validate(&link).is_err());
+    assert!(crate::logins::codex_validate(&link, control_agent::Form::Session).is_err());
     assert!(read_report(&link).is_err());
     fs::remove_dir_all(root).unwrap();
 }

@@ -30,6 +30,15 @@ impl Backend for Test {
             Self::Claude => ".credentials.json",
         })
     }
+    fn key_file(self) -> Option<KeyFile> {
+        match self {
+            Self::Codex => Some(KeyFile {
+                name: "auth.json",
+                writer: KeyWriter::Cli,
+            }),
+            Self::Claude => None,
+        }
+    }
     fn signs_in(self) -> bool {
         true
     }
@@ -104,7 +113,7 @@ fn without_a_file_every_backend_has_only_its_implicit_account() {
         .unwrap_err();
     assert_eq!(
         (missing.why, missing.existing),
-        (Unusable::Missing, vec![AccountName::implicit()])
+        (Unusable::Missing(name("second")), vec![AccountName::implicit()])
     );
 }
 
@@ -139,7 +148,7 @@ fn a_hand_written_file_defines_named_accounts_and_defaults() {
     let disabled = store
         .choose(Test::Codex, &name("key").into(), |_| 0, |_| false)
         .unwrap_err();
-    assert_eq!(disabled.why, Unusable::Disabled);
+    assert_eq!(disabled.why, Unusable::Disabled(name("key")));
     assert_eq!(disabled.existing.len(), 4);
     // A pool skips disabled accounts and takes the least loaded, the first on a tie.
     let load = |busy: &'static [&'static str]| move |n: &AccountName| usize::from(busy.contains(&n.as_str()));
@@ -243,13 +252,13 @@ fn a_reference_resolves_to_its_first_available_location() {
 #[test]
 fn a_named_accounts_login_is_in_its_own_directory() {
     assert_eq!(
-        secret(Test::Claude, &name("second")),
+        secret(Test::Claude, &name("second"), AccountKind::Subscription),
         SecretRef(vec![Location::Config(
             RelativePath::try_from("accounts/claude/second/.credentials.json").unwrap()
         )])
     );
     assert_eq!(
-        secret(Test::Claude, &AccountName::implicit()),
+        secret(Test::Claude, &AccountName::implicit(), AccountKind::Subscription),
         Test::Claude.implicit().1
     );
     assert_eq!(
@@ -351,4 +360,87 @@ fn a_usage_limit_cools_an_account_and_admission_holds_it_without_failover() {
         r#"{"cooling":[{"backend":"codex","name":"second","since":1000}]}"#
     );
     assert_eq!(serde_json::from_str::<Status<Test>>(&saved).unwrap(), cooled);
+}
+
+#[test]
+fn a_pool_takes_accounts_of_one_kind_only() {
+    use AccountKind::{ApiKey, Cloud, Subscription};
+    let mixed = |kinds: &[AccountKind]| MixedKinds(kinds.to_vec());
+    let table: [(&[AccountKind], Result<(), MixedKinds>); 7] = [
+        (&[], Ok(())),
+        (&[Subscription], Ok(())),
+        (&[ApiKey, ApiKey], Ok(())),
+        (&[Subscription, Subscription, Subscription], Ok(())),
+        (&[Subscription, ApiKey], Err(mixed(&[Subscription, ApiKey]))),
+        (&[ApiKey, Subscription, ApiKey], Err(mixed(&[ApiKey, Subscription]))),
+        (
+            &[Subscription, Cloud, ApiKey],
+            Err(mixed(&[Subscription, Cloud, ApiKey])),
+        ),
+    ];
+    table
+        .into_iter()
+        .for_each(|(kinds, expected)| assert_eq!(one_kind(kinds.iter().copied()), expected, "{kinds:?}"));
+    // In a store: an enabled key beside the implicit subscription refuses the
+    // pool and says why; disabled, it is not in the pool.
+    let store = |enabled: bool| {
+        Store::<Test>::parse(
+            format!(r#"{{"accounts":[{{"backend":"codex","name":"key","kind":"api_key","enabled":{enabled}}}]}}"#)
+                .as_bytes(),
+        )
+        .unwrap()
+    };
+    let refused = store(true)
+        .choose(Test::Codex, &AccountChoice::Pool, |_| 0, |_| false)
+        .unwrap_err();
+    assert_eq!(refused.why, Unusable::Mixed(mixed(&[Subscription, ApiKey])));
+    assert!(
+        store(false)
+            .choose(Test::Codex, &AccountChoice::Pool, |_| 0, |_| false)
+            .is_ok()
+    );
+    // A named account of either kind is still chosen by name.
+    assert_eq!(
+        store(true)
+            .choose(Test::Codex, &name("key").into(), |_| 0, |_| false)
+            .unwrap()
+            .kind,
+        ApiKey
+    );
+}
+
+#[test]
+fn an_api_key_account_keeps_its_key_file_and_runs_uncapped() {
+    assert_eq!(AccountKind::try_from("api-key"), Ok(AccountKind::ApiKey));
+    assert_eq!(AccountKind::try_from("api_key"), Ok(AccountKind::ApiKey));
+    assert_eq!(AccountKind::ApiKey.as_str(), "api-key");
+    assert!(AccountKind::try_from("key").is_err());
+    let store = Store::<Test>::parse(
+        br#"{"accounts":[{"backend":"codex","name":"key","kind":"api_key"},{"backend":"codex","name":"plan","kind":"subscription"}]}"#,
+    )
+    .unwrap();
+    let key = store.get(Test::Codex, &name("key")).unwrap();
+    assert_eq!(
+        key.secret,
+        SecretRef(vec![Location::Config(
+            RelativePath::try_from("accounts/codex/key/auth.json").unwrap()
+        )])
+    );
+    // A key never refreshes, so it is not held to one attempt at a time.
+    assert_eq!(key.effective_cap(), None);
+    assert_eq!(
+        store.get(Test::Codex, &name("plan")).unwrap().effective_cap(),
+        NonZeroU8::new(1)
+    );
+    // The file keeps serde's spelling.
+    assert!(
+        String::from_utf8(store.encode())
+            .unwrap()
+            .contains(r#""kind": "api_key""#)
+    );
+    // A backend that takes no key has no API-key accounts.
+    let refused = Store::<Test>::parse(br#"{"accounts":[{"backend":"claude","name":"k","kind":"api_key"}]}"#)
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("takes no API key"), "{refused}");
 }
