@@ -2,6 +2,7 @@
 //! review surface can admit a proposal; a worker never edits accepted records.
 use crate::{
     State,
+    collective::Knowledge,
     identity::{self, Actor},
 };
 use serde::{Deserialize, Serialize};
@@ -125,7 +126,11 @@ struct Record<'a> {
     revision: Option<u64>,
     admitted: bool,
 }
-fn records<'a>(state: &'a State, run: Option<&'a crate::runtime::Run>) -> impl Iterator<Item = Record<'a>> {
+fn records<'a>(
+    documents: &'a [crate::knowledge::Document],
+    proposals: &'a [Knowledge],
+    run: Option<&'a crate::runtime::Run>,
+) -> impl Iterator<Item = Record<'a>> {
     let captured = run
         .and_then(|run| run.context.as_ref())
         .into_iter()
@@ -137,16 +142,14 @@ fn records<'a>(state: &'a State, run: Option<&'a crate::runtime::Run>) -> impl I
             revision: Some(doc.revision),
             admitted: false,
         });
-    let local = state.documents.iter().filter(move |_| run.is_none()).map(|doc| Record {
+    let local = documents.iter().filter(move |_| run.is_none()).map(|doc| Record {
         id: format!("document:{}", doc.id),
         title: &doc.title,
         body: &doc.body,
         revision: Some(doc.revision),
         admitted: false,
     });
-    let accepted = state
-        .collective
-        .proposals
+    let accepted = proposals
         .iter()
         .enumerate()
         .filter(|(_, p)| p.status == "accepted")
@@ -159,7 +162,13 @@ fn records<'a>(state: &'a State, run: Option<&'a crate::runtime::Run>) -> impl I
         });
     captured.chain(local).chain(accepted)
 }
-pub fn read(state: &State, run: Option<&crate::runtime::Run>, name: &str, args: &Value) -> Result<Value, &'static str> {
+pub fn read(
+    documents: &[crate::knowledge::Document],
+    proposals: &[Knowledge],
+    run: Option<&crate::runtime::Run>,
+    name: &str,
+    args: &Value,
+) -> Result<Value, &'static str> {
     match canonical(name) {
         "control.knowledge.search" => {
             let input: Search =
@@ -170,7 +179,7 @@ pub fn read(state: &State, run: Option<&crate::runtime::Run>, name: &str, args: 
             }
             let query = input.query.to_lowercase();
             let terms = query.split_whitespace().collect::<Vec<_>>();
-            let results=records(state,run).filter(|record| {
+            let results=records(documents,proposals,run).filter(|record| {
                 let title=record.title.to_lowercase();let body=record.body.to_lowercase();
                 terms.iter().all(|term|title.contains(term)||body.contains(term))
             }).take(limit).map(|record|json!({"id":record.id,"title":record.title.chars().take(280).collect::<String>(),"excerpt":record.body.chars().take(180).collect::<String>(),"revision":record.revision,"admitted":record.admitted})).collect::<Vec<_>>();
@@ -184,7 +193,7 @@ pub fn read(state: &State, run: Option<&crate::runtime::Run>, name: &str, args: 
             if input.id.len() > 200 || offset > 32000 || !(1..=4000).contains(&limit) {
                 return Err("Use an ID, character offset up to 32000 and limit of 1–4000");
             }
-            let record = records(state, run)
+            let record = records(documents, proposals, run)
                 .find(|record| record.id == input.id)
                 .ok_or("Knowledge entry not found in this context")?;
             let mut chars = record.body.chars().skip(offset);
@@ -192,7 +201,7 @@ pub fn read(state: &State, run: Option<&crate::runtime::Run>, name: &str, args: 
             let next = chars.next().map(|_| offset + body.chars().count());
             let mut result = json!({"id":record.id,"title":record.title.chars().take(280).collect::<String>(),"body":body,"revision":record.revision,"admitted":record.admitted,"next_offset":next});
             if let Some(index) = input.id.strip_prefix("claim:").and_then(|id| id.parse::<usize>().ok()) {
-                let proposal = &state.collective.proposals[index];
+                let proposal = &proposals[index];
                 result["evidence"] = json!(proposal.evidence.chars().take(1000).collect::<String>());
                 result["scope"] = json!(proposal.scope.chars().take(300).collect::<String>());
                 result["validity"] = json!(proposal.validity.chars().take(300).collect::<String>());
@@ -288,7 +297,7 @@ pub fn worker(
         return Err("Judges may only read knowledge");
     }
     if canonical(name) != "control.knowledge.propose" {
-        return read(state, Some(run), name, args);
+        return read(&state.documents, &state.collective.proposals, Some(run), name, args);
     }
     if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err("Missing or invalid request identity");
@@ -320,7 +329,7 @@ pub fn local(
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> Result<Value, &'static str> {
     if canonical(name) != "control.knowledge.propose" {
-        return read(state, None, name, args);
+        return read(&state.documents, &state.collective.proposals, None, name, args);
     }
     let chat = args["chat"]
         .as_str()
@@ -347,18 +356,16 @@ pub fn local(
 
 /// Pending worker proposals from `chat` and the chats spawned below it, as
 /// operator requests (`pending_knowledge`). Decided only through [`review_action`].
-pub(crate) fn pending_json(state: &State, chat: &str) -> Vec<Value> {
-    state.collective.proposals.iter().enumerate().filter(|(_, p)| p.status == "pending")
-        .filter_map(|(index, p)| p.source.as_ref().filter(|s| crate::chat::Lineage::of(&state.chats).within(&s.chat, chat)).map(|s| (index, p, s)))
+pub(crate) fn pending_json(proposals: &[Knowledge], lineage: crate::chat::Lineage<'_>, chat: &str) -> Vec<Value> {
+    proposals.iter().enumerate().filter(|(_, p)| p.status == "pending")
+        .filter_map(|(index, p)| p.source.as_ref().filter(|s| lineage.within(&s.chat, chat)).map(|s| (index, p, s)))
         .map(|(index, p, s)| json!({"claim_id":format!("claim:{index}"),"chat_id":s.chat,"claim":p.claim,"evidence":p.evidence,"scope":p.scope,"validity":p.validity,
             "summary":format!("{}\nEvidence: {}\nScope: {}\nRecheck when: {}", p.claim, p.evidence, p.scope, p.validity)}))
         .collect()
 }
 /// Chats with a pending proposal, for the node-wide request view.
-pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
-    state
-        .collective
-        .proposals
+pub(crate) fn pending_chats(proposals: &[Knowledge]) -> impl Iterator<Item = &str> {
+    proposals
         .iter()
         .filter(|p| p.status == "pending")
         .filter_map(|p| p.source.as_ref().map(|s| s.chat.as_str()))
