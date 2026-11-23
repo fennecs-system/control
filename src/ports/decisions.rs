@@ -201,7 +201,7 @@ fn advance_with_wake(
         .collect::<Vec<_>>();
     let mut grants = Vec::new();
     for origin in state.runtime.runs.iter().filter(|run| origins.contains(&run.id)) {
-        for grant in crate::services::grants(state, origin) {
+        for grant in crate::services::grants(crate::services::ServiceAuthority::of(state), origin) {
             if !grants.contains(&grant) {
                 grants.push(grant);
             }

@@ -6,15 +6,14 @@ use super::*;
 
 /// The chat and, with `team`, every chat spawned from it. The named chat must
 /// exist and be visible to its actor.
-fn chats(state: &State, id: &str, team: bool) -> io::Result<Vec<String>> {
-    let session = state
-        .chats
+fn chats(sessions: &[crate::chat::Session], id: &str, team: bool) -> io::Result<Vec<String>> {
+    let session = sessions
         .iter()
         .find(|session| session.id == id)
         .ok_or_else(|| fail("Chat not found."))?;
     identity::authorize(&session.actor, Action::Task).map_err(fail)?;
     Ok(if team {
-        crate::chat::Lineage::of(&state.chats)
+        Lineage::of(sessions)
             .subtree([id])
             .into_iter()
             .map(str::to_owned)
@@ -27,9 +26,9 @@ fn row(service: &Service) -> Value {
     json!({"service_id":service.resource.id,"chat":service.resource.owner.chat.as_str(),"phase":service.phase_name(),"command":service.label(),"running_commands":service.running_commands()})
 }
 /// Live services owned by `id` (or its team), oldest first.
-pub(crate) fn list(state: &State, id: &str, team: bool) -> io::Result<Value> {
-    let chats = chats(state, id, team)?;
-    Ok(json!({"services":state.services.iter()
+pub(crate) fn list(services: &[Service], sessions: &[crate::chat::Session], id: &str, team: bool) -> io::Result<Value> {
+    let chats = chats(sessions, id, team)?;
+    Ok(json!({"services":services.iter()
         .filter(|service| service.live() && chats.iter().any(|chat| chat == service.resource.owner.chat.as_str()))
         .map(row).collect::<Vec<_>>()}))
 }
@@ -44,7 +43,7 @@ pub(crate) fn stop(
     service: Option<&str>,
     save: impl Fn(&State) -> io::Result<()>,
 ) -> io::Result<Value> {
-    let chats = chats(state, id, team)?;
+    let chats = chats(&state.chats, id, team)?;
     let chosen = state
         .services
         .iter()

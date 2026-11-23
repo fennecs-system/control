@@ -457,7 +457,7 @@ pub fn request(
         resource_grants: if judge {
             Vec::new()
         } else {
-            crate::services::grants(state, run)
+            crate::services::grants(crate::services::ServiceAuthority::of(state), run)
         },
         actor,
         action,

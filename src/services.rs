@@ -21,6 +21,7 @@ pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Dura
 }
 use crate::{
     State,
+    chat::Lineage,
     identity::{self, Action, Actor},
     tool_registry::AttemptRef,
 };
@@ -149,11 +150,29 @@ impl Grant {
             && self.generation == service.resource.generation
     }
 }
+/// What service authorization reads: the services, the runs that call them
+/// and the chats' lineage, which decides team membership. Read-only, so a
+/// decision made from it cannot change state.
+#[derive(Clone, Copy)]
+pub(crate) struct ServiceAuthority<'a> {
+    services: &'a [Service],
+    runs: &'a [crate::runtime::Run],
+    lineage: Lineage<'a>,
+}
+impl<'a> ServiceAuthority<'a> {
+    pub(crate) fn of(state: &'a State) -> Self {
+        Self {
+            services: &state.services,
+            runs: &state.runtime.runs,
+            lineage: Lineage::of(&state.chats),
+        }
+    }
+}
 /// Whether `run` may use `service`: its own or granted services, and every
 /// service of its team. A service belongs to the work, not to the chat that
 /// happened to start it, so a teammate needs no grant.
-pub(crate) fn accessible(state: &State, service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
-    direct(service, node, run) || teammate(state, service, node, run)
+pub(crate) fn accessible(lineage: Lineage<'_>, service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
+    direct(service, node, run) || teammate(lineage, service, node, run)
 }
 /// Owned by `run`'s chat or granted to it: what it may share onward.
 pub(crate) fn direct(service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
@@ -165,8 +184,7 @@ pub(crate) fn direct(service: &Service, node: &NodeId, run: &crate::runtime::Run
 }
 /// A teammate in the same task tree (its top-level chat and every chat
 /// spawned beneath it), with the same actor and node. Judges never qualify.
-pub(crate) fn teammate(state: &State, service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
-    let lineage = crate::chat::Lineage::of(&state.chats);
+pub(crate) fn teammate(lineage: Lineage<'_>, service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
     service.resource.owner.node == *node
         && service.actor == run.actor
         && !crate::delegation::is_judge(run)
@@ -176,18 +194,18 @@ pub(crate) fn teammate(state: &State, service: &Service, node: &NodeId, run: &cr
             .is_some_and(|chat| lineage.team_root(chat) == lineage.team_root(service.resource.owner.chat.as_str()))
 }
 /// The index of service `id` that `run` may act on.
-fn target(state: &State, node: &NodeId, run: &crate::runtime::Run, id: &str) -> io::Result<usize> {
-    state
+fn target(authority: ServiceAuthority<'_>, node: &NodeId, run: &crate::runtime::Run, id: &str) -> io::Result<usize> {
+    authority
         .services
         .iter()
-        .position(|service| service.resource.id.as_str() == id && accessible(state, service, node, run))
+        .position(|service| service.resource.id.as_str() == id && accessible(authority.lineage, service, node, run))
         .ok_or_else(|| fail("Service is not owned by this chat or its team"))
 }
-pub(crate) fn grants(state: &State, run: &crate::runtime::Run) -> Vec<Grant> {
-    state
+pub(crate) fn grants(authority: ServiceAuthority<'_>, run: &crate::runtime::Run) -> Vec<Grant> {
+    authority
         .services
         .iter()
-        .filter(|service| accessible(state, service, &service.resource.owner.node, run))
+        .filter(|service| accessible(authority.lineage, service, &service.resource.owner.node, run))
         .map(Service::grant)
         .collect()
 }
@@ -367,10 +385,12 @@ pub struct Input {
 fn default_lease() -> i64 {
     -1
 }
-fn caller<'a>(s: &'a State, run: &str, generation: &str) -> io::Result<(&'a crate::runtime::Run, &'a str)> {
-    let run = s
-        .runtime
-        .runs
+fn caller<'a>(
+    runs: &'a [crate::runtime::Run],
+    run: &str,
+    generation: &str,
+) -> io::Result<(&'a crate::runtime::Run, &'a str)> {
+    let run = runs
         .iter()
         .find(|r| r.id == run && r.status == "running")
         .ok_or_else(|| fail("Run is not active"))?;
@@ -422,8 +442,9 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         ServiceCall::Stop(id) => (true, false, id, false),
     };
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let (active, _) = caller(&s, run, generation)?;
-    let owned = |service: &&Service| accessible(&s, service, &node, active);
+    let authority = ServiceAuthority::of(&s);
+    let (active, _) = caller(authority.runs, run, generation)?;
+    let owned = |service: &&Service| accessible(authority.lineage, service, &node, active);
     let Some(id) = id else {
         return if list {
             Ok(listing(&s, owned, run, detail))
@@ -431,7 +452,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             Err(fail("service_id is required"))
         };
     };
-    let index = target(&s, &node, active, &id)?;
+    let index = target(authority, &node, active, &id)?;
     if stop {
         let own = direct(&s.services[index], &node, active);
         transition(
@@ -473,7 +494,7 @@ fn start(
     input: Input,
 ) -> io::Result<Value> {
     let s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let (active, _) = caller(&s, run, generation)?;
+    let (active, _) = caller(&s.runtime.runs, run, generation)?;
     let image: ImageId = active
         .attempts
         .last()
@@ -494,7 +515,7 @@ fn start(
     quota_supported(&input, || isolation.disk_quota())?;
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
     // Revalidate the captured image after the engine query outside the state lock.
-    if caller(&s, run, generation)?
+    if caller(&s.runtime.runs, run, generation)?
         .0
         .attempts
         .last()
@@ -558,7 +579,7 @@ fn admit_profile(
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let Request { run, generation, nonce } = request;
-    let (run, chat) = caller(s, run, generation)?;
+    let (run, chat) = caller(&s.runtime.runs, run, generation)?;
     let lease = if input.lease_seconds == -1 {
         Lease::until_stopped(time)
     } else {

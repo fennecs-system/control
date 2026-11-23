@@ -600,7 +600,7 @@ pub(super) fn request_with(
     let digest = commands::hash(&serde_json::to_vec(&("copy", &transfer, input.timeout_seconds)).map_err(fail)?);
     let bounds = {
         let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-        let index = commands::owned(&state, run, generation, node, &input.service_id)?;
+        let index = commands::owned(ServiceAuthority::of(&state), run, generation, node, &input.service_id)?;
         if let Some(value) = commands::previous(&state.services[index], run, generation, nonce, &digest)? {
             return Ok(value);
         }
@@ -641,7 +641,7 @@ impl Job {
     ) -> io::Result<Self> {
         if !shared
             .lock()
-            .is_ok_and(|state| commands::live_attempt(&state, run, attempt))
+            .is_ok_and(|state| commands::live_attempt(&state.runtime.runs, run, attempt))
         {
             return Err(fail("the requesting attempt ended before the copy started"));
         }

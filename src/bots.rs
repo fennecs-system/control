@@ -1819,7 +1819,12 @@ fn reconcile_with_wake_at(
                             .iter()
                             .filter(|service| grant.matches(service))
                             .all(|service| {
-                                crate::services::accessible(state, service, &service.resource.owner.node, published)
+                                crate::services::accessible(
+                                    crate::chat::Lineage::of(&state.chats),
+                                    service,
+                                    &service.resource.owner.node,
+                                    published,
+                                )
                             })
                     })
                 })

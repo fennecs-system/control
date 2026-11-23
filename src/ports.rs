@@ -220,14 +220,14 @@ impl<'a> PortAuthority<'a> {
         }
     }
 }
-fn accessible(state: &State, port: &Port, run: &crate::runtime::Run, node: &NodeId) -> bool {
+fn accessible(authority: PortAuthority<'_>, port: &Port, run: &crate::runtime::Run, node: &NodeId) -> bool {
     port.node == *node
         && port.actor == run.actor
-        && state.services.iter().any(|service| {
+        && authority.services.iter().any(|service| {
             service.resource.id == port.service
                 && service.resource.generation == port.generation
                 && service.resource.owner.chat.as_str() == port.chat
-                && crate::services::accessible(state, service, node, run)
+                && crate::services::accessible(crate::chat::Lineage::of(authority.chats), service, node, run)
         })
 }
 fn service<'a>(authority: PortAuthority<'a>, port: &Port, time: u64) -> io::Result<&'a Service> {
@@ -377,7 +377,7 @@ fn admit(
         .iter()
         .find(|s| {
             s.resource.id == input.service_id
-                && crate::services::accessible(state, s, &node, run)
+                && crate::services::accessible(crate::chat::Lineage::of(&state.chats), s, &node, run)
                 && matches!(s.resource.phase, Phase::Running(_))
                 && !s.resource.lease.expired(now())
         })
@@ -409,7 +409,7 @@ fn admit(
                 && p.direction == Direction::Ingress
                 && p.status != Status::Stopped
                 && p.service != input.service_id
-                && accessible(state, p, run, &node)
+                && accessible(PortAuthority::of(state), p, run, &node)
         }).ok_or_else(||io::Error::other("peer_port_id must be an active ingress of another owned or explicitly granted service. If a lead created the service after spawning you, ask it to send control_agent_message with services:[service_id]. The grant applies to your queued follow-up turn; port approval remains separate."))?;
         self::service(PortAuthority::of(state),port,now()).map(Service::grant)
     }).transpose()?;
@@ -550,7 +550,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     r.chat_id
         .as_ref()
         .ok_or_else(|| io::Error::other("A chat is required"))?;
-    let owned = |p: &&Port| accessible(&state, p, r, &node);
+    let owned = |p: &&Port| accessible(PortAuthority::of(&state), p, r, &node);
     if let Some(Some((service, direction))) = stop {
         let chosen: Vec<usize> = state
             .ports
@@ -572,7 +572,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let index = state
         .ports
         .iter()
-        .position(|p| accessible(&state, p, r, &node) && Some(&p.id) == port_id.as_ref())
+        .position(|p| accessible(PortAuthority::of(&state), p, r, &node) && Some(&p.id) == port_id.as_ref())
         .ok_or_else(|| io::Error::other("Owned port not found"))?;
     if stop.is_some() && state.ports[index].status != Status::Stopped {
         let old = state.ports[index].status;

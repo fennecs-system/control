@@ -1499,11 +1499,11 @@ fn teammates_use_and_stop_their_teams_services_without_a_grant() {
             "it holds no grant to share onward"
         );
         assert!(
-            accessible(&s, &s.services[0], &node, teammate_run),
+            accessible(Lineage::of(&s.chats), &s.services[0], &node, teammate_run),
             "a team's service belongs to the team"
         );
         assert_eq!(
-            target(&s, &node, teammate_run, &id).unwrap(),
+            target(ServiceAuthority::of(&s), &node, teammate_run, &id).unwrap(),
             0,
             "exec, attach, logs and stop need no grant"
         );
@@ -1511,7 +1511,7 @@ fn teammates_use_and_stop_their_teams_services_without_a_grant() {
     // The lead uses a service a worker started after it was spawned.
     let lead_run = s.runtime.runs[0].clone();
     s.services[0].resource.owner.chat = worker.clone().try_into().unwrap();
-    assert!(target(&s, &node, &lead_run, &id).is_ok());
+    assert!(target(ServiceAuthority::of(&s), &node, &lead_run, &id).is_ok());
 
     // Outside the tree, another actor, another node or a judge: refused.
     let stranger = crate::chat::create(&mut s);
@@ -1531,10 +1531,10 @@ fn teammates_use_and_stop_their_teams_services_without_a_grant() {
         bundle: None,
     });
     for refused in [&outsider, &other_actor, &judge] {
-        assert!(target(&s, &node, refused, &id).is_err());
+        assert!(target(ServiceAuthority::of(&s), &node, refused, &id).is_err());
     }
     let elsewhere: NodeId = "node-b".to_owned().try_into().unwrap();
-    assert!(target(&s, &elsewhere, &worker_run, &id).is_err());
+    assert!(target(ServiceAuthority::of(&s), &elsewhere, &worker_run, &id).is_err());
 }
 
 #[test]

@@ -433,8 +433,8 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             return Err("Delegated child actor mismatch.");
         }
         let feedback = feedback(&child);
-        let mut resources = crate::services::grants(state, &parent);
-        for grant in crate::services::grants(state, &child) {
+        let mut resources = crate::services::grants(crate::services::ServiceAuthority::of(state), &parent);
+        for grant in crate::services::grants(crate::services::ServiceAuthority::of(state), &child) {
             if !resources.contains(&grant) {
                 resources.push(grant);
             }
@@ -487,7 +487,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         let resources = if d.input.role == Role::Judge {
             vec![]
         } else {
-            crate::services::grants(state, &parent)
+            crate::services::grants(crate::services::ServiceAuthority::of(state), &parent)
         };
         crate::scheduler::admit(&state.runtime)?;
         // A child joins its team room: the parent chat's link, else its lead's.

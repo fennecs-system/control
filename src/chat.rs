@@ -178,7 +178,7 @@ pub(crate) fn continuation(
     if objective.is_empty() || control_context::limits::message_too_long(&objective) {
         return Err(ContinuationError::Rejected);
     }
-    let grants = crate::services::grants(state, latest);
+    let grants = crate::services::grants(crate::services::ServiceAuthority::of(state), latest);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -225,7 +225,7 @@ impl FollowUp {
             context: run.context.clone(),
             lenses: run.lenses.clone(),
             persona: crate::delegation::lineage(run),
-            grants: crate::services::grants(state, run),
+            grants: crate::services::grants(crate::services::ServiceAuthority::of(state), run),
         }
     }
     /// Adds grants not already carried, keeping their order.
@@ -416,7 +416,7 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
             .or_else(|| previous.model.clone());
         let context = previous.context.clone();
         let lenses = previous.lenses.clone();
-        let resources = crate::services::grants(state, previous);
+        let resources = crate::services::grants(crate::services::ServiceAuthority::of(state), previous);
         if let Some(lenses) = &lenses {
             let session = state.chats.last_mut().unwrap();
             session.lenses = Some(lenses.clone());
@@ -852,7 +852,9 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     };
     let run_id = if native.is_none() {
         let resources = latest_task(state, id, &state.chats[index].actor)
-            .map(|from| crate::services::grants(state, &state.runtime.runs[from]))
+            .map(|from| {
+                crate::services::grants(crate::services::ServiceAuthority::of(state), &state.runtime.runs[from])
+            })
             .unwrap_or_default();
         state.runtime.enqueue_for(
             objective.into(),
@@ -1544,7 +1546,8 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &
         "control.chat.read" => detail(state, id()?),
         "control.run.scores" => crate::scores::read(state, id()?),
         "control.services.list" => {
-            crate::services::operator::list(state, id()?, arguments["team"] == true).map_err(|_| "Chat not found.")
+            crate::services::operator::list(&state.services, &state.chats, id()?, arguments["team"] == true)
+                .map_err(|_| "Chat not found.")
         }
         "control.services.stop" => {
             let service = match arguments.get("service_id") {
