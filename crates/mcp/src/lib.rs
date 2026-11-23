@@ -64,13 +64,15 @@ pub fn is_v2(request: &Value) -> bool {
 pub struct Call<'a> {
     pub name: &'a str,
     pub arguments: &'a Value,
+    /// The whole `params`, for a proxy that forwards the call unchanged.
+    pub params: &'a Value,
 }
 /// `Some` only for `tools/call`.
 pub fn call(request: &Value) -> Option<Call<'_>> {
     (method(request) == Method::ToolsCall).then(|| named(request))
 }
 fn named(request: &Value) -> Call<'_> {
-    Call { name: request["params"]["name"].as_str().unwrap_or(""), arguments: &request["params"]["arguments"] }
+    Call { name: request["params"]["name"].as_str().unwrap_or(""), arguments: &request["params"]["arguments"], params: &request["params"] }
 }
 
 /// A successful reply.

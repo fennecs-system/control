@@ -125,63 +125,54 @@ fn hive(connection: &mut Option<Hive>) -> io::Result<&mut Hive> {
     Ok(connection.as_mut().unwrap())
 }
 pub(crate) fn local_definitions() -> Vec<Value> {crate::tool_registry::local_definitions()}
-fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Value {
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let result = (|| -> io::Result<Value> {
-        if request["jsonrpc"] != "2.0" {
-            return Err(fail("Invalid JSON-RPC request"));
-        }
-        match request["method"].as_str().unwrap_or("") {
-            "initialize" => Ok(
-                json!({"protocolVersion":control_mcp::negotiate(request["params"]["protocolVersion"].as_str()),"capabilities":{"tools":{}},"serverInfo":{"name":"control-local-tools","version":env!("CARGO_PKG_VERSION")}}),
-            ),
-            "ping" => Ok(json!({})),
-            "tools/list" => {
-                let mut tools = match hive(connection).and_then(|h| h.rpc("tools/list", json!({})))
-                {
-                    Ok(value) => value["tools"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|t| {
-                            crate::tool_registry::bridge_read(t["name"].as_str().unwrap_or(""))
-                        })
-                        .map(|mut t| {
-                            t["annotations"] = json!({"readOnlyHint":true,"openWorldHint":false});
-                            t
-                        })
-                        .collect::<Vec<_>>(),
-                    Err(_) => Vec::new(),
-                };
-                tools.extend(local_definitions());
-                Ok(json!({"tools":tools}))
-            }
-            "tools/call" => {
-                let name = request["params"]["name"].as_str().unwrap_or("");
-                let arguments = &request["params"]["arguments"];
-                let result = if name == "control.browser.capture" {
-                    capture(root, arguments)
-                } else if crate::toolbox::known(name) {
-                    Ok(crate::toolbox::result(crate::toolbox::call(
-                        name, arguments,
-                    )))
-                } else if crate::tool_registry::bridge_forward(name) {
-                    hive(connection).and_then(|h| h.rpc("tools/call", request["params"].clone()))
-                } else {
-                    Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures, Rust snippets and solvers"))
-                };
-                Ok(result.unwrap_or_else(
-                    |e| json!({"content":[{"type":"text","text":e.to_string()}],"isError":true}),
-                ))
-            }
-            _ => Err(fail("Method not found")),
-        }
-    })();
-    match result {
-        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-        Err(e) => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":e.to_string()}}),
+const BRIDGE: control_mcp::Server = control_mcp::Server {
+    name: "control-local-tools",
+    version: env!("CARGO_PKG_VERSION"),
+    instructions: None,
+    // This bridge has always answered a non-2.0 request with -32601.
+    invalid: (control_mcp::METHOD_NOT_FOUND, "Invalid JSON-RPC request"),
+    unknown: (control_mcp::METHOD_NOT_FOUND, "Method not found"),
+};
+/// Read-only Control tools through the operator connection, plus local ones.
+struct Bridge<'a> {
+    connection: &'a mut Option<Hive>,
+    root: &'a Path,
+}
+impl control_mcp::Tools for Bridge<'_> {
+    fn list(&mut self) -> Vec<Value> {
+        let mut tools = match hive(self.connection).and_then(|h| h.rpc("tools/list", json!({}))) {
+            Ok(value) => value["tools"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| crate::tool_registry::bridge_read(t["name"].as_str().unwrap_or("")))
+                .map(|mut t| {
+                    t["annotations"] = json!({"readOnlyHint":true,"openWorldHint":false});
+                    t
+                })
+                .collect::<Vec<_>>(),
+            Err(_) => Vec::new(),
+        };
+        tools.extend(local_definitions());
+        tools
     }
+    fn call(&mut self, call: control_mcp::Call<'_>) -> Value {
+        let (name, arguments) = (call.name, call.arguments);
+        let result = if name == "control.browser.capture" {
+            capture(self.root, arguments)
+        } else if crate::toolbox::known(name) {
+            Ok(crate::toolbox::result(crate::toolbox::call(name, arguments)))
+        } else if crate::tool_registry::bridge_forward(name) {
+            hive(self.connection).and_then(|h| h.rpc("tools/call", call.params.clone()))
+        } else {
+            Err(fail("Tool unavailable: this bridge exposes read-only Control access, web search, offline captures, Rust snippets and solvers"))
+        };
+        result.unwrap_or_else(|e| control_mcp::failure(&e.to_string()))
+    }
+}
+fn dispatch(connection: &mut Option<Hive>, root: &Path, request: &Value) -> Value {
+    control_mcp::serve(&BRIDGE, request, &mut Bridge { connection, root })
 }
 pub fn run(args: &[String]) -> io::Result<()> {
     let root = match args {
@@ -222,16 +213,16 @@ pub(crate) fn serve(mut dispatch: impl FnMut(&Value) -> Value) -> io::Result<()>
                 }
             }
         }
-        let request: Value = match (!oversized).then(|| serde_json::from_slice(&bytes).ok()).flatten() {
+        let request = match (!oversized).then(|| control_mcp::parse(&bytes)).flatten() {
             Some(v) => v,
             None => {
-                let (code, message) = if oversized { (-32600, "MCP input exceeds 64 KiB") } else { (-32700, "Invalid JSON") };
-                writeln!(output, "{}", json!({"jsonrpc":"2.0","id":null,"error":{"code":code,"message":message}}))?;
+                let (code, message) = if oversized { (control_mcp::INVALID_REQUEST, "MCP input exceeds 64 KiB") } else { (control_mcp::PARSE_ERROR, "Invalid JSON") };
+                writeln!(output, "{}", control_mcp::error(&Value::Null, code, message))?;
                 output.flush()?;
                 continue;
             }
         };
-        if request.get("id").is_none() {
+        if control_mcp::is_notification(&request) {
             continue;
         }
         writeln!(output, "{}", dispatch(&request))?;

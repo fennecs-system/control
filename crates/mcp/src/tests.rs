@@ -40,6 +40,7 @@ fn calls_name_their_tool_or_the_empty_name() {
     let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.chats.list","arguments":{"limit":2}}});
     let call = call(&request).unwrap();
     assert_eq!((call.name, call.arguments), ("control.chats.list", &json!({"limit":2})));
+    assert_eq!(call.params, &request["params"]);
     let unnamed = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":7}});
     let unnamed = super::call(&unnamed).unwrap();
     assert_eq!((unnamed.name, unnamed.arguments), ("", &Value::Null));

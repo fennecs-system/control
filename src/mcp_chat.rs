@@ -454,36 +454,40 @@ pub(crate) fn call(remote: &mut impl Remote, name: &str, args: &Value, approvals
     Ok(clip(&text, OUTPUT))
 }
 
-fn dispatch<R: Remote>(connect: &mut impl FnMut() -> io::Result<R>, connection: &mut Option<R>, request: &Value) -> Value {
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let result = match request["method"].as_str().unwrap_or("") {
-        _ if request["jsonrpc"] != "2.0" => Err((-32600, "Invalid JSON-RPC request".to_owned())),
-        "initialize" => Ok(json!({"protocolVersion":control_mcp::negotiate(request["params"]["protocolVersion"].as_str()),"capabilities":{"tools":{}},"serverInfo":{"name":"control-chat","version":env!("CARGO_PKG_VERSION")},
-            "instructions":"Drive Control chats as the local operator: chats_list, chat_create, chat_send, chat_read. chat_open raises folder requests and control_design_ask asks the operator a decision (its answer appears in that chat); decisions stay with the operator unless enabled in Manage → Permissions (then chat_decide)."})),
-        "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools":definitions(false, control::permissions::read().mcp_approvals)})),
-        "tools/call" => {
-            let name = request["params"]["name"].as_str().unwrap_or("");
-            let result = match connection.take().map_or_else(&mut *connect, Ok) {
-                Ok(mut remote) => {
-                    let result = call(&mut remote, name, &request["params"]["arguments"], control::permissions::read().mcp_approvals);
-                    // Keep the session unless the transport failed; reconnect next call.
-                    if !result.as_ref().is_err_and(|e| e.to_string().starts_with("Control is unavailable")) { *connection = Some(remote); }
-                    result
-                }
-                Err(error) => Err(error),
-            };
-            Ok(match result {
-                Ok(text) => json!({"content":[{"type":"text","text":text}],"isError":false}),
-                Err(error) => json!({"content":[{"type":"text","text":error.to_string()}],"isError":true}),
-            })
-        }
-        _ => Err((-32601, "Method not found".to_owned())),
-    };
-    match result {
-        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-        Err((code, message)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}),
+const CHAT: control_mcp::Server = control_mcp::Server {
+    name: "control-chat",
+    version: env!("CARGO_PKG_VERSION"),
+    instructions: Some("Drive Control chats as the local operator: chats_list, chat_create, chat_send, chat_read. chat_open raises folder requests and control_design_ask asks the operator a decision (its answer appears in that chat); decisions stay with the operator unless enabled in Manage → Permissions (then chat_decide)."),
+    invalid: (control_mcp::INVALID_REQUEST, "Invalid JSON-RPC request"),
+    unknown: (control_mcp::METHOD_NOT_FOUND, "Method not found"),
+};
+/// The chat tools over one operator connection, opened on first use.
+struct Chats<'a, R, C> {
+    connect: &'a mut C,
+    connection: &'a mut Option<R>,
+}
+impl<R: Remote, C: FnMut() -> io::Result<R>> control_mcp::Tools for Chats<'_, R, C> {
+    fn list(&mut self) -> Vec<Value> {
+        definitions(false, control::permissions::read().mcp_approvals)
     }
+    fn call(&mut self, call: control_mcp::Call<'_>) -> Value {
+        let result = match self.connection.take().map_or_else(&mut *self.connect, Ok) {
+            Ok(mut remote) => {
+                let result = self::call(&mut remote, call.name, call.arguments, control::permissions::read().mcp_approvals);
+                // Keep the session unless the transport failed; reconnect next call.
+                if !result.as_ref().is_err_and(|e| e.to_string().starts_with("Control is unavailable")) { *self.connection = Some(remote); }
+                result
+            }
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(text) => control_mcp::text(&text),
+            Err(error) => control_mcp::failure(&error.to_string()),
+        }
+    }
+}
+fn dispatch<R: Remote>(connect: &mut impl FnMut() -> io::Result<R>, connection: &mut Option<R>, request: &Value) -> Value {
+    control_mcp::serve(&CHAT, request, &mut Chats { connect, connection })
 }
 
 /// Serves the chat tools on stdio until EOF. The connection authenticates with

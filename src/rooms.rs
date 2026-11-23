@@ -175,15 +175,15 @@ pub(crate) fn worker_definitions(judge: bool) -> Vec<Value> {
 pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
     let req = &envelope["request"];
     // Notifications never mutate state and have no wire response.
-    if req.get("id").is_none() {
+    if control_mcp::is_notification(req) {
         return Value::Null;
     }
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
+    let id = control_mcp::id(req);
     if let Some(fault) = control_mcp::request_fault(req) {
         return fault;
     }
-    if !matches!(req["method"].as_str(), Some("initialize" | "ping" | "tools/list" | "tools/call")) {
-        return control_mcp::error(&id, -32601, "Unsupported room method.");
+    if matches!(control_mcp::method(req), control_mcp::Method::Other(_)) {
+        return control_mcp::error(id, control_mcp::METHOD_NOT_FOUND, "Unsupported room method.");
     }
     let result = (|| -> Result<Value, std::borrow::Cow<'static, str>> {
         let run = state
@@ -217,13 +217,11 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
             }),
             None => attached.clone().ok_or_else(|| "No room attached. Call control_room_list and pass room.".into()),
         } };
-        match req["method"].as_str().unwrap_or("") {
-            "initialize" => Ok(
-                json!({"protocolVersion":control_mcp::LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-room","version":"0.1"}}),
-            ),
-            "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({"tools":worker_definitions(crate::delegation::is_judge(run))})),
-            "tools/call" => {
+        match control_mcp::method(req) {
+            control_mcp::Method::Initialize => Ok(control_mcp::initialize(control_mcp::LATEST, "control-room", "0.1")),
+            control_mcp::Method::Ping => Ok(json!({})),
+            control_mcp::Method::ToolsList => Ok(control_mcp::tools(worker_definitions(crate::delegation::is_judge(run)))),
+            control_mcp::Method::ToolsCall => {
                 let name = req["params"]["name"].as_str().unwrap_or("");
                 let value = match name {
                     "control_room_list" => {
@@ -255,7 +253,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                     "control_room_watch" | "control_room_notifications" | "control_room_ack" => {
                         let run = run.id.clone();
                         return notifications::call(state, &run, name, &req["params"]["arguments"])
-                            .map(|value| json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})).map_err(Into::into);
+                            .map(|value| control_mcp::text(&value.to_string())).map_err(Into::into);
                     },
                     "control_room_post" => {
                         let room = room()?;
@@ -295,15 +293,14 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                     }
                     _ => return Err("Tool is not allowed for this worker.".into()),
                 };
-                Ok(json!({"content":[{"type":"text","text":value.to_string()}],"isError":false}))
+                Ok(control_mcp::text(&value.to_string()))
             }
-            _ => Err("Unsupported room method.".into()),
+            control_mcp::Method::Other(_) => Err("Unsupported room method.".into()),
         }
     })();
     match result {
-        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-        Err(message) if req["method"] == "tools/call" => control_mcp::tool_error(&id, &message),
-        Err(message) => control_mcp::error(&id, -32602, &message),
+        Ok(result) => control_mcp::reply(id, result),
+        Err(message) => control_mcp::refusal(req, &message),
     }
 }
 

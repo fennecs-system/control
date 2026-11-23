@@ -132,16 +132,15 @@ fn dispatch_raw(
     let envelope = match direct(envelope) { Ok(envelope) => envelope, Err(refused) => return refused };
     let envelope = envelope.as_ref();
     let request = &envelope["request"];
-    let Some(id) = request.get("id") else {
+    if control_mcp::is_notification(request) {
         return Value::Null;
-    };
+    }
+    let id = control_mcp::id(request);
     if let Some(fault) = control_mcp::request_fault(request) {
         return fault;
     }
     // Every tools/call failure past the protocol checks is a tool result.
-    let call = request["method"] == "tools/call";
-    let error = |message: &str| if call { control_mcp::tool_error(id, message) }
-        else { control_mcp::error(id, -32602, message) };
+    let error = |message: &str| control_mcp::refusal(request, message);
     if crate::shutdown::requested() { return error("Control is stopping; no new tools may run."); }
     let Ok(mut state) = shared.lock() else {
         return error(
@@ -180,14 +179,12 @@ fn dispatch_raw(
     let facts = deferred::Facts::of(&state, run, managed);
     // Backends without their own sandbox shell get Control's offline workspace tool.
     let (claude, judge) = (facts.shell, facts.judge);
-    let result = match request["method"].as_str().unwrap_or("") {
-        "initialize" => {
-            json!({"protocolVersion":control_mcp::LATEST,"capabilities":{"tools":{}},"serverInfo":{"name":"control-worker","version":"0.1"}})
-        }
-        "ping" => json!({}),
+    let result = match control_mcp::method(request) {
+        control_mcp::Method::Initialize => control_mcp::initialize(control_mcp::LATEST, "control-worker", "0.1"),
+        control_mcp::Method::Ping => json!({}),
         // The role's core schemas; the rest are in the prompt's deferred index.
-        "tools/list" => json!({"tools":deferred::listed(&facts)}),
-        "tools/call" => {
+        control_mcp::Method::ToolsList => control_mcp::tools(deferred::listed(&facts)),
+        control_mcp::Method::ToolsCall => {
             if run.attempts.last().and_then(|a|a.turn_mailbox.as_ref()).and_then(|m|m.accepted()).is_some()
                 && !control_context::tool_policy::after_handoff(request["params"]["name"].as_str().unwrap_or("")) {
                 return error("A handoff is staged; only observations and handoff corrections may run before this attempt finishes. No further call is needed; to change it, call control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} again.");
@@ -197,11 +194,11 @@ fn dispatch_raw(
             }
             // Pure read of the run's captured context, for every role including judges.
             if request["params"]["name"]=="control_guidance" {
-                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(crate::guidance::answer(run,&request["params"]["arguments"]))});
+                return control_mcp::reply(id, crate::toolbox::result(crate::guidance::answer(run,&request["params"]["arguments"])));
             }
             // Schemas of the tools this session may call; a pure read for every role.
             if request["params"]["name"]==deferred::SEARCH {
-                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(deferred::search(&facts,&request["params"]["arguments"]))});
+                return control_mcp::reply(id, crate::toolbox::result(deferred::search(&facts,&request["params"]["arguments"])));
             }
             // Standing (captured persona, else the built-in of its position) decides.
             if !facts.standing.may_call(request["params"]["name"].as_str().unwrap_or("")) {
@@ -214,7 +211,7 @@ fn dispatch_raw(
             if matches!(request["params"]["name"].as_str(),Some("control_agent_spawn_status"|"control_agent_spawn_cancel")) {
                 if run.question.as_ref().is_some_and(|q|q.answer.is_none()) {return error("This attempt is pausing for a design answer.");}
                 return match crate::spawning::manage(&mut state,run_id,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"],crate::storage::save) {
-                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(Ok(value))}),
+                    Ok(value)=>control_mcp::reply(id, control_mcp::data(&value)),
                     Err(message)=>error(message),
                 };
             }
@@ -224,7 +221,7 @@ fn dispatch_raw(
                 let input=match serde_json::from_value(request["params"]["arguments"].clone()) {Ok(input)=>input,Err(_)=>return error("Expected a bounded list of agent objectives")};
                 let chat=run.chat_id.clone();
                 return match crate::spawning::request(&mut state,run_id,&generation,nonce,input,crate::storage::save) {
-                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(Ok(value))}),
+                    Ok(value)=>control_mcp::reply(id, control_mcp::data(&value)),
                     Err(message)=>error(&crate::delegation::refusal(&state,chat.as_deref(),message)),
                 };
             }
@@ -233,14 +230,14 @@ fn dispatch_raw(
                 let Ok(input)=serde_json::from_value(request["params"]["arguments"].clone()) else{return error("Expected a delegation objective and role");};
                 let chat=run.chat_id.clone();
                 return match crate::delegation::request(&mut state,run_id,nonce,input) {
-                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Ok(value)=>control_mcp::reply(id, control_mcp::text(&value.to_string())),
                     Err(message)=>error(&crate::delegation::refusal(&state,chat.as_deref(),message)),
                 };
             }
             if request["params"]["name"]!="control_design_ask" && run.question.as_ref().is_some_and(|q|q.answer.is_none()&&run.attempts.last().is_some_and(|a|a.workspace_id.as_deref()==Some(&q.generation))) {return error("This attempt is pausing for a design answer; no more tools may run.");}
             if crate::knowledge_tools::known(request["params"]["name"].as_str().unwrap_or("")) {
                 return match crate::knowledge_tools::worker(&mut state,run_id,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"],envelope["nonce"].as_str().unwrap_or(""),crate::storage::save) {
-                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false}}),
+                    Ok(value)=>control_mcp::reply(id, control_mcp::data(&value)),
                     Err(message)=>error(message),
                 };
             }
@@ -250,7 +247,7 @@ fn dispatch_raw(
                 drop(state);
                 let host=crate::tool_registry::LocalHost(shared);
                 let cx=crate::tool_registry::AttemptCall{attempt:crate::tool_registry::AttemptRef{run:run_id,generation:&generation,nonce:&nonce},host:&host};
-                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(tools.call(&cx,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"]))});
+                return control_mcp::reply(id, crate::toolbox::result(tools.call(&cx,request["params"]["name"].as_str().unwrap(),&request["params"]["arguments"])));
             }
             if request["params"]["name"]=="control_github_open_pr" {
                 if run.action != identity::Action::Improve {return error("GitHub publication requires an improvement run");}
@@ -258,7 +255,7 @@ fn dispatch_raw(
                 let input=serde_json::from_value::<crate::github::Input>(request["params"]["arguments"].clone());
                 drop(state);
                 return match input.map_err(|_|std::io::Error::other("Expected run_id, title and optional body")).and_then(|input|crate::github::open(shared,&chat,input)) {
-                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Ok(value)=>control_mcp::reply(id, control_mcp::text(&value.to_string())),
                     Err(message)=>error(&message.to_string()),
                 };
             }
@@ -270,7 +267,7 @@ fn dispatch_raw(
                 drop(state);
                 let result=if stopping {crate::previews::stop(shared,&chat,&preview_id).map(|_|json!({"stopped":true}))}
                     else {input.map_err(|_|std::io::Error::other("Expected a preview command and port")).and_then(|input|crate::previews::start(shared,run_id,input))};
-                return match result {Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),Err(message)=>error(&message.to_string())};
+                return match result {Ok(value)=>control_mcp::reply(id, control_mcp::text(&value.to_string())),Err(message)=>error(&message.to_string())};
             }
             if request["params"]["name"]=="control_project_request" {
                 let chat=run.chat_id.clone().unwrap_or_default();
@@ -278,7 +275,7 @@ fn dispatch_raw(
                 let previous=state.chats[index].clone();
                 let result=crate::projects::request_named(&mut state,&chat,request["params"]["arguments"]["path"].as_str().unwrap_or(""),request["params"]["arguments"]["name"].as_str(),crate::projects::Requester::Agent{run:Some(run_id)});
                 return match result {
-                    Ok(value) if crate::storage::save(&state).is_ok()=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Ok(value) if crate::storage::save(&state).is_ok()=>control_mcp::reply(id, control_mcp::text(&value.to_string())),
                     Ok(_)=>{state.chats[index]=previous;error("Could not save project request")},
                     Err(message)=>error(message),
                 };
@@ -290,7 +287,7 @@ fn dispatch_raw(
                     Err(message) => return error(message),
                 };
                 return match crate::design::ask(&mut state, run_id, nonce, input) {
-                    Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Ok(value) => control_mcp::reply(id, control_mcp::text(&value.to_string())),
                     Err(message) => error(message),
                 };
             }
@@ -300,7 +297,7 @@ fn dispatch_raw(
                 };
                 drop(state);
                 return match crate::delegated_results::execute(plan) {
-                    Ok(value)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":value.to_string()}],"isError":false}}),
+                    Ok(value)=>control_mcp::reply(id, control_mcp::text(&value.to_string())),
                     Err(message)=>error(message),
                 };
             }
@@ -415,7 +412,7 @@ fn dispatch_raw(
                         },
                     );
                 }
-                return json!({"jsonrpc":"2.0","id":id,"result":crate::toolbox::result(result)});
+                return control_mcp::reply(id, crate::toolbox::result(result));
             }
             // Worker spellings of toolbox tools resolve to their registered names.
             let name = request["params"]["name"].as_str().unwrap_or("");
@@ -445,9 +442,9 @@ fn dispatch_raw(
                 return error("Tool is not allowed for this worker. Next: call control_tool_search {} to list the tools this session may call.");
             }
         }
-        _ => return control_mcp::error(id, -32601, "Unsupported worker method"),
+        control_mcp::Method::Other(_) => return control_mcp::error(id, control_mcp::METHOD_NOT_FOUND, "Unsupported worker method"),
     };
-    json!({"jsonrpc":"2.0","id":id,"result":result})
+    control_mcp::reply(id, result)
 }
 /// The prompt's deferred tool index for `run`: the tools its session may
 /// call beyond the listed core, one terse line per family.
@@ -517,19 +514,8 @@ pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: 
 /// tools such as room posts do not collapse two calls into one.
 fn answer(envelope: &Value, single: impl Fn(&Value) -> Value) -> Value {
     let Some(batch) = envelope["request"].as_array() else { return single(envelope) };
-    if batch.is_empty() {
-        return json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Empty JSON-RPC batch"}});
-    }
     let nonce = envelope["nonce"].as_str().unwrap_or_default();
-    let replies: Vec<Value> = batch.iter().enumerate()
-        .map(|(index, request)| {
-            if !request.is_object() || request["jsonrpc"] != "2.0" || !request["method"].is_string() {
-                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid JSON-RPC batch element"}})
-            } else { single(&json!({"nonce":format!("{nonce}-{index}"),"request":request})) }
-        })
-        .filter(|reply| !reply.is_null())
-        .collect();
-    if replies.is_empty() { Value::Null } else { Value::Array(replies) }
+    control_mcp::batch(batch, |index, request| single(&json!({"nonce":format!("{nonce}-{index}"),"request":request})))
 }
 
 #[cfg(test)]
