@@ -333,3 +333,26 @@ fn reconcile_profile() {
         );
     }
 }
+#[test]
+fn stop_waits_for_a_killed_container_the_engine_still_lists_as_running() {
+    use std::cell::Cell;
+    let checks = Cell::new(0);
+    let pauses = Cell::new(0);
+    let lingering = || {
+        checks.set(checks.get() + 1);
+        Ok(checks.get() < 3)
+    };
+    assert_eq!(await_exit(lingering, || pauses.set(pauses.get() + 1)), Ok(()));
+    assert_eq!((checks.get(), pauses.get()), (3, 2));
+    let pauses = Cell::new(0);
+    assert_eq!(
+        await_exit(|| Ok(true), || pauses.set(pauses.get() + 1)),
+        Err("Worker is still running; work remains fenced.")
+    );
+    assert_eq!(pauses.get(), EXIT_POLLS - 1, "bounded, never waits forever");
+    let unavailable = "Could not confirm worker exit; work remains fenced.";
+    assert_eq!(
+        await_exit(|| Err(unavailable), || panic!("an engine error is not retried")),
+        Err(unavailable)
+    );
+}

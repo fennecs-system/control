@@ -1356,7 +1356,12 @@ fn live_service_survives_server_restart_and_expires_without_control() {
                 .unwrap(),
         )
     };
-    let read = || serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
+    // The server appends saves to state.log; read the snapshot with its log replayed.
+    let read = || {
+        crate::config::read_state_in::<State>(&state_dir, isize::MAX as usize)
+            .unwrap()
+            .unwrap()
+    };
     let wait_running = |server: &mut Server| {
         let started = Instant::now();
         loop {
@@ -1383,8 +1388,8 @@ fn live_service_survives_server_restart_and_expires_without_control() {
     }
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            if let Ok(bytes) = fs::read(self.root.join("state/state.json"))
-                && let Ok(state) = serde_json::from_slice::<State>(&bytes)
+            if let Ok(Some(state)) =
+                crate::config::read_state_in::<State>(&self.root.join("state"), isize::MAX as usize)
                 && let Some(service) = state.services.into_iter().next()
             {
                 self.service = service;
