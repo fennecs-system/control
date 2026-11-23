@@ -96,14 +96,15 @@ fn every_run_denies_the_clis_own_tools_and_only_a_turn_allows_controls() {
     let text = settings(Form::ApiKey, false);
     assert_eq!(text["permissions"]["allow"], json!([]));
     assert_eq!(text["modelProvider"], "gemini");
-    assert_eq!(
-        &FLAGS[..2],
-        ["--dangerously-skip-permissions", "--disable-slash-commands"]
-    );
+    // Unattended without auto-approval: an action no rule allows is refused.
+    assert!(!FLAGS.contains(&"--dangerously-skip-permissions"));
+    assert_eq!(FLAGS[0], "--disable-slash-commands");
     // Every Control tool is eager, under the server name the decoder expects.
     let mcp = mcp_config();
     let server = &mcp["mcpServers"]["control"];
     assert_eq!(server["command"], "/bin/control-room-mcp");
+    // The transport never inherits an API key from the CLI.
+    assert_eq!(server["env"]["GEMINI_API_KEY"], "");
     for name in control_context::worker_mcp_names() {
         assert_eq!(server["tools"][name]["eager"], true, "{name}");
     }
@@ -295,7 +296,6 @@ const TEXT_KEY: &[&str] = &[
     "sha256:img",
     "control-agy",
     "text",
-    "--dangerously-skip-permissions",
     "--disable-slash-commands",
     "--output-format",
     "stream-json",
@@ -346,7 +346,6 @@ const TEXT_ADC: &[&str] = &[
     "sha256:img",
     "control-agy",
     "text",
-    "--dangerously-skip-permissions",
     "--disable-slash-commands",
     "--output-format",
     "stream-json",
@@ -395,7 +394,6 @@ const TURN_GOOGLE: &[&str] = &[
     "sha256:img",
     "control-agy",
     "turn",
-    "--dangerously-skip-permissions",
     "--disable-slash-commands",
     "--output-format",
     "stream-json",

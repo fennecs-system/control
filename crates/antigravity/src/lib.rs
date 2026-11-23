@@ -141,16 +141,17 @@ const CLI: Cli = Cli {
     },
     failure: diagnose,
 };
-/// Headless and unattended. Approval prompts are skipped, so nothing is
-/// soft-denied; what stays blocked is the deny list in [`settings`], which
-/// applies in every mode.
-const FLAGS: [&str; 4] = [
-    "--dangerously-skip-permissions",
-    "--disable-slash-commands",
-    "--output-format",
-    "stream-json",
-];
-/// Every built-in action class the CLI's permission engine names.
+/// Headless and unattended, without `--dangerously-skip-permissions`: headless
+/// mode cannot prompt, so an action no rule allows is refused
+/// (https://antigravity.google/docs/cli/headless) rather than approved, and the
+/// deny list in [`settings`] need not name every future action. Checked
+/// offline against a scripted model endpoint: Control's MCP tools run under
+/// the `mcp(control/*)` allow rule and every denied read is refused.
+const FLAGS: [&str; 3] = ["--disable-slash-commands", "--output-format", "stream-json"];
+/// Every built-in action class the CLI's rule parser accepts besides `mcp`
+/// (its pattern in 1.5.14:
+/// `^(command|read_file|write_file|read_url|mcp|execute_url|download_url|unsandboxed)\s*\(.*\)$`).
+/// It ignores a rule it cannot parse (https://antigravity.google/docs/settings).
 const DENY: [&str; 7] = [
     "command(*)",
     "unsandboxed(*)",
@@ -195,12 +196,18 @@ fn settings(login: Form, tools: bool) -> Value {
 /// Control's tools as the one MCP server. Each is loaded eagerly: a lazy tool
 /// is found by reading its schema file, which the deny list forbids
 /// (https://antigravity.google/docs/mcp#tool-loading-lazy-vs-eager).
+/// The CLI reads an API key only from its environment, which an MCP server
+/// inherits; the transport gets it blanked.
 fn mcp_config() -> Value {
     let tools: serde_json::Map<String, Value> = control_context::worker_mcp_names()
         .into_iter()
         .map(|name| (name.to_owned(), json!({"eager": true})))
         .collect();
-    json!({"mcpServers": {"control": {"command": "/bin/control-room-mcp", "tools": tools}}})
+    json!({"mcpServers": {"control": {
+        "command": "/bin/control-room-mcp",
+        "env": {"GEMINI_API_KEY": ""},
+        "tools": tools,
+    }}})
 }
 /// Writes the private directory a container reads its settings, MCP server
 /// and prompt from.
