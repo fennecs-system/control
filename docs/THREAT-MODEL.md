@@ -55,6 +55,34 @@ arbitrary downloaded code safe.
   [host_shell.rs](../src/host_shell.rs),
   `live_offline_workspace_isolated_and_persistent_across_processes`.
 
+- **The model inside a vendor CLI and its credential.** Claude, Grok and
+  Antigravity keep their login in the turn container, readable by the uid the
+  CLI runs as. Enforced by construction: the model's commands run in the
+  separate credential-free shell container; the login is read-only beneath a
+  mode-0700 home owned by the CLI's uid, so no other uid in the container
+  reaches it (Docker Desktop and OrbStack show a bind-mounted file as owned by
+  whoever reads it, so the file's own mode protects nothing there), and a turn
+  whose launch puts a secret anywhere else is refused before it starts; once a
+  decoder sees a tool outside Control's, nothing decoded afterwards reaches
+  activity, and the turn is stopped and fails as `UnexpectedTools`. Resting on
+  the vendor CLI honouring its own configuration: Claude's `--tools ""`
+  (checked against its init tool list before the model acts, and at any
+  non-Control call), Grok's `--tools mcp__control` (checked against
+  `available_commands` and at each call), and Antigravity's deny rules, which no
+  flag replaces (its stream-json init lists all 60 built-ins whatever the
+  settings) and which are checked only at the call. The CLI's MCP transport
+  runs as the CLI's uid: no process can change uid under `--cap-drop=ALL` and
+  no-new-privileges (setuid and `unshare(CLONE_NEWUSER)` were refused in the
+  pinned images, as root and as the CLI uid), so separating it would need
+  `SETUID`/`SETGID`, which Control does not grant; it reads and writes only
+  fixed mailbox paths. `control claude|grok|antigravity check` runs a
+  fake-credential canary in the turn's own container, one line per assertion.
+  Evidence: `control_agent::cli::canary` and `secrets_private` tests, each
+  backend's `…beneath_the_private_home_of_the_cli_uid` test,
+  `nothing_after_a_forbidden_call_reaches_activity` in
+  [streams.rs](../crates/ai/tests/streams.rs), and
+  [ANTIGRAVITY.md](ANTIGRAVITY.md) for Antigravity's offline checks.
+
 - **Malicious builds and base-image integrity.** Pinned Nix images run non-root
   with dropped capabilities, no-new-privileges and resource limits. Lite and
   credential-bearing harnesses keep read-only roots. Opt-in Full tool containers

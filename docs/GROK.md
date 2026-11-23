@@ -19,7 +19,10 @@ nix run .#setup -- --grok
 ```
 
 `check` tests offline workspace isolation without mounting a login or calling a
-model. `login` runs Grok's own device-code sign-in (`grok login --device-auth`)
+model, then mounts a fake credential in a turn container exactly as a turn
+mounts the login and prints one PASS or FAIL line per reader: the CLI uid can
+read it; another uid cannot, directly or through `/proc/1/root`, and it is not
+in the environment. Run it after any image update. `login` runs Grok's own device-code sign-in (`grok login --device-auth`)
 inside the image: open the address it prints and enter its code; never paste
 codes or credentials into chat. The login lives under `~/.config/control/grok/`.
 Control checks its metadata and mounts only `auth.json`, read-only, into task

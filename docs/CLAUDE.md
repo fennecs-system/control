@@ -46,7 +46,10 @@ nix run .#setup -- --claude
 ```
 
 `check` tests offline workspace isolation without mounting a login or calling a
-model. `login` runs Claude's own interactive sign-in inside the image; never paste
+model, then mounts a fake credential in a turn container exactly as a turn
+mounts the login and prints one PASS or FAIL line per reader: the CLI uid can
+read it; another uid cannot, directly or through `/proc/1/root`, and it is not
+in the environment. Run it after any image update. `login` runs Claude's own interactive sign-in inside the image; never paste
 codes or credentials into chat. The login lives under `~/.config/control/claude/`.
 Control checks its metadata and mounts only `.credentials.json`, read-only, into
 task runs, so runs cannot modify it. It never extracts a macOS Keychain entry.

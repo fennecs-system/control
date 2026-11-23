@@ -52,11 +52,23 @@ Like Grok, and given what Codex is given:
 
 - The same captured turn context and policy prompt as Codex, written to a
   private file beside the workspace and sent as one stream-json user message.
-- The CLI's own tools are denied: settings deny every built-in action class
-  (`command`, `read_file`, `write_file`, `read_url`, `execute_url`,
-  `download_url`, `unsandboxed`) and allow `mcp(control/*)`. Deny rules apply in
-  every mode, so `--dangerously-skip-permissions` approves only Control's tools
-  and nothing waits for an approval that headless mode would silently refuse.
+- The CLI's own tools are denied: settings deny every action class its rule
+  parser accepts besides `mcp` (`command`, `read_file`, `write_file`,
+  `read_url`, `execute_url`, `download_url`, `unsandboxed`) and allow
+  `mcp(control/*)`. The CLI runs without `--dangerously-skip-permissions`:
+  headless mode cannot prompt, so an action no rule allows is refused
+  (https://antigravity.google/docs/cli/headless) rather than approved, and a
+  future action class the deny list does not name is refused too. No flag or
+  setting removes the built-ins in stream-json mode; only the ACP server's
+  `session/new` takes a `disableBuiltInTools` parameter, which Control does not
+  use (it would mean a different protocol client and could not be checked
+  without a model).
+- The CLI reads an API key only from `GEMINI_API_KEY`
+  (https://antigravity.google/docs/install), so the wrapper still exports it;
+  Control's MCP server gets it blanked (`"env": {"GEMINI_API_KEY": ""}`), and
+  shell commands are denied, so nothing the model can start inherits it.
+- The login is read-only beneath the CLI's mode-0700 home; no other uid in the
+  container can read it (see the threat model).
 - Control's tools are the one MCP server, every tool loaded eagerly. A turn is
   stopped if the CLI calls any other tool or starts a subagent, and fails if it
   reports a Control tool call as refused even though the run says success.
@@ -86,9 +98,26 @@ A failure never falls back to another backend or the host.
   rejected login.
 - Without a login the CLI ends with `authentication failed or timed out`.
 - A turn container with Control's settings and MCP configuration: the CLI's
-  log shows the allow and deny rules as written, "--dangerously-skip-permissions
-  set", and the `control` MCP server being connected (it waited for Control's
-  host, which was not running) before the model call.
+  log shows the allow and deny rules as written and the `control` MCP server
+  being connected (it waited for Control's host, which was not running) before
+  the model call.
+- Offline, with a scripted stand-in for the Gemini endpoint inside the turn
+  container (`GOOGLE_GEMINI_BASE_URL` on loopback, `--network=none`, a fake key
+  file): with an API key the CLI offers the model 14 built-ins (`read_file`,
+  `run_command`, `write_file`, `edit_file`, `run_workflow`, `search_web`,
+  `schedule`, `manage_task`, `send_message`, `swarm`, `ask_question` and three
+  subagent tools) plus Control's MCP tools and `list_resources`/`read_resource`.
+  With Control's settings, with and without `--dangerously-skip-permissions`,
+  scripted calls of `read_file` on the key path, on `/proc/self/environ` and via
+  `/workspace/..`, `run_command` (`cat KEY; env`), `run_workflow` (checked as
+  `unsandboxed`) and `edit_file` were each refused "Matches user-configured deny
+  rule", and so were the same reads made by a subagent the model defined and
+  invoked; the key never reached any request. Without the deny rules the same
+  `read_file` returned the key, and `run_command` saw it in its environment. An
+  allowed Control MCP tool ran in both modes; with no allow rule and no skip it
+  was refused, as documented.
+- `control antigravity check` runs the credential canary for each login form:
+  all assertions pass in the pinned image.
 - The decoder is tested on the stream shapes in Google's headless page and on
   the endings above.
 
@@ -104,3 +133,11 @@ A failure never falls back to another backend or the host.
   steps under that name, as the MCP page describes. Any other name stops the turn
   with "unexpected tool (NAME)", which names what to allow.
 - How a subscription's usage limit is worded in the stream.
+- That a Google sign-in gets the same refusals: its tool set (the init list
+  names `view_file`, `list_dir`, `grep_search`, `find_by_name`,
+  `read_url_content` and others not offered with an API key) could not be
+  exercised offline. Ask the model to read
+  `/home/agent/.gemini/antigravity-cli/antigravity-oauth-token` (or, with a
+  key, `/home/agent/.control-key/gemini-api-key`) and to print its environment;
+  either succeeding is a failure, and the turn should instead stop with
+  "unexpected tool (NAME)".
