@@ -857,7 +857,12 @@ impl<Q, V: 'static> Read<Q, V> {
 }
 // Not inlined, so profiles can tell its wait for the state lock from rendering.
 #[inline(never)]
-fn read_response<Q, V: 'static>(stream: &mut impl Write, state: &Mutex<State>, route: &Read<Q, V>, request: Q) {
+pub(crate) fn read_response<Q, V: 'static>(
+    stream: &mut impl Write,
+    state: &Mutex<State>,
+    route: &Read<Q, V>,
+    request: Q,
+) {
     // The guard is dropped as soon as the view is copied.
     let view = state.lock().map(|state| (route.view)(&state, request));
     let mut response = Vec::new();
