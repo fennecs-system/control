@@ -561,10 +561,14 @@ fn commit(
     } else {
         None
     };
-    // A usage limit cools the attempt's account: new attempts on it wait; none moves to another.
-    if attempt.cause == Some(control_agent::Cause::UsageLimit) {
-        crate::providers::accounts::cool(&mut s.runtime, attempt.backend, &attempt.account);
-    }
+    // A usage limit cools the attempt's account: new attempts on it wait; none
+    // moves to another. A probe's ending clears or extends the cooldown.
+    let ended = match (&outcome, attempt.cause) {
+        (_, Some(control_agent::Cause::UsageLimit { retry_at })) => crate::accounts::Ended::Limited(retry_at),
+        (Ok(_), _) => crate::accounts::Ended::Succeeded,
+        (Err(_), _) => crate::accounts::Ended::Otherwise,
+    };
+    crate::providers::accounts::ended(&mut s.runtime, &attempt, ended);
     let r = &mut s.runtime.runs[run_index];
     if let Err((status, _)) = &outcome
         && *status != control_agent::Status::Waiting

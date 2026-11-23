@@ -264,8 +264,12 @@ pub(crate) fn account_argument(args: &[String]) -> io::Result<(AccountName, Vec<
 }
 
 /// One line per account of `backend`: its kind and whether its login is
-/// present and private. Metadata only.
-pub(crate) fn report(backend: Backend, store: &crate::accounts::Store<Backend>) -> Vec<String> {
+/// present and private, and its cooldown when `cooling` lists one. Metadata only.
+pub(crate) fn report(
+    backend: Backend,
+    store: &crate::accounts::Store<Backend>,
+    cooling: &[crate::providers::accounts::Note],
+) -> Vec<String> {
     store
         .of(backend)
         .map(|account| {
@@ -278,9 +282,14 @@ pub(crate) fn report(backend: Backend, store: &crate::accounts::Store<Backend>) 
                 (Err(error), _) => format!("not ready: {error}"),
             };
             let enabled = if account.enabled { "" } else { ", disabled" };
+            let cooling = cooling
+                .iter()
+                .find(|note| note.backend == backend && note.account == *name)
+                .map(|note| format!(" · {}", note.note))
+                .unwrap_or_default();
             // The one command that recovers this account, whatever its state.
             format!(
-                "{}+{name} ({}{enabled}): {state} · sign in again with {}",
+                "{}+{name} ({}{enabled}): {state}{cooling} · sign in again with {}",
                 backend.id(),
                 account.kind.as_str(),
                 sign_in_command(&account)
@@ -316,7 +325,11 @@ pub(crate) fn command(
         )));
     }
     if action == Some("check") {
-        report(backend, &store).iter().for_each(|line| println!("{line}"));
+        let cooling = crate::providers::accounts::live();
+        report(backend, &store, cooling.as_deref().unwrap_or_default())
+            .into_iter()
+            .chain(cooling.err())
+            .for_each(|line| println!("{line}"));
     }
     let directory = directory(backend, &name)?;
     let backend_command = |key| control_agent::Command {

@@ -857,19 +857,28 @@ fn a_usage_limit_cools_its_account_and_a_pool_picks_another() {
     let stream = lines(&[
         json!({"type":"thread.started","thread_id":"0199a1b2-7c3d-7e10-9f00-1a2b3c4d5e6f"}),
         json!({"type":"turn.started"}),
-        json!({"type":"error","message":"You\u{2019}ve hit your usage limit."}),
-        json!({"type":"turn.failed","error":{"message":"You\u{2019}ve hit your usage limit."}}),
+        json!({"type":"error","message":"You\u{2019}ve hit your usage limit. Try again at Jan 1st, 2099 12:00 AM."}),
+        json!({"type":"turn.failed","error":{"message":"You\u{2019}ve hit your usage limit. Try again at Jan 1st, 2099 12:00 AM."}}),
     ]);
     let mut finished = attempt_on(Backend::Codex, "second", |_| replay(&stream, 1));
     let name = crate::accounts::AccountName::try_from("second").unwrap();
     let runtime = &mut finished.state.runtime;
+    // The turn that hit the limit still fails loudly, in the fixed wording.
     assert_eq!(runtime.runs[0].status, RunStatus::Failed);
-    let now = crate::providers::accounts::now();
-    assert!(runtime.account_status.cooling(Backend::Codex, &name, now).is_some());
+    assert_eq!(
+        *runtime.runs[0].result,
+        "The signed-in Codex account reached a usage or rate limit."
+    );
+    // The stated retry time reached the host: 2099-01-01 00:00 UTC.
+    let until = crate::accounts::RetryAt(crate::accounts::UnixSeconds(4_070_908_800));
+    assert_eq!(
+        runtime.account_status.cooling(Backend::Codex, &name).map(|c| c.until),
+        Some(until)
+    );
     assert!(
         runtime
             .account_status
-            .cooling(Backend::Codex, &crate::accounts::AccountName::implicit(), now)
+            .cooling(Backend::Codex, &crate::accounts::AccountName::implicit())
             .is_none(),
         "only the limited account cools"
     );
@@ -883,7 +892,13 @@ fn a_usage_limit_cools_its_account_and_a_pool_picks_another() {
     next.status = RunStatus::Queued;
     assert_eq!(
         crate::providers::accounts::hold(runtime, &next),
-        Some(crate::accounts::Hold::Cooling(None))
+        Some(crate::accounts::Hold::Cooling(until))
+    );
+    assert!(
+        crate::providers::accounts::held_run(runtime, &next).is_some_and(|text| text
+            .starts_with("Held: codex account second reached its usage limit; retrying at 2099-01-01 00:00 UTC (in ")),
+        "{:?}",
+        crate::providers::accounts::held_run(runtime, &next)
     );
     let pool = crate::providers::selection::choose(runtime, Backend::Codex, "codex+*:gpt-6.1-sol").unwrap();
     let picked = crate::providers::selection::admit(runtime, &pool).unwrap();

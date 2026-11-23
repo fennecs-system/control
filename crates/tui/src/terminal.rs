@@ -781,6 +781,9 @@ impl App {
                     };
                     lines.push(Line::styled(format!("● {}", clean(status)), Style::default().fg(color)));
                 }
+                if let Some(held) = message["held"].as_str() {
+                    lines.push(Line::styled(clean(held), Style::default().fg(history::PURPLE)));
+                }
                 let folder_reply = (message["run_id"].is_null()
                     && commands::tail(message["text"].as_str().unwrap_or("").trim(), commands::Kind::Open).is_some()
                     && message["reply"]
