@@ -436,6 +436,7 @@ pub(crate) const ZOOM_SLOT: &str = "<div class='canvas-controls' data-canvas-con
 /// The SVG drawing, or None when no task tree has a bot, service or active turn
 /// (that `search` matches, when it is not empty). Matched chats are marked
 /// `pt-match`; the rest of a searched drawing is dimmed.
+#[cfg(test)]
 pub(crate) fn render(state: &State, search: &str) -> Option<String> {
     Forest::of(state, search).render()
 }

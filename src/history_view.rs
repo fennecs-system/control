@@ -429,6 +429,7 @@ fn models(state: &State) -> BTreeSet<&str> {
 }
 
 /// The page: heading, filters, one page of DM rows and its cursors.
+#[cfg(test)]
 pub fn page(state: &State, filter: &Filter) -> String {
     Page::of(state, filter.clone()).render()
 }
@@ -595,7 +596,7 @@ impl Page {
                 // Turns to list: those matching a turn filter, or with "Show turns" the newest.
                 let found = match &matches {
                     Some(matches) => matches.get(row.id),
-                    None => Some(&summary.recent).filter(|_| filter.expand),
+                    None => filter.expand.then_some(&summary.recent),
                 };
                 dm_row(&mut texts, state, row, summary, found, &filter)
             })
@@ -872,6 +873,7 @@ fn render_turns(texts: &Texts, turns: &Turns, dm: &str, filter: &Filter) -> Stri
 
 /// `GET /bots/history/turns?dm=ID`: the turns a DM row shows when it opens.
 /// Errors for a DM that does not exist or is not visible to the operator.
+#[cfg(test)]
 pub fn turns(state: &State, filter: &Filter) -> Result<String, &'static str> {
     DmTurns::of(state, filter.clone()).render()
 }

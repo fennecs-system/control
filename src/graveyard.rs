@@ -231,6 +231,7 @@ fn row(stone: &Stone) -> String {
 /// scroll loader swaps in for the previous slot. Stones reference the skull
 /// symbol [`render`] defined, and the CSS stagger depends only on a stone's
 /// position in the list, so appended pages continue the layout.
+#[cfg(test)]
 pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
     Stones::of(graves, query).render()
 }
@@ -307,6 +308,7 @@ const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='
 /// The graveyard: the ground beneath the live task trees on the Bots page,
 /// with the dead bots' headstones (the page selected by `query`, whose search
 /// the page's one search box sets).
+#[cfg(test)]
 pub fn render(state: &State, query: &Query) -> String {
     Yard::of(state, query).render()
 }

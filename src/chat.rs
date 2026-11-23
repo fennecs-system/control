@@ -282,6 +282,7 @@ impl FollowUp {
         Ok(run)
     }
 }
+#[cfg(test)]
 fn command_menu(actor: &Actor) -> String {
     command_menu_for(
         identity::authorize(actor, Action::Task).is_ok(),
