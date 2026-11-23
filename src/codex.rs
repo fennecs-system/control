@@ -700,7 +700,8 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
                 if acted_now > before || handoff_grace_over(at, Instant::now()) {
                     let _ = child.kill();
                     let _ = child.wait();
-                    crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+                    crate::attempt_control::stop(isolation, bridge, attempt)
+                        .map_err(|m| ("interrupted", m.to_owned()))?;
                     break Ok(true);
                 }
             }
@@ -714,7 +715,7 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
         match child.try_wait() {
             // An accepted handoff is the result however the turn then ended.
             Ok(Some(_)) if handoff.is_some() => {
-                crate::attempt_control::stop(bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+                crate::attempt_control::stop(isolation, bridge, attempt).map_err(|m| ("interrupted", m.to_owned()))?;
                 break Ok(true);
             }
             Ok(Some(status)) => break Ok(status.success()),
@@ -727,7 +728,7 @@ pub(crate) fn execute(turn: Turn<'_>, attempt: &mut crate::usage::Attempt) -> Re
     if result.is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        if let Err(message) = crate::attempt_control::stop(bridge, attempt) {
+        if let Err(message) = crate::attempt_control::stop(isolation, bridge, attempt) {
             return Err(("interrupted", message.into()));
         }
         if let Ok((usage, _, _)) = accounting.join() {

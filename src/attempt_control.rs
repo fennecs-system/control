@@ -116,7 +116,11 @@ pub fn reply(requested: bool, activity: &[crate::usage::Activity], progress: Opt
 }
 /// Stop all attempt-owned writers using current durable job identities. Persistent
 /// services are separate resources and intentionally survive a model yield.
-pub fn stop(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt) -> Result<(), &'static str> {
+pub fn stop(
+    isolation: &dyn control_isolation::Isolation,
+    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    attempt: &Attempt,
+) -> Result<(), &'static str> {
     let mut identity = attempt.clone();
     if let Some((shared, id)) = bridge {
         let state = shared.lock().map_err(|_| "State unavailable while stopping attempt")?;
@@ -134,7 +138,7 @@ pub fn stop(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt) -> Re
             .map(crate::command_jobs::Job::identity)
             .collect();
     }
-    crate::lifecycle::stop_attempt(crate::engine::isolation(), &identity)
+    crate::lifecycle::stop_attempt(isolation, &identity)
 }
 
 #[cfg(test)]

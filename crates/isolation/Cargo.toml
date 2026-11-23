@@ -3,6 +3,10 @@ name = "control-isolation"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+# The scripted backend for other crates' tests; never enabled in a build.
+testing = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

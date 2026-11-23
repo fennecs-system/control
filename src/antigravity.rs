@@ -414,6 +414,7 @@ pub(crate) fn execute(
         .map_err(|_| failed("Cannot start the Antigravity Nix container"))?;
     let cli = claude::Cli {
         name: "Antigravity",
+        isolation,
         id,
         mailbox: &mailbox,
         workspace,
