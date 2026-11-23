@@ -11,7 +11,7 @@ fn enqueue_continuation(
     source: &str,
 ) -> Result<String, ContinuationError> {
     let run = continuation(state, chat, from, objective, kind, source)?;
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     state.runtime.runs.push(run);
     state.runtime.notice = "Run queued.".into();
     crate::worker::wake();
@@ -40,7 +40,7 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
     origin.status = RunStatus::Completed;
     origin.target.model = Some("model-a".into());
     origin.lenses = Some(vec!["lens-a".into()]);
-    let origin_id = origin.id().to_string();
+    let origin_id = origin.id().as_str().to_owned();
     let grant = |id: &str| {
         serde_json::from_value::<crate::services::Grant>(
             json!({"id":id,"owner":{"node":"node-a","chat":chat},"generation":1}),
@@ -264,7 +264,7 @@ fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
     send(&mut state, &parent, "Add tests", "test").unwrap();
     let other = create(&mut state);
     send(&mut state, &other, "Other task", "test").unwrap();
-    let other_run = state.runtime.runs[2].id().to_string();
+    let other_run = state.runtime.runs[2].id().as_str().to_owned();
     assert!(send(&mut state, &parent, &format!("/cancel {other_run}"), "test").is_err());
     let revision = state.chats[0].revision;
     send(&mut state, &parent, "/cancel", "test").unwrap();
@@ -274,7 +274,7 @@ fn cancel_targets_only_this_chats_pending_work_and_refreshes_until_exit() {
     assert!(state.chats[0].revision > revision);
     let html = transcript(&state, &parent).unwrap().render();
     assert!(html.contains("Stopping…") && !html.contains("http-equiv='refresh'"));
-    let queued = state.runtime.runs[1].id().to_string();
+    let queued = state.runtime.runs[1].id().as_str().to_owned();
     send(&mut state, &parent, &format!("/cancel {queued}"), "test").unwrap();
     assert_eq!(state.runtime.runs[1].status, RunStatus::Cancelled);
     assert!(transcript(&state, &parent).unwrap().render().contains("Cancelled"));
@@ -426,7 +426,7 @@ fn steering_is_durable_ordered_and_never_mutates_an_active_request() {
     );
     restored.runtime.runs[0].status = RunStatus::Completed;
     restored.runtime.runs[0].result = "Parser complete".into();
-    let steering = restored.runtime.runs[2].id().to_string();
+    let steering = restored.runtime.runs[2].id().as_str().to_owned();
     assert!(prompt(&restored, &steering).unwrap().contains("Parser complete"));
     assert!(send(&mut restored, &id, "/steer", "test").is_err());
     assert_eq!(restored.runtime.runs.len(), 3);
@@ -444,7 +444,7 @@ fn improve_mode_persists_discussion_and_can_exit_without_changing_queued_authori
     assert!(state.chats[0].improve_mode);
     send(&mut state, &id, "Could this design be simpler?", "test").unwrap();
     assert_eq!(state.runtime.runs[0].action, Action::Improve);
-    let first = state.runtime.runs[0].id().to_string();
+    let first = state.runtime.runs[0].id().as_str().to_owned();
     assert!(
         prompt(&state, &first)
             .unwrap()
@@ -477,7 +477,7 @@ fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html()
         reply: String::new(),
     });
     send(&mut state, &id, "Check the build", "test").unwrap();
-    let run_id = state.runtime.runs[0].id().to_string();
+    let run_id = state.runtime.runs[0].id().as_str().to_owned();
     assert_eq!(omitted_history(&state, &run_id), 1);
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         omitted_history: 1,
@@ -526,7 +526,7 @@ fn runs_pin_nested_definitions_and_document_contents() {
     let chat = tool(&mut state, "control.chat.create", &json!({"lenses":["engineering"]})).unwrap();
     let id = chat["id"].as_str().unwrap();
     send(&mut state, id, "Check the architecture", "test").unwrap();
-    let first = state.runtime.runs[0].id().to_string();
+    let first = state.runtime.runs[0].id().as_str().to_owned();
     state.documents[0].body = "Changed document body".into();
     state.documents[0].revision = 2;
     definition.revision = 3;
@@ -611,7 +611,7 @@ fn composing_and_changing_lenses_preserves_each_runs_selection() {
     let id = chat["id"].as_str().unwrap();
     assert_eq!(chat["lenses"], json!(["engineering", "research"]));
     send(&mut state, id, "Review this design", "test").unwrap();
-    let first = state.runtime.runs[0].id().to_string();
+    let first = state.runtime.runs[0].id().as_str().to_owned();
     tool(&mut state, "control.chat.lenses", &json!({"id":id,"lenses":[]})).unwrap();
     send(&mut state, id, "Continue without lenses", "test").unwrap();
     assert!(prompt(&state, &first).unwrap().contains("Engineering + Research"));
@@ -654,9 +654,9 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     .unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
     send(&mut state, &id, "Investigate this blocked task", "test").unwrap();
-    let parent = state.runtime.runs[0].id().to_string();
+    let parent = state.runtime.runs[0].id().as_str().to_owned();
     fork(&mut state, &id, "Inspect an independent hypothesis", "test").unwrap();
-    let child = state.runtime.runs[1].id().to_string();
+    let child = state.runtime.runs[1].id().as_str().to_owned();
     let mut revised = state.lens_library.get("investigation").unwrap().clone();
     revised.revision += 1;
     revised.instructions = "Future investigation guidance only".into();
@@ -712,7 +712,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
         assert!(!text.contains("Future investigation guidance only"));
     }
     send(&mut state, &id, "Start a new authorized step", "test").unwrap();
-    let last = state.runtime.runs.last().unwrap().id().to_string();
+    let last = state.runtime.runs.last().unwrap().id().as_str().to_owned();
     let next = prompt(&state, &last).unwrap();
     assert!(next.contains("investigation@5") && next.contains("coordination@19") && next.contains("planning@10"));
     assert_eq!(

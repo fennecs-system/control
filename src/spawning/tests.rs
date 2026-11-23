@@ -27,7 +27,7 @@ pub(super) fn active() -> (State, String) {
         parent_artifact: Some("immutable-baseline".into()),
         ..Default::default()
     });
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     (s, id)
 }
 pub(super) fn input(n: usize) -> Input {
@@ -126,7 +126,7 @@ fn batch_is_nonblocking_isolated_deduplicated_and_available_after_restore() {
     let next = restored.runtime.runs.last_mut().unwrap();
     next.chat_id = parent_chat;
     next.status = RunStatus::Running;
-    let next_id = next.id().to_string();
+    let next_id = next.id().as_str().to_owned();
     assert!(
         crate::delegated_results::prepare(
             &restored,
@@ -257,7 +257,7 @@ fn later_originating_turn_pages_and_cancels_backlog_atomically() {
     let caller = s.runtime.runs.last_mut().unwrap();
     caller.status = RunStatus::Running;
     caller.chat_id = originating;
-    let caller = caller.id().to_string();
+    let caller = caller.id().as_str().to_owned();
     let args = json!({"batch":batch,"offset":10,"limit":20});
     let page = manage(&mut s, &caller, "control_agent_spawn_status", &args, |_| {
         panic!("Read cannot save")
@@ -342,7 +342,7 @@ fn node_backlog_budget_is_shared_across_independent_roots() {
         workspace_id: Some("other-attempt".into()),
         ..Default::default()
     });
-    let root = root.id().to_string();
+    let root = root.id().as_str().to_owned();
     assert!(
         request(&mut s, &root, "other-attempt", "two", input(2), |_| panic!(
             "Node backlog must apply across roots"
@@ -380,7 +380,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
             ..Default::default()
         },
         child: Some("completed-review".into()),
-        continuation: Some(next.id().to_string()),
+        continuation: Some(next.id().as_str().to_owned()),
     });
     s.runtime.runs.push(next);
     request(
@@ -421,7 +421,7 @@ fn configured_team_above_legacy_graph_limit_remains_inspectable() {
         reconcile(&mut s, |_| Ok(())).unwrap();
     }
     assert_eq!(s.runtime.runs.len(), 1031);
-    let last = s.runtime.runs.last().unwrap().id().to_string();
+    let last = s.runtime.runs.last().unwrap().id().as_str().to_owned();
     let plan = crate::delegated_results::prepare(&s, &id, json!({"child":last,"section":"status"})).unwrap();
     assert_eq!(crate::delegated_results::execute(plan).unwrap()["status"], "queued");
 }
@@ -592,7 +592,7 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
     let (mut s, id) = active();
     s.chats[0].lenses = Some(vec!["advisor".into()]);
     request(&mut s, &id, "parent-attempt", "workers", input(2), |_| Ok(())).unwrap();
-    let worker = s.runtime.runs.last().unwrap().id().to_string();
+    let worker = s.runtime.runs.last().unwrap().id().as_str().to_owned();
     let status = |s: &State, child: &str| {
         crate::delegated_results::prepare(s, &id, json!({"child":child,"section":"status"}))
             .and_then(crate::delegated_results::execute)
@@ -604,7 +604,7 @@ fn a_lead_with_an_advisor_still_reads_its_workers_results() {
         ..input(1)
     };
     request(&mut s, &id, "parent-attempt", "advisor", judge, |_| Ok(())).unwrap();
-    let advisor = s.runtime.runs.last().unwrap().id().to_string();
+    let advisor = s.runtime.runs.last().unwrap().id().as_str().to_owned();
     assert!(delegation::is_judge(s.runtime.runs.last().unwrap()));
     assert_eq!(status(&s, &worker).unwrap(), "queued");
     // The advisor's receipt is checked under its own batch's role, but an

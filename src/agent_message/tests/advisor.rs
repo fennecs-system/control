@@ -288,7 +288,7 @@ fn an_active_lead_gets_one_callback_hint_per_note() {
         turn_mailbox: Some(Box::new(mailbox)).into(),
         ..Default::default()
     });
-    let target = target.id().to_string();
+    let target = target.id().as_str().to_owned();
     assert!(!crate::turn_context::callback_notice(&mut state, &target, true));
     note(
         &mut state,

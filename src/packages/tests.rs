@@ -88,7 +88,7 @@ fn running(state: &mut State, packages: Vec<control_context::PackageInput>) -> S
         packages,
         ..Default::default()
     });
-    run.id().to_string()
+    run.id().as_str().to_owned()
 }
 
 #[test]

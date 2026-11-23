@@ -74,7 +74,7 @@ fn wake(state: &mut State, chat: &str, kind: crate::runtime::RunKind, text: &str
     run.chat_id = Some(chat.into());
     run.status = RunStatus::Completed;
     *run.result = "Read room, read watch, checked status, acknowledged; still waiting".into();
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     state.chats[0].messages.push(crate::chat::Message {
         speaker: Default::default(),
         text: text.into(),

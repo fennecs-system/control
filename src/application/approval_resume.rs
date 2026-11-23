@@ -35,7 +35,7 @@ pub(crate) struct Edit<'a> {
 /// Keep exclusive ownership through acknowledgement; this is not an async plan.
 #[inline]
 pub(crate) fn record(edit: Edit<'_>, chat: &str, run: Option<Run>, text: String) -> Outcome {
-    let run_id = run.as_ref().map(|run| run.id().to_string());
+    let run_id = run.as_ref().map(|run| run.id().as_str().to_owned());
     if let Some(run) = run {
         edit.runs.push(run);
         *edit.notice = "Run queued.".into();

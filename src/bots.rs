@@ -1352,7 +1352,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
                     .as_ref()
                     .is_some_and(|mailbox| mailbox.accepted().is_none())
         }))
-    .then(|| latest.id().to_string());
+    .then(|| latest.id().as_str().to_owned());
     let note = recovery
         .as_ref()
         .map(|_| recovery_note(state, chat, latest))
@@ -1413,7 +1413,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         run.status = RunStatus::Completed;
         *run.result = "Patrol skipped: no team activity since the last patrol.".into();
     }
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
     session.messages.push(crate::chat::Message {
         speaker: Default::default(),
@@ -2251,7 +2251,7 @@ fn handle_with(
         .chat_id
         .clone()
         .ok_or_else(|| io::Error::other("A chat is required"))?;
-    let (origin, actor) = (run.id().to_string(), run.actor.clone());
+    let (origin, actor) = (run.id().as_str().to_owned(), run.actor.clone());
     match call {
         BotCall::Pause => {
             if !defined(state, &requester) {

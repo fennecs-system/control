@@ -10,7 +10,7 @@ fn active(state: &mut State, parent: Option<&str>) -> (String, String) {
         workspace_id: Some(format!("attempt-{}", run.id())),
         ..Default::default()
     });
-    (chat, run.id().to_string())
+    (chat, run.id().as_str().to_owned())
 }
 fn room_call(state: &mut State, run: &str, tool: &str, args: Value, nonce: &str) -> Value {
     let response = checkpoint(
@@ -169,7 +169,7 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
         room: "research".into(),
         text: "An update <script>".into(),
         chat: Some(active.clone()),
-        run: Some(state.runtime.runs[0].id().to_string()),
+        run: Some(state.runtime.runs[0].id().as_str().to_owned()),
         key: String::new(),
         delivery: Default::default(),
     });
@@ -198,7 +198,7 @@ fn worker_is_scoped_and_cannot_forge_authority_or_duplicate_posts() {
     state.chats[0].room = Some("research".into());
     crate::chat::send(&mut state, &id, "Investigate a source", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id().to_string();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let req = json!({"nonce":"123-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"engineering","actor":"architect","message":"<shared>"}}}});
     assert_eq!(worker_rpc(&mut state, &run, &req)["result"]["isError"], false);
     worker_rpc(&mut state, &run, &req);
@@ -294,7 +294,7 @@ fn unlinked_chats_discover_rooms_and_posting_links_them() {
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Coordinate", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id().to_string();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let call = |name: &str, args: Value, nonce: &str| json!({"nonce":nonce,"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}});
     let text = |response: Value| {
         serde_json::from_str::<Value>(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
@@ -392,7 +392,7 @@ fn a_bot_whose_chat_links_by_posting_hears_that_room() {
     crate::chat::send(&mut state, &id, "Keep watch", "test").unwrap();
     crate::bots::command(&mut state, &id, "on every 10").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
-    let run = state.runtime.runs[0].id().to_string();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let post = json!({"nonce":"2-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_room_post","arguments":{"room":"research","message":"here"}}}});
     let failed = checkpoint(&mut state, &run, &post, |_| Err(std::io::Error::other("disk")));
     assert!(crate::toolbox::failure_text(&failed).is_some(), "{failed}");

@@ -97,7 +97,7 @@ fn inherited_definition() -> Value {
 pub(crate) fn lineage(run: &runtime::Run) -> Persona {
     run.persona.clone().unwrap_or(Persona {
         role: Role::Worker,
-        root: run.id().to_string(),
+        root: run.id().as_str().to_owned(),
         depth: 0,
         parent: None,
         bundle: None,
@@ -466,7 +466,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
                 recommended: None,
             },
         });
-        let next_id = next.id().to_string();
+        let next_id = next.id().as_str().to_owned();
         state.runtime.runs[index].delegation.as_mut().unwrap().continuation = Some(next_id.clone());
         *state.runtime.runs[index].result = format!(
             "Delegated {} finished ({}). Continuing in this conversation.",
@@ -536,10 +536,10 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             role: d.input.role,
             root: root.root,
             depth: root.depth + 1,
-            parent: Some(parent.id().to_string()),
+            parent: Some(parent.id().as_str().to_owned()),
             bundle: None,
         });
-        let child_id = child.id().to_string();
+        let child_id = child.id().as_str().to_owned();
         state.chats.last_mut().unwrap().messages.push(chat::Message {
             speaker: Default::default(),
             text: d.input.objective,

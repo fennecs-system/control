@@ -19,7 +19,7 @@ fn fixture() -> (State, String) {
         }],
         ..Default::default()
     });
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     state.documents.push(crate::knowledge::Document {
         id: "selected".into(),
         title: "Selected.md".into(),

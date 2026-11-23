@@ -631,7 +631,7 @@ fn admit_profile(
     compute::admit_within(&s.services, limits, capacity)?;
     let actor = run.actor.clone();
     let origin = Origin {
-        run: run.id().to_string().try_into().map_err(fail)?,
+        run: run.id().as_str().to_owned().try_into().map_err(fail)?,
         attempt: generation.to_owned().try_into().map_err(fail)?,
     };
     let image = run

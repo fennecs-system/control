@@ -254,7 +254,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                         };
                         let run = &s.runtime.runs[index];
                         (
-                            run.id().to_string(),
+                            run.id().as_str().to_owned(),
                             // Managed adapters read the already durable exact
                             // input. Do not rebuild the old history/handoff as
                             // an unused second projection under the state lock.

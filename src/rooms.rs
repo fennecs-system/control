@@ -342,7 +342,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                         value
                     }
                     "control_room_watch" | "control_room_notifications" | "control_room_ack" => {
-                        let run = run.id().to_string();
+                        let run = run.id().as_str().to_owned();
                         return notifications::call(state, &run, name, &req["params"]["arguments"])
                             .map(|value| control_mcp::text(&value.to_string()))
                             .map_err(Into::into);
@@ -372,7 +372,7 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                             format!("{}:{nonce}", run.id()),
                             text.to_owned(),
                             chat.id.clone(),
-                            run.id().to_string(),
+                            run.id().as_str().to_owned(),
                         );
                         if !linked {
                             state.chats[chat_index].room = Some(room.clone());

@@ -599,7 +599,7 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
             }
         };
         let delivery = Delivery {
-            run: run.id().to_string(),
+            run: run.id().as_str().to_owned(),
             source: run.source.clone(),
             chat: run.chat_id.clone(),
             actor: run.actor.clone(),
@@ -619,7 +619,7 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
         let run = &state.runtime.runs[index];
         if let Some(report) = notice {
             let delivery = Delivery {
-                run: run.id().to_string(),
+                run: run.id().as_str().to_owned(),
                 source: run.source.clone(),
                 chat: run.chat_id.clone(),
                 actor: run.actor.clone(),

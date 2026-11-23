@@ -511,7 +511,7 @@ pub fn request(
 }
 
 fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<(), &'static str> {
-    let parent_id = state.runtime.runs[index].id().to_string();
+    let parent_id = state.runtime.runs[index].id().as_str().to_owned();
     let batch = &state.runtime.runs[index].spawns[batch_index];
     if batch.cancelled || batch.pending() == 0 {
         return Ok(());
@@ -579,7 +579,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
             parent: Some(parent_id.clone()),
             bundle: seed.persona.clone(),
         });
-        let child_run = run.id().to_string();
+        let child_run = run.id().as_str().to_owned();
         // Wake behaviours become an ordinary pending bot request.
         if let Some(bundle) = seed.persona.as_deref() {
             crate::bots::persona_request(state, &seed.parent_chat, &parent_id, &child_id, &bundle.behaviours);
@@ -694,7 +694,7 @@ fn owned_ids(state: &State, index: usize, batch_index: usize) -> std::collection
                     .and_then(|p| p.parent.as_ref())
                     .is_some_and(|parent| selected.contains(parent))
             {
-                selected.insert(run.id().to_string());
+                selected.insert(run.id().as_str().to_owned());
             }
         }
         if selected.len() == before {

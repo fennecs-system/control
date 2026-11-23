@@ -47,7 +47,7 @@ fn fixture() -> (State, String, String) {
         workspace_id: Some(generation.clone()),
         ..Default::default()
     });
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     (state, id, generation)
 }
 #[test]

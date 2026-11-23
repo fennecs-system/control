@@ -63,7 +63,7 @@ pub(super) fn fixture() -> (State, String) {
         workspace_id: Some("attempt-one".into()),
         ..Default::default()
     });
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     (state, id)
 }
 fn watch(state: &mut State, run: &str, wake: bool) {
@@ -315,7 +315,7 @@ fn one_shot_waits_for_idle_and_survives_failed_checkpoint_and_restart() {
         workspace_id: Some("notification-attempt".into()),
         ..Default::default()
     });
-    let notification = restored.runtime.runs[1].id().to_string();
+    let notification = restored.runtime.runs[1].id().as_str().to_owned();
     assert!(
         call(
             &mut restored,
@@ -509,7 +509,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     let resumed = state.runtime.runs.len() - 1;
     reconcile(&mut state, |_| panic!("parent continuation is queued")).unwrap();
     running_attempt(&mut state, resumed, "resume-one");
-    let resumed_id = state.runtime.runs[resumed].id().to_string();
+    let resumed_id = state.runtime.runs[resumed].id().as_str().to_owned();
     assert!(
         call(
             &mut state,
@@ -559,7 +559,7 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
             3 => state.runtime.runs[leaf].chat_id = Some("sibling-chat".into()),
             4 => state.runtime.runs[leaf].target.model = Some("different-model".into()),
             5 => {
-                let target = state.runtime.runs[first].id().to_string();
+                let target = state.runtime.runs[first].id().as_str().to_owned();
                 state.runtime.runs[leaf].status = RunStatus::Continued;
                 state.runtime.runs[leaf].question = Some(crate::design::Question {
                     id: "cycle".into(),

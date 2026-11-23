@@ -255,7 +255,7 @@ pub(crate) fn deliver(state: &mut State, now_ms: u64) -> usize {
         ) else {
             continue;
         };
-        let id = run.id().to_string();
+        let id = run.id().as_str().to_owned();
         let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
         session.messages.push(crate::chat::Message {
             speaker: Default::default(),

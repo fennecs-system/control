@@ -90,7 +90,7 @@ impl RunStatusCheckpoint {
                 .filter(|run| run.status.is_active() && selected.contains(run.id().as_str()))
                 .map(|run| {
                     (
-                        run.id().to_string(),
+                        run.id().as_str().to_owned(),
                         run.status.clone(),
                         run.result.to_string(),
                         run.question.clone(),

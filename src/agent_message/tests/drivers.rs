@@ -12,7 +12,7 @@ fn fixture(peer: bool) -> (State, String, String, &'static str) {
         let origin = tests::activate(&mut state, &child);
         (state, origin, target, "peer-attempt")
     } else {
-        let origin = state.runtime.runs[0].id().to_string();
+        let origin = state.runtime.runs[0].id().as_str().to_owned();
         (state, origin, child, "attempt-a")
     }
 }

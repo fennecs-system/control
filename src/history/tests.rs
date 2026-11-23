@@ -13,7 +13,7 @@ fn missing_activity_is_reported_in_chat_views_and_prompt_without_changing_state(
         ..Default::default()
     });
     crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
-    let next = state.runtime.runs[1].id().to_string();
+    let next = state.runtime.runs[1].id().as_str().to_owned();
     let before = persisting(|| serde_json::to_vec(&state)).unwrap();
     let detail = crate::chat::detail(&state, &chat).unwrap();
     let attempt = &detail["messages"][0]["attempts"][0];

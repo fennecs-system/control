@@ -63,7 +63,7 @@ fn fixture(messages: usize, unrelated: usize) -> State {
             state.chats[0].messages.push(chat::Message {
                 speaker: Default::default(),
                 text: format!("Question {index}: <&> λ"),
-                run_id: Some(run.id().to_string()),
+                run_id: Some(run.id().as_str().to_owned()),
                 reply: String::new(),
             });
         }
@@ -173,7 +173,7 @@ fn history_reads() {
 fn ownership_snapshots() {
     let mut state = fixture(500, 0);
     for run in state.runtime.runs.iter_mut() {
-        let id = run.id().to_string();
+        let id = run.id().as_str().to_owned();
         let run = &mut **run;
         run.attempts[0].command_jobs.push(crate::command_jobs::Job {
             generation: format!("{id}-attempt-1"),

@@ -278,7 +278,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
     if matches!(input.section, Section::Status) {
         return Ok(Plan {
             child: input.child.clone(),
-            run: child.id().to_string(),
+            run: child.id().as_str().to_owned(),
             target: child.target.clone(),
             status: child.status.clone(),
             artifact: None,
@@ -332,7 +332,7 @@ pub fn prepare(state: &State, run_id: &str, args: Value) -> Result<Plan, &'stati
         .cloned();
     Ok(Plan {
         child: input.child.clone(),
-        run: child.id().to_string(),
+        run: child.id().as_str().to_owned(),
         target: child.target.clone(),
         status: child.status.clone(),
         artifact,

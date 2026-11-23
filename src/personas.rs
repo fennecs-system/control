@@ -248,7 +248,7 @@ pub(crate) fn apply_to_root(
     }
     run.persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Worker,
-        root: run.id().to_string(),
+        root: run.id().as_str().to_owned(),
         depth: 0,
         parent: None,
         bundle: Some(Box::new(bundle)),

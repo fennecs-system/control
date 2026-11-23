@@ -252,7 +252,7 @@ fn backend_selection_is_captured_and_failed_settings_do_not_reroute_runs() {
     assert_eq!(state.runtime.runs[1].target.backend, Backend::Claude);
     let mut restored: crate::State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.runtime.runs[1].target.backend, Backend::Claude);
-    let id = restored.runtime.runs[1].id().to_string();
+    let id = restored.runtime.runs[1].id().as_str().to_owned();
     restored.runtime.runs[1].status = RunStatus::Failed;
     restored
         .runtime

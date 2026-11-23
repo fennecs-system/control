@@ -23,7 +23,7 @@ fn ok(_: &State) -> io::Result<()> {
 fn turn(state: &mut State, chat: &str, posts: &[String], calls: &mut Calls) -> Value {
     let index = crate::worker::checkpoint_next(state, ok).expect("a wake was queued");
     assert_eq!(state.runtime.runs[index].kind, RunKind::BotWake);
-    let run = state.runtime.runs[index].id().to_string();
+    let run = state.runtime.runs[index].id().as_str().to_owned();
     let attempt = state.runtime.runs[index].attempts.last().unwrap();
     let generation = attempt.workspace_id.clone().unwrap();
     let projection = crate::turn_context::input(attempt).unwrap().unwrap();

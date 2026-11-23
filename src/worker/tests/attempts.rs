@@ -259,7 +259,7 @@ fn attempt_in(
     let mut attempt = attempt.clone();
     let run = &state.runtime.runs[0];
     let (id, objective, actor, action) = (
-        run.id().to_string(),
+        run.id().as_str().to_owned(),
         run.objective.to_string(),
         run.actor.clone(),
         run.action,

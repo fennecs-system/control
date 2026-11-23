@@ -7,7 +7,7 @@ fn requested() -> (State, String, String) {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Run the server", "test").unwrap();
     state.runtime.runs[0].target.model = Some("captured-model".into());
-    let origin = state.runtime.runs[0].id().to_string();
+    let origin = state.runtime.runs[0].id().as_str().to_owned();
     (state, chat, origin)
 }
 fn decide(state: &mut State, chat: &str, origin: &str) -> Outcome {

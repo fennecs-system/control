@@ -1199,7 +1199,7 @@ fn dismissal_reaches_the_requesting_agent_like_a_port_decision() {
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &id, "Review the shared library", "test").unwrap();
-    let origin = state.runtime.runs[0].id().to_string();
+    let origin = state.runtime.runs[0].id().as_str().to_owned();
     let run = Some(origin.as_str());
     request(&mut state, &id, "/node/library", Requester::Agent { run }).unwrap();
     // A busy chat only notes it; the agent reads it on its next turn.

@@ -26,7 +26,7 @@ pub(super) fn fixture() -> (State, String, String, u64) {
         image: Some(format!("sha256:{}", "a".repeat(64))),
         ..Default::default()
     });
-    let run = run.id().to_string();
+    let run = run.id().as_str().to_owned();
     let time = now();
     (s, run, chat, time)
 }

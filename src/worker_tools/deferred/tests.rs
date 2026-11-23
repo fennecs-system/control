@@ -340,7 +340,7 @@ fn member_state() -> (String, Value) {
         bundle: None,
     });
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let id = state.runtime.runs[index].id().to_string();
+    let id = state.runtime.runs[index].id().as_str().to_owned();
     assert_eq!(state.runtime.runs[index].status, RunStatus::Running);
     (id, serde_json::to_value(&state).unwrap())
 }

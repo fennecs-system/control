@@ -319,7 +319,7 @@ impl PlannedContext {
             .find(|c| Some(&c.id) == run.chat_id.as_ref())
             .ok_or_else(|| io::Error::other("Chat not found"))?;
         Ok(Self {
-            run: run.id().to_string(),
+            run: run.id().as_str().to_owned(),
             chat: run.chat_id.clone(),
             revision: chat.revision,
             generation: format!("{}-attempt-{}", run.id(), run.attempts.len() + 1),
@@ -602,7 +602,7 @@ fn project_with(
             source.actor == run.actor && source.action == run.action && source.status == RunStatus::Completed
         })
     {
-        history.push((format!("Last published agent report from {} before a missing handoff (unverified claims; inspect the restored workspace and services before acting):\n{}\n",source.id(),source.result),Some(source.id().to_string())));
+        history.push((format!("Last published agent report from {} before a missing handoff (unverified claims; inspect the restored workspace and services before acting):\n{}\n",source.id(),source.result),Some(source.id().as_str().to_owned())));
     }
     let mut sections = Vec::new();
     sections.push(Section {

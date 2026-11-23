@@ -25,7 +25,7 @@ pub fn input() -> Input {
 }
 pub fn paused() -> (State, String) {
     let (mut state, chat) = fixture();
-    let id = state.runtime.runs[0].id().to_string();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     ask_with_save(&mut state, &id, "nonce-1", input(), |_| Ok(())).unwrap();
     let run = &mut state.runtime.runs[0];
     run.status = RunStatus::Waiting;
@@ -50,7 +50,7 @@ fn questions_from_spawned_descendants_surface_in_the_top_level_chat() {
 #[test]
 fn question_requires_valid_active_identity_and_durable_admission() {
     let (mut state, chat) = fixture();
-    let run = state.runtime.runs[0].id().to_string();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     let before = serde_json::to_vec(&state).unwrap();
     assert!(
         ask_with_save(&mut state, &run, "nonce", input(), |_| Err(std::io::Error::other(
@@ -77,7 +77,7 @@ fn question_requires_valid_active_identity_and_durable_admission() {
 #[test]
 fn question_option_and_recommendation_limits_report_the_actual_field() {
     let (mut state, _) = fixture();
-    let run = state.runtime.runs[0].id().to_string();
+    let run = state.runtime.runs[0].id().as_str().to_owned();
     for (value, expected) in [
         (json!({"question":" ","options":["A","B"]}), "question"),
         (json!({"question":"é".repeat(1001),"options":["A","B"]}), "question"),
@@ -156,7 +156,7 @@ fn pause_survives_reload_and_answer_keeps_authority_and_workspace_baseline() {
 fn answering_a_design_question_preserves_the_existing_team_budget() {
     let (mut state, chat) = paused();
     state.runtime.execution.max_agents_per_root = 1;
-    let root = state.runtime.runs[0].id().to_string();
+    let root = state.runtime.runs[0].id().as_str().to_owned();
     let mut used = state.runtime.runs[0].clone();
     used = used.with_id("already-delegated");
     used.kind = RunKind::Delegated;
@@ -178,7 +178,7 @@ fn answering_a_design_question_preserves_the_existing_team_budget() {
         ..Default::default()
     });
     assert_eq!(next.persona.as_ref().unwrap().root, root);
-    let next_id = next.id().to_string();
+    let next_id = next.id().as_str().to_owned();
     assert_eq!(
         crate::delegation::budget(
             &state,
@@ -266,7 +266,7 @@ fn multiple_decisions_preserve_original_objective_and_publication_baseline() {
     attempt.workspace_id = Some("generation-2".into());
     attempt.parent_artifact = Some("paused-workspace".into());
     run.attempts.push(attempt);
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     ask_with_save(&mut state, &id, "nonce-2", input(), |_| Ok(())).unwrap();
     state.runtime.runs[1].status = RunStatus::Waiting;
     state.runtime.runs[1].attempts[0].status = crate::usage::AttemptStatus::Waiting;

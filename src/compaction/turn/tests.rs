@@ -8,7 +8,7 @@ fn running() -> (Arc<Mutex<State>>, String, String, String) {
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let run = &state.runtime.runs[0];
     let generation = run.attempts.last().unwrap().workspace_id.clone().unwrap();
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     (Arc::new(Mutex::new(state)), chat, id, generation)
 }
 const DIAGNOSIS: &str = "tool: $ readelf -l /opt/jdk/bin/java\n[Requesting program interpreter: /lib/ld-linux-aarch64.so.1]\n$ ls /lib/ld-linux-aarch64.so.1\nls: cannot access '/lib/ld-linux-aarch64.so.1': No such file or directory";

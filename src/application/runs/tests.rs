@@ -200,7 +200,7 @@ fn the_run_ledger_finds_runs_by_id_through_every_reshaping_edit() {
     assert_eq!(runs.position("b"), Some(1));
     runs.push(run("d"));
     assert_eq!(runs.position("d"), Some(2));
-    assert_eq!(runs.pop().map(|run| run.id().to_string()).as_deref(), Some("d"));
+    assert_eq!(runs.pop().map(|run| run.id().as_str().to_owned()).as_deref(), Some("d"));
     assert!(runs.get("d").is_none());
     // A duplicate id resolves to its first run, as the linear search did.
     let mut twin = run("a");

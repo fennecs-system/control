@@ -46,7 +46,7 @@ fn active(action: Action) -> State {
     s
 }
 fn pause(s: &mut State, role: Role) {
-    let id = s.runtime.runs[0].id().to_string();
+    let id = s.runtime.runs[0].id().as_str().to_owned();
     request_with_save(s, &id, "nonce", input(role), |_| Ok(())).unwrap();
     s.runtime.runs[0].status = RunStatus::Waiting;
     let a = &mut s.runtime.runs[0].attempts[0];
@@ -81,7 +81,7 @@ fn explicit_reviewer_model_is_captured_without_changing_parent_or_granting_autho
         .runtime
         .models
         .push(crate::providers::Model::captured(Backend::Claude, "reviewer".into()));
-    let id = state.runtime.runs[0].id().to_string();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     let mut task = input(Role::Judge);
     task.model = Some("claude:reviewer".into());
     request_with_save(&mut state, &id, "selected", task, |_| Ok(())).unwrap();
@@ -96,7 +96,7 @@ fn explicit_reviewer_model_is_captured_without_changing_parent_or_granting_autho
 #[test]
 fn acknowledgement_is_idempotent_and_fences_other_requests() {
     let mut s = active(Action::Task);
-    let id = s.runtime.runs[0].id().to_string();
+    let id = s.runtime.runs[0].id().as_str().to_owned();
     request_with_save(&mut s, &id, "same", input(Role::Worker), |_| Ok(())).unwrap();
     request_with_save(&mut s, &id, "same", input(Role::Worker), |_| {
         panic!("Acknowledgement replay must not save a second admission")
@@ -113,7 +113,7 @@ fn acknowledgement_is_idempotent_and_fences_other_requests() {
 fn worker_inherits_current_improve_snapshot_without_sharing_publication() {
     let mut s = active(Action::Improve);
     pause(&mut s, Role::Worker);
-    let parent = s.runtime.runs[0].id().to_string();
+    let parent = s.runtime.runs[0].id().as_str().to_owned();
     assert!(crate::scheduler::next(&s.runtime).is_none());
     reconcile(&mut s, |_| Ok(())).unwrap();
     assert_eq!(s.runtime.runs.len(), 2);
@@ -214,7 +214,7 @@ fn all_children_keep_parent_selection_and_failures_resume_the_parent() {
 #[test]
 fn denied_identity_mismatched_actor_depth_and_total_budget_are_enforced() {
     let mut s = active(Action::Task);
-    let id = s.runtime.runs[0].id().to_string();
+    let id = s.runtime.runs[0].id().as_str().to_owned();
     s.runtime.runs[0].actor = Actor::Unknown;
     assert!(request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Ok(())).is_err());
     s.runtime.runs[0].actor = Actor::LocalOperator;
@@ -255,7 +255,7 @@ fn denied_identity_mismatched_actor_depth_and_total_budget_are_enforced() {
 #[test]
 fn request_and_transition_failures_rollback_without_duplicate_children() {
     let mut s = active(Action::Task);
-    let id = s.runtime.runs[0].id().to_string();
+    let id = s.runtime.runs[0].id().as_str().to_owned();
     assert!(
         request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Err(std::io::Error::other(
             "disk full"
@@ -296,7 +296,7 @@ fn project_child_captures_full_checkpoint_and_cancellation_cascades() {
         s.chats[1].project.as_ref().unwrap().head.as_deref(),
         Some("project-paused")
     );
-    let id = s.runtime.runs[0].id().to_string();
+    let id = s.runtime.runs[0].id().as_str().to_owned();
     let before = serde_json::to_vec(&s).unwrap();
     let rollback = runtime::RunStatusCheckpoint::capture(&s.runtime, |r| r.id() == id);
     crate::lifecycle::request_cancel(&mut s.runtime, &id, &Actor::LocalOperator).unwrap();
@@ -325,7 +325,7 @@ fn child_question_is_answerable_from_parent_but_not_unrelated_chat() {
         parent_artifact: Some("immutable-paused-source".into()),
         ..Default::default()
     });
-    let child_id = child.id().to_string();
+    let child_id = child.id().as_str().to_owned();
     crate::design::tests::ask_without_io(&mut state, &child_id, "question", crate::design::tests::input()).unwrap();
     let child = &mut state.runtime.runs[1];
     child.status = RunStatus::Waiting;
@@ -407,7 +407,7 @@ fn parent_waits_for_child_design_and_delegation_continuations() {
         next = next.clone().with_id(format!("{}-continuation", next.id()));
         next.kind = RunKind::DesignAnswer;
         next.status = RunStatus::Queued;
-        let next_id = next.id().to_string();
+        let next_id = next.id().as_str().to_owned();
         s.runtime.runs[1].status = RunStatus::Continued;
         if design {
             s.runtime.runs[1].question = Some(crate::design::Question {
@@ -480,7 +480,7 @@ fn tree_with_children(count: usize, at_ms: u64, parent_kind: RunKind) -> (State,
         let mut turn = s.runtime.runs[0].clone();
         turn = turn.with_id(format!("turn-{index}"));
         turn.kind = parent_kind;
-        let parent = turn.id().to_string();
+        let parent = turn.id().as_str().to_owned();
         s.runtime.runs.push(turn);
         let child = chat::create(&mut s);
         s.chats.last_mut().unwrap().parent_chat = Some(lead.clone());
@@ -557,7 +557,7 @@ fn agents_woken_by_control_events_cannot_keep_respawning() {
 fn reserved_blocking_children_count_against_the_tree_window() {
     let mut s = active(Action::Task);
     s.runtime.execution.max_agents_per_root = 2;
-    let id = s.runtime.runs[0].id().to_string();
+    let id = s.runtime.runs[0].id().as_str().to_owned();
     request_with_save(&mut s, &id, "n", input(Role::Worker), |_| Ok(())).unwrap();
     let lead = s.chats[0].id.clone();
     let sibling = chat::create(&mut s);

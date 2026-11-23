@@ -144,7 +144,7 @@ impl Change {
                     revision: chat.revision,
                 });
                 *state.wake = None;
-                *state.delivered = Some(delivery.run.id().to_string());
+                *state.delivered = Some(delivery.run.id().as_str().to_owned());
                 state.runs.push(delivery.run);
                 chat.messages.push(delivery.message);
                 chat.revision = chat.revision.saturating_add(1);

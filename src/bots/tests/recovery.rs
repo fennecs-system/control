@@ -77,7 +77,7 @@ fn publish(state: &mut State, chat: &str, revision: u64, processed: Vec<Range>) 
         .rposition(|run| run.chat_id.as_deref() == Some(chat))
         .unwrap();
     state.runtime.runs[index].status = RunStatus::Completed;
-    let run = state.runtime.runs[index].id().to_string();
+    let run = state.runtime.runs[index].id().as_str().to_owned();
     state
         .chats
         .iter_mut()
@@ -451,7 +451,7 @@ fn finished_watches_are_collected_once_processed_without_redelivery() {
         "the next publication retires its watermark"
     );
     // Nothing can read it again, so nothing can be redelivered.
-    let id = state.runtime.runs[0].id().to_string();
+    let id = state.runtime.runs[0].id().as_str().to_owned();
     state.runtime.runs[0].status = RunStatus::Running;
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
         workspace_id: Some("later".into()),

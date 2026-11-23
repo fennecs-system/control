@@ -29,7 +29,7 @@ fn fixture(chats: usize) -> (State, String, String, usize) {
         state.runtime.runs.push(task);
     }
     let target = state.chats.last().unwrap().id.clone();
-    let sender = state.runtime.runs[0].id().to_string();
+    let sender = state.runtime.runs[0].id().as_str().to_owned();
     let runs = state.runtime.runs.len();
     (state, sender, target, runs)
 }

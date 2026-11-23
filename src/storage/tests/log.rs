@@ -593,7 +593,12 @@ fn referenced_blocks(scratch: &Scratch) -> Vec<String> {
     names
 }
 fn ids(state: &State) -> Vec<String> {
-    state.runtime.runs.iter().map(|run| run.id().to_string()).collect()
+    state
+        .runtime
+        .runs
+        .iter()
+        .map(|run| run.id().as_str().to_owned())
+        .collect()
 }
 
 /// A clean stop compacts and a restart loads (hydrating journal text); neither

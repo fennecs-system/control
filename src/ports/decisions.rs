@@ -162,7 +162,7 @@ fn advance_with_wake(
     let Some(chat_id) = root.chat_id.clone() else {
         return Ok(());
     };
-    let root_id = root.id().to_string();
+    let root_id = root.id().as_str().to_owned();
     let actor = root.actor.clone();
     let indices = state
         .ports

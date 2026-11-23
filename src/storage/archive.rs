@@ -253,7 +253,12 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
     if archive.is_empty() {
         return Ok(());
     }
-    let hot: HashSet<String> = state.runtime.runs.iter().map(|run| run.id().to_string()).collect();
+    let hot: HashSet<String> = state
+        .runtime
+        .runs
+        .iter()
+        .map(|run| run.id().as_str().to_owned())
+        .collect();
     // A run un-archived and later archived again is in an older block too,
     // until a merge drops that copy: the newest block's copy wins.
     let mut archived: Vec<Run> = Vec::new();
@@ -267,7 +272,7 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
                 match at.get(run.id().as_str()) {
                     Some(&index) => archived[index] = run,
                     None => {
-                        at.insert(run.id().to_string(), archived.len());
+                        at.insert(run.id().as_str().to_owned(), archived.len());
                         archived.push(run);
                     }
                 }

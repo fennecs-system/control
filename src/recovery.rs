@@ -142,7 +142,7 @@ pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mute
             .filter_map(|r| {
                 let a = r.attempts.last()?;
                 (a.termination.is_some() && a.recovery.is_none() && !a.review_only)
-                    .then(|| (r.id().to_string(), a.clone()))
+                    .then(|| (r.id().as_str().to_owned(), a.clone()))
             })
             .collect()
     };

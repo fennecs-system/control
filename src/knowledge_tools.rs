@@ -307,7 +307,7 @@ pub fn worker(
     let source = Source {
         actor: run.actor.clone(),
         chat: run.chat_id.clone().ok_or("Run has no chat")?,
-        run: Some(run.id().to_string()),
+        run: Some(run.id().as_str().to_owned()),
         attempt: Some(
             run.attempts
                 .last()

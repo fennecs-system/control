@@ -137,7 +137,7 @@ fn owner_can_stop_a_queued_followup_and_models_cannot_replace_intent() {
     post(&mut state, "research", "hello", None);
     tick(&mut state, 100);
     state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
-    let run = state.runtime.runs.last().unwrap().id().to_string();
+    let run = state.runtime.runs.last().unwrap().id().as_str().to_owned();
     for args in [json!({"enabled":false}), json!({"enabled":true,"wake":true})] {
         assert!(super::super::call(&mut state, &run, "control_room_watch", &args).is_err());
     }
@@ -198,7 +198,7 @@ fn acknowledged_posts_during_cooldown_do_not_trigger_redundant_turns() {
     tick(&mut state, 100);
     let run = state.runtime.runs.last_mut().unwrap();
     run.status = RunStatus::Running;
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     post(
         &mut state,
         "research",

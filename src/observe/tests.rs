@@ -15,7 +15,7 @@ fn fixture() -> (Arc<Mutex<State>>, String, String) {
         workspace_id: Some(GENERATION.into()),
         ..Default::default()
     });
-    let run = run.id().to_string();
+    let run = run.id().as_str().to_owned();
     state.services.push(serde_json::from_value(json!({
         "resource":{"id":"svc-game","owner":{"node":"node-a","chat":chat},"generation":1,
             "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},"lease":[1,u64::MAX],"phase":"Requested"},

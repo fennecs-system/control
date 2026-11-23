@@ -48,7 +48,7 @@ fn turn(
     run.persona = persona;
     run.status = RunStatus::Completed;
     *run.result = "Claimed the next milestone; routine running; waiting on its events.".into();
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     let session = state.chats.iter_mut().find(|c| c.id == chat).unwrap();
     session.messages.push(crate::chat::Message {
         speaker: Default::default(),
@@ -72,7 +72,7 @@ fn team() -> Team {
     let seed = state.runtime.runs[0].clone();
     assert!(seed.context.is_some(), "the lead captures its lens context");
     state.runtime.runs[0].status = RunStatus::Completed;
-    let root = seed.id().to_string();
+    let root = seed.id().as_str().to_owned();
     let member_chat = chat_with(&mut state, Some(&lead_chat), &["swarm", "advisor"]);
     let worker = Persona {
         role: Role::Worker,

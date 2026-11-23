@@ -576,7 +576,7 @@ pub fn withdraw(
     let held = run.question.clone().ok_or(Refusal::NotPending.message())?;
     let authority = Authority::check(&held, &Asker::of(run), caller, operator).map_err(Refusal::message)?;
     let withdrawn = held.withdraw(authority, reason, at).map_err(Refusal::message)?;
-    let (run_id, chat_id) = (run.id().to_string(), run.chat_id.clone());
+    let (run_id, chat_id) = (run.id().as_str().to_owned(), run.chat_id.clone());
     crate::lifecycle::request_cancel(&mut state.runtime, &run_id, &identity::Actor::LocalOperator)?;
     let note = outcome(&withdrawn).unwrap_or_default();
     let run = &mut state.runtime.runs[index];
@@ -851,7 +851,7 @@ pub fn answer(
     next.chat_id = Some(chat_id.into());
     next.queue_order = queue_order;
     *next.continuation = Some(continuation);
-    let next_id = next.id().to_string();
+    let next_id = next.id().as_str().to_owned();
     state.runtime.runs[index].question = Some(Question {
         continuation: Some(next_id.clone()),
         ..answered

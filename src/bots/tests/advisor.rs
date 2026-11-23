@@ -27,7 +27,7 @@ pub(super) fn opt_in(state: &mut State, root: &str, on: bool) {
 /// A completed read-only judge child of `root`, before it runs as a bot.
 fn judge(state: &mut State, root: &str) -> String {
     let chat = spawned(state, root, "Advisor");
-    let lead = state.runtime.runs[0].id().to_string();
+    let lead = state.runtime.runs[0].id().as_str().to_owned();
     state.runtime.runs.last_mut().unwrap().persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
         root: lead,
@@ -300,7 +300,7 @@ fn notes_and_lead_turns_woken_only_by_notes_do_not_re_trigger_the_advisor() {
         }]
     ));
     assert!(woken[0].objective.contains("an observer's note"));
-    let id = woken[0].id().to_string();
+    let id = woken[0].id().as_str().to_owned();
     let woken = state.runtime.runs.get_mut(&id).unwrap();
     woken.status = RunStatus::Completed;
     woken.attempts = vec![crate::usage::Attempt::default()];
@@ -509,7 +509,7 @@ fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     let judge = spawned(&mut state, &lead, "Advisor");
     let persona = crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
-        root: state.runtime.runs[0].id().to_string(),
+        root: state.runtime.runs[0].id().as_str().to_owned(),
         depth: 1,
         parent: None,
         bundle: None,

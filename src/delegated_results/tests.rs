@@ -337,7 +337,7 @@ fn child_continuations_are_followed_but_forged_cross_chat_chains_are_denied() {
     s.runtime.runs[1].status = RunStatus::Continued;
     let mut d = s.runtime.runs[0].delegation.clone().unwrap();
     d.child = None;
-    d.continuation = Some(next.id().to_string());
+    d.continuation = Some(next.id().as_str().to_owned());
     s.runtime.runs[1].delegation = Some(d);
     s.runtime.runs.push(next);
     let value = store

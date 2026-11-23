@@ -105,7 +105,7 @@ fn fixture() -> State {
         .runtime
         .runs
         .iter()
-        .map(|run| run.id().to_string())
+        .map(|run| run.id().as_str().to_owned())
         .collect::<Vec<_>>();
     for (index, id) in runs.iter().enumerate() {
         text = text.replace(id, &format!("fixture-run-{index}"));

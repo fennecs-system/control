@@ -32,7 +32,7 @@ fn active() -> (State, String, String) {
         parent_artifact: Some("baseline".into()),
         ..Default::default()
     });
-    let id = run.id().to_string();
+    let id = run.id().as_str().to_owned();
     (state, chat, id)
 }
 fn spawn(state: &mut State, id: &str, nonce: &str, input: Value) -> Result<Value, std::borrow::Cow<'static, str>> {

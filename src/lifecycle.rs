@@ -43,7 +43,7 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
         .runs
         .iter()
         .filter(|r| r.persona.as_ref().is_some_and(|p| p.parent.as_deref() == Some(id)) && r.status.is_active())
-        .map(|r| r.id().to_string())
+        .map(|r| r.id().as_str().to_owned())
         .collect();
     for child in children {
         request_cancel(runtime, &child, actor)?;

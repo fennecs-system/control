@@ -169,7 +169,7 @@ fn shared_local_summaries_feed_both_cli_chat_projections() {
     crate::chat::send(&mut state, &job.chat, "Continue the task", "test").unwrap();
     for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         state.runtime.backend = backend;
-        let id = state.runtime.runs.last().unwrap().id().to_string();
+        let id = state.runtime.runs.last().unwrap().id().as_str().to_owned();
         state.runtime.runs.last_mut().unwrap().target.backend = backend;
         let prompt = crate::chat::prompt(&state, &id).unwrap();
         assert!(prompt.contains("LOCAL SUMMARY SENTINEL"));

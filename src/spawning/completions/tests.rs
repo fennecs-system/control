@@ -17,7 +17,7 @@ fn spawned(n: usize) -> State {
 fn parent_chat_remains_available_and_completion_uses_current_workspace() {
     let mut state = spawned(1);
     let parent_chat = state.chats[0].id.clone();
-    let child = state.runtime.runs[1].id().to_string();
+    let child = state.runtime.runs[1].id().as_str().to_owned();
     state.runtime.runs[0].status = RunStatus::Completed;
     state.runtime.runs[1].status = RunStatus::Running;
     chat::send(&mut state, &parent_chat, "How is the bot doing?", "test").unwrap();
@@ -128,7 +128,7 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
     next.chat_id = child.chat_id.clone();
     next.persona = child.persona.clone();
     next.status = RunStatus::Running;
-    let next_id = next.id().to_string();
+    let next_id = next.id().as_str().to_owned();
     state.runtime.runs[1].status = RunStatus::Continued;
     state.runtime.runs[1].question = Some(crate::design::Question {
         id: "fixture-question".into(),

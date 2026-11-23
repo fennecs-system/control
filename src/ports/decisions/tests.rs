@@ -135,9 +135,9 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
             answer: "Relay".into(),
             asked_at: None,
         },
-        continuation: Some(continuation.id().to_string()),
+        continuation: Some(continuation.id().as_str().to_owned()),
     });
-    state.ports[0].origin_run = continuation.id().to_string();
+    state.ports[0].origin_run = continuation.id().as_str().to_owned();
     state.runtime.runs.push(continuation);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
@@ -157,7 +157,7 @@ fn requests_from_a_resumed_turn_wake_the_conversation_again() {
     });
     let mut second = state.ports[0].clone();
     second.id = "port-second".to_owned().try_into().unwrap();
-    second.origin_run = state.runtime.runs[resumed].id().to_string();
+    second.origin_run = state.runtime.runs[resumed].id().as_str().to_owned();
     second.origin_attempt = "attempt-b".into();
     second.decision = Some(Receipt::pending(true));
     state.ports.push(second);
@@ -178,7 +178,7 @@ fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
     let (mut state, lead) = approved();
     state.runtime.runs[0].status = RunStatus::Completed;
     state.ports[0].decision = None;
-    let root = state.runtime.runs[0].id().to_string();
+    let root = state.runtime.runs[0].id().as_str().to_owned();
     let mut later = state.runtime.runs[0].clone();
     later = later.with_id("later");
     later.kind = crate::runtime::RunKind::AgentCompletion;

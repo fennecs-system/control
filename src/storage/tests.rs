@@ -12,7 +12,7 @@ fn reconciled_approval_checkpoint_survives_restart_without_a_duplicate_resume() 
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "original task", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Completed;
-    let origin = state.runtime.runs[0].id().to_string();
+    let origin = state.runtime.runs[0].id().as_str().to_owned();
     let decide = |state: &mut State| {
         crate::approvals::resume(
             state,

@@ -63,7 +63,7 @@ pub(crate) fn fixture() -> (State, String, String) {
         workspace_id: Some("attempt-a".into()),
         ..Default::default()
     });
-    let run_id = run.id().to_string();
+    let run_id = run.id().as_str().to_owned();
     let resource = Resource {
         id: ResourceId::try_from("svc-a".to_owned()).unwrap(),
         owner: Owner {
