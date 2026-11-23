@@ -300,13 +300,13 @@ pub fn render(runtime: &crate::runtime::Runtime) -> String {
     for model in &agents {
         html.push_str(&endpoint_row(runtime, model));
     }
-    html.push_str("</div><details class='model-add'><summary>+ New model</summary>");
+    // One form for every hosted backend, so the list does not grow with them.
+    html.push_str("</div><details class='model-add'><summary>+ New model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='add'><h4>Integration</h4><div class='provider-fields'><label>Provider<select name='provider'>");
     for backend in crate::backend::Backend::hosted() {
-        let id = backend.id();
-        let label = backend.label();
-        let default = crate::escape(&backend.default_model());
-        html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='add'><input type='hidden' name='provider' value='{id}'><label>{label} model ID<input name='model' required maxlength='100' value='{default}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Add model</button></form>"));
+        html.push_str(&format!("<option value='{}'>{}</option>", backend.id(), backend.label()));
     }
+    let examples = crate::backend::Backend::hosted().map(|backend| crate::escape(&backend.default_model())).collect::<Vec<_>>().join(", ");
+    html.push_str(&format!("</select></label><label>Model ID<input name='model' required maxlength='100' placeholder='{examples}' spellcheck='false' autocapitalize='none'></label></div><button class='primary'>Add model</button></form>"));
     html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><h4>Local endpoint</h4>{}<button class='primary'>Add local model</button></form></details></section>", text_fields(None, true)));
     // Entries that cannot run agent turns: summaries and text generation only.
     html.push_str(&format!("<section class='provider-section' aria-labelledby='summary-models-heading'><details class='model-add summary-models'><summary id='summary-models-heading'>Summary models ({})</summary><p class='provider-description'>Summaries and <code>control_model_generate</code> only; a local endpoint that serves tool calls is listed under Agent models.</p><div class='model-list' aria-label='Summary models'>", summaries.len()));

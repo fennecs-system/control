@@ -88,19 +88,16 @@ fn sole_configured_model_is_selected_without_an_explicit_default() {
     assert!(migrate(serde_json::from_str(explicit_wrong).unwrap(), &[]).is_err());
 }
 #[test]
-fn provider_forms_have_bound_prefilled_defaults() {
+fn one_add_form_offers_every_hosted_backend_with_its_default_as_an_example() {
     let html = render(&crate::runtime::Runtime::default());
-    let forms = html.split("<details class='model-add'>").nth(1).unwrap();
-    let claude = forms
-        .split("name='provider' value='claude'")
-        .nth(1)
-        .unwrap();
-    assert!(claude.contains("value='sonnet'"));
-    assert!(forms.contains(&format!(
-        "value='{}'",
-        crate::backend::Backend::Codex.default_model()
-    )));
-    assert!(!forms.contains("type='radio'"));
+    let form = html.split("<details class='model-add'>").nth(1).unwrap().split("</form>").next().unwrap();
+    // One form, however many backends: each is an option, none needs a page edit.
+    assert_eq!(form.matches("name='action' value='add'").count(), 1);
+    for backend in crate::backend::Backend::hosted() {
+        assert!(form.contains(&format!("<option value='{}'>{}</option>", backend.id(), backend.label())), "{form}");
+        assert!(form.split("placeholder='").nth(1).unwrap().split('\'').next().unwrap().contains(&backend.default_model()));
+    }
+    assert!(!form.contains("type='radio'"));
 }
 #[test]
 fn init_options_are_explicit_and_reject_invalid_or_repeated_flags() {
