@@ -252,16 +252,37 @@ enum Action {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"control_room_claim","description":"Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate it. Omit room for the team room. acquire is atomic: it succeeds if the key is free or released, otherwise returns the current owner without changing it. An applied change returns your claim's key, status, revision and incarnation. Either way it lists related live claims that look like the same effort: join or wait on one of those, or release your duplicate. update and release need the current revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) or done; done is your own report of the outcome, not host verification. control_room_read marks abandoned=true when the owner is lost (its turn failed, was cancelled or interrupted, or its bot was stopped) and owner_idle=true when it has no active turn; only the operator releases another owner's claim. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority.","annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false},
-        "inputSchema":{"type":"object","properties":{
-            "room":{"type":"string"},
-            "key":{"type":"string","minLength":1,"maxLength":MAX_KEY,"pattern":"^[A-Za-z0-9._-]+$"},
-            "action":{"type":"string","enum":["acquire","update","release"]},
-            "status":{"type":"string","enum":["working","blocked","done"]},
-            "blocked_on":{"type":"string","maxLength":MAX_KEY},
-            "note":{"type":"string","maxLength":MAX_NOTE},
-            "revision":{"type":"integer","minimum":1}},
-        "required":["key","action"],"additionalProperties":false}})
+    json!({
+        "name": "control_room_claim",
+        "description": concat!(
+            "Advisory ownership of one deliverable or investigation in this task's thread, so peers do not duplicate ",
+            "it. Omit room for the team room. acquire is atomic: it succeeds if the key is free or released, ",
+            "otherwise returns the current owner without changing it. An applied change returns your claim's key, ",
+            "status, revision and incarnation. Either way it lists related live claims that look like the same ",
+            "effort: join or wait on one of those, or release your duplicate. update and release need the current ",
+            "revision and only work for the owner. status working, blocked (set blocked_on to the claim key you need) ",
+            "or done; done is your own report of the outcome, not host verification. control_room_read marks ",
+            "abandoned=true when the owner is lost (its turn failed, was cancelled or interrupted, or its bot was ",
+            "stopped) and owner_idle=true when it has no active turn; only the operator releases another owner's ",
+            "claim. A bot waits for a dependency with wait topic claim:<room>/<key>: it wakes once, when that claim ",
+            "incarnation resolves as done, released or abandoned, not on progress updates. Claims grant no authority."
+        ),
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room": {"type": "string"},
+                "key": {"type": "string", "minLength": 1, "maxLength": MAX_KEY, "pattern": "^[A-Za-z0-9._-]+$"},
+                "action": {"type": "string", "enum": ["acquire", "update", "release"]},
+                "status": {"type": "string", "enum": ["working", "blocked", "done"]},
+                "blocked_on": {"type": "string", "maxLength": MAX_KEY},
+                "note": {"type": "string", "maxLength": MAX_NOTE},
+                "revision": {"type": "integer", "minimum": 1}
+            },
+            "required": ["key", "action"],
+            "additionalProperties": false
+        }
+    })
 }
 
 /// A claim change waiters may need: only resolutions are offered to them.

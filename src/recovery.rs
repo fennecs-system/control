@@ -218,9 +218,29 @@ struct Input {
 }
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![
-            json!({"name":"control_recovery","description":"Inspect unpublished recovery evidence from this chat and action. Without generation, list candidates (paged by offset). With generation, read metadata/draft and a bounded file listing; path reads a UTF-8 file up to 64 KiB. restore=true copies the full candidate into a new .control-recovery-GENERATION folder in the active workspace, only if the original committed base and project grant still match. It never replaces committed state or acknowledges events. Reconcile external effects before using recovered files. Snapshot uses the existing checkpoint exclusions for credentials, generated folders and symlinks.","inputSchema":{"type":"object","properties":{"generation":{"type":"string"},"path":{"type":"string"},"restore":{"type":"boolean","default":false},"offset":{"type":"integer","minimum":0}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
-        ]
+        vec![json!({
+            "name": "control_recovery",
+            "description": concat!(
+                "Inspect unpublished recovery evidence from this chat and action. Without generation, list ",
+                "candidates (paged by offset). With generation, read metadata/draft and a bounded file listing; ",
+                "path reads a UTF-8 file up to 64 KiB. restore=true copies the full candidate into a new ",
+                ".control-recovery-GENERATION folder in the active workspace, only if the original committed base ",
+                "and project grant still match. It never replaces committed state or acknowledges events. ",
+                "Reconcile external effects before using recovered files. Snapshot uses the existing checkpoint ",
+                "exclusions for credentials, generated folders and symlinks."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "generation": {"type": "string"},
+                    "path": {"type": "string"},
+                    "restore": {"type": "boolean", "default": false},
+                    "offset": {"type": "integer", "minimum": 0}
+                },
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "openWorldHint": false}
+        })]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_recovery"

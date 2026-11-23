@@ -21,23 +21,94 @@ pub trait ServiceOps {
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        let mut tools = vec![
-            json!({"name":"control_service_start","description":"Start a chat-owned offline tool container that survives model turns and Control restart. Status reports its platform (e.g. linux/aarch64): download binaries built for that architecture. lease_seconds=-1 (default) disables lease expiry; a positive duration limits its lifetime. Process exit still triggers container cleanup. Keep ALL task code and durable data in /workspace: it is a mounted disk volume shared by this chat's new services, retained after container removal and automatically reopened by replacement services. Avoid conflicting writes between same-chat services. /home/agent and other writable-layer files are lost on removal; /tmp is disposable RAM scratch (128 MiB), erased on restart. Optional shape selects small (2 GiB, 1 CPU), medium (4 GiB, 2 CPUs), or large (8 GiB, 2 CPUs), independent of image capabilities. The process limit, threads included, grows with RAM; status reports pids_limit. Omit shape for the image default. The node service budget (memory and CPU, operator-configured; default 20 GiB and 8 CPUs x2) bounds how many services run; stopping and fenced services retain reservations until cleanup. Services are not tied to agents or bots: many can share one service (commands run concurrently) or spread across several. No automatic resizing: stop and replace to change shape, reusing this chat's workspace. Leave memory headroom inside the container for application overhead. Optional storage_limit_mb caps only the private writable layer, NOT /workspace; nodes without Docker quota support refuse it at once without reserving anything, so omit it unless needed. A service whose container the engine refuses to create ends Stopped with reason Failed and its diagnostic, releasing its reservation. No attempt files, credentials, network or host mounts. Use a foreground command. Returns a durable handle immediately; inspect status before assuming startup succeeded. Older services keep their captured layout: check status.workspace for retained storage. A retained volume is not a backup against disk loss or explicit volume deletion.","inputSchema":{"type":"object","properties":{"shape":{"type":"string","enum":["small","medium","large"],"description":"Optional compute preset. Omit to retain image default limits. control_service_status {\"detail\":\"node\"} shows presets and remaining node capacity."},"command":{"type":"string","minLength":1,"maxLength":16000},"lease_seconds":{"type":"integer","oneOf":[{"const":-1},{"minimum":1,"maximum":3600}],"default":-1},"storage_limit_mb":{"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Optional private writable-layer quota in MiB; /workspace and other mounts are excluded. Needs a quota-capable Docker storage driver; otherwise the start is refused before reserving anything. Omit for no Control disk cap."}},"required":["command"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"openWorldHint":false}}),
-        ];
+        let mut tools = vec![json!({
+            "name": "control_service_start",
+            "description": concat!(
+                "Start a chat-owned offline tool container that survives model turns and Control restart. Status ",
+                "reports its platform (e.g. linux/aarch64): download binaries built for that architecture. ",
+                "lease_seconds=-1 (default) disables lease expiry; a positive duration limits its lifetime. ",
+                "Process exit still triggers container cleanup. Keep ALL task code and durable data in ",
+                "/workspace: it is a mounted disk volume shared by this chat's new services, retained after ",
+                "container removal and automatically reopened by replacement services. Avoid conflicting writes ",
+                "between same-chat services. /home/agent and other writable-layer files are lost on removal; /tmp ",
+                "is disposable RAM scratch (128 MiB), erased on restart. Optional shape selects small (2 GiB, 1 ",
+                "CPU), medium (4 GiB, 2 CPUs), or large (8 GiB, 2 CPUs), independent of image capabilities. The ",
+                "process limit, threads included, grows with RAM; status reports pids_limit. Omit shape for the ",
+                "image default. The node service budget (memory and CPU, operator-configured; default 20 GiB and ",
+                "8 CPUs x2) bounds how many services run; stopping and fenced services retain reservations until ",
+                "cleanup. Services are not tied to agents or bots: many can share one service (commands run ",
+                "concurrently) or spread across several. No automatic resizing: stop and replace to change shape, ",
+                "reusing this chat's workspace. Leave memory headroom inside the container for application ",
+                "overhead. Optional storage_limit_mb caps only the private writable layer, NOT /workspace; nodes ",
+                "without Docker quota support refuse it at once without reserving anything, so omit it unless ",
+                "needed. A service whose container the engine refuses to create ends Stopped with reason Failed ",
+                "and its diagnostic, releasing its reservation. No attempt files, credentials, network or host ",
+                "mounts. Use a foreground command. Returns a durable handle immediately; inspect status before ",
+                "assuming startup succeeded. Older services keep their captured layout: check status.workspace ",
+                "for retained storage. A retained volume is not a backup against disk loss or explicit volume ",
+                "deletion."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "shape": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large"],
+                        "description": concat!(
+                            "Optional compute preset. Omit to retain image default limits. control_service_status ",
+                            "{\"detail\":\"node\"} shows presets and remaining node capacity."
+                        )
+                    },
+                    "command": {"type": "string", "minLength": 1, "maxLength": 16000},
+                    "lease_seconds": {
+                        "type": "integer",
+                        "oneOf": [{"const": -1}, {"minimum": 1, "maximum": 3600}],
+                        "default": -1
+                    },
+                    "storage_limit_mb": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": u32::MAX,
+                        "description": concat!(
+                            "Optional private writable-layer quota in MiB; /workspace and other mounts are ",
+                            "excluded. Needs a quota-capable Docker storage driver; otherwise the start is ",
+                            "refused before reserving anything. Omit for no Control disk cap."
+                        )
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "openWorldHint": false}
+        })];
         for (name, description, readonly) in [
             (
                 "control_service_attach",
-                "Read one of this chat's or its team's services: status, its ports, watches and this chat's executions, and bounded logs. Not needed before control_service_exec or control_watch_start, which work on any team service directly. Attachment grants no host filesystem access and does not extend the lease.",
+                concat!(
+                    "Read one of this chat's or its team's services: status, its ports, watches and this chat's ",
+                    "executions, and bounded logs. Not needed before control_service_exec or control_watch_start, ",
+                    "which work on any team service directly. Attachment grants no host filesystem access and does ",
+                    "not extend the lease."
+                ),
                 true,
             ),
             (
                 "control_service_status",
-                "Read this chat's service status and bounded logs. Omit service_id to list active services and ten recent completed handles. detail \"node\" adds compute shapes, the node service budget and other chats' executions.",
+                concat!(
+                    "Read this chat's service status and bounded logs. Omit service_id to list active services and ",
+                    "ten recent completed handles. detail \"node\" adds compute shapes, the node service budget and ",
+                    "other chats' executions."
+                ),
                 true,
             ),
             (
                 "control_service_stop",
-                "Request stop of an exact service: one this chat owns or was granted, or a teammate's in the same task tree (its lead, spawned workers and their workers). Stopping releases its capacity; the owner's /workspace volume is retained. Stopping is not confirmation of removal; inspect status until Stopped. Does not cancel the model turn.",
+                concat!(
+                    "Request stop of an exact service: one this chat owns or was granted, or a teammate's in the same ",
+                    "task tree (its lead, spawned workers and their workers). Stopping releases its capacity; the ",
+                    "owner's /workspace volume is retained. Stopping is not confirmation of removal; inspect status ",
+                    "until Stopped. Does not cancel the model turn."
+                ),
                 false,
             ),
         ] {
@@ -45,7 +116,17 @@ impl AttemptTools for Tools {
             if name != "control_service_stop" {
                 properties["detail"] = json!({"type":"string","enum":["node"]});
             }
-            tools.push(json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":if name=="control_service_status"{json!([])}else{json!(["service_id"])},"additionalProperties":false},"annotations":{"readOnlyHint":readonly,"openWorldHint":false}}));
+            tools.push(json!({
+                "name": name,
+                "description": description,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": if name=="control_service_status"{json!([])}else{json!(["service_id"])},
+                    "additionalProperties": false
+                },
+                "annotations": {"readOnlyHint": readonly, "openWorldHint": false}
+            }));
         }
         tools.extend(commands::definitions());
         tools.push(copy::definition());

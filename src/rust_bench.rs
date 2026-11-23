@@ -4,7 +4,28 @@ use serde_json::{Value, json};
 use std::io;
 
 pub fn definition() -> Value {
-    json!({"name":"control.rust.bench","description":"Benchmark a standalone Rust expression with optional setup code in a fresh offline Nix container. Optimized Rust 2024, standard library only; setup runs once, warmup then repeated samples. Use std::hint::black_box for inputs and return the measured result. Compilation/startup are excluded from sample timings. Combined code/setup ≤14000 bytes. 3-second program deadline; no crates, host files, credentials or network. Timings are workload evidence, not a correctness guarantee.","inputSchema":{"type":"object","properties":{"code":{"type":"string","minLength":1,"maxLength":12000},"setup":{"type":"string","maxLength":12000},"iterations":{"type":"integer","minimum":1,"maximum":1000000,"default":1000},"samples":{"type":"integer","minimum":3,"maximum":31,"default":9}},"required":["code"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({
+        "name": "control.rust.bench",
+        "description": concat!(
+            "Benchmark a standalone Rust expression with optional setup code in a fresh offline Nix container. ",
+            "Optimized Rust 2024, standard library only; setup runs once, warmup then repeated samples. Use ",
+            "std::hint::black_box for inputs and return the measured result. Compilation/startup are excluded from ",
+            "sample timings. Combined code/setup ≤14000 bytes. 3-second program deadline; no crates, host files, ",
+            "credentials or network. Timings are workload evidence, not a correctness guarantee."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "minLength": 1, "maxLength": 12000},
+                "setup": {"type": "string", "maxLength": 12000},
+                "iterations": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 1000},
+                "samples": {"type": "integer", "minimum": 3, "maximum": 31, "default": 9}
+            },
+            "required": ["code"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+    })
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

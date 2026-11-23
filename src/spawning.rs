@@ -163,12 +163,104 @@ pub fn definition() -> Value {
     definition
 }
 fn inherited_definition() -> Value {
-    json!({"name":"control_agent_spawn","description":"Start independent or background worker objectives without pausing this conversation. Give each worker ownership of its goal and dependencies, including ongoing infrastructure when needed. If you were spawned for a goal, do that work yourself: spawn only for a separate side task, never to hand your own assignment to a helper and wait on it. Workers coordinate directly with same-task peers; keep the root chat for steering and consequential decisions rather than relaying routine updates. Continue useful work in this session; spawning does not require ending it. Control queues completion updates automatically. Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only when a current status check is needed, never in a polling loop. Configured team budget (default 64), pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit captured model, lenses, actor and immutable baseline, never live edits, and share this chat's team room (its linked room, else its lead's), so objectives need not name a room; agents cannot create rooms. First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences backlog and descendants; later originating-chat turns can inspect or cancel retained batches.","inputSchema":{"type":"object","properties":{"objectives":{"type":"array","description":"One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: [\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do not supply nonce or identity fields.","minItems":1,"items":{"type":"string","minLength":1,"maxLength":2000}},"role":{"type":"string","enum":["worker","judge"],"description":"Default worker. judge starts exactly one isolated read-only advisor candidate with no resources, within the root task's advisor allowance (default 2), separate from its one blocking judge review. Available only when the root chat selects the advisor lens; request it as a bot to make it the team's advisor."},"persona":{"type":"string","maxLength":64,"description":"A persona from the library (control.personas.list; built-ins lead, worker, advisor, acceptance, antibody, judge): children capture its purpose, DNA, standing, default model and behaviours. Read-only personas are judges and need their opt-in gene. Omit to inherit your context as before."},"lenses":{"type":"array","maxItems":32,"items":{"type":"string"},"description":"Explicit genes replacing the persona's DNA or your inherited lenses."}},"required":["objectives"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({
+        "name": "control_agent_spawn",
+        "description": concat!(
+            "Start independent or background worker objectives without pausing this conversation. Give each worker ",
+            "ownership of its goal and dependencies, including ongoing infrastructure when needed. If you were ",
+            "spawned for a goal, do that work yourself: spawn only for a separate side task, never to hand your own ",
+            "assignment to a helper and wait on it. Workers coordinate directly with same-task peers; keep the root ",
+            "chat for steering and consequential decisions rather than relaying routine updates. Continue useful work ",
+            "in this session; spawning does not require ending it. Control queues completion updates automatically. ",
+            "Yield when genuinely waiting with no independent work remaining. Use control_agent_spawn_status only ",
+            "when a current status check is needed, never in a polling loop. Configured team budget (default 64), ",
+            "pending-intent budget and 24000-byte payload apply independently of model slots. Children inherit ",
+            "captured model, lenses, actor and immutable baseline, never live edits, and share this chat's team room ",
+            "(its linked room, else its lead's), so objectives need not name a room; agents cannot create rooms. ",
+            "First Improve turns without a published baseline must checkpoint via control_agent_spawn_blocking or ",
+            "finish first. Depth limit 2; children and blocking spawns share one root budget. Cancellation fences ",
+            "backlog and descendants; later originating-chat turns can inspect or cancel retained batches."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "objectives": {
+                    "type": "array",
+                    "description": concat!(
+                        "One concise task per child, 1–2000 characters each and 24000 UTF-8 bytes total. Example: ",
+                        "[\"Inspect the API\",\"Review the tests\"]. Request identity comes from the transport; do ",
+                        "not supply nonce or identity fields."
+                    ),
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+                },
+                "role": {
+                    "type": "string",
+                    "enum": ["worker", "judge"],
+                    "description": concat!(
+                        "Default worker. judge starts exactly one isolated read-only advisor candidate with no ",
+                        "resources, within the root task's advisor allowance (default 2), separate from its one ",
+                        "blocking judge review. Available only when the root chat selects the advisor lens; request ",
+                        "it as a bot to make it the team's advisor."
+                    )
+                },
+                "persona": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": concat!(
+                        "A persona from the library (control.personas.list; built-ins lead, worker, advisor, ",
+                        "acceptance, antibody, judge): children capture its purpose, DNA, standing, default model and ",
+                        "behaviours. Read-only personas are judges and need their opt-in gene. Omit to inherit your ",
+                        "context as before."
+                    )
+                },
+                "lenses": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {"type": "string"},
+                    "description": "Explicit genes replacing the persona's DNA or your inherited lenses."
+                }
+            },
+            "required": ["objectives"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+    })
 }
 pub fn management_definitions() -> Vec<Value> {
     vec![
-        json!({"name":"control_agent_spawn_status","description":"Read a retained spawn batch in your originating chat, including after its parent finishes. At most 20 materialized handles per page; pending counts are independent of running slots.","inputSchema":{"type":"object","properties":{"batch":{"type":"string","maxLength":512},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["batch"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}),
-        json!({"name":"control_agent_spawn_cancel","description":"Cancel a retained spawn batch owned by your originating chat. Fences unmaterialized backlog and cancels active descendants; completed results remain retained.","inputSchema":{"type":"object","properties":{"batch":{"type":"string","maxLength":512}},"required":["batch"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
+        json!({
+            "name": "control_agent_spawn_status",
+            "description": concat!(
+                "Read a retained spawn batch in your originating chat, including after its parent finishes. At most ",
+                "20 materialized handles per page; pending counts are independent of running slots."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "batch": {"type": "string", "maxLength": 512},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20}
+                },
+                "required": ["batch"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": true}
+        }),
+        json!({
+            "name": "control_agent_spawn_cancel",
+            "description": concat!(
+                "Cancel a retained spawn batch owned by your originating chat. Fences unmaterialized backlog and ",
+                "cancels active descendants; completed results remain retained."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {"batch": {"type": "string", "maxLength": 512}},
+                "required": ["batch"],
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": false}
+        }),
     ]
 }
 

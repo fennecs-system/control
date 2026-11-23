@@ -62,9 +62,20 @@ pub(crate) fn read(context: Option<&Resolved>, role: Audience, topic: Option<&st
 
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![
-            json!({"name":NAME,"description":"Read guidance on demand: the full captured text of a lens named in your prompt's guidance index, or the built-in topics session, rooms and environment. Without topic, list the topics. Read a topic when its situation arises, not every turn. Read-only; grants nothing.","inputSchema":{"type":"object","properties":{"topic":{"type":"string","maxLength":80}},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-        ]
+        vec![json!({
+            "name": NAME,
+            "description": concat!(
+                "Read guidance on demand: the full captured text of a lens named in your prompt's guidance index, ",
+                "or the built-in topics session, rooms and environment. Without topic, list the topics. Read a ",
+                "topic when its situation arises, not every turn. Read-only; grants nothing."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {"topic": {"type": "string", "maxLength": 80}},
+                "additionalProperties": false
+            },
+            "annotations": {"readOnlyHint": true, "openWorldHint": false}
+        })]
     }
     fn known(&self, name: &str) -> bool {
         name == NAME

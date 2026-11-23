@@ -19,6 +19,10 @@ impl crate::backend::Agent for Grok {
     fn label(&self) -> &'static str {
         "xAI / Grok Build"
     }
+    /// Its credential names: never mounted in a workspace today, and never published if one appears there.
+    fn private_names(&self) -> &'static [&'static str] {
+        &[".grok"]
+    }
     fn name(&self) -> &'static str {
         "Grok"
     }

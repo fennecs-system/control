@@ -68,7 +68,28 @@ pub fn definition() -> Value {
     definition
 }
 fn inherited_definition() -> Value {
-    json!({"name":"control_agent_spawn_blocking","description":"Spawn a bounded worker or isolated read-only judge and block this conversation until its result returns. Use control_agent_spawn for independent background work. This checkpoints your files, pauses you, releases the worker, then automatically resumes you using your captured provider and model. Stop immediately after acknowledgement; never poll or wait inside a command. Children share your actor and authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, configured per-root team budget shared with spawn batches, and one judge per root task; execution uses bounded node slots.","inputSchema":{"type":"object","properties":{"objective":{"type":"string","minLength":1,"maxLength":2000},"role":{"type":"string","enum":["worker","judge"]}},"required":["objective","role"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+    json!({
+        "name": "control_agent_spawn_blocking",
+        "description": concat!(
+            "Spawn a bounded worker or isolated read-only judge and block this conversation until its result returns. ",
+            "Use control_agent_spawn for independent background work. This checkpoints your files, pauses you, ",
+            "releases the worker, then automatically resumes you using your captured provider and model. Stop ",
+            "immediately after acknowledgement; never poll or wait inside a command. Children share your actor and ",
+            "authority ceiling, not writable files. Review feedback never applies or merges changes. Limits: depth 2, ",
+            "configured per-root team budget shared with spawn batches, and one judge per root task; execution uses ",
+            "bounded node slots."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "objective": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "role": {"type": "string", "enum": ["worker", "judge"]}
+            },
+            "required": ["objective", "role"],
+            "additionalProperties": false
+        },
+        "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
+    })
 }
 
 pub(crate) fn lineage(run: &runtime::Run) -> Persona {
