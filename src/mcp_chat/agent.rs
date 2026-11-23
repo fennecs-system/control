@@ -181,8 +181,8 @@ impl AttemptTools for Tools {
             "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_chat"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_chat"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _name: &str, args: &Value) -> io::Result<Value> {
         if !control::permissions::read().agent_chat_tools {

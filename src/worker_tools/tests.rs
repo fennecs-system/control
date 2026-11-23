@@ -1570,3 +1570,4 @@ fn worker_envelopes_are_pinned() {
 }
 
 mod characterisation;
+mod dispatch_table;

@@ -293,15 +293,14 @@ impl AttemptTools for Tools {
         });
         definitions
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "control_watch_start"
-                | "control_watch_events"
-                | "control_watch_status"
-                | "control_watch_stop"
-                | "control_watch_wake"
-        )
+    fn names(&self) -> &'static [&'static str] {
+        &[
+            "control_watch_start",
+            "control_watch_events",
+            "control_watch_status",
+            "control_watch_stop",
+            "control_watch_wake",
+        ]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         run(cx.host, &cx.attempt, name, args)

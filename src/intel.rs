@@ -692,8 +692,8 @@ impl AttemptTools for Tools {
             }),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(name, "control_intel_brief" | "control_operator_notify")
+    fn names(&self) -> &'static [&'static str] {
+        &["control_intel_brief", "control_operator_notify"]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         execute(cx.host, &cx.attempt, name, args)

@@ -80,8 +80,8 @@ impl AttemptTools for Tools {
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
         })]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_agent_message"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_agent_message"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         run(cx.host, &cx.attempt, args)

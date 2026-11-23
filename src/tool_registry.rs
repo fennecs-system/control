@@ -18,7 +18,13 @@ pub struct AttemptCall<'a> {
 /// Worker tools bound to one attempt. Calls run without the state lock held.
 pub trait AttemptTools: Sync {
     fn definitions(&self) -> Vec<Value>;
-    fn known(&self, name: &str) -> bool;
+    /// Every name the family answers, listed or not (some list only when
+    /// the operator enables them): the worker dispatch table is built from it.
+    fn names(&self) -> &'static [&'static str];
+    #[cfg(test)]
+    fn known(&self, name: &str) -> bool {
+        self.names().contains(&name)
+    }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value>;
 }
 static ATTEMPT_TOOLS: [&dyn AttemptTools; 16] = [
@@ -39,6 +45,11 @@ static ATTEMPT_TOOLS: [&dyn AttemptTools; 16] = [
     &crate::intel::Tools,
     &crate::mcp_chat::AgentTools,
 ];
+/// Every family, in registration order.
+pub fn attempt_families() -> &'static [&'static dyn AttemptTools] {
+    &ATTEMPT_TOOLS
+}
+#[cfg(test)]
 pub fn attempt_tools(name: &str) -> Option<&'static dyn AttemptTools> {
     ATTEMPT_TOOLS.iter().copied().find(|tools| tools.known(name))
 }

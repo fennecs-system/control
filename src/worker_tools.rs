@@ -1,16 +1,18 @@
 //! Credential-free worker tools are authorized against the active run on the host.
-use crate::runtime::RunStatus;
-use crate::{State, identity, rooms};
+use crate::{State, rooms};
 use serde_json::{Value, json};
 use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
 
+mod authority;
 mod compact;
 pub(crate) mod deferred;
 pub(crate) mod fixes;
+mod kinds;
 pub(crate) mod nudges;
+mod table;
 
 /// `control_call` becomes the direct call it names before any policy runs,
 /// so both spellings share one authorization and dispatch path.
@@ -170,459 +172,29 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
     if crate::shutdown::requested() {
         return error("Control is stopping; no new tools may run.");
     }
-    let Ok(mut state) = shared.lock() else {
+    let Ok(state) = shared.lock() else {
         return error("State unavailable; tools are disabled until Control is checked and restarted");
     };
     if crate::shutdown::requested() {
         return error("Control is stopping; no new tools may run.");
     }
-    let Some(run) = state
-        .runtime
-        .runs
-        .get(run_id)
-        .filter(|r| r.status == RunStatus::Running)
-    else {
-        return error("Run is not active");
+    let caller = match authority::admit(&state, run_id, workspace) {
+        Ok(caller) => caller,
+        Err(message) => return error(message),
     };
-    if let Err(message) = identity::authorize(&run.actor, run.action) {
-        return error(message);
-    }
-    // Every request is fenced before dispatch, including room writes and search.
-    // A late mailbox from a previous attempt cannot acquire the retry's authority.
-    if let Some(workspace) = workspace {
-        let expected = run
-            .attempts
-            .last()
-            .and_then(|a| a.workspace_id.as_deref())
-            .and_then(|id| crate::runtime::workspace(id).ok())
-            .and_then(|p| p.canonicalize().ok());
-        if expected.as_deref() != Some(workspace) {
-            return error("Mailbox belongs to an inactive attempt");
-        }
-    }
-    // Enabling a bot affects the next admission, not the protocol of an
-    // already-running provider session whose input was captured earlier.
-    let managed = crate::turn_context::managed(&state, run)
-        && run
-            .attempts
-            .last()
-            .is_some_and(|attempt| attempt.turn_mailbox.is_some());
-    let facts = deferred::Facts::of(&state, run, managed);
-    // Backends without their own sandbox shell get Control's offline workspace tool.
-    let (claude, judge) = (facts.shell, facts.judge);
     let result = match control_mcp::method(request) {
         control_mcp::Method::Initialize => control_mcp::initialize(control_mcp::LATEST, "control-worker", "0.1"),
         control_mcp::Method::Ping => json!({}),
         // The role's core schemas; the rest are in the prompt's deferred index.
-        control_mcp::Method::ToolsList => control_mcp::tools(deferred::listed(&facts)),
+        control_mcp::Method::ToolsList => control_mcp::tools(deferred::listed(caller.facts())),
         control_mcp::Method::ToolsCall => {
-            if run
-                .attempts
-                .last()
-                .and_then(|a| a.turn_mailbox.as_ref())
-                .and_then(|m| m.accepted())
-                .is_some()
-                && !control_context::tool_policy::after_handoff(request["params"]["name"].as_str().unwrap_or(""))
-            {
-                return error(
-                    "A handoff is staged; only observations and handoff corrections may run before this attempt finishes. No further call is needed; to change it, call control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} again.",
-                );
-            }
-            if matches!(
-                request["params"]["name"].as_str(),
-                Some("control_room_ack" | "control_room_notifications")
-            ) && managed
-            {
-                return error(
-                    "Managed sessions read room posts with control_turn_context {\"source\":\"room\"}; control_turn_handoff acknowledges them when you yield.",
-                );
-            }
-            // Pure read of the run's captured context, for every role including judges.
-            if request["params"]["name"] == "control_guidance" {
-                return control_mcp::reply(
-                    id,
-                    crate::toolbox::result(crate::guidance::answer(run, &request["params"]["arguments"])),
-                );
-            }
-            // Schemas of the tools this session may call; a pure read for every role.
-            if request["params"]["name"] == deferred::SEARCH {
-                return control_mcp::reply(
-                    id,
-                    crate::toolbox::result(deferred::search(&facts, &request["params"]["arguments"])),
-                );
-            }
-            // Standing (captured persona, else the built-in of its position) decides.
-            if !facts
-                .standing
-                .may_call(request["params"]["name"].as_str().unwrap_or(""))
-            {
-                return error(if judge {
-                    "Judge policy permits read-only source inspection, isolated verification and room collaboration only. Next: call control_tool_search {} to list the tools you may call."
-                } else {
-                    "This persona's standing denies that tool. Next: call control_tool_search {} to list the tools you may call."
-                });
-            }
-            let blocking_spawn = request["params"]["name"] == "control_agent_spawn_blocking";
-            if crate::delegation::pausing(run) && !blocking_spawn {
-                return error("This attempt is pausing for delegated work; no more tools may run.");
-            }
-            if matches!(
-                request["params"]["name"].as_str(),
-                Some("control_agent_spawn_status" | "control_agent_spawn_cancel")
-            ) {
-                if run.question.as_ref().is_some_and(|q| q.pending()) {
-                    return error("This attempt is pausing for a design answer.");
-                }
-                return match crate::spawning::manage(
-                    &mut state,
-                    run_id,
-                    request["params"]["name"].as_str().unwrap(),
-                    &request["params"]["arguments"],
-                    crate::storage::save,
-                ) {
-                    Ok(value) => control_mcp::reply(id, control_mcp::data(&value)),
-                    Err(message) => error(message),
-                };
-            }
-            if request["params"]["name"] == "control_agent_spawn" {
-                let Some(generation) = run.attempts.last().and_then(|a| a.workspace_id.clone()) else {
-                    return error("Missing attempt identity");
-                };
-                let Some(nonce) = envelope["nonce"].as_str() else {
-                    return error("Missing request identity");
-                };
-                let input = match serde_json::from_value(request["params"]["arguments"].clone()) {
-                    Ok(input) => input,
-                    Err(_) => return error("Expected a bounded list of agent objectives"),
-                };
-                let chat = run.chat_id.clone();
-                return match crate::spawning::request(
-                    &mut state,
-                    run_id,
-                    &generation,
-                    nonce,
-                    input,
-                    crate::storage::save,
-                ) {
-                    Ok(value) => control_mcp::reply(id, control_mcp::data(&value)),
-                    Err(message) => error(&crate::delegation::refusal(&state, chat.as_deref(), message)),
-                };
-            }
-            if blocking_spawn {
-                let Some(nonce) = envelope["nonce"].as_str() else {
-                    return error("Missing request identity");
-                };
-                let Ok(input) = serde_json::from_value(request["params"]["arguments"].clone()) else {
-                    return error("Expected a delegation objective and role");
-                };
-                let chat = run.chat_id.clone();
-                return match crate::delegation::request(&mut state, run_id, nonce, input) {
-                    Ok(value) => control_mcp::reply(id, control_mcp::text(&value.to_string())),
-                    Err(message) => error(&crate::delegation::refusal(&state, chat.as_deref(), message)),
-                };
-            }
-            if request["params"]["name"] != "control_design_ask"
-                && run.question.as_ref().is_some_and(|q| {
-                    q.pending()
-                        && run
-                            .attempts
-                            .last()
-                            .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
-                })
-            {
-                return error("This attempt is pausing for a design answer; no more tools may run.");
-            }
-            if crate::knowledge_tools::known(request["params"]["name"].as_str().unwrap_or("")) {
-                return match crate::knowledge_tools::worker(
-                    &mut state,
-                    run_id,
-                    request["params"]["name"].as_str().unwrap(),
-                    &request["params"]["arguments"],
-                    envelope["nonce"].as_str().unwrap_or(""),
-                    crate::storage::save,
-                ) {
-                    Ok(value) => control_mcp::reply(id, control_mcp::data(&value)),
-                    Err(message) => error(message),
-                };
-            }
-            if let Some(tools) = crate::tool_registry::attempt_tools(request["params"]["name"].as_str().unwrap_or("")) {
-                let generation = run
-                    .attempts
-                    .last()
-                    .and_then(|a| a.workspace_id.clone())
-                    .unwrap_or_default();
-                let nonce = envelope["nonce"].as_str().unwrap_or("").to_owned();
-                drop(state);
-                let host = crate::tool_registry::LocalHost(shared);
-                let cx = crate::tool_registry::AttemptCall {
-                    attempt: crate::tool_registry::AttemptRef {
-                        run: run_id,
-                        generation: &generation,
-                        nonce: &nonce,
-                    },
-                    host: &host,
-                };
-                return control_mcp::reply(
-                    id,
-                    crate::toolbox::result(tools.call(
-                        &cx,
-                        request["params"]["name"].as_str().unwrap(),
-                        &request["params"]["arguments"],
-                    )),
-                );
-            }
-            if request["params"]["name"] == "control_github_open_pr" {
-                if run.action != identity::Action::Improve {
-                    return error("GitHub publication requires an improvement run");
-                }
-                let chat = run.chat_id.clone().unwrap_or_default();
-                let input = serde_json::from_value::<crate::github::Input>(request["params"]["arguments"].clone());
-                drop(state);
-                return match input
-                    .map_err(|_| std::io::Error::other("Expected run_id, title and optional body"))
-                    .and_then(|input| crate::github::open(shared, &chat, input))
-                {
-                    Ok(value) => control_mcp::reply(id, control_mcp::text(&value.to_string())),
-                    Err(message) => error(&message.to_string()),
-                };
-            }
-            if request["params"]["name"] == "control_preview_start"
-                || request["params"]["name"] == "control_preview_stop"
-            {
-                let stopping = request["params"]["name"] == "control_preview_stop";
-                let chat = run.chat_id.clone().unwrap_or_default();
-                let preview_id = run
-                    .attempts
-                    .last()
-                    .and_then(|a| a.workspace_id.as_deref())
-                    .map(|id| format!("control-{id}-preview"))
-                    .unwrap_or_default();
-                let input = serde_json::from_value::<crate::previews::Input>(request["params"]["arguments"].clone());
-                drop(state);
-                let result = if stopping {
-                    crate::previews::stop(shared, &chat, &preview_id).map(|_| json!({"stopped":true}))
-                } else {
-                    input
-                        .map_err(|_| std::io::Error::other("Expected a preview command and port"))
-                        .and_then(|input| crate::previews::start(shared, run_id, input))
-                };
-                return match result {
-                    Ok(value) => control_mcp::reply(id, control_mcp::text(&value.to_string())),
-                    Err(message) => error(&message.to_string()),
-                };
-            }
-            if request["params"]["name"] == "control_project_request" {
-                let chat = run.chat_id.clone().unwrap_or_default();
-                let Some(index) = state.chats.iter().position(|c| c.id == chat) else {
-                    return error("Chat not found");
-                };
-                let previous = state.chats[index].clone();
-                let result = crate::projects::request_named(
-                    &mut state,
-                    &chat,
-                    request["params"]["arguments"]["path"].as_str().unwrap_or(""),
-                    request["params"]["arguments"]["name"].as_str(),
-                    crate::projects::Requester::Agent { run: Some(run_id) },
-                );
-                return match result {
-                    Ok(value) if crate::storage::save(&state).is_ok() => {
-                        control_mcp::reply(id, control_mcp::text(&value.to_string()))
-                    }
-                    Ok(_) => {
-                        state.chats[index] = previous;
-                        error("Could not save project request")
-                    }
-                    Err(message) => error(message),
-                };
-            }
-            if request["params"]["name"] == "control_design_ask" {
-                let Some(nonce) = envelope["nonce"].as_str() else {
-                    return error("Missing request identity");
-                };
-                let input = match crate::design::parse_input(request["params"]["arguments"].clone()) {
-                    Ok(input) => input,
-                    Err(message) => return error(message),
-                };
-                return match crate::design::ask(&mut state, run_id, nonce, input) {
-                    Ok(value) => control_mcp::reply(id, control_mcp::text(&value.to_string())),
-                    Err(message) => error(message),
-                };
-            }
-            if request["params"]["name"] == "control_agent_result" {
-                let plan =
-                    match crate::delegated_results::prepare(&state, run_id, request["params"]["arguments"].clone()) {
-                        Ok(plan) => plan,
-                        Err(message) => return error(message),
-                    };
-                drop(state);
-                return match crate::delegated_results::execute(plan) {
-                    Ok(value) => control_mcp::reply(id, control_mcp::text(&value.to_string())),
-                    Err(message) => error(message),
-                };
-            }
-            if request["params"]["name"] == "control_workspace_run" {
-                if !claude {
-                    return error("Workspace tool is not enabled for this backend");
-                }
-                #[derive(serde::Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Input {
-                    command: String,
-                }
-                let Ok(input) = serde_json::from_value::<Input>(request["params"]["arguments"].clone()) else {
-                    return error("Expected a command");
-                };
-                let Some(attempt) = run.attempts.last() else {
-                    return error("No active attempt");
-                };
-                if attempt
-                    .command_jobs
-                    .iter()
-                    .any(|job| ["preparing", "running", "stopping"].contains(&job.status.as_str()))
-                {
-                    return error(
-                        "An asynchronous workspace command owns this attempt; await or cancel it before running another command",
-                    );
-                }
-                let (Some(image), Some(node), Some(workspace)) = (&attempt.image, &attempt.node_id, workspace) else {
-                    return error("Attempt workspace is unavailable");
-                };
-                let image = image.clone();
-                let review_only = attempt.review_only;
-                let node = node.clone();
-                let generation = attempt.workspace_id.clone().unwrap_or_default();
-                let name = format!("control-{}-tool", attempt.workspace_id.as_deref().unwrap_or(run_id));
-                let Some(expected) = attempt
-                    .workspace_id
-                    .as_deref()
-                    .and_then(|id| crate::runtime::workspace(id).ok())
-                else {
-                    return error("No captured workspace identity");
-                };
-                if expected.canonicalize().ok().as_deref() != Some(workspace) {
-                    return error("Workspace does not match the active attempt");
-                }
-                let Some(nonce) = envelope["nonce"].as_str().filter(|s| {
-                    !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-                }) else {
-                    return error("Invalid tool request nonce");
-                };
-                // Persist intent outside both model-visible mounts before the command.
-                // A retry after an ambiguous acknowledgement never repeats the effect.
-                // The fsync runs without the state lock; this mailbox is served serially,
-                // and the run is re-fenced below before anything executes.
-                drop(state);
-                if crate::host_shell::claim(workspace, nonce).is_err() {
-                    return error(
-                        "Workspace command already admitted or intent could not be saved; inspect the attempt before retrying",
-                    );
-                }
-                let Ok(mut state) = shared.lock() else {
-                    return error("State unavailable; tools are disabled until Control is checked and restarted");
-                };
-                // Records only while the same attempt is still running (cancellation fences here).
-                if !crate::worker::record_activity_for(
-                    &mut state,
-                    run_id,
-                    &generation,
-                    crate::usage::Activity {
-                        id: envelope["nonce"].as_str().unwrap_or("workspace-command").into(),
-                        kind: "command_execution".into(),
-                        text: input.command.chars().take(2000).collect(),
-                        output: String::new(),
-                        status: "running".into(),
-                    },
-                ) {
-                    return error("Run is not active");
-                }
-                drop(state);
-                let result = crate::host_shell::shell_scoped(
-                    crate::engine::isolation(),
-                    &image,
-                    &name,
-                    &node,
-                    workspace,
-                    &input.command,
-                    review_only,
-                );
-                if !review_only {
-                    crate::worker::observe_workspace_diff(shared, run_id, &generation, workspace, "observed");
-                }
-                if let Ok(mut state) = shared.lock() {
-                    crate::worker::record_activity_for(
-                        &mut state,
-                        run_id,
-                        &generation,
-                        crate::usage::Activity {
-                            id: envelope["nonce"].as_str().unwrap_or("workspace-command").into(),
-                            kind: "command_execution".into(),
-                            text: input.command.chars().take(2000).collect(),
-                            output: result
-                                .as_ref()
-                                .ok()
-                                .map(|v| v.to_string())
-                                .unwrap_or_default()
-                                .chars()
-                                .take(8000)
-                                .collect(),
-                            status: if result.as_ref().is_ok_and(|v| v["exit_code"] == 0) {
-                                "completed"
-                            } else {
-                                "failed"
-                            }
-                            .into(),
-                        },
-                    );
-                }
-                return control_mcp::reply(id, crate::toolbox::result(result));
-            }
-            // Worker spellings of toolbox tools resolve to their registered names.
-            let name = request["params"]["name"].as_str().unwrap_or("");
-            let name = control_context::dotted_name(name)
-                .filter(|dotted| {
-                    crate::tool_registry::lookup(dotted)
-                        .is_some_and(|e| e.route == crate::tool_registry::Route::Toolbox)
-                })
-                .unwrap_or(name);
-            if name == crate::model_calls::tool::NAME {
-                drop(state);
-                // Inference runs on the host, outside the state lock; cancelling the
-                // attempt closes the endpoint connection so the server stops generating.
-                crate::toolbox::result(crate::model_calls::tool::call(&request["params"]["arguments"], &|| {
-                    crate::lifecycle::cancelled(Some((shared, run_id)))
-                }))
-            } else if crate::toolbox::known(name) {
-                drop(state);
-                // Network requests and compilation must not hold the control-plane state lock.
-                crate::toolbox::result(crate::toolbox::call(name, &request["params"]["arguments"]))
-            } else if name == "control_web_fetch" {
-                drop(state);
-                crate::toolbox::result(crate::web_access::worker(
-                    shared,
-                    run_id,
-                    &request["params"]["arguments"],
-                ))
-            } else if name == "control_browser_capture" {
-                drop(state);
-                crate::web_access::capture_tool(&request["params"]["arguments"])
-                    .unwrap_or_else(|error| crate::toolbox::result(Err(error)))
-            } else if [
-                "control_room_list",
-                "control_room_read",
-                "control_room_post",
-                "control_room_watch",
-                "control_room_notifications",
-                "control_room_ack",
-                "control_room_claim",
-                "control_room_plan",
-            ]
-            .contains(&name)
-            {
-                return rooms::checkpoint(&mut state, run_id, envelope, crate::storage::save);
-            } else {
-                return error(
-                    "Tool is not allowed for this worker. Next: call control_tool_search {} to list the tools this session may call.",
-                );
+            let call = kinds::Call::of(envelope, workspace);
+            let entry = table::lookup(call.name);
+            match fence(&state, &caller, &call, entry) {
+                Ok(()) => entry
+                    .handler
+                    .answer(state, shared, &caller, &call, crate::storage::save),
+                Err(refusal) => control_mcp::failure(refusal),
             }
         }
         control_mcp::Method::Other(_) => {
@@ -630,6 +202,72 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
         }
     };
     control_mcp::reply(id, result)
+}
+/// The run-level checks before a tool's handler, in order: a staged handoff,
+/// a managed session's room cursor, then the entry's fence (standing, the
+/// delegation pause, this attempt's design question).
+fn fence(
+    state: &State,
+    caller: &authority::Caller<'_>,
+    call: &kinds::Call<'_>,
+    entry: &table::Entry,
+) -> Result<(), &'static str> {
+    use table::{Fence, Session};
+    let run = caller.run(state);
+    let attempt = run.attempts.last();
+    if attempt
+        .and_then(|a| a.turn_mailbox.as_ref())
+        .and_then(|m| m.accepted())
+        .is_some()
+        && !control_context::tool_policy::after_handoff(call.name)
+    {
+        return Err(
+            "A handoff is staged; only observations and handoff corrections may run before this attempt finishes. No further call is needed; to change it, call control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} again.",
+        );
+    }
+    if entry.session == Session::Unmanaged && caller.facts().managed {
+        return Err(
+            "Managed sessions read room posts with control_turn_context {\"source\":\"room\"}; control_turn_handoff acknowledges them when you yield.",
+        );
+    }
+    // Standing (captured persona, else the built-in of its position) decides.
+    let standing = || {
+        if caller.facts().standing.may_call(call.name) {
+            Ok(())
+        } else if caller.facts().judge {
+            Err(
+                "Judge policy permits read-only source inspection, isolated verification and room collaboration only. Next: call control_tool_search {} to list the tools you may call.",
+            )
+        } else {
+            Err(
+                "This persona's standing denies that tool. Next: call control_tool_search {} to list the tools you may call.",
+            )
+        }
+    };
+    let delegation = || {
+        if crate::delegation::pausing(run) {
+            Err("This attempt is pausing for delegated work; no more tools may run.")
+        } else {
+            Ok(())
+        }
+    };
+    // Only a question asked by this attempt pauses it.
+    let design =
+        || {
+            if run.question.as_ref().is_some_and(|q| {
+                q.pending() && attempt.is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
+            }) {
+                Err("This attempt is pausing for a design answer; no more tools may run.")
+            } else {
+                Ok(())
+            }
+        };
+    match entry.fence {
+        Fence::Open => Ok(()),
+        Fence::Standing => standing(),
+        Fence::Delegation => standing().and_then(|()| delegation()),
+        Fence::Design => standing().and_then(|()| delegation()).and_then(|()| design()),
+    }
 }
 /// The prompt's deferred tool index for `run`: the tools its session may
 /// call beyond the listed core, one terse line per family.

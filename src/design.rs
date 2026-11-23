@@ -330,10 +330,7 @@ pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
         })
     })
 }
-pub fn ask(state: &mut State, id: &str, nonce: &str, input: Input) -> Result<Value, &'static str> {
-    ask_with_save(state, id, nonce, input, crate::storage::save)
-}
-fn ask_with_save(
+pub(crate) fn ask_with_save(
     state: &mut State,
     id: &str,
     nonce: &str,
