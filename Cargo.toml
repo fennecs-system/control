@@ -31,6 +31,7 @@ control-config = { path = "crates/config" }
 control-identity = { path = "crates/identity" }
 control-client = { path = "crates/client" }
 control-discord = { path = "crates/discord" }
+control-isolation = { path = "crates/isolation" }
 control-tui = { path = "crates/tui", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 ring = "0.17.14"
@@ -47,5 +48,5 @@ control = { path = ".", default-features = false, features = ["test-isolation"] 
 
 
 [workspace]
-members = ["crates/context", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/client", "crates/tui", "crates/discord"]
+members = ["crates/context", "crates/http", "crates/ai", "crates/core", "crates/effect", "crates/bot", "crates/comonad", "crates/journal", "crates/config", "crates/identity", "crates/client", "crates/tui", "crates/discord", "crates/isolation"]
 exclude = ["web"]

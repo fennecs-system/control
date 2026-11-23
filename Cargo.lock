@@ -153,6 +153,7 @@ dependencies = [
  "control-effect",
  "control-http",
  "control-identity",
+ "control-isolation",
  "control-journal",
  "control-tui",
  "libc",
@@ -257,6 +258,13 @@ dependencies = [
  "control-config",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "control-isolation"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
