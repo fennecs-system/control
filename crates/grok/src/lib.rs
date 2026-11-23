@@ -233,8 +233,10 @@ fn login_container(name: &str, node: &str, owner: User, directory: &Path, image:
 /// rejected login); otherwise Grok's own bounded ending.
 fn diagnose(ended: Option<Ending>, stderr: &[u8]) -> Failure {
     let known = |bytes: &[u8]| control_agent::classify(bytes).map(|cause| Failure::Provider { agent: "Grok", cause });
+    // A rejected tool is never read as a provider cause, whatever its wording.
     ended
         .as_ref()
+        .filter(|e| !e.rejected_tools)
         .and_then(|e| known(e.text.as_bytes()))
         .or_else(|| ended.map(Ending::failure))
         .or_else(|| known(stderr))

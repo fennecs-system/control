@@ -42,6 +42,22 @@ pub trait Decoder {
 
 pub const MAX_RECORD_BYTES: usize = 1_048_576;
 
+/// `emit` behind a fence: once a decoder rejects the tools, no activity it
+/// decodes afterwards reaches the caller, so a forbidden call's result, or a
+/// message built on it, is never recorded. A decoder rejects before it emits
+/// the record's own activity.
+fn fenced(mut emit: impl FnMut(Event)) -> impl FnMut(Event) {
+    let mut closed = false;
+    move |event| match event {
+        Event::RejectedTools => {
+            closed = true;
+            emit(Event::RejectedTools)
+        }
+        Event::Activity(_) if closed => {}
+        Event::Activity(activity) => emit(Event::Activity(activity)),
+    }
+}
+
 /// Reuses one bounded buffer and parses each record once. No transcript retention,
 /// queues, background tasks, cloned JSON trees or allocation per input chunk.
 pub fn json_lines(reader: impl Read, decoder: impl Decoder, emit: impl FnMut(Event)) -> io::Result<Output> {
@@ -60,9 +76,10 @@ pub fn json_lines_usage(
 pub fn json_lines_live(
     reader: impl Read,
     mut decoder: impl Decoder,
-    mut emit: impl FnMut(Event),
+    emit: impl FnMut(Event),
     mut progress: impl FnMut(&Usage),
 ) -> (io::Result<Output>, Usage) {
+    let mut emit = fenced(emit);
     let mut seen = None;
     let mut reader = reader;
     let mut line = Vec::new();

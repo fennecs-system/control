@@ -313,3 +313,18 @@ const LOGIN: &[&str] = &[
     "login",
     "--device-auth",
 ];
+
+/// A rejected tool is the typed failure even when the ending's wording
+/// resembles a provider cause (a tool named after a login error).
+#[test]
+fn a_rejected_tool_is_always_an_unexpected_tool_failure() {
+    let text = "stopped: unexpected tool (authentication required / resource_exhausted)";
+    let ended = Some(Ending {
+        text: text.to_owned(),
+        rejected_tools: true,
+    });
+    assert_eq!(
+        diagnose(ended, b"rate limit"),
+        Failure::UnexpectedTools(text.to_owned())
+    );
+}

@@ -336,8 +336,10 @@ fn diagnose(ended: Option<Ending>, stderr: &[u8]) -> Failure {
             cause,
         })
     };
+    // A rejected tool is never read as a provider cause, whatever its wording.
     ended
         .as_ref()
+        .filter(|e| !e.rejected_tools)
         .and_then(|e| own(e.text.as_bytes()))
         .or_else(|| ended.map(Ending::failure))
         .or_else(|| own(stderr))

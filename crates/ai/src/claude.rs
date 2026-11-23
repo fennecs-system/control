@@ -41,6 +41,13 @@ fn model(value: &Value) -> Option<String> {
         .map(|m| m.chars().filter(|c| !c.is_control()).take(100).collect())
 }
 impl Claude<'_> {
+    /// Whether `tool` is one of Control's allowed tools (or the CLI's own ending).
+    fn allowed(&self, tool: &str) -> bool {
+        tool == "EndConversation"
+            || tool
+                .strip_prefix("mcp__control__")
+                .is_some_and(|name| self.allowed_tools.contains(&name))
+    }
     fn event(&mut self, value: &Value) -> Option<Activity> {
         match value["type"].as_str()? {
             "system" if value["subtype"] == "init" => {
@@ -48,16 +55,10 @@ impl Claude<'_> {
                 if let Some(model) = model(&value["model"]) {
                     self.model = Some(model);
                 }
-                let allowed = self.allowed_tools;
-                if !value["tools"].as_array().is_some_and(|tools| {
-                    tools.iter().all(|t| {
-                        t.as_str().is_some_and(|s| {
-                            s == "EndConversation"
-                                || s.strip_prefix("mcp__control__")
-                                    .is_some_and(|name| allowed.contains(&name))
-                        })
-                    })
-                }) {
+                if !value["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().all(|t| t.as_str().is_some_and(|s| self.allowed(s))))
+                {
                     self.invalid = true;
                     self.bad_tools = true;
                 }
@@ -185,6 +186,15 @@ impl Claude<'_> {
                     let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str()) else {
                         continue;
                     };
+                    // A tool outside Control's server (a built-in the CLI should not
+                    // have): stop before its result is recorded. Which Control tool
+                    // may run is the host's decision.
+                    if !(name == "EndConversation" || name.starts_with("mcp__control__")) {
+                        self.invalid = true;
+                        self.bad_tools = true;
+                        emit(Event::RejectedTools);
+                        continue;
+                    }
                     let name = name.strip_prefix("mcp__control__").unwrap_or(name);
                     // A deferred tool's activity is recorded under the tool it called.
                     let name = if name == "control_call" {
