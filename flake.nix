@@ -62,6 +62,8 @@
           worker-full-image = import ./examples/worker-image.nix { inherit pkgs; profile = "full"; };
           claude-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; };
           claude-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "claude"; profile = "full"; };
+          grok-image = import ./examples/worker-image.nix { inherit pkgs; backend = "grok"; };
+          grok-full-image = import ./examples/worker-image.nix { inherit pkgs; backend = "grok"; profile = "full"; };
           browser-image = import ./tools/browser/image.nix { inherit pkgs; };
           build-image = import ./tools/build/image.nix { inherit pkgs; };
           inference-image = import ./tools/inference/image.nix { inherit pkgs; };

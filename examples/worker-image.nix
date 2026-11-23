@@ -27,14 +27,20 @@ let
     cp ${../tools/mailbox-limits.rs} src/mailbox-limits.rs
     rustc --edition=2024 -O src/room-mcp/main.rs -o $out/bin/control-room-mcp
   '';
+  agent = {
+    codex = pkgs.codex;
+    claude = pkgs.claude-code;
+    grok = import ../tools/grok/package.nix { inherit pkgs; };
+  }.${backend};
+  command = { codex = "codex"; claude = "claude"; grok = "grok"; }.${backend};
 in
 pkgs.dockerTools.buildLayeredImage {
-  name = if backend == "claude" then "control-claude" else "control-worker";
+  name = if backend == "codex" then "control-worker" else "control-${backend}";
   tag = if profile == "full" then "nix-full" else "nix";
   includeNixDB = profile == "full";
   contents = [
     roomMcp playground serviceRunner tcpRelay
-    (if backend == "claude" then pkgs.claude-code else pkgs.codex)
+    agent
     pkgs.rustc pkgs.cargo pkgs.rustfmt pkgs.clippy
     pkgs.gitMinimal pkgs.stdenv.cc pkgs.pkg-config pkgs.ripgrep pkgs.fd
     pkgs.bash pkgs.coreutils pkgs.procps pkgs.cacert pkgs.gnutar pkgs.gzip pkgs.xz pkgs.gnugrep pkgs.gnused pkgs.gawk pkgs.findutils
@@ -76,6 +82,6 @@ pkgs.dockerTools.buildLayeredImage {
       "XDG_CONFIG_HOME=/home/agent/.config"
       "XDG_CACHE_HOME=/home/agent/.cache"
     ];
-    Cmd = [ (if backend == "claude" then "claude" else "codex") "--version" ];
+    Cmd = [ command "--version" ];
   };
 }

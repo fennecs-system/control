@@ -66,6 +66,9 @@ impl crate::backend::Agent for Claude {
     fn mailbox(&self) -> Option<&'static str> {
         Some("claude-mailbox")
     }
+    fn own_prompt(&self) -> bool {
+        true
+    }
     fn probe_workspace(&self) -> &'static str {
         "claude-isolation-probe"
     }
@@ -117,7 +120,7 @@ pub(crate) fn text_command(image:&str,name:&str,workspace:&Path,node:&str,model:
         "--disable-slash-commands","--setting-sources","","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--permission-mode","dontAsk","--model",model]);
     Ok(command)
 }
-fn mount(path: &Path, target: &str, readonly: bool) -> io::Result<String> {
+pub(crate) fn mount(path: &Path, target: &str, readonly: bool) -> io::Result<String> {
     let path = path
         .to_str()
         .filter(|s| path.is_absolute() && !s.contains([',', '\n', '\r']))
@@ -127,7 +130,7 @@ fn mount(path: &Path, target: &str, readonly: bool) -> io::Result<String> {
         if readonly { ",readonly" } else { "" }
     ))
 }
-fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
+pub(crate) fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
     let mut command = crate::engine::scrubbed();
     command.args([
         "run",
@@ -141,7 +144,7 @@ fn base(name: &str, node: &str, uid: u32, gid: u32) -> Command {
         &format!("dev.control.attempt={name}"),
         "--label",
         // Login and offline checks are supervised by their command, not run reconciliation.
-        if name.starts_with("control-claude-login-") || name.starts_with("control-claude-probe-") || name.starts_with("control-summary-") { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
+        if ["control-claude-login-", "control-claude-probe-", "control-grok-login-", "control-grok-probe-", "control-summary-"].iter().any(|prefix| name.starts_with(prefix)) { crate::lifecycle::CHECK_LABEL } else { "dev.control.purpose=run" },
         "--user",
         &format!("{uid}:{gid}"),
         "--read-only",
@@ -201,7 +204,7 @@ pub fn shell_scoped(image:&str,name:&str,node:&str,workspace:&Path,command:&str,
     shell_bounded(image,name,node,workspace,command,readonly,Duration::from_secs(25))
 }
 /// A command stopped at `deadline` fails with [`io::ErrorKind::TimedOut`].
-fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,deadline:Duration)->io::Result<Value> {
+pub(crate) fn shell_bounded(image:&str,name:&str,node:&str,workspace:&Path,command:&str,readonly:bool,deadline:Duration)->io::Result<Value> {
     if crate::shutdown::requested() { return Err(fail("Control is stopping; workspace command was not started.")); }
     if command.is_empty() || command.len() > 16000 {
         return Err(fail("Command must contain 1–16000 bytes"));
@@ -308,22 +311,23 @@ fn probe_named(image: &str, node: &str, root: &Path, name: &str) -> io::Result<(
 
 #[cfg(test)]
 fn capture(reader: impl Read, update: impl FnMut(Activity)) -> io::Result<(String, Option<Tokens>)> {
-    capture_with(reader, update, |_| {}, &std::sync::atomic::AtomicBool::new(false)).0
+    capture_with(reader, control_ai::claude::Claude::new(&control_context::worker_mcp_names()), "Claude", update, |_| {}, &std::sync::atomic::AtomicBool::new(false)).0
 }
 /// The final reply, and the usage reported whether or not there was one.
 /// `progress` sees the usage so far each time a call reports more.
-fn capture_with(
+pub(crate) fn capture_with(
     reader: impl Read,
+    decoder: impl control_ai::Decoder,
+    name: &str,
     mut update: impl FnMut(Activity),
     progress: impl FnMut(&control_ai::Usage),
     bad_tools: &std::sync::atomic::AtomicBool,
 ) -> (io::Result<(String, Option<Tokens>)>, control_ai::Usage) {
-    let allowed = control_context::worker_mcp_names();
-    let (output, usage) = control_ai::json_lines_live(reader, control_ai::claude::Claude::new(&allowed), |event| match event {
+    let (output, usage) = control_ai::json_lines_live(reader, decoder, |event| match event {
         control_ai::Event::Activity(activity) => update(activity),
         control_ai::Event::RejectedTools => bad_tools.store(true, std::sync::atomic::Ordering::Relaxed),
     }, progress);
-    let reply = output.and_then(|output| Ok((output.text.ok_or_else(|| fail("Claude did not return a final result"))?, output.tokens)));
+    let reply = output.and_then(|output| Ok((output.text.ok_or_else(|| fail(&format!("{name} did not return a final result")))?, output.tokens)));
     (reply, usage)
 }
 
@@ -365,9 +369,44 @@ pub fn execute(
     if crate::lifecycle::cancelled(bridge) {
         return Err(("cancelled", "Cancelled before Claude launch.".into()));
     }
-    let mut child = command
+    let child = command
         .spawn()
         .map_err(|_| failed("Cannot start the Claude Nix container"))?;
+    let prompt = crate::observe::append(bridge, captured.unwrap_or_else(|| render_prompt(objective,attempt.review_only)));
+    let cli = Cli {
+        name: "Claude", id, mailbox: &mailbox, workspace, stdin: Some(prompt),
+        capture: |reader, update, progress, bad_tools| capture_with(reader, control_ai::claude::Claude::new(&control_context::worker_mcp_names()), "Claude", update, progress, bad_tools),
+        failure: |ended, stderr| ended.map(str::to_owned).unwrap_or_else(|| diagnose(stderr)),
+    };
+    supervise(cli, child, attempt, bridge)
+}
+/// Decodes a CLI's event stream to its reply and the usage it reported.
+pub(crate) type Capture = fn(&mut dyn Read, &mut dyn FnMut(Activity), &mut dyn FnMut(&control_ai::Usage), &std::sync::atomic::AtomicBool) -> (io::Result<(String, Option<Tokens>)>, control_ai::Usage);
+/// One turn of a CLI whose only tools are Control's, reached through the
+/// mailbox mounted as its `/workspace`.
+pub(crate) struct Cli<'a> {
+    pub name: &'static str,
+    pub id: &'a str,
+    pub mailbox: &'a Path,
+    pub workspace: &'a Path,
+    /// The prompt, for a CLI that reads it from standard input.
+    pub stdin: Option<String>,
+    pub capture: Capture,
+    /// The user-facing failure, from the decoder's own ending when it reported
+    /// one and the bounded stderr.
+    pub failure: fn(Option<&str>, &[u8]) -> String,
+}
+/// Supervises a started CLI to its reply: activity and usage are recorded as
+/// they stream, and a handoff, cancellation, design request or the time limit
+/// stops it.
+pub(crate) fn supervise(
+    cli: Cli<'_>,
+    mut child: std::process::Child,
+    attempt: &mut Attempt,
+    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+) -> Outcome {
+    let Cli { name, id, mailbox, workspace, stdin, capture, failure } = cli;
+    let failed = |message: &str| ("failed", message.into());
     attempt.accounting = crate::usage::Accounting::Unknown;
     let diagnostics = drain(child.stderr.take().unwrap(), 64000);
     let bad_tools = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -376,12 +415,13 @@ pub fn execute(
     let live = bridge.map(|(s, r)| (Arc::clone(s), r.to_owned()));
     let generation = id.to_owned();
     let output = std::thread::spawn(move || {
-        capture_with(stdout, |event| {
+        let mut stdout = stdout;
+        capture(&mut stdout, &mut |event| {
             if let Some((s, r)) = &live
                 && let Ok(mut s) = s.lock() {
                     crate::worker::record_activity_for(&mut s, r, &generation, event);
                 }
-        }, |usage| {
+        }, &mut |usage| {
             // Live totals while the turn runs; the finished attempt replaces them.
             if let Some((s, r)) = &live
                 && let Ok(mut s) = s.lock() {
@@ -389,15 +429,14 @@ pub fn execute(
                 }
         }, &flag)
     });
-    let prompt = crate::observe::append(bridge, captured.unwrap_or_else(|| render_prompt(objective,attempt.review_only)));
-    let sent = child
-        .stdin
-        .take()
-        .is_some_and(|mut stdin| stdin.write_all(prompt.as_bytes()).is_ok());
+    let sent = match stdin {
+        Some(prompt) => child.stdin.take().is_some_and(|mut stdin| stdin.write_all(prompt.as_bytes()).is_ok()),
+        None => true,
+    };
     let start = Instant::now();
     let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
-    let mailbox_wake = crate::mailbox_wake::MailboxWake::new(&mailbox);
+    let mailbox_wake = crate::mailbox_wake::MailboxWake::new(mailbox);
     let mut timed_out = None;
     let mut handoff = None;
     let mut accepted = None;
@@ -414,7 +453,7 @@ pub fn execute(
             if s.is_poisoned() {
                 break false;
             }
-            crate::worker_tools::pump_at(s, r, &mailbox, workspace,attempt.context_trace.is_some());
+            crate::worker_tools::pump_at(s, r, mailbox, workspace,attempt.context_trace.is_some());
         }
         if crate::design::requested(bridge) { break false; }
         match crate::attempt_control::poll(bridge, attempt, start.elapsed() + Duration::from_secs(admitted)) {
@@ -449,7 +488,7 @@ pub fn execute(
     }
     let (result, usage) = output
         .join()
-        .map_err(|_| failed("Claude stream reader stopped"))?;
+        .map_err(|_| failed(&format!("{name} stream reader stopped")))?;
     attempt.record_usage(usage);
     let stderr = diagnostics.join().unwrap_or_default();
     if let Some(summary) = handoff {
@@ -468,11 +507,9 @@ pub fn execute(
         if let Some(limit) = timed_out {
             return Err(("failed", crate::worker::timeout_message(limit)));
         }
-        if let Err(e) = &result
-            && (e.to_string().starts_with("Claude ended with") || bad_tools.load(std::sync::atomic::Ordering::Relaxed)) {
-                return Err(failed(&e.to_string()));
-            }
-        return Err(failed(&diagnose(&stderr)));
+        let ended = result.as_ref().err().map(ToString::to_string)
+            .filter(|e| e.starts_with(&format!("{name} ended with")) || bad_tools.load(std::sync::atomic::Ordering::Relaxed));
+        return Err(failed(&failure(ended.as_deref(), &stderr)));
     }
     let (text, _) = result.map_err(|e| failed(&format!("{e} The previous workspace checkpoint is unchanged.")))?;
     Ok(text)

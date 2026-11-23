@@ -60,14 +60,14 @@ pub fn initialization_options(
     for pair in options {
         match pair[0].as_str() {
             "--provider" if provider.is_none() => {
-                provider = Some(hosted(&pair[1]).ok_or_else(|| std::io::Error::other("Provider must be codex or claude"))?);
+                provider = Some(hosted(&pair[1]).ok_or_else(|| std::io::Error::other("Provider must be codex, claude or grok"))?);
             }
             "--source-root" if source.is_none() && std::path::Path::new(&pair[1]).is_absolute() => {
                 source = Some(std::path::PathBuf::from(&pair[1]))
             }
             _ => {
                 return Err(std::io::Error::other(
-                    "Use config init [--provider codex|claude] [--source-root /absolute/checkout]",
+                    "Use config init [--provider codex|claude|grok] [--source-root /absolute/checkout]",
                 ))
             }
         }
@@ -387,7 +387,7 @@ fn text_fields(model: Option<&crate::model_calls::Endpoint>) -> String {
     let endpoint = model.is_none_or(|m| m.cli.is_none());
     let mut html = String::from("<div class='provider-fields'>");
     if model.is_none() {
-        html.push_str("<label>Adapter<select name='adapter'><option value='endpoint'>Local endpoint</option><option value='codex'>Codex CLI</option><option value='claude'>Claude CLI</option></select></label><label>Name<input name='id' required maxlength='100' placeholder='qwen-local'></label>");
+        html.push_str("<label>Adapter<select name='adapter'><option value='endpoint'>Local endpoint</option><option value='codex'>Codex CLI</option><option value='claude'>Claude CLI</option><option value='grok'>Grok CLI</option></select></label><label>Name<input name='id' required maxlength='100' placeholder='qwen-local'></label>");
     }
     html.push_str(&format!("<label>Model ID or server alias<input name='model' required maxlength='100' value='{}'></label>", value(|m| m.model.clone(), "")));
     if endpoint {

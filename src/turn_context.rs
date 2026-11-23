@@ -360,11 +360,11 @@ pub(crate) fn capture(state: &State, index: usize) -> io::Result<TraceRef> {
         .ok_or_else(|| io::Error::other("Missing attempt identity"))?;
     let objective =
         crate::chat::prompt(state, &run.id).unwrap_or_else(|| run.objective.to_string());
-    let text = match run.backend {
-        crate::backend::Backend::Claude => {
+    let text = match run.backend.agent().own_prompt() {
+        true => {
             crate::claude::render_prompt(&objective, attempt.review_only)
         }
-        crate::backend::Backend::Codex | crate::backend::Backend::Local => {
+        false => {
             let scope =
                 crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
             let room = state
@@ -463,12 +463,12 @@ fn project_with(state: &State, id: &str, compactor: &dyn crate::conversation::Co
         .position(id)
         .ok_or_else(|| io::Error::other("Run has no conversation entry"))?;
     let scope = crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
-    let prefix = match run.backend {
-        // A future local agent adapter receives the same Control-owned policy text.
-        crate::backend::Backend::Codex | crate::backend::Backend::Local => {
+    let prefix = match run.backend.agent().own_prompt() {
+        // Every other backend receives the same Control-owned policy text.
+        false => {
             crate::worker::render_prompt_mode("", scope, session.room.as_deref(), true, true)
         }
-        crate::backend::Backend::Claude => {
+        true => {
             crate::claude::render_prompt("", crate::delegation::is_judge(run))
         }
     };
