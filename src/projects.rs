@@ -550,8 +550,11 @@ pub fn message_index(chat: &crate::chat::Session) -> Option<usize> {
 fn git(args: &[&std::ffi::OsStr]) -> io::Result<()> {
     git_output(args, &[]).map(drop).map_err(|_| io::Error::other("Could not prepare an isolated Git worktree; check that Git is installed and this is a readable checkout with a commit."))
 }
-/// Host Git with no system/global config, hooks, fsmonitor, prompts or
-/// credential helpers. Returns stdout; stderr is discarded.
+/// Host Git with no system/global config, hooks, fsmonitor, prompts,
+/// credential helpers or auto maintenance. Returns stdout; stderr is discarded.
+/// A commit otherwise detaches `git maintenance run --auto`, which creates and
+/// removes `objects/maintenance.lock` after Git returns, while the import
+/// still walks, syncs and moves that repository (ENOENT, failed approvals).
 pub(crate) fn git_output(args: &[&std::ffi::OsStr], envs: &[(&str, &std::ffi::OsStr)]) -> io::Result<Vec<u8>> {
     let mut command = Command::new("git");
     command
@@ -570,6 +573,8 @@ pub(crate) fn git_output(args: &[&std::ffi::OsStr], envs: &[(&str, &std::ffi::Os
             "credential.helper=",
             "-c",
             "protocol.file.allow=always",
+            "-c",
+            "maintenance.auto=false",
         ])
         .args(args)
         .stdin(Stdio::null())
