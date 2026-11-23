@@ -965,25 +965,30 @@ fn render_accounts(runtime: &crate::runtime::Runtime) -> String {
         .map(|(backend, account, default)| {
             let name = &account.id.name;
             let id = backend.id();
-            let signed_in = crate::logins::locate(backend, name).is_ok();
+            let signed_in = crate::logins::locate(&account).is_ok();
             let cooling = runtime.account_status.cooling(backend, name, now).map(|_| {
                 format!("<form method='post' action='/providers'><input type='hidden' name='action' value='account-clear'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='account' value='{name}'><button class='provider-secondary'>Cooling down · clear</button></form>")
             });
             format!(
                 "<tr><td><code>{id}+{name}</code>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 if *name == default { " <span class='model-default'>Default</span>" } else { "" },
-                account.kind.as_str().replace('_', " "),
-                if signed_in { "Signed in" } else { "No login yet" },
+                account.kind.as_str(),
+                match (signed_in, account.kind) {
+                    (true, crate::accounts::AccountKind::ApiKey) => "Key saved",
+                    (false, crate::accounts::AccountKind::ApiKey) => "No key yet",
+                    (true, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => "Signed in",
+                    (false, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => "No login yet",
+                },
                 match (account.enabled, cooling) {
                     (false, _) => "Disabled".to_owned(),
                     (true, Some(cooling)) => cooling,
                     (true, None) => "Enabled".to_owned(),
                 },
-                crate::escape(&crate::logins::login_command(backend, name))
+                crate::escape(&crate::logins::sign_in_command(&account))
             )
         })
         .collect();
     format!(
-        "<h4 class='model-group'>Accounts</h4><p class='provider-description'>Select one with <code>backend+account:model</code>. Add one with <code>control accounts add BACKEND NAME</code>.</p><table class='persona-table provider-accounts'><thead><tr><th>Account</th><th>Kind</th><th>Login</th><th>State</th><th>Sign in with</th></tr></thead><tbody>{rows}</tbody></table>"
+        "<h4 class='model-group'>Accounts</h4><p class='provider-description'>Select one with <code>backend+account:model</code>. Add one with <code>control accounts add BACKEND NAME</code>, or <code>--kind api-key</code> for an API key, which bills per use.</p><table class='persona-table provider-accounts'><thead><tr><th>Account</th><th>Kind</th><th>Login</th><th>State</th><th>Sign in with</th></tr></thead><tbody>{rows}</tbody></table>"
     )
 }

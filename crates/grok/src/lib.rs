@@ -2,7 +2,7 @@
 //! only tools are Control's over MCP, and executable work runs in separate
 //! offline containers through the host shell tool.
 use control_agent::{
-    Agent, Checked, Command, Failure, Granted, Host, ImagePin, Login, Node, Outcome, Runs, TextCall, Turn, Turns,
+    Agent, Checked, Command, Failure, Form, Granted, Host, ImagePin, Login, Node, Outcome, Runs, TextCall, Turn, Turns,
     cli::{self, Cli, Delivery, Ending, Probe},
 };
 use control_isolation::{Access, Input, Isolation, RunSpec, Size, Streams, Tmpfs, User};
@@ -23,7 +23,7 @@ impl Agent for Grok {
     }
     /// Its credential names: never mounted in a workspace today, and never published if one appears there.
     fn private_names(&self) -> &'static [&'static str] {
-        &[".grok"]
+        &[".grok", KEY_FILE]
     }
     fn name(&self) -> &'static str {
         "Grok"
@@ -85,7 +85,7 @@ impl Turns for Grok {
                 prepared.root.join("grok-config.toml"),
                 prepared.root.join("grok-prompt"),
             );
-            cli::private_file(&config, CONFIG)
+            cli::private_file(&config, config_for(prepared.login))
                 .and_then(|_| cli::private_file(&prompt, prepared.prompt.as_deref().unwrap_or_default()))
                 .map_err(|_| Failure::Failed("Cannot prepare Grok configuration".into()))?;
             // The container's own mount failure reads as a credential problem; the
@@ -114,7 +114,7 @@ const MAILBOX: &str = "grok-mailbox";
 const LOGIN: &str = "run control grok login; its private login stays outside the checkout";
 const PROBE: Probe = Probe {
     directory: "grok-isolation-probe",
-    command: "set -eu; test ! -e /home/agent/.grok/auth.json; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.grok/auth.json; test -z \"${XAI_API_KEY-}\"; printf verified > isolation-check",
+    command: "set -eu; test ! -e /home/agent/.grok/auth.json; test ! -e /home/agent/.control-key; test ! -S /var/run/docker.sock; test ! -e /proc/1/root/home/agent/.grok/auth.json; test -z \"${XAI_API_KEY-}\"; printf verified > isolation-check",
     timed_out: "Grok tool isolation probe timed out after 90 s: the container engine is busy or slow, which is not an isolation failure. No account credentials were mounted; retry shortly.",
     failed: "Grok workspace isolation check failed; no credentials were mounted",
 };
@@ -155,6 +155,30 @@ const FLAGS: [&str; 9] = [
 const NO_TOOLS: &str = "mcp__control";
 /// Control's tools, as the one MCP server in Grok's user configuration.
 const CONFIG: &str = "[mcp_servers.control]\ncommand = \"/bin/control-room-mcp\"\n";
+/// The same server started without the key Grok was given: Grok passes its
+/// own environment to an MCP server, and Control's server needs no key.
+const KEY_CONFIG: &str =
+    "[mcp_servers.control]\ncommand = \"/bin/env\"\nargs = [\"-u\", \"XAI_API_KEY\", \"/bin/control-room-mcp\"]\n";
+/// The name of an API-key account's key file, in its directory and here.
+const KEY_FILE: &str = "xai-api-key";
+const KEY: &str = "/home/agent/.control-key/xai-api-key";
+/// The MCP configuration for the login's form.
+fn config_for(login: &Granted) -> &'static str {
+    match login.form() {
+        Form::ApiKey => KEY_CONFIG,
+        Form::Session | Form::CloudDefault => CONFIG,
+    }
+}
+/// What runs Grok: the CLI itself for a sign-in. For a key, `control-grok`
+/// (tools/grok), which exports the mounted key as XAI_API_KEY, Grok's
+/// documented key path, for Grok's process alone: the key is never a
+/// variable of the container.
+fn program(login: &Granted) -> &'static str {
+    match login.form() {
+        Form::ApiKey => "control-grok",
+        Form::Session | Form::CloudDefault => "grok",
+    }
+}
 
 fn fail(message: &str) -> io::Error {
     io::Error::other(message)
@@ -170,7 +194,10 @@ fn container(name: &str, node: &str, login: &Granted, image: &str) -> io::Result
     }
     .env("GROK_HOME", "/home/agent/.grok")
     .tmpfs(Tmpfs::new("/home/agent/.grok", Size::Mib(64)).owned(owner));
-    login.mount(spec, "grok/auth.json", "/home/agent/.grok/auth.json")
+    match login.form() {
+        Form::ApiKey => login.mount(spec, "grok/api-key", KEY),
+        Form::Session | Form::CloudDefault => login.mount(spec, "grok/auth.json", "/home/agent/.grok/auth.json"),
+    }
 }
 fn text_container(call: &TextCall<'_>, login: &Granted) -> io::Result<RunSpec> {
     // A text request carries no prompt file: the caller writes the prompt to
@@ -178,10 +205,13 @@ fn text_container(call: &TextCall<'_>, login: &Granted) -> io::Result<RunSpec> {
     Ok(container(call.name, call.node, login, call.image)?
         .bind(cli::checked(call.workspace)?, "/workspace", Access::ReadOnly)
         .args([
-            "bash",
-            "-c",
-            "cat > /tmp/prompt && exec grok \"$@\" --prompt-file /tmp/prompt",
-            "grok",
+            "bash".to_owned(),
+            "-c".to_owned(),
+            format!(
+                "cat > /tmp/prompt && exec {} \"$@\" --prompt-file /tmp/prompt",
+                program(login)
+            ),
+            "grok".to_owned(),
         ])
         .args(FLAGS)
         .args([
@@ -209,7 +239,7 @@ fn turn_container(
         .bind(cli::checked(config)?, "/home/agent/.grok/config.toml", Access::ReadOnly)
         .bind(cli::checked(turn)?, "/home/agent/prompt", Access::ReadOnly)
         .bind(cli::checked(mailbox)?, "/workspace", Access::ReadWrite)
-        .args(["grok", "--prompt-file", "/home/agent/prompt"])
+        .args([program(login), "--prompt-file", "/home/agent/prompt"])
         .args(FLAGS)
         .args(["--tools", NO_TOOLS, "--model", model]))
 }
@@ -257,7 +287,7 @@ pub fn command(command: Command<'_>) -> io::Result<()> {
     let [action] = args else { return Err(fail(USAGE)) };
     if matches!(action.as_str(), "--help" | "-h" | "help") {
         println!(
-            "control grok login: sign in with a device code inside the pinned Nix Grok container\ncontrol grok check: offline tool isolation check; no credentials or model calls"
+            "control grok login: sign in with a device code inside the pinned Nix Grok container\ncontrol grok key --account NAME: save an API-key account's key from standard input\ncontrol grok check: offline tool isolation check; no credentials or model calls"
         );
         return Ok(());
     }

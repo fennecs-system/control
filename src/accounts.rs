@@ -23,9 +23,12 @@ pub trait Backend: Copy + Eq + fmt::Debug + Serialize + DeserializeOwned {
     /// The implicit `default` account's kind and credential location: where
     /// the backend keeps its sign-in today, overrides included.
     fn implicit(self) -> (AccountKind, SecretRef);
-    /// The file a login directory holds, `None` when the directory itself is
-    /// the login (Antigravity picks a file inside it).
+    /// The file a subscription's login directory holds, `None` when the
+    /// directory itself is the login (Antigravity picks a file inside it).
     fn login_file(self) -> Option<&'static str>;
+    /// Where an API-key account keeps its key; `None` when the backend takes
+    /// no key.
+    fn key_file(self) -> Option<KeyFile>;
     /// Whether the backend signs in at all; local endpoints do not, so they
     /// have no named accounts.
     fn signs_in(self) -> bool;
@@ -33,6 +36,21 @@ pub trait Backend: Copy + Eq + fmt::Debug + Serialize + DeserializeOwned {
     /// attempts refreshing one sign-in at once can invalidate it, so such a
     /// named account runs one attempt at a time unless its `cap` says more.
     fn refreshes(self) -> bool;
+}
+
+/// The file an API-key account's directory holds, and who writes it there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyFile {
+    pub name: &'static str,
+    pub writer: KeyWriter,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyWriter {
+    /// Control saves the key as given, privately.
+    Host,
+    /// The CLI's own API-key login turns the key into its sign-in file
+    /// (Codex's `auth.json`), run once in its pinned image.
+    Cli,
 }
 
 /// An account's name: `[a-z0-9-]{1,32}`. `default` is reserved for the
@@ -172,10 +190,12 @@ pub enum AccountKind {
 }
 impl AccountKind {
     pub const ALL: [Self; 3] = [Self::Subscription, Self::ApiKey, Self::Cloud];
+    /// The kind as the operator types and reads it. accounts.json keeps
+    /// `api_key`, which `--kind` also accepts.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Subscription => "subscription",
-            Self::ApiKey => "api_key",
+            Self::ApiKey => "api-key",
             Self::Cloud => "cloud",
         }
     }
@@ -183,10 +203,29 @@ impl AccountKind {
 impl TryFrom<&str> for AccountKind {
     type Error = &'static str;
     fn try_from(text: &str) -> Result<Self, &'static str> {
+        let text = text.replace('_', "-");
         Self::ALL
             .into_iter()
             .find(|kind| kind.as_str() == text)
-            .ok_or("an account kind is subscription, api_key or cloud")
+            .ok_or("an account kind is subscription, api-key or cloud")
+    }
+}
+/// The kinds a pool would mix, in the order its accounts list them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixedKinds(pub Vec<AccountKind>);
+/// Whether accounts of these kinds may form one pool: only when they are all
+/// one kind. Kinds bill differently (a subscription's allowance, a key's
+/// metered spend), so a pool never switches between them silently.
+pub fn one_kind(kinds: impl IntoIterator<Item = AccountKind>) -> Result<(), MixedKinds> {
+    let distinct = kinds.into_iter().fold(Vec::new(), |mut seen, kind| {
+        if !seen.contains(&kind) {
+            seen.push(kind);
+        }
+        seen
+    });
+    match distinct.as_slice() {
+        [] | [_] => Ok(()),
+        _ => Err(MixedKinds(distinct)),
     }
 }
 
@@ -300,15 +339,17 @@ pub fn directory<B: Backend>(backend: B, name: &AccountName) -> RelativePath {
     RelativePath(["accounts", backend.id(), name.as_str()].iter().collect())
 }
 /// Where an account's login is: today's location for the implicit account,
-/// else the backend's login file in the account's own directory.
-pub fn secret<B: Backend>(backend: B, name: &AccountName) -> SecretRef {
+/// else the file its kind keeps in the account's own directory.
+pub fn secret<B: Backend>(backend: B, name: &AccountName, kind: AccountKind) -> SecretRef {
     if name.is_implicit() {
         return backend.implicit().1;
     }
     let directory = directory(backend, name).0;
-    let path = backend
-        .login_file()
-        .map_or_else(|| directory.clone(), |file| directory.join(file));
+    let file = match kind {
+        AccountKind::ApiKey => backend.key_file().map(|key| key.name),
+        AccountKind::Subscription | AccountKind::Cloud => backend.login_file(),
+    };
+    let path = file.map_or_else(|| directory.clone(), |file| directory.join(file));
     SecretRef(vec![Location::Config(RelativePath(path))])
 }
 
@@ -324,11 +365,12 @@ pub struct Account<B> {
 }
 impl<B: Backend> Account<B> {
     /// The cap admission applies: the operator's, else one at a time for a
-    /// named account whose CLI refreshes its own sign-in. The implicit
-    /// account keeps today's behaviour.
+    /// named account whose CLI refreshes its own sign-in. A key is never
+    /// refreshed; the implicit account keeps today's behaviour.
     pub fn effective_cap(&self) -> Option<NonZeroU8> {
+        let refreshed = self.id.backend.refreshes() && self.kind != AccountKind::ApiKey;
         self.cap
-            .or_else(|| (self.id.backend.refreshes() && !self.id.name.is_implicit()).then_some(NonZeroU8::MIN))
+            .or_else(|| (refreshed && !self.id.name.is_implicit()).then_some(NonZeroU8::MIN))
     }
 }
 
@@ -372,7 +414,7 @@ fn is_enabled(enabled: &bool) -> bool {
 impl<B: Backend> From<Entry<B>> for Account<B> {
     fn from(entry: Entry<B>) -> Self {
         Self {
-            secret: secret(entry.backend, &entry.name),
+            secret: secret(entry.backend, &entry.name, entry.kind),
             id: AccountId {
                 backend: entry.backend,
                 name: entry.name,
@@ -427,6 +469,8 @@ pub enum LoadError<B> {
     DefaultTwice(B),
     /// An account of a backend that signs in to nothing (a local endpoint).
     NoLogin(B),
+    /// An API-key account of a backend that takes no key.
+    NoKey(B),
     /// A change naming an account that is not defined.
     Missing(AccountId<B>),
 }
@@ -447,6 +491,7 @@ impl<B: Backend> fmt::Display for LoadError<B> {
             ),
             Self::DefaultTwice(backend) => write!(f, "accounts.json names a default for {} twice", backend.id()),
             Self::NoLogin(backend) => write!(f, "{} signs in to nothing, so it has no accounts", backend.id()),
+            Self::NoKey(backend) => write!(f, "{} takes no API key", backend.id()),
             Self::Missing(id) => write!(f, "{} has no account {}", id.backend.id(), id.name),
         }
     }
@@ -461,14 +506,15 @@ impl<B: Backend> From<LoadError<B>> for io::Error {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal<B> {
     pub backend: B,
-    pub name: AccountName,
     pub why: Unusable,
     pub existing: Vec<AccountName>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unusable {
-    Missing,
-    Disabled,
+    Missing(AccountName),
+    Disabled(AccountName),
+    /// A pool whose enabled accounts are of more than one kind.
+    Mixed(MixedKinds),
 }
 
 impl<B: Backend> Store<B> {
@@ -494,6 +540,9 @@ impl<B: Backend> Store<B> {
             }
             if !account.id.backend.signs_in() {
                 return Err(LoadError::NoLogin(account.id.backend));
+            }
+            if account.kind == AccountKind::ApiKey && account.id.backend.key_file().is_none() {
+                return Err(LoadError::NoKey(account.id.backend));
             }
             if accounts[..at].iter().any(|other| other.id == account.id) {
                 return Err(LoadError::Duplicate(account.id.clone()));
@@ -580,29 +629,28 @@ impl<B: Backend> Store<B> {
         load: impl Fn(&AccountName) -> usize,
         cooling: impl Fn(&AccountName) -> bool,
     ) -> Result<Account<B>, Refusal<B>> {
+        let refused = |why| Refusal {
+            backend,
+            why,
+            existing: self.of(backend).map(|a| a.id.name).collect(),
+        };
         let named = |name: AccountName| match self.get(backend, &name) {
             Some(account) if account.enabled => Ok(account),
-            found => Err(Refusal {
-                backend,
-                why: if found.is_some() {
-                    Unusable::Disabled
-                } else {
-                    Unusable::Missing
-                },
-                name,
-                existing: self.of(backend).map(|a| a.id.name).collect(),
-            }),
+            Some(_) => Err(refused(Unusable::Disabled(name))),
+            None => Err(refused(Unusable::Missing(name))),
         };
+        let enabled = || self.of(backend).filter(|a| a.enabled);
         match choice {
             // Never refused: `parse` admits only enabled defaults.
             AccountChoice::Default => named(self.default_name(backend)),
             AccountChoice::Named(name) => named(name.clone()),
-            AccountChoice::Pool => Ok(self
-                .of(backend)
-                .filter(|a| a.enabled)
-                .map(|a| ((cooling(&a.id.name), load(&a.id.name)), a))
-                .reduce(|best, next| if next.0 < best.0 { next } else { best })
-                .map_or_else(|| default_for(backend), |(_, account)| account)),
+            AccountChoice::Pool => {
+                one_kind(enabled().map(|a| a.kind)).map_err(|mixed| refused(Unusable::Mixed(mixed)))?;
+                Ok(enabled()
+                    .map(|a| ((cooling(&a.id.name), load(&a.id.name)), a))
+                    .reduce(|best, next| if next.0 < best.0 { next } else { best })
+                    .map_or_else(|| default_for(backend), |(_, account)| account))
+            }
         }
     }
 }

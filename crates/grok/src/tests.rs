@@ -313,3 +313,65 @@ const LOGIN: &[&str] = &[
     "login",
     "--device-auth",
 ];
+
+/// An API-key account's containers: the key is one read-only secret mount,
+/// `control-grok` exports it for Grok alone, and Control's MCP server starts
+/// without it.
+#[test]
+fn an_api_key_is_mounted_and_exported_only_inside_grok() {
+    let root = std::env::temp_dir().join(format!("control-grok-key-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let key = root.join(KEY_FILE);
+    cli::private_file(&key, "xai-CANARY").unwrap();
+    let meta = fs::symlink_metadata(&key).unwrap();
+    let granted = Granted::located(
+        Form::ApiKey,
+        key.clone(),
+        User {
+            uid: meta.uid(),
+            gid: meta.gid(),
+        },
+    );
+    let call = TextCall {
+        image: "sha256:img",
+        name: "control-summary-1",
+        workspace: &root,
+        node: "node-1",
+        model: "grok-4.7",
+        login: Some(&granted),
+    };
+    let text = text_container(&call, &granted).unwrap();
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        &granted,
+        &root.join("grok-config.toml"),
+        &root.join("grok-prompt"),
+        &root,
+        "sha256:img",
+        "grok-4.7",
+    )
+    .unwrap();
+    assert_eq!(turn.argv[0], "control-grok");
+    assert!(text.argv[2].contains("exec control-grok "), "{:?}", text.argv);
+    for spec in [&text, &turn] {
+        let [secret] = spec.secrets.as_slice() else {
+            panic!("one secret: {:?}", spec.secrets)
+        };
+        assert_eq!(
+            (
+                secret.name.as_str(),
+                secret.target.as_str(),
+                secret.access,
+                &secret.source
+            ),
+            ("grok/api-key", KEY, Access::ReadOnly, &key)
+        );
+        let shown = format!("{:?}{:?}", spec.argv, spec.env);
+        assert!(!shown.contains("CANARY") && !shown.contains("XAI_API_KEY"), "{shown}");
+    }
+    assert_eq!(config_for(&granted), KEY_CONFIG);
+    assert!(KEY_CONFIG.contains(r#"args = ["-u", "XAI_API_KEY", "/bin/control-room-mcp"]"#));
+    assert!(Grok.private_names().contains(&KEY_FILE));
+    fs::remove_dir_all(root).unwrap();
+}

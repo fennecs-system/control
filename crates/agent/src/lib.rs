@@ -7,11 +7,13 @@ pub mod cli;
 mod failure;
 mod granted;
 pub mod host;
+mod key;
 pub mod mailbox_wake;
 
 pub use failure::{CANCELLED, Cancelled, Cause, Failure, Status, UNFINISHED_TOOL, WAITING, classify, timeout_message};
 pub use granted::{Form, Granted};
 pub use host::{Control, Events, Host, Node, Stop};
+pub use key::{ApiKey, KeyError};
 
 use control_isolation::{Isolation, RunSpec};
 use std::{
@@ -225,4 +227,7 @@ pub struct Command<'a> {
     pub directory: std::path::PathBuf,
     /// The account's login, as a turn would be granted it.
     pub login: io::Result<Granted>,
+    /// The key read for `key`, handed only to a backend whose CLI writes its
+    /// own sign-in from a key (Codex); the host saves every other key itself.
+    pub key: Option<&'a ApiKey>,
 }

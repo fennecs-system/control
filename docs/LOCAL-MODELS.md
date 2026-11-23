@@ -85,9 +85,31 @@ kept). A running Control picks changes up by itself. The file they write:
 }
 ```
 
-`kind` is `subscription`, `api_key` or `cloud` (API-key accounts are signed in
-by a later change); `cap`, `enabled` (default true) and `label` are optional,
+`kind` is `subscription`, `api_key` (typed `api-key`) or `cloud`; `cap`, `enabled` (default true) and `label` are optional,
 `default` cannot be redefined, and `defaults` names an enabled account.
+
+**API keys.** An API-key account bills the key's owner per use instead of a
+subscription's allowance. Add it with `--kind api-key`, then pipe its key into
+`control BACKEND key --account NAME`: the key is read once from standard input
+(never a terminal or an argument), checked only for shape, written 0600 into
+the account's directory, and the command prints only `key saved`. `check` and
+`control accounts list` then report `api-key: present` from file metadata. A
+`+*` pool is refused when its enabled accounts are of more than one kind, so
+work never moves silently between billing kinds.
+
+```sh
+control accounts add codex metered --kind api-key
+pbpaste | control codex key --account metered        # Codex's own offline `codex login --with-api-key` writes auth.json
+control accounts add claude metered --kind api-key
+pbpaste | control claude key --account metered       # anthropic-api-key, read by Claude's apiKeyHelper
+control accounts add grok metered --kind api-key
+pbpaste | control grok key --account metered         # xai-api-key, exported as XAI_API_KEY for Grok alone
+control accounts add antigravity metered --kind api-key
+pbpaste | control antigravity key --account metered  # gemini-api-key, exported as GEMINI_API_KEY for agy alone
+```
+
+Select one like any account: `/model claude+metered:sonnet`. What keeps a key
+from the model is in docs/THREAT-MODEL.md.
 
 **Caps and cooldowns.** An account at its `cap` holds its next turn in the queue
 with a notice; other accounts and conversations are not held. Codex rewrites its
