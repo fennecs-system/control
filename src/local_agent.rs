@@ -1025,7 +1025,8 @@ pub(crate) fn execute(
     }
     // The loop has ended: stop attempt-owned tool containers, as the CLI adapters
     // do when their harness exits. Persistent services are separate resources.
-    crate::attempt_control::stop(Some((shared, run)), attempt).map_err(|m| ("interrupted", m.to_owned()))?;
+    crate::attempt_control::stop(crate::engine::isolation(), Some((shared, run)), attempt)
+        .map_err(|m| ("interrupted", m.to_owned()))?;
     result.map(|outcome| outcome.text)
 }
 fn run_loop(

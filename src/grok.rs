@@ -307,6 +307,7 @@ pub(crate) fn execute(
         .map_err(|_| failed("Cannot start the Grok Nix container"))?;
     let cli = claude::Cli {
         name: "Grok",
+        isolation,
         id,
         mailbox: &mailbox,
         workspace,

@@ -13,7 +13,7 @@ fn cpu() -> f64 {
 }
 
 /// Polls cancellation like a provider worker, then commits through the real path.
-fn execute(state: Arc<Mutex<State>>, task: Task) {
+fn execute(_: &dyn control_isolation::Isolation, state: Arc<Mutex<State>>, task: Task) {
     while !crate::lifecycle::cancelled(Some((&state, &task.0))) {
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -106,7 +106,7 @@ fn live_cancel_all_profile() {
     storage::save(&initial).unwrap();
     let bytes = fs::metadata(crate::config::state("state.json").unwrap()).unwrap().len();
     let state = Arc::new(Mutex::new(initial));
-    let threads = start_with(state.clone(), execute);
+    let threads = start_with(state.clone(), crate::engine::isolation(), execute);
     let active = |s: &State| {
         s.runtime
             .runs
