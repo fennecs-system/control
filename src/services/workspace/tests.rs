@@ -37,7 +37,11 @@ fn volume_identity_rejects_foreign_owners_and_host_backed_driver_options() {
         name: workspace.name().into(),
         driver: "local".into(),
         scope: "local".into(),
-        labels: workspace.labels().into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect(),
+        labels: workspace
+            .labels()
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
         options: Default::default(),
     };
     assert!(workspace.matches(&record));
@@ -46,18 +50,18 @@ fn volume_identity_rejects_foreign_owners_and_host_backed_driver_options() {
         ("Driver", |v| v.driver = "plugin".into()),
         ("Scope", |v| v.scope = "global".into()),
         ("Labels", |v| v.labels.clear()),
-        ("Options", |v| v.options = [("type", "none"), ("o", "bind"), ("device", "/host")].map(|(k, v)| (k.to_owned(), v.to_owned())).into()),
+        ("Options", |v| {
+            v.options = [("type", "none"), ("o", "bind"), ("device", "/host")]
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .into()
+        }),
     ];
     for (field, change) in changes {
         let mut bad = record.clone();
         change(&mut bad);
         assert!(!workspace.matches(&bad), "{field}");
     }
-    for field in [
-        "dev.control.node",
-        "dev.control.chat",
-        "dev.control.purpose",
-    ] {
+    for field in ["dev.control.node", "dev.control.chat", "dev.control.purpose"] {
         let mut bad = record.clone();
         bad.labels.insert(field.into(), "other".into());
         assert!(!workspace.matches(&bad), "{field}");
@@ -73,11 +77,7 @@ fn container_mounts_require_exact_workspace_and_reject_extra_or_missing_mounts()
     let tmpfs = crate::services::tmpfs(&service);
     assert!(!valid_mounts(&service, &[], &tmpfs));
     let mount = good.mounts[0].clone();
-    assert!(!valid_mounts(
-        &service,
-        &[mount.clone(), mount.clone()],
-        &tmpfs
-    ));
+    assert!(!valid_mounts(&service, &[mount.clone(), mount.clone()], &tmpfs));
     let changes: [Change<ObservedMount>; 5] = [
         ("Type", |m| m.kind = MountKind::Bind),
         ("Name", |m| m.name = Some("foreign".into())),
@@ -91,7 +91,14 @@ fn container_mounts_require_exact_workspace_and_reject_extra_or_missing_mounts()
         assert!(crate::services::verify(&service, &bad).is_err(), "{field}");
     }
     let mut bad = good.clone();
-    bad.mounts.push(ObservedMount { kind: MountKind::Bind, name: None, driver: None, source: String::new(), destination: "/host".into(), writable: true });
+    bad.mounts.push(ObservedMount {
+        kind: MountKind::Bind,
+        name: None,
+        driver: None,
+        source: String::new(),
+        destination: "/host".into(),
+        writable: true,
+    });
     assert!(crate::services::verify(&service, &bad).is_err());
 }
 

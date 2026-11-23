@@ -14,20 +14,13 @@ pub fn sized(total: usize, older: Option<usize>, newer: Option<usize>, size: usi
     } else {
         0..size.min(total)
     };
-    if range.is_empty() {
-        0..size.min(total)
-    } else {
-        range
-    }
+    if range.is_empty() { 0..size.min(total) } else { range }
 }
 pub fn controls(base: &str, newer: Option<&str>, older: Option<&str>) -> String {
     let mut html = String::new();
     for (direction, label, id) in [("newer", "← Newer", newer), ("older", "Older →", older)] {
         if let Some(id) = id {
-            let mut url = reqwest::Url::parse("http://localhost")
-                .unwrap()
-                .join(base)
-                .unwrap();
+            let mut url = reqwest::Url::parse("http://localhost").unwrap().join(base).unwrap();
             url.query_pairs_mut().append_pair(direction, id);
             let target = format!("{}?{}", url.path(), url.query().unwrap());
             html.push_str(&format!("<a href='{}'>{label}</a>", crate::escape(&target)));

@@ -1,9 +1,15 @@
-
 use super::*;
-use crate::codex::{capture_codex, container_spec, container_spec_scoped, finish_codex_tools, mount_path, offline_probe, permissions, probe_detail, probe_nonce, sandbox_verdict, tail_reader, Credentials, PERMISSIONS, SANDBOX_PROBE_TIMED_OUT};
-use control_effect::sync::Recv;
-use std::{path::PathBuf, process::{Command, Stdio}};
+use crate::codex::{
+    Credentials, PERMISSIONS, SANDBOX_PROBE_TIMED_OUT, capture_codex, container_spec, container_spec_scoped,
+    finish_codex_tools, mount_path, offline_probe, permissions, probe_detail, probe_nonce, sandbox_verdict,
+    tail_reader,
+};
 use crate::runtime::RunKind;
+use control_effect::sync::Recv;
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 /// The binary's tests link the library through the `test-isolation` feature, so
 /// with no `CONTROL_*_DIR` set every node directory is under the test root, and
@@ -23,22 +29,42 @@ fn test_builds_never_resolve_operator_node_directories() {
     }
     let operator = crate::config::operator_directories();
     let helpers = [
-        ("config::directory", crate::config::directory().map_err(std::io::Error::other)),
-        ("config::state_directory", crate::config::state_directory().map_err(std::io::Error::other)),
-        ("config::state", crate::config::state("state.json").map_err(std::io::Error::other)),
+        (
+            "config::directory",
+            crate::config::directory().map_err(std::io::Error::other),
+        ),
+        (
+            "config::state_directory",
+            crate::config::state_directory().map_err(std::io::Error::other),
+        ),
+        (
+            "config::state",
+            crate::config::state("state.json").map_err(std::io::Error::other),
+        ),
         ("outbox::path", control_delivery::path().map_err(std::io::Error::other)),
         ("history::path", crate::history::path(None)),
         ("packages::store", crate::packages::store()),
-        ("runtime::workspace", crate::runtime::workspace("run").map_err(std::io::Error::other)),
+        (
+            "runtime::workspace",
+            crate::runtime::workspace("run").map_err(std::io::Error::other),
+        ),
         ("codex credentials", Credentials::path().map_err(std::io::Error::other)),
     ];
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         let credentials = Credentials::path().unwrap();
-        assert!(!credentials.starts_with(home.join(".codex")), "Codex credentials resolved {}", credentials.display());
+        assert!(
+            !credentials.starts_with(home.join(".codex")),
+            "Codex credentials resolved {}",
+            credentials.display()
+        );
     }
     for (name, path) in helpers {
         let path = path.unwrap();
-        assert!(!operator.iter().any(|real| path.starts_with(real)), "{name} resolved {}", path.display());
+        assert!(
+            !operator.iter().any(|real| path.starts_with(real)),
+            "{name} resolved {}",
+            path.display()
+        );
     }
 }
 
@@ -51,11 +77,30 @@ fn a_slow_sandbox_probe_is_reported_apart_from_an_isolation_failure() {
     assert!(crate::claude::PROBE_TIMED_OUT.contains(&format!("after {} s", SANDBOX_PROBE_WAIT.as_secs())));
     assert_eq!(sandbox_verdict(exited(0), || true), Ok(()));
     let failed = sandbox_verdict(exited(0), || false).unwrap_err();
-    assert!(failed.starts_with("Credential isolation verification failed"), "{failed}");
-    assert!(sandbox_verdict(exited(41), || true).unwrap_err().contains("canary was readable"));
-    assert!(sandbox_verdict(exited(42), || true).unwrap_err().contains("PID namespace"));
-    for interrupted in [Recv::Cancelled, Recv::Closed, Recv::Item(Err(std::io::Error::other("lost")))] {
-        assert_eq!(sandbox_verdict(interrupted, || true).unwrap_err(), failed, "an interrupted probe is not called a timeout");
+    assert!(
+        failed.starts_with("Credential isolation verification failed"),
+        "{failed}"
+    );
+    assert!(
+        sandbox_verdict(exited(41), || true)
+            .unwrap_err()
+            .contains("canary was readable")
+    );
+    assert!(
+        sandbox_verdict(exited(42), || true)
+            .unwrap_err()
+            .contains("PID namespace")
+    );
+    for interrupted in [
+        Recv::Cancelled,
+        Recv::Closed,
+        Recv::Item(Err(std::io::Error::other("lost"))),
+    ] {
+        assert_eq!(
+            sandbox_verdict(interrupted, || true).unwrap_err(),
+            failed,
+            "an interrupted probe is not called a timeout"
+        );
     }
 }
 
@@ -68,17 +113,32 @@ fn a_failed_sandbox_probe_reports_its_exit_result_file_and_stderr_tail() {
         probe_detail(status(1 << 8), None, stale),
         "(exit code 1; result file missing; stderr tail: bash: line 1: /workspace/probe-result: No such file or directory)"
     );
-    assert_eq!(probe_detail(status(9), Some(b"other"), b""), "(killed by signal 9; unexpected result file; stderr tail: (empty))");
+    assert_eq!(
+        probe_detail(status(9), Some(b"other"), b""),
+        "(killed by signal 9; unexpected result file; stderr tail: (empty))"
+    );
     assert!(probe_detail(None, None, b"").starts_with("(exit not observed;"));
     // Control characters cannot forge report lines, and only the end of a long stream is kept.
     let noisy = [b"\x1b[31mstart\r\n".as_slice(), &[b'x'; 2000], b"\nfinal error"].concat();
     let detail = probe_detail(status(0), Some(b"verified"), &noisy);
-    assert!(!detail.contains(['\n', '\r', '\x1b']) && !detail.contains("start"), "{detail}");
-    assert!(detail.ends_with("x final error)") && detail.contains("stderr tail: …x"), "{detail}");
+    assert!(
+        !detail.contains(['\n', '\r', '\x1b']) && !detail.contains("start"),
+        "{detail}"
+    );
+    assert!(
+        detail.ends_with("x final error)") && detail.contains("stderr tail: …x"),
+        "{detail}"
+    );
     let long = vec![b'y'; 10_000];
-    let kept = tail_reader(Some(std::io::Cursor::new([b"head".as_slice(), &long].concat()))).recv().unwrap();
+    let kept = tail_reader(Some(std::io::Cursor::new([b"head".as_slice(), &long].concat())))
+        .recv()
+        .unwrap();
     assert_eq!(kept, vec![b'y'; 4096]);
-    assert_ne!(probe_nonce().unwrap(), probe_nonce().unwrap(), "each probe writes a fresh result name");
+    assert_ne!(
+        probe_nonce().unwrap(),
+        probe_nonce().unwrap(),
+        "each probe writes a fresh result name"
+    );
 }
 
 #[test]
@@ -119,7 +179,10 @@ fn codex_tool_outcome_survives_activity_truncation_and_drains_final_results() {
 
 #[test]
 fn admission_captures_the_local_turn_limit_only_for_local_attempts() {
-    for (backend, expected) in [(crate::backend::Backend::Local, Some(3600)), (crate::backend::Backend::Codex, None)] {
+    for (backend, expected) in [
+        (crate::backend::Backend::Local, Some(3600)),
+        (crate::backend::Backend::Codex, None),
+    ] {
         let mut state = State::default();
         let chat = crate::chat::create(&mut state);
         crate::chat::send(&mut state, &chat, "Set up", "test").unwrap();
@@ -177,9 +240,7 @@ fn unfinished_codex_tool_prevents_success_without_publishing_or_retrying() {
     assert_eq!(state.chats[0].workspace.as_deref(), Some("previous-output"));
     let events = crate::history::activity(Some(&chat), &state.runtime.runs[0].attempts[0]).unwrap();
     assert_eq!(events[0].status, "interrupted");
-    assert!(events[0]
-        .output
-        .contains("effect may already have happened"));
+    assert!(events[0].output.contains("effect may already have happened"));
 }
 
 #[test]
@@ -216,14 +277,16 @@ fn codex_completion_distinguishes_finished_tools_and_host_handoffs() {
             },
         );
         let shared = Arc::new(Mutex::new(state));
-        assert!(finish_codex_tools(
-            &mut attempt,
-            Some((&shared, &id)),
-            &generation,
-            host_finished,
-            kind == "mcp_tool_call" && status == "in_progress"
-        )
-        .is_ok());
+        assert!(
+            finish_codex_tools(
+                &mut attempt,
+                Some((&shared, &id)),
+                &generation,
+                host_finished,
+                kind == "mcp_tool_call" && status == "in_progress"
+            )
+            .is_ok()
+        );
         assert!(attempt.termination.is_none());
         assert_eq!(
             shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status,
@@ -249,34 +312,76 @@ fn running_usage_is_live_in_state_and_rendered_until_the_attempt_finishes() {
         attempt.model = "local:qwen-local".into();
     }
     let revision = state.chats.iter().find(|c| c.id == chat).unwrap().revision;
-    let so_far = Tokens { input_tokens: 12000, cached_input_tokens: 11000, output_tokens: 300 };
-    let usage = |tokens| control_ai::Usage { tokens: Some(tokens), complete: false, model: Some("qwen3-coder-30b".into()) };
+    let so_far = Tokens {
+        input_tokens: 12000,
+        cached_input_tokens: 11000,
+        output_tokens: 300,
+    };
+    let usage = |tokens| control_ai::Usage {
+        tokens: Some(tokens),
+        complete: false,
+        model: Some("qwen3-coder-30b".into()),
+    };
     assert!(!record_usage_for(&mut state, &id, "stale-generation", usage(so_far)));
     assert_eq!(state.runtime.runs[0].attempts[0].tokens, None);
     assert!(record_usage_for(&mut state, &id, &generation, usage(so_far)));
     let attempt = &state.runtime.runs[0].attempts[0];
-    assert_eq!((attempt.tokens, attempt.accounting, attempt.reported_model.as_deref()), (Some(so_far), Accounting::Partial, Some("qwen3-coder-30b")));
-    assert!(state.chats.iter().find(|c| c.id == chat).unwrap().revision > revision, "open views refresh");
+    assert_eq!(
+        (attempt.tokens, attempt.accounting, attempt.reported_model.as_deref()),
+        (Some(so_far), Accounting::Partial, Some("qwen3-coder-30b"))
+    );
+    assert!(
+        state.chats.iter().find(|c| c.id == chat).unwrap().revision > revision,
+        "open views refresh"
+    );
 
     let monitor = crate::usage::render(&state);
     assert!(monitor.contains("Running now"), "{monitor}");
-    assert!(monitor.contains("local:qwen-local (served: qwen3-coder-30b)</td><td>12000</td><td>11000</td><td>300</td><td>so far"), "{monitor}");
-    assert!(monitor.contains("running (totals so far): 1 · unknown attempts: 0 · partial (stopped mid-turn, lower bound): 0"), "{monitor}");
-    assert!(crate::history_view::page(&state, &crate::history_view::Filter { expand: true, ..Default::default() }).contains("1 attempt(s) · 12000 input (11000 cached) · 300 output tokens so far"));
+    assert!(
+        monitor.contains(
+            "local:qwen-local (served: qwen3-coder-30b)</td><td>12000</td><td>11000</td><td>300</td><td>so far"
+        ),
+        "{monitor}"
+    );
+    assert!(
+        monitor
+            .contains("running (totals so far): 1 · unknown attempts: 0 · partial (stopped mid-turn, lower bound): 0"),
+        "{monitor}"
+    );
+    assert!(
+        crate::history_view::page(
+            &state,
+            &crate::history_view::Filter {
+                expand: true,
+                ..Default::default()
+            }
+        )
+        .contains("1 attempt(s) · 12000 input (11000 cached) · 300 output tokens so far")
+    );
     let transcript = crate::chat::transcript(&state, &chat).unwrap();
     assert!(transcript.contains(">↑ 12,000 in (11,000 cached)</span> · <span title='300 output tokens so far; the attempt is still running'>↓ 300 out…</span>"), "{transcript}");
 
     // Finished: the attempt's own record replaces the live one.
     let attempt = &mut state.runtime.runs[0].attempts[0];
     attempt.status = "completed".into();
-    attempt.record_usage(control_ai::Usage { tokens: Some(so_far), complete: true, model: None });
+    attempt.record_usage(control_ai::Usage {
+        tokens: Some(so_far),
+        complete: true,
+        model: None,
+    });
     state.runtime.runs[0].status = "completed".into();
-    assert!(!record_usage_for(&mut state, &id, &generation, usage(Tokens::default())), "a finished run takes no live usage");
+    assert!(
+        !record_usage_for(&mut state, &id, &generation, usage(Tokens::default())),
+        "a finished run takes no live usage"
+    );
     let monitor = crate::usage::render(&state);
     assert!(!monitor.contains("Running now"));
     assert!(monitor.contains("running (totals so far): 0"));
     let transcript = crate::chat::transcript(&state, &chat).unwrap();
-    assert!(transcript.contains("<span title='300 output tokens'>↓ 300 out</span>"), "{transcript}");
+    assert!(
+        transcript.contains("<span title='300 output tokens'>↓ 300 out</span>"),
+        "{transcript}"
+    );
 }
 
 #[test]
@@ -314,10 +419,7 @@ fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() 
         turn_mailbox::{Disposition, Handoff, Mailbox},
         working_state::Payload,
     };
-    for backend in [
-        crate::backend::Backend::Codex,
-        crate::backend::Backend::Claude,
-    ] {
+    for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         for cancelled in [false, true] {
             let mut state = State::default();
             let chat = crate::chat::create(&mut state);
@@ -347,11 +449,7 @@ fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() 
             let mut attempt = state.runtime.runs[0].attempts[0].clone();
             attempt.explicit_timeout_seconds = Some(600);
             let shared = Arc::new(Mutex::new(state));
-            let decision = crate::attempt_control::poll(
-                Some((&shared, &id)),
-                &attempt,
-                Duration::from_secs(600),
-            );
+            let decision = crate::attempt_control::poll(Some((&shared, &id)), &attempt, Duration::from_secs(600));
             let crate::attempt_control::Decision::Finish(summary) = decision else {
                 panic!("host must finish accepted handoff");
             };
@@ -360,24 +458,10 @@ fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() 
                 state.runtime.runs[0].status = "cancelling".into();
             }
             attempt.artifact = Some("stopped-writer-checkpoint".into());
-            commit(
-                &mut state,
-                &id,
-                Action::Task,
-                attempt,
-                Ok(summary),
-                false,
-                |_| Ok(()),
-            )
-            .unwrap();
+            commit(&mut state, &id, Action::Task, attempt, Ok(summary), false, |_| Ok(())).unwrap();
             assert_eq!(state.chats[0].workspace.is_some(), !cancelled);
             assert_eq!(
-                state.chats[0]
-                    .continuity
-                    .as_ref()
-                    .unwrap()
-                    .working
-                    .is_some(),
+                state.chats[0].continuity.as_ref().unwrap().working.is_some(),
                 !cancelled
             );
             assert_eq!(
@@ -403,17 +487,8 @@ fn consumed_steering_does_not_drop_requested_continuation() {
         .persist()
         .unwrap();
     checkpoint_prepared(&mut state, Some(trace), None, |_| Ok(())).unwrap();
-    crate::chat::send(
-        &mut state,
-        &chat,
-        "/steer Keep the public API stable",
-        "test",
-    )
-    .unwrap();
-    let mailbox = state.runtime.runs[0].attempts[0]
-        .turn_mailbox
-        .as_mut()
-        .unwrap();
+    crate::chat::send(&mut state, &chat, "/steer Keep the public API stable", "test").unwrap();
+    let mailbox = state.runtime.runs[0].attempts[0].turn_mailbox.as_mut().unwrap();
     mailbox
         .deliver(
             "steering".into(),
@@ -474,13 +549,7 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     state.chats[0].room = Some("general".into());
-    crate::chat::send(
-        &mut state,
-        &chat,
-        "Build a small tool and keep improving it",
-        "test",
-    )
-    .unwrap();
+    crate::chat::send(&mut state, &chat, "Build a small tool and keep improving it", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let first = state.runtime.runs[0].id.clone();
     // Simulate an already running pre-continuity provider process.
@@ -522,7 +591,11 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
         Some(queued)
     );
     let attempt = state.runtime.runs[queued].attempts.last().unwrap();
-    assert!(attempt.turn_mailbox.as_ref().unwrap().baseline.iter().any(|range|matches!(range,control_context::turn_mailbox::Range::Room{room,through:1,..} if room=="general")));
+    assert!(
+        attempt.turn_mailbox.as_ref().unwrap().baseline.iter().any(
+            |range| matches!(range,control_context::turn_mailbox::Range::Room{room,through:1,..} if room=="general")
+        )
+    );
     let input = crate::turn_context::input(attempt).unwrap().unwrap();
     assert!(!input.contains("Old room history"));
     assert!(input.contains("Created /workspace/tool.rs"));
@@ -535,10 +608,7 @@ fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures()
     crate::chat::send(&mut state, &chat, "Read history", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let run = state.runtime.runs[0].id.clone();
-    let generation = state.runtime.runs[0].attempts[0]
-        .workspace_id
-        .clone()
-        .unwrap();
+    let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     let shared = Arc::new(Mutex::new(state));
     let result = project_operation(
         Some((&shared, &run)),
@@ -546,13 +616,8 @@ fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures()
         "project-prepare",
         "Preparing workspace",
         || {
-            let state = shared
-                .try_lock()
-                .expect("Project I/O must not hold the state lock");
-            assert_eq!(
-                state.runtime.runs[0].attempts[0].activity[0].status,
-                "in_progress"
-            );
+            let state = shared.try_lock().expect("Project I/O must not hold the state lock");
+            assert_eq!(state.runtime.runs[0].attempts[0].activity[0].status, "in_progress");
             Ok("ready")
         },
     )
@@ -651,15 +716,9 @@ fn result_rollback_preserves_attempt_history_and_live_diagnostics() {
         .is_err()
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    commit(
-        &mut state,
-        &id,
-        Action::Task,
-        attempt,
-        Ok("done".into()),
-        false,
-        |_| Ok(()),
-    )
+    commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), false, |_| {
+        Ok(())
+    })
     .unwrap();
     assert_eq!(
         serde_json::to_value(&state.runtime.runs[0].attempts[0]).unwrap(),
@@ -669,8 +728,9 @@ fn result_rollback_preserves_attempt_history_and_live_diagnostics() {
         crate::history::activity(
             state.runtime.runs[0].chat_id.as_deref(),
             &state.runtime.runs[0].attempts[1]
-        ).unwrap()[0]
-        .output,
+        )
+        .unwrap()[0]
+            .output,
         "retained diagnostics"
     );
     assert_eq!(state.chats[0].workspace.as_deref(), Some("published"));
@@ -737,22 +797,11 @@ fn working_state_and_processed_receipts_publish_with_the_matching_workspace_only
             .unwrap();
         run.attempts[0].turn_mailbox = Some(Box::new(mailbox)).into();
         let before = serde_json::to_value(&state).unwrap();
-        let outcome = || {
-            failure.map_or_else(
-                || Ok("Progress".into()),
-                |status| Err((status, "diagnostics".into())),
-            )
-        };
+        let outcome = || failure.map_or_else(|| Ok("Progress".into()), |status| Err((status, "diagnostics".into())));
         assert!(
-            commit(
-                &mut state,
-                &id,
-                Action::Task,
-                attempt.clone(),
-                outcome(),
-                false,
-                |_| Err(std::io::Error::other("disk full"))
-            )
+            commit(&mut state, &id, Action::Task, attempt.clone(), outcome(), false, |_| {
+                Err(std::io::Error::other("disk full"))
+            })
             .is_err()
         );
         assert_eq!(
@@ -760,16 +809,7 @@ fn working_state_and_processed_receipts_publish_with_the_matching_workspace_only
             before,
             "failed save restores draft, receipts and workspace together"
         );
-        commit(
-            &mut state,
-            &id,
-            Action::Task,
-            attempt,
-            outcome(),
-            false,
-            |_| Ok(()),
-        )
-        .unwrap();
+        commit(&mut state, &id, Action::Task, attempt, outcome(), false, |_| Ok(())).unwrap();
         let working = state.chats[0].continuity.as_ref().unwrap().working.as_ref();
         if failure.is_none() {
             assert_eq!(working.unwrap().checkpoint, "matching-workspace");
@@ -884,10 +924,7 @@ fn consumed_steering_does_not_launch_twice_and_racing_input_stays_queued() {
     .unwrap();
     assert_eq!(state.runtime.runs[1].status, "completed");
     assert!(state.runtime.runs[1].result.contains(&id));
-    assert_eq!(
-        state.runtime.runs[2].status, "queued",
-        "unseen steering must still run"
-    );
+    assert_eq!(state.runtime.runs[2].status, "queued", "unseen steering must still run");
 }
 #[test]
 fn reports_keep_valid_utf8_prefixes_but_reject_malformed_files_and_links() {
@@ -944,17 +981,13 @@ fn isolated_supervisor_retains_intent_after_worker_panic() {
     let threads = start_with(state, panic_worker);
     let start = Instant::now();
     while !crate::shutdown::requested() {
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "Panic was not supervised"
-        );
+        assert!(start.elapsed() < Duration::from_secs(10), "Panic was not supervised");
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(threads.join().is_err());
-    let saved: State =
-        crate::config::read_state::<crate::State>(isize::MAX as usize)
-            .unwrap()
-            .unwrap();
+    let saved: State = crate::config::read_state::<crate::State>(isize::MAX as usize)
+        .unwrap()
+        .unwrap();
     assert_eq!(saved.runtime.runs[0].status, "running");
     assert_eq!(saved.runtime.runs[0].attempts.len(), 1);
 }
@@ -967,12 +1000,7 @@ fn overlapping_commits_rollback_only_their_own_conversation() {
     }
     assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(0));
     assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(1));
-    let mut attempts: Vec<_> = state
-        .runtime
-        .runs
-        .iter()
-        .map(|r| r.attempts[0].clone())
-        .collect();
+    let mut attempts: Vec<_> = state.runtime.runs.iter().map(|r| r.attempts[0].clone()).collect();
     attempts[0].artifact = Some("output-a".into());
     attempts[1].artifact = Some("output-b".into());
     let ids: Vec<_> = state.runtime.runs.iter().map(|r| r.id.clone()).collect();
@@ -1023,21 +1051,13 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     fn execute(state: Arc<Mutex<State>>, task: Task) {
         {
             let mut s = state.lock().unwrap();
-            s.runtime
-                .runs
-                .iter_mut()
-                .find(|r| r.id == task.0)
-                .unwrap()
-                .result = "entered".into();
+            s.runtime.runs.iter_mut().find(|r| r.id == task.0).unwrap().result = "entered".into();
             storage::save(&s).unwrap();
         }
         let marker = crate::config::state(&format!("release-{}", task.0)).unwrap();
         let started = Instant::now();
         while !marker.exists() && !crate::lifecycle::cancelled(Some((&state, &task.0))) {
-            assert!(
-                started.elapsed() < Duration::from_secs(20),
-                "Test worker timed out"
-            );
+            assert!(started.elapsed() < Duration::from_secs(20), "Test worker timed out");
             std::thread::sleep(Duration::from_millis(10));
         }
         commit(
@@ -1090,16 +1110,12 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
                     <= 2
             );
             if expected.iter().all(|(i, status, result)| {
-                s.runtime.runs[*i].status == *status
-                    && result.is_none_or(|r| s.runtime.runs[*i].result == r)
+                s.runtime.runs[*i].status == *status && result.is_none_or(|r| s.runtime.runs[*i].result == r)
             }) {
                 break;
             }
             drop(s);
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "Dispatcher did not progress"
-            );
+            assert!(start.elapsed() < Duration::from_secs(10), "Dispatcher did not progress");
             std::thread::sleep(Duration::from_millis(10));
         }
     };
@@ -1121,11 +1137,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         (2, "cancelled", None),
         (3, "running", Some("entered")),
     ]);
-    fs::write(
-        crate::config::state(&format!("release-{}", ids[0])).unwrap(),
-        "release",
-    )
-    .unwrap();
+    fs::write(crate::config::state(&format!("release-{}", ids[0])).unwrap(), "release").unwrap();
     wait(&[
         (0, "completed", None),
         (1, "running", Some("entered")),
@@ -1150,10 +1162,9 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         .map(|a| &a.workspace_id)
         .collect();
     assert_eq!(attempts.len(), 4);
-    let saved: State =
-        crate::config::read_state::<crate::State>(isize::MAX as usize)
-            .unwrap()
-            .unwrap();
+    let saved: State = crate::config::read_state::<crate::State>(isize::MAX as usize)
+        .unwrap()
+        .unwrap();
     assert_eq!(saved.runtime.runs[4].status, "queued");
     assert!(
         saved
@@ -1185,9 +1196,7 @@ fn live_shutdown(parallel: bool) {
                 libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
             }
             let start = Instant::now();
-            while self.0.try_wait().ok().flatten().is_none()
-                && start.elapsed() < Duration::from_secs(30)
-            {
+            while self.0.try_wait().ok().flatten().is_none() && start.elapsed() < Duration::from_secs(30) {
                 std::thread::sleep(Duration::from_millis(50));
             }
             let _ = self.0.kill();
@@ -1229,10 +1238,7 @@ fn live_shutdown(parallel: bool) {
         .send()
         .is_ok_and(|r| r.status().is_success())
     {
-        assert!(
-            started.elapsed() < Duration::from_secs(15),
-            "QA server did not start"
-        );
+        assert!(started.elapsed() < Duration::from_secs(15), "QA server did not start");
         assert!(server.0.try_wait().unwrap().is_none());
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -1265,9 +1271,7 @@ fn live_shutdown(parallel: bool) {
             .any(|event| {
                 event["kind"] == "command_execution"
                     && ["running", "in_progress"].contains(&event["status"].as_str().unwrap_or(""))
-                    && event["text"]
-                        .as_str()
-                        .is_some_and(|s| s.contains("sleep 90"))
+                    && event["text"].as_str().is_some_and(|s| s.contains("sleep 90"))
             });
         let marker = message["attempts"]
             .as_array()
@@ -1319,25 +1323,15 @@ fn live_shutdown(parallel: bool) {
                 ["queued", "running"].contains(&message["status"].as_str().unwrap_or("")),
                 "Sibling worker failed"
             );
-            assert!(
-                started.elapsed() < Duration::from_secs(60),
-                "Workers did not overlap"
-            );
+            assert!(started.elapsed() < Duration::from_secs(60), "Workers did not overlap");
             std::thread::sleep(Duration::from_millis(100));
         }
-        tool(
-            "control.chat.send",
-            json!({"id":sibling,"message":"/cancel"}),
-        );
+        tool("control.chat.send", json!({"id":sibling,"message":"/cancel"}));
         let started = Instant::now();
         loop {
             let detail = tool("control.chat.read", json!({"id":sibling}));
             if detail["messages"][0]["status"] == "cancelled" {
-                let id = detail["messages"][0]["attempts"]
-                    .as_array()
-                    .unwrap()
-                    .last()
-                    .unwrap()["workspace_id"]
+                let id = detail["messages"][0]["attempts"].as_array().unwrap().last().unwrap()["workspace_id"]
                     .as_str()
                     .unwrap();
                 let names = crate::engine::query(&[
@@ -1349,10 +1343,7 @@ fn live_shutdown(parallel: bool) {
                     &format!("name=control-{id}"),
                 ])
                 .unwrap();
-                assert!(
-                    names.trim().is_empty(),
-                    "Cancelled sibling still has a container"
-                );
+                assert!(names.trim().is_empty(), "Cancelled sibling still has a container");
                 break;
             }
             assert!(
@@ -1370,10 +1361,7 @@ fn live_shutdown(parallel: bool) {
         "control.chat.send",
         json!({"id":chat,"message":"Follow up after this task."}),
     );
-    assert_eq!(
-        unsafe { libc::kill(server.0.id() as libc::pid_t, libc::SIGTERM) },
-        0
-    );
+    assert_eq!(unsafe { libc::kill(server.0.id() as libc::pid_t, libc::SIGTERM) }, 0);
     let started = Instant::now();
     loop {
         if let Some(status) = server.0.try_wait().unwrap() {
@@ -1386,10 +1374,9 @@ fn live_shutdown(parallel: bool) {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    let state: State =
-        crate::config::read_state::<crate::State>(isize::MAX as usize)
-            .unwrap()
-            .unwrap();
+    let state: State = crate::config::read_state::<crate::State>(isize::MAX as usize)
+        .unwrap()
+        .unwrap();
     let chat = state.chats.iter().find(|c| c.id == chat).unwrap();
     assert!(chat.workspace.is_none());
     assert_eq!(chat.messages.len(), 2);
@@ -1403,12 +1390,7 @@ fn live_shutdown(parallel: bool) {
     let attempt = run.attempts.last().unwrap();
     assert!(!attempt.activity.is_empty());
     let id = attempt.workspace_id.as_ref().unwrap();
-    assert!(
-        runtime::workspace(id)
-            .unwrap()
-            .join("shutdown-proof.txt")
-            .is_file()
-    );
+    assert!(runtime::workspace(id).unwrap().join("shutdown-proof.txt").is_file());
     let next = state
         .runtime
         .runs
@@ -1505,12 +1487,7 @@ fn shutdown_fences_success_preserves_diagnostics_queue_and_checkpoint() {
         output: "retained diagnostics".into(),
         status: "completed".into(),
     };
-    record_activity_for(
-        &mut state,
-        &id,
-        attempt.workspace_id.as_deref().unwrap(),
-        event,
-    );
+    record_activity_for(&mut state, &id, attempt.workspace_id.as_deref().unwrap(), event);
     crate::chat::send(&mut state, &chat, "Next turn", "test").unwrap();
     let before = serde_json::to_vec(&state).unwrap();
     assert!(
@@ -1526,23 +1503,18 @@ fn shutdown_fences_success_preserves_diagnostics_queue_and_checkpoint() {
         .is_err()
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    commit(
-        &mut state,
-        &id,
-        Action::Task,
-        attempt,
-        Ok("done".into()),
-        true,
-        |_| Ok(()),
-    )
+    commit(&mut state, &id, Action::Task, attempt, Ok("done".into()), true, |_| {
+        Ok(())
+    })
     .unwrap();
     assert_eq!(state.runtime.runs[0].status, "interrupted");
     assert_eq!(
         crate::history::activity(
             state.runtime.runs[0].chat_id.as_deref(),
             &state.runtime.runs[0].attempts[0]
-        ).unwrap()[0]
-        .output,
+        )
+        .unwrap()[0]
+            .output,
         "retained diagnostics"
     );
     assert_eq!(state.runtime.runs[1].status, "queued");
@@ -1598,9 +1570,7 @@ fn design_continuation_restores_pause_before_queued_followups_and_keeps_baseline
     let index = checkpoint_next(&mut state, |_| Ok(())).unwrap();
     assert_eq!(index, 2);
     assert_eq!(
-        state.runtime.runs[index].attempts[0]
-            .parent_artifact
-            .as_deref(),
+        state.runtime.runs[index].attempts[0].parent_artifact.as_deref(),
         Some("paused-workspace")
     );
     assert_eq!(
@@ -1647,11 +1617,7 @@ fn failed_discord_cancel_checkpoint_preserves_run_and_retryable_delivery() {
         assert_eq!(state.discord_seen, ["fixture-message"]);
         assert_eq!(
             state.runtime.runs[0].status,
-            if status == "queued" {
-                "cancelled"
-            } else {
-                "cancelling"
-            }
+            if status == "queued" { "cancelled" } else { "cancelling" }
         );
     }
 }
@@ -1694,15 +1660,9 @@ fn child_uses_frozen_task_checkpoint_and_unique_writable_attempt() {
             .unwrap()
             .starts_with(&state.runtime.runs[0].id)
     );
-    assert_eq!(
-        state.runtime.runs[0].chat_id.as_deref(),
-        Some(child.as_str())
-    );
+    assert_eq!(state.runtime.runs[0].chat_id.as_deref(), Some(child.as_str()));
     assert_eq!(state.runtime.runs[0].action, Action::Task);
-    assert_eq!(
-        state.chats[0].workspace.as_deref(),
-        Some("later-parent-output")
-    );
+    assert_eq!(state.chats[0].workspace.as_deref(), Some("later-parent-output"));
     assert!(state.chats[1].improve_workspace.is_none());
 }
 #[test]
@@ -1719,10 +1679,7 @@ fn retry_cannot_rebind_to_an_added_folder_when_both_checkpoint_heads_are_empty()
     state.chats[0].project.as_mut().unwrap().grant = Some("new-grant".into());
     assert!(checkpoint_next(&mut state, |_| Ok(())).is_none());
     assert_eq!(state.runtime.runs[0].status, "blocked");
-    assert_eq!(
-        state.runtime.runs[0].attempts[0].project.as_deref(),
-        Some("old-grant")
-    );
+    assert_eq!(state.runtime.runs[0].attempts[0].project.as_deref(), Some("old-grant"));
 }
 #[test]
 fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
@@ -1742,10 +1699,9 @@ fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
     state.runtime.runs[1].status = "failed".into();
     crate::chat::send(&mut state, &chat, "Third", "test").unwrap();
     let retry = state.runtime.runs[1].id.clone();
-    state.runtime.action(
-        "/retry-run",
-        &std::collections::HashMap::from([("id".into(), retry)]),
-    );
+    state
+        .runtime
+        .action("/retry-run", &std::collections::HashMap::from([("id".into(), retry)]));
     assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(2));
     state.runtime.runs[2].status = "completed".into();
     state.chats[0].workspace = Some("third-artifact".into());
@@ -1754,19 +1710,13 @@ fn followups_capture_workspace_at_dispatch_and_retries_keep_their_parent() {
     // A later turn published: the retry is refused before any model run.
     assert_eq!(checkpoint_next(&mut restored, |_| Ok(())), None);
     assert_eq!(restored.runtime.runs[1].status, "blocked");
-    assert!(
-        restored.runtime.runs[1]
-            .result
-            .contains("Send a new message")
-    );
+    assert!(restored.runtime.runs[1].result.contains("Send a new message"));
     assert_eq!(restored.runtime.runs[1].attempts.len(), 1);
     restored.chats[0].workspace = Some("first-artifact".into());
     restored.runtime.runs[1].status = "queued".into();
     assert_eq!(checkpoint_next(&mut restored, |_| Ok(())), Some(1));
     assert_eq!(
-        restored.runtime.runs[1].attempts[1]
-            .parent_artifact
-            .as_deref(),
+        restored.runtime.runs[1].attempts[1].parent_artifact.as_deref(),
         Some("first-artifact")
     );
 }
@@ -1776,10 +1726,7 @@ fn activity_updates_keep_attempt_identity_and_bounded_history() {
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Check build", "test").unwrap();
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let old_generation = state.runtime.runs[0].attempts[0]
-        .workspace_id
-        .clone()
-        .unwrap();
+    let old_generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     let run = state.runtime.runs[0].id.clone();
     let event = |id: usize, status: &str| crate::usage::Activity {
         id: id.to_string(),
@@ -1792,10 +1739,7 @@ fn activity_updates_keep_attempt_identity_and_bounded_history() {
     record_activity(&mut state, &run, event(0, "running"));
     record_activity(&mut state, &run, event(0, "completed"));
     assert_eq!(state.runtime.runs[0].attempts[0].activity.len(), 1);
-    assert_eq!(
-        state.runtime.runs[0].attempts[0].activity[0].status,
-        "completed"
-    );
+    assert_eq!(state.runtime.runs[0].attempts[0].activity[0].status, "completed");
     assert_eq!(state.chats[0].revision, revision + 2);
     for id in 1..70 {
         record_activity(&mut state, &run, event(id, "completed"));
@@ -1841,12 +1785,7 @@ fn failed_checkpoint_preserves_queue_and_dispatches_after_recovery() {
         )
         .unwrap();
     state.runtime.model = Some("later-model".into());
-    assert!(
-        checkpoint_next(&mut state, |_| Err(std::io::Error::other(
-            "simulated full disk"
-        )))
-        .is_none()
-    );
+    assert!(checkpoint_next(&mut state, |_| Err(std::io::Error::other("simulated full disk"))).is_none());
     assert_eq!(state.runtime.runs[0].status, "queued");
     assert!(state.runtime.runs[0].attempts.is_empty());
     assert_eq!(checkpoint_next(&mut state, |_| Ok(())), Some(0));
@@ -1872,8 +1811,7 @@ fn user_workspace_has_no_control_source_or_configuration() {
 }
 #[test]
 fn source_workspace_snapshots_required_build_inputs_and_explains_failures() {
-    let root =
-        std::env::temp_dir().join(format!("control-source-workspace-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("control-source-workspace-{}", std::process::id()));
     let source = root.join("source");
     fs::create_dir_all(source.join("src")).unwrap();
     fs::create_dir_all(source.join("hosting")).unwrap();
@@ -1933,7 +1871,8 @@ fn judge_dispatch_captures_readonly_policy_and_cannot_publish_a_development_head
         role: crate::delegation::Role::Judge,
         root: root.clone(),
         depth: 1,
-        parent: Some("parent".into()), bundle: None
+        parent: Some("parent".into()),
+        bundle: None,
     });
     state.chats[0].workspace = Some("immutable-source".into());
     let index = checkpoint_next(&mut state, |_| Ok(())).unwrap();
@@ -1952,10 +1891,7 @@ fn judge_dispatch_captures_readonly_policy_and_cannot_publish_a_development_head
         |_| Ok(()),
     )
     .unwrap();
-    assert_eq!(
-        state.chats[0].workspace.as_deref(),
-        Some("immutable-source")
-    );
+    assert_eq!(state.chats[0].workspace.as_deref(), Some("immutable-source"));
     assert!(state.chats[0].improve_workspace.is_none());
 }
 
@@ -1974,8 +1910,7 @@ fn live_offline_probe_passes_on_consecutive_runs() {
 #[ignore = "requires a locally pinned worker image and Linux container engine; no model calls"]
 fn live_judge_source_is_readonly_in_both_execution_adapters() {
     use std::os::unix::fs::MetadataExt;
-    let image =
-        std::env::var("CONTROL_QA_IMAGE").expect("Set CONTROL_QA_IMAGE to a pinned image ID");
+    let image = std::env::var("CONTROL_QA_IMAGE").expect("Set CONTROL_QA_IMAGE to a pinned image ID");
     assert!(runtime::pinned_image(&image));
     let root = std::env::temp_dir().join(format!(
         "control-judge-qa-{}-{}",
@@ -2012,27 +1947,29 @@ fn live_judge_source_is_readonly_in_both_execution_adapters() {
     .unwrap()
     .args(["codex", "sandbox", "-P", "control"]))
     .args(["--","bash","-c","set -eu; test \"$(cat /review/code.txt)\" = immutable-source; if printf poisoned > /review/code.txt 2>/dev/null; then exit 42; fi; printf scratch-ok > /workspace/result; printf tmp-ok > /tmp/result"]);
-    let output = crate::engine::isolation().spawn(&spec, control_isolation::Streams::new(control_isolation::Stream::Null, control_isolation::Stream::Piped, control_isolation::Stream::Piped)).unwrap().wait_with_output().unwrap();
+    let output = crate::engine::isolation()
+        .spawn(
+            &spec,
+            control_isolation::Streams::new(
+                control_isolation::Stream::Null,
+                control_isolation::Stream::Piped,
+                control_isolation::Stream::Piped,
+            ),
+        )
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
     assert!(
         output.status.success(),
         "Synthetic judge mount probe failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        fs::read_to_string(source.join("code.txt")).unwrap(),
-        "immutable-source"
-    );
-    assert_eq!(
-        fs::read_to_string(scratch.join("result")).unwrap(),
-        "scratch-ok"
-    );
+    assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "immutable-source");
+    assert_eq!(fs::read_to_string(scratch.join("result")).unwrap(), "scratch-ok");
     let result=crate::claude::shell_scoped(crate::engine::isolation(), &image,&format!("control-judge-claude-qa-{}",std::process::id()),"synthetic-qa-node",&source,"set -eu; if printf poisoned > /workspace/code.txt 2>/dev/null; then exit 42; fi; printf tmp-ok > /tmp/result; cat /workspace/code.txt",true).unwrap();
     assert_eq!(result["exit_code"], 0);
     assert_eq!(result["stdout"], "immutable-source");
-    assert_eq!(
-        fs::read_to_string(source.join("code.txt")).unwrap(),
-        "immutable-source"
-    );
+    assert_eq!(fs::read_to_string(source.join("code.txt")).unwrap(), "immutable-source");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -2054,19 +1991,13 @@ fn credentials_are_readonly_mounts_and_never_environment_values() {
     .unwrap();
     let args = crate::engine::golden::run(&spec);
     let args: Vec<_> = args.iter().map(String::as_str).collect();
+    assert!(args.contains(&"type=bind,src=/private/auth.json,dst=/home/agent/.codex/auth.json,readonly"));
+    assert!(!args.iter().any(|s| s.contains("API_KEY") || s.contains("ACCESS_TOKEN")));
     assert!(
-        args.contains(
-            &"type=bind,src=/private/auth.json,dst=/home/agent/.codex/auth.json,readonly"
-        )
+        !control_isolation::Docker::scrubbed()
+            .get_envs()
+            .any(|(name, _)| name == "CODEX_API_KEY" || name == "OPENAI_API_KEY" || name == "CODEX_ACCESS_TOKEN")
     );
-    assert!(
-        !args
-            .iter()
-            .any(|s| s.contains("API_KEY") || s.contains("ACCESS_TOKEN"))
-    );
-    assert!(!control_isolation::Docker::scrubbed().get_envs().any(|(name, _)| name == "CODEX_API_KEY"
-        || name == "OPENAI_API_KEY"
-        || name == "CODEX_ACCESS_TOKEN"));
     assert!(!args.contains(&"--privileged"));
     assert!(args.contains(&"--interactive"));
     assert!(!args.contains(&"--security-opt=seccomp=unconfined"));
@@ -2095,19 +2026,28 @@ fn a_usage_limit_reported_only_in_the_event_stream_is_named() {
         "{\"type\":\"turn.failed\",\"error\":{\"message\":\"You\u{2019}ve hit your usage limit.\"}}\n",
     );
     let (_, _, reported) = capture_codex(stream.as_bytes(), |_| {});
-    assert_eq!(reported, Some("The signed-in Codex account reached a usage or rate limit."));
+    assert_eq!(
+        reported,
+        Some("The signed-in Codex account reached a usage or rate limit.")
+    );
     // Only the provider's error events count, and unknown ones stay unknown.
     let reply = "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"we hit the usage limit of the quarry\"}}\n";
     assert_eq!(capture_codex(reply.as_bytes(), |_| {}).2, None);
-    assert_eq!(capture_codex("{\"type\":\"error\",\"message\":\"something odd\"}\n".as_bytes(), |_| {}).2, None);
+    assert_eq!(
+        capture_codex(
+            "{\"type\":\"error\",\"message\":\"something odd\"}\n".as_bytes(),
+            |_| {}
+        )
+        .2,
+        None
+    );
 }
 
 #[test]
 fn mounts_reject_csv_injection_and_reports_reject_symlinks() {
     assert!(mount_path(Path::new("/tmp/auth,readonly=false")).is_err());
     assert!(mount_path(Path::new("relative/auth.json")).is_err());
-    let root =
-        std::env::temp_dir().join(format!("control-credentials-test-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("control-credentials-test-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     let file = root.join("auth.json");
     fs::write(&file, b"harmless-canary").unwrap();
@@ -2130,7 +2070,10 @@ fn handoff_grace_is_bounded() {
     assert!(!handoff_grace_over(accepted, accepted));
     assert!(!handoff_grace_over(accepted, accepted + HANDOFF_GRACE / 2));
     assert!(handoff_grace_over(accepted, accepted + HANDOFF_GRACE));
-    assert!(!handoff_grace_over(accepted + HANDOFF_GRACE, accepted), "a clock that runs backwards is not over");
+    assert!(
+        !handoff_grace_over(accepted + HANDOFF_GRACE, accepted),
+        "a clock that runs backwards is not over"
+    );
 }
 #[path = "tests/cancel_profile.rs"]
 mod cancel_profile;
@@ -2146,46 +2089,111 @@ fn a_cut_off_turn_leaves_a_host_checkpoint_the_next_turn_resumes_from() {
     let id = state.runtime.runs[0].id.clone();
     let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
     // Tool activity lives on the running attempt, not the worker's copy.
-    state.runtime.runs[0].attempts[0].activity = (0..10).map(|i| crate::usage::Activity {
-        id: format!("call-{i}"), kind: "command_execution".into(), text: format!("cargo build step {i}"),
-        output: "o".repeat(500), status: if i == 9 { "failed" } else { "completed" }.into(),
-    }).collect();
+    state.runtime.runs[0].attempts[0].activity = (0..10)
+        .map(|i| crate::usage::Activity {
+            id: format!("call-{i}"),
+            kind: "command_execution".into(),
+            text: format!("cargo build step {i}"),
+            output: "o".repeat(500),
+            status: if i == 9 { "failed" } else { "completed" }.into(),
+        })
+        .collect();
     let mut attempt = state.runtime.runs[0].attempts[0].clone();
     attempt.activity.clear();
     attempt.termination = Some(Termination::TimedOut);
     attempt.elapsed_ms = 1_200_000;
     attempt.recovery = Some(crate::recovery::Candidate {
-        generation: generation.clone(), base: None, project: None, project_base: None,
-        cause: Termination::TimedOut, captured: true, error: None, draft: None,
+        generation: generation.clone(),
+        base: None,
+        project: None,
+        project_base: None,
+        cause: Termination::TimedOut,
+        captured: true,
+        error: None,
+        draft: None,
     });
     let timed_out = Err(("failed", "Timed out after 1200 s".into()));
     // A failed save leaves no note behind: it is part of the finish transaction.
-    assert!(commit(&mut state, &id, Action::Task, attempt.clone(), timed_out.clone(), false, |_| Err(std::io::Error::other("disk full"))).is_err());
+    assert!(
+        commit(
+            &mut state,
+            &id,
+            Action::Task,
+            attempt.clone(),
+            timed_out.clone(),
+            false,
+            |_| Err(std::io::Error::other("disk full"))
+        )
+        .is_err()
+    );
     assert!(state.chats[0].continuity.as_ref().unwrap().interrupted.is_none());
     commit(&mut state, &id, Action::Task, attempt, timed_out, false, |_| Ok(())).unwrap();
     let note = state.chats[0].continuity.as_ref().unwrap().interrupted.clone().unwrap();
-    assert_eq!((note.generation.as_str(), note.cause, note.captured, note.elapsed_seconds), (generation.as_str(), Termination::TimedOut, true, 1200));
+    assert_eq!(
+        (
+            note.generation.as_str(),
+            note.cause,
+            note.captured,
+            note.elapsed_seconds
+        ),
+        (generation.as_str(), Termination::TimedOut, true, 1200)
+    );
     assert_eq!(note.calls.len(), 8);
-    assert_eq!((note.calls[0].text.as_str(), note.calls[7].status.as_str()), ("cargo build step 2", "failed"));
+    assert_eq!(
+        (note.calls[0].text.as_str(), note.calls[7].status.as_str()),
+        ("cargo build step 2", "failed")
+    );
     assert_eq!(note.calls[0].output.chars().count(), 201, "outputs are bounded");
     // No head or cursor moved; the next turn's input carries the note and the exact restore call.
     assert!(state.chats[0].workspace.is_none());
     assert!(state.chats[0].continuity.as_ref().unwrap().working.is_none());
     crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
     let next = checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let input = crate::turn_context::input(state.runtime.runs[next].attempts.last().unwrap()).unwrap().unwrap();
+    let input = crate::turn_context::input(state.runtime.runs[next].attempts.last().unwrap())
+        .unwrap()
+        .unwrap();
     assert!(input.contains("Host checkpoint (written by Control"), "{input}");
-    assert!(input.contains(&format!("control_recovery {{\"generation\":\"{generation}\",\"restore\":true}}")), "{input}");
+    assert!(
+        input.contains(&format!(
+            "control_recovery {{\"generation\":\"{generation}\",\"restore\":true}}"
+        )),
+        "{input}"
+    );
     assert!(input.contains("cargo build step 9"), "{input}");
     // A published handoff clears it.
     let next_id = state.runtime.runs[next].id.clone();
     let mut attempt = state.runtime.runs[next].attempts[0].clone();
     attempt.artifact = Some("checkpoint".into());
-    state.runtime.runs[next].attempts[0].turn_mailbox.as_mut().unwrap().stage("resumed".into(), Handoff {
-        base_revision: 0, payload: control_context::working_state::Payload { subgoal: "Finish".into(), ..Default::default() },
-        processed: vec![], resynchronised: vec![], disposition: Disposition::Done, progress: None,
-    }, 0).unwrap();
-    commit(&mut state, &next_id, Action::Task, attempt, Ok("Resumed".into()), false, |_| Ok(())).unwrap();
+    state.runtime.runs[next].attempts[0]
+        .turn_mailbox
+        .as_mut()
+        .unwrap()
+        .stage(
+            "resumed".into(),
+            Handoff {
+                base_revision: 0,
+                payload: control_context::working_state::Payload {
+                    subgoal: "Finish".into(),
+                    ..Default::default()
+                },
+                processed: vec![],
+                resynchronised: vec![],
+                disposition: Disposition::Done,
+                progress: None,
+            },
+            0,
+        )
+        .unwrap();
+    commit(
+        &mut state,
+        &next_id,
+        Action::Task,
+        attempt,
+        Ok("Resumed".into()),
+        false,
+        |_| Ok(()),
+    )
+    .unwrap();
     let continuity = state.chats[0].continuity.as_ref().unwrap();
     assert!(continuity.working.is_some() && continuity.interrupted.is_none());
 }
@@ -2198,28 +2206,46 @@ fn a_local_turn_stopped_at_its_step_cap_leaves_a_host_checkpoint() {
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let id = state.runtime.runs[0].id.clone();
     state.runtime.runs[0].attempts[0].activity = vec![crate::usage::Activity {
-        id: "local-1-0".into(), kind: "mcp_tool_call".into(), text: "control_service_exec".into(),
-        output: "curl: (6) Could not resolve host: files.example".into(), status: "completed".into(),
+        id: "local-1-0".into(),
+        kind: "mcp_tool_call".into(),
+        text: "control_service_exec".into(),
+        output: "curl: (6) Could not resolve host: files.example".into(),
+        status: "completed".into(),
     }];
     let mut attempt = state.runtime.runs[0].attempts[0].clone();
     attempt.activity.clear();
     // Set by the local loop at its cap; the worker's finish keeps it.
     attempt.termination = Some(Termination::StepLimit);
     // The latest reasoning, carried verbatim (its tail) into the checkpoint.
-    attempt.interrupted_reasoning = Some(format!("{}\nNext: request egress for files.example, then   retry the download.", "Earlier planning. ".repeat(200)));
+    attempt.interrupted_reasoning = Some(format!(
+        "{}\nNext: request egress for files.example, then   retry the download.",
+        "Earlier planning. ".repeat(200)
+    ));
     let capped = Err(("failed", "Local agent reached its 64-step limit".into()));
     commit(&mut state, &id, Action::Task, attempt, capped, false, |_| Ok(())).unwrap();
     assert!(crate::attempt_control::cut_off(&state.runtime.runs[0]));
-    assert!(state.runtime.runs[0].attempts[0].interrupted_reasoning.is_none(), "only the checkpoint keeps it");
+    assert!(
+        state.runtime.runs[0].attempts[0].interrupted_reasoning.is_none(),
+        "only the checkpoint keeps it"
+    );
     let note = state.chats[0].continuity.as_ref().unwrap().interrupted.clone().unwrap();
     assert_eq!(note.cause, Termination::StepLimit);
     let reasoning = note.reasoning.clone().unwrap();
     assert_eq!(reasoning.chars().count(), crate::turn_context::REASONING_CHARS);
-    assert!(reasoning.starts_with('…') && reasoning.ends_with("Next: request egress for files.example, then retry the download."), "{reasoning}");
+    assert!(
+        reasoning.starts_with('…')
+            && reasoning.ends_with("Next: request egress for files.example, then retry the download."),
+        "{reasoning}"
+    );
     crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
     let next = checkpoint_next(&mut state, |_| Ok(())).unwrap();
-    let input = crate::turn_context::input(state.runtime.runs[next].attempts.last().unwrap()).unwrap().unwrap();
+    let input = crate::turn_context::input(state.runtime.runs[next].attempts.last().unwrap())
+        .unwrap()
+        .unwrap();
     assert!(input.contains("your previous turn used all its model steps"), "{input}");
     assert!(input.contains("Could not resolve host: files.example"), "{input}");
-    assert!(input.contains("Your reasoning when it stopped, verbatim: <<…") && input.contains("continue that plan"), "{input}");
+    assert!(
+        input.contains("Your reasoning when it stopped, verbatim: <<…") && input.contains("continue that plan"),
+        "{input}"
+    );
 }

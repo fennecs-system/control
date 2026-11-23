@@ -17,11 +17,19 @@ fn the_container_mounts_the_login_read_only_and_keeps_grok_state_on_a_tmpfs() {
     let auth = login("container");
     let args = args(&container("control-run-1", "node", &auth, "sha256:img").unwrap());
     let joined = args.join(" ");
-    assert!(joined.contains(&format!("type=bind,src={},dst=/home/agent/.grok/auth.json,readonly", auth.display())));
+    assert!(joined.contains(&format!(
+        "type=bind,src={},dst=/home/agent/.grok/auth.json,readonly",
+        auth.display()
+    )));
     assert!(joined.contains("--tmpfs /home/agent/.grok:rw,nosuid,"));
     assert!(joined.contains("--env GROK_HOME=/home/agent/.grok"));
     // The shared CLI isolation: immutable root, no capabilities, no new privileges.
-    for flag in ["--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pull=never"] {
+    for flag in [
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pull=never",
+    ] {
         assert!(args.iter().any(|a| a == flag), "{flag}");
     }
     assert!(!joined.contains("XAI_API_KEY"));
@@ -32,7 +40,13 @@ fn the_container_mounts_the_login_read_only_and_keeps_grok_state_on_a_tmpfs() {
 fn every_run_removes_groks_own_tools_and_a_text_call_the_mcp_tools_too() {
     // An `mcp__` allowlist entry names no built-in tool and is never unknown.
     assert!(NO_TOOLS.starts_with("mcp__"));
-    for flag in ["--always-approve", "--no-subagents", "--disable-web-search", "--no-memory", "--no-auto-update"] {
+    for flag in [
+        "--always-approve",
+        "--no-subagents",
+        "--disable-web-search",
+        "--no-memory",
+        "--no-auto-update",
+    ] {
         assert!(FLAGS.contains(&flag), "{flag}");
     }
     assert_eq!(&FLAGS[..2], ["--output-format", "streaming-json"]);
@@ -42,9 +56,18 @@ fn every_run_removes_groks_own_tools_and_a_text_call_the_mcp_tools_too() {
 
 #[test]
 fn a_known_failure_gets_the_fixed_message_and_an_unknown_one_groks_own_ending() {
-    assert_eq!(diagnose(Some("Grok ended with an error: Rate limit exceeded."), b""), "The signed-in Grok account reached a usage or rate limit.");
-    assert_eq!(diagnose(Some("Grok ended with max_tokens."), b""), "Grok ended with max_tokens.");
-    assert_eq!(diagnose(None, b"error: 401 Unauthorized"), "Grok account authentication was rejected. Refresh the host login and submit a new run.");
+    assert_eq!(
+        diagnose(Some("Grok ended with an error: Rate limit exceeded."), b""),
+        "The signed-in Grok account reached a usage or rate limit."
+    );
+    assert_eq!(
+        diagnose(Some("Grok ended with max_tokens."), b""),
+        "Grok ended with max_tokens."
+    );
+    assert_eq!(
+        diagnose(None, b"error: 401 Unauthorized"),
+        "Grok account authentication was rejected. Refresh the host login and submit a new run."
+    );
     assert!(diagnose(None, b"").starts_with("Grok stopped without success."));
 }
 
@@ -54,7 +77,10 @@ fn the_backend_is_selected_by_its_prefix_and_treated_like_the_shared_default() {
     assert!(Backend::hosted().any(|b| b == Backend::Grok));
     // Control's shared framing and captured turn context, not its own prompt.
     assert!(!Grok.own_prompt() && Grok.host_shell() && !Grok.review_mount());
-    assert_eq!((Grok.mailbox(), Grok.probe_workspace()), (Some("grok-mailbox"), "grok-isolation-probe"));
+    assert_eq!(
+        (Grok.mailbox(), Grok.probe_workspace()),
+        (Some("grok-mailbox"), "grok-isolation-probe")
+    );
     assert_eq!(serde_json::to_string(&Backend::Grok).unwrap(), "\"grok\"");
 }
 
@@ -65,13 +91,43 @@ fn grok_launch_vectors_are_pinned() {
     let root = auth.parent().unwrap().to_path_buf();
     let meta = fs::symlink_metadata(&auth).unwrap();
     let (uid, gid) = (meta.uid().to_string(), meta.gid().to_string());
-    let values = [("root", root.to_str().unwrap()), ("uid", uid.as_str()), ("gid", gid.as_str())];
+    let values = [
+        ("root", root.to_str().unwrap()),
+        ("uid", uid.as_str()),
+        ("gid", gid.as_str()),
+    ];
     let workspace = root.join("workspace");
-    let call = crate::backend::TextCall { image: "sha256:img", name: "control-summary-1", workspace: &workspace, node: "node-1", model: "grok-4.7" };
+    let call = crate::backend::TextCall {
+        image: "sha256:img",
+        name: "control-summary-1",
+        workspace: &workspace,
+        node: "node-1",
+        model: "grok-4.7",
+    };
     pin_equivalent(&run(&text_container(&call, &auth).unwrap()), &fill(TEXT, &values));
-    let turn = turn_container("control-run-1", "node-1", &auth, &root.join("grok-config.toml"), &root.join("grok-prompt"), &root.join(MAILBOX), "sha256:img", "grok-4.7").unwrap();
+    let turn = turn_container(
+        "control-run-1",
+        "node-1",
+        &auth,
+        &root.join("grok-config.toml"),
+        &root.join("grok-prompt"),
+        &root.join(MAILBOX),
+        "sha256:img",
+        "grok-4.7",
+    )
+    .unwrap();
     pin_equivalent(&run(&turn), &fill(TURN, &values));
-    let login = login_container("control-grok-login-7", "node-1", User { uid: meta.uid(), gid: meta.gid() }, &root, "sha256:img").unwrap();
+    let login = login_container(
+        "control-grok-login-7",
+        "node-1",
+        User {
+            uid: meta.uid(),
+            gid: meta.gid(),
+        },
+        &root,
+        "sha256:img",
+    )
+    .unwrap();
     pin_equivalent(&run(&login), &fill(LOGIN, &values));
     fs::remove_dir_all(root).unwrap();
 }

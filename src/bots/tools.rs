@@ -7,8 +7,14 @@ use std::io;
 
 pub enum BotCall {
     Pause,
-    Request { chat_id: String, every_minutes: Option<u64>, room: bool },
-    Status { chat_id: Option<String> },
+    Request {
+        chat_id: String,
+        every_minutes: Option<u64>,
+        room: bool,
+    },
+    Status {
+        chat_id: Option<String>,
+    },
 }
 pub trait BotOps {
     fn bot(&self, attempt: &AttemptRef<'_>, call: BotCall) -> io::Result<Value>;
@@ -59,9 +65,15 @@ fn decode(name: &str, args: &Value) -> io::Result<BotCall> {
         chat_id: Option<String>,
     }
     match name {
-        "control_bot_pause" => serde_json::from_value::<Pause>(args.clone()).map(|_| BotCall::Pause).map_err(|_| io::Error::other("control_bot_pause takes no arguments")),
+        "control_bot_pause" => serde_json::from_value::<Pause>(args.clone())
+            .map(|_| BotCall::Pause)
+            .map_err(|_| io::Error::other("control_bot_pause takes no arguments")),
         "control_bot_request" => serde_json::from_value::<Request>(args.clone())
-            .map(|r| BotCall::Request { chat_id: r.chat_id, every_minutes: r.every_minutes, room: r.room })
+            .map(|r| BotCall::Request {
+                chat_id: r.chat_id,
+                every_minutes: r.every_minutes,
+                room: r.room,
+            })
             .map_err(|_| io::Error::other("Expected chat_id, optional every_minutes (1–1440) and room")),
         "control_bot_status" => serde_json::from_value::<Status>(args.clone())
             .map(|s| BotCall::Status { chat_id: s.chat_id })

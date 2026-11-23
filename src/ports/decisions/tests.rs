@@ -1,4 +1,3 @@
-
 use super::*;
 fn approved() -> (State, String) {
     let (mut state, run, chat) = super::super::tests::fixture();
@@ -31,29 +30,43 @@ fn dispatcher_wakes_only_after_acknowledged_checkpoint_and_never_on_replay() {
     let checkpointed = std::cell::Cell::new(false);
     let wakes = std::cell::Cell::new(0);
     let before = serde_json::to_vec(&state).unwrap();
-    assert!(advance_with_wake(&mut state, |_| Err(io::Error::other("disk full")), || wakes.set(wakes.get() + 1)).is_err());
+    assert!(
+        advance_with_wake(
+            &mut state,
+            |_| Err(io::Error::other("disk full")),
+            || wakes.set(wakes.get() + 1)
+        )
+        .is_err()
+    );
     assert_eq!(wakes.get(), 0);
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    advance_with_wake(&mut state, |state| {
-        assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
-        assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::PortDecision);
-        checkpointed.set(true);
-        Ok(())
-    }, || {
-        assert!(checkpointed.get());
-        wakes.set(wakes.get() + 1);
-    }).unwrap();
+    advance_with_wake(
+        &mut state,
+        |state| {
+            assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
+            assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::PortDecision);
+            checkpointed.set(true);
+            Ok(())
+        },
+        || {
+            assert!(checkpointed.get());
+            wakes.set(wakes.get() + 1);
+        },
+    )
+    .unwrap();
     assert_eq!(wakes.get(), 1);
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    advance_with_wake(&mut restored, |_| panic!("no replay checkpoint"), || panic!("no replay wake")).unwrap();
+    advance_with_wake(
+        &mut restored,
+        |_| panic!("no replay checkpoint"),
+        || panic!("no replay wake"),
+    )
+    .unwrap();
 }
 #[test]
 fn approval_waits_for_turn_and_wakes_once_with_captured_provider() {
     let (mut state, chat) = approved();
-    advance(&mut state, |_| {
-        panic!("active turn must not queue another run")
-    })
-    .unwrap();
+    advance(&mut state, |_| panic!("active turn must not queue another run")).unwrap();
     state.runtime.runs[0].status = "completed".into();
     state.runtime.runs[0].model = Some("captured-model".into());
     let before = serde_json::to_vec(&state).unwrap();
@@ -61,20 +74,11 @@ fn approval_waits_for_turn_and_wakes_once_with_captured_provider() {
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 2);
-    assert_eq!(
-        state.runtime.runs[1].chat_id.as_deref(),
-        Some(chat.as_str())
-    );
-    assert_eq!(
-        state.runtime.runs[1].model.as_deref(),
-        Some("captured-model")
-    );
+    assert_eq!(state.runtime.runs[1].chat_id.as_deref(), Some(chat.as_str()));
+    assert_eq!(state.runtime.runs[1].model.as_deref(), Some("captured-model"));
     assert_eq!(state.runtime.runs[1].kind, RunKind::PortDecision);
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    advance(&mut restored, |_| {
-        panic!("acknowledged decisions must not replay")
-    })
-    .unwrap();
+    advance(&mut restored, |_| panic!("acknowledged decisions must not replay")).unwrap();
     assert_eq!(restored.runtime.runs.len(), 2);
 }
 #[test]
@@ -101,13 +105,7 @@ fn bot_wake_turns_do_not_supersede_approvals() {
 fn newer_human_instruction_suppresses_delayed_approval_wake() {
     let (mut state, chat) = approved();
     state.runtime.runs[0].status = "completed".into();
-    crate::chat::send(
-        &mut state,
-        &chat,
-        "Stop the playtest and leave resources alone",
-        "test",
-    )
-    .unwrap();
+    crate::chat::send(&mut state, &chat, "Stop the playtest and leave resources alone", "test").unwrap();
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     let count = state.runtime.runs.len();
     advance(&mut state, |_| Ok(())).unwrap();
@@ -139,10 +137,7 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
     state.runtime.runs.push(continuation);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
-    assert_eq!(
-        state.runtime.runs[2].chat_id.as_deref(),
-        Some(chat.as_str())
-    );
+    assert_eq!(state.runtime.runs[2].chat_id.as_deref(), Some(chat.as_str()));
     assert_eq!(state.runtime.runs[2].kind, RunKind::PortDecision);
 }
 #[test]
@@ -152,12 +147,10 @@ fn requests_from_a_resumed_turn_wake_the_conversation_again() {
     advance(&mut state, |_| Ok(())).unwrap();
     let resumed = state.runtime.runs.len() - 1;
     state.runtime.runs[resumed].status = "completed".into();
-    state.runtime.runs[resumed]
-        .attempts
-        .push(crate::usage::Attempt {
-            workspace_id: Some("attempt-b".into()),
-            ..Default::default()
-        });
+    state.runtime.runs[resumed].attempts.push(crate::usage::Attempt {
+        workspace_id: Some("attempt-b".into()),
+        ..Default::default()
+    });
     let mut second = state.ports[0].clone();
     second.id = "port-second".to_owned().try_into().unwrap();
     second.origin_run = state.runtime.runs[resumed].id.clone();
@@ -190,12 +183,7 @@ fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
     let mut chat = lead.clone();
     for (depth, id) in [(1, "helper"), (2, "coordinator")] {
         let child = crate::chat::create(&mut state);
-        state
-            .chats
-            .iter_mut()
-            .find(|s| s.id == child)
-            .unwrap()
-            .parent_chat = Some(chat.clone());
+        state.chats.iter_mut().find(|s| s.id == child).unwrap().parent_chat = Some(chat.clone());
         let mut run = state.runtime.runs[0].clone();
         run.id = id.into();
         run.kind = crate::runtime::RunKind::Spawned;
@@ -204,7 +192,8 @@ fn requests_from_a_grandchild_spawned_by_a_later_turn_resume_the_lead() {
             role: crate::delegation::Role::Worker,
             root: root.clone(),
             depth,
-            parent: Some(parent.clone()), bundle: None
+            parent: Some(parent.clone()),
+            bundle: None,
         });
         run.attempts = vec![crate::usage::Attempt {
             workspace_id: Some(format!("{id}-attempt")),
@@ -243,10 +232,7 @@ fn waiting_chat_does_not_starve_an_independent_ready_callback() {
     state.services.extend(other.services);
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), 3);
-    assert_eq!(
-        state.runtime.runs[2].chat_id.as_deref(),
-        Some(chat.as_str())
-    );
+    assert_eq!(state.runtime.runs[2].chat_id.as_deref(), Some(chat.as_str()));
     assert!(!state.ports[0].decision.as_ref().unwrap().acknowledged);
 }
 #[test]
@@ -267,14 +253,26 @@ fn denial_wakes_without_granting_access_and_cancelled_requests_never_wake() {
 #[test]
 fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     let (mut state, run, chat) = super::super::tests::fixture();
-    admit(&mut state, &run, "attempt-a", "notice", Input {
-        service_id: "svc-a".to_owned().try_into().unwrap(),
-        name: "download".to_owned().try_into().unwrap(),
-        direction: Direction::Egress,
-        service_port: std::num::NonZeroU16::new(3128).unwrap(),
-        target: Some(Endpoint { host: "files.example".into(), port: std::num::NonZeroU16::new(443).unwrap() }),
-        peer_port_id: None,
-    }, "node-a".to_owned().try_into().unwrap(), |_| Ok(())).unwrap();
+    admit(
+        &mut state,
+        &run,
+        "attempt-a",
+        "notice",
+        Input {
+            service_id: "svc-a".to_owned().try_into().unwrap(),
+            name: "download".to_owned().try_into().unwrap(),
+            direction: Direction::Egress,
+            service_port: std::num::NonZeroU16::new(3128).unwrap(),
+            target: Some(Endpoint {
+                host: "files.example".into(),
+                port: std::num::NonZeroU16::new(443).unwrap(),
+            }),
+            peer_port_id: None,
+        },
+        "node-a".to_owned().try_into().unwrap(),
+        |_| Ok(()),
+    )
+    .unwrap();
     // The requesting turn spent its model steps retrying while the request was pending.
     state.runtime.runs[0].status = "failed".into();
     state.runtime.runs[0].attempts[0].termination = Some(crate::attempt_control::Termination::StepLimit);
@@ -283,9 +281,20 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     state.ports[0].decision = Some(Receipt::pending(true));
     advance(&mut state, |_| Ok(())).unwrap();
     let wake = state.runtime.runs.last().unwrap();
-    assert_eq!((wake.kind, wake.chat_id.as_deref()), (RunKind::PortDecision, Some(chat.as_str())));
-    assert!(wake.objective.contains("download") && wake.objective.contains("approved"), "{}", wake.objective);
-    assert!(wake.objective.contains("HTTPS_PROXY") && wake.objective.contains("curl -fsSLO https://files.example/…"), "{}", wake.objective);
+    assert_eq!(
+        (wake.kind, wake.chat_id.as_deref()),
+        (RunKind::PortDecision, Some(chat.as_str()))
+    );
+    assert!(
+        wake.objective.contains("download") && wake.objective.contains("approved"),
+        "{}",
+        wake.objective
+    );
+    assert!(
+        wake.objective.contains("HTTPS_PROXY") && wake.objective.contains("curl -fsSLO https://files.example/…"),
+        "{}",
+        wake.objective
+    );
     assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
     // A denial wakes a timed-out requester the same way, without relay instructions.
     let (mut denied, _) = approved();
@@ -297,7 +306,11 @@ fn approving_egress_wakes_a_chat_whose_turn_was_cut_off_with_the_relay_line() {
     advance(&mut denied, |_| Ok(())).unwrap();
     let wake = denied.runtime.runs.last().unwrap();
     assert_eq!(wake.kind, RunKind::PortDecision);
-    assert!(wake.objective.contains("denied") && !wake.objective.contains("HTTPS_PROXY"), "{}", wake.objective);
+    assert!(
+        wake.objective.contains("denied") && !wake.objective.contains("HTTPS_PROXY"),
+        "{}",
+        wake.objective
+    );
     // An ordinary failure (no host checkpoint) still does not wake.
     let (mut failed, _) = approved();
     failed.runtime.runs[0].status = "failed".into();
@@ -317,9 +330,17 @@ fn a_decision_read_back_after_a_restart_never_queues_a_turn() {
     let (mut state, _) = approved();
     cut_off(&mut state);
     let mut restarted: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    advance_with_wake(&mut restarted, |_| panic!("nothing to checkpoint"), || panic!("no wake after a restart")).unwrap();
+    advance_with_wake(
+        &mut restarted,
+        |_| panic!("nothing to checkpoint"),
+        || panic!("no wake after a restart"),
+    )
+    .unwrap();
     assert_eq!(restarted.runtime.runs.len(), 1);
-    assert!(restarted.ports[0].decision.as_ref().unwrap().acknowledged, "retired once, carried by the next save");
+    assert!(
+        restarted.ports[0].decision.as_ref().unwrap().acknowledged,
+        "retired once, carried by the next save"
+    );
     // The same decision in the process that made it resumes the requester.
     advance(&mut state, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::PortDecision);
@@ -335,14 +356,26 @@ fn a_chat_the_operator_cancelled_is_not_resumed_by_a_decision() {
     assert!(state.ports[0].decision.as_ref().unwrap().acknowledged);
     // Decided after the cancellation, on a request still pending from before it.
     let (mut state, run, chat) = super::super::tests::fixture();
-    admit(&mut state, &run, "attempt-a", "notice", Input {
-        service_id: "svc-a".to_owned().try_into().unwrap(),
-        name: "download".to_owned().try_into().unwrap(),
-        direction: Direction::Egress,
-        service_port: std::num::NonZeroU16::new(3128).unwrap(),
-        target: Some(Endpoint { host: "files.example".into(), port: std::num::NonZeroU16::new(443).unwrap() }),
-        peer_port_id: None,
-    }, "node-a".to_owned().try_into().unwrap(), |_| Ok(())).unwrap();
+    admit(
+        &mut state,
+        &run,
+        "attempt-a",
+        "notice",
+        Input {
+            service_id: "svc-a".to_owned().try_into().unwrap(),
+            name: "download".to_owned().try_into().unwrap(),
+            direction: Direction::Egress,
+            service_port: std::num::NonZeroU16::new(3128).unwrap(),
+            target: Some(Endpoint {
+                host: "files.example".into(),
+                port: std::num::NonZeroU16::new(443).unwrap(),
+            }),
+            peer_port_id: None,
+        },
+        "node-a".to_owned().try_into().unwrap(),
+        |_| Ok(()),
+    )
+    .unwrap();
     cut_off(&mut state);
     crate::chat::send(&mut state, &chat, "/cancel all", "test").unwrap();
     state.ports[0].status = Status::Approved;

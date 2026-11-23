@@ -85,7 +85,12 @@ use crate::config::unix_seconds as now;
 /// [`MAX_KEYS`] finite numbers under short plain names. Earlier lines are free
 /// diagnostics.
 pub fn parse(output: &str) -> Result<BTreeMap<String, f64>, String> {
-    let line = output.lines().rev().map(str::trim).find(|line| !line.is_empty()).ok_or("The probe printed nothing")?;
+    let line = output
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or("The probe printed nothing")?;
     if line.len() > MAX_LINE_BYTES {
         return Err(format!("The probe's last line exceeds {MAX_LINE_BYTES} bytes"));
     }
@@ -94,15 +99,23 @@ pub fn parse(output: &str) -> Result<BTreeMap<String, f64>, String> {
     if object.is_empty() || object.len() > MAX_KEYS {
         return Err(format!("A score needs 1 to {MAX_KEYS} numeric fields"));
     }
-    object.into_iter().map(|(key, value)| {
-        let named = !key.is_empty() && key.chars().count() <= MAX_KEY_CHARS
-            && key.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
-        match value.as_f64().filter(|number| number.is_finite()) {
-            Some(number) if named => Ok((key, number)),
-            _ if !named => Err(format!("Score names are 1 to {MAX_KEY_CHARS} letters, digits, '_', '-' or '.'")),
-            _ => Err(format!("Score field {key} is not a number")),
-        }
-    }).collect()
+    object
+        .into_iter()
+        .map(|(key, value)| {
+            let named = !key.is_empty()
+                && key.chars().count() <= MAX_KEY_CHARS
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+            match value.as_f64().filter(|number| number.is_finite()) {
+                Some(number) if named => Ok((key, number)),
+                _ if !named => Err(format!(
+                    "Score names are 1 to {MAX_KEY_CHARS} letters, digits, '_', '-' or '.'"
+                )),
+                _ => Err(format!("Score field {key} is not a number")),
+            }
+        })
+        .collect()
 }
 
 /// Appends a sample, thinning the older half when the series is full.
@@ -123,7 +136,10 @@ pub fn push(samples: &mut VecDeque<Sample>, sample: Sample) {
 /// increase triggers a milestone sample.
 pub fn milestones(state: &State, chat: &str) -> u64 {
     let teams = Teams::new(state);
-    teams.root(chat).and_then(|root| teams.milestones(state, &[root]).get(root).copied()).unwrap_or(0)
+    teams
+        .root(chat)
+        .and_then(|root| teams.milestones(state, &[root]).get(root).copied())
+        .unwrap_or(0)
 }
 /// Each chat's team root, computed once per pass: one walk over the chats and
 /// one over runs and claims, however many probes there are.
@@ -132,11 +148,27 @@ struct Teams<'a> {
 }
 impl<'a> Teams<'a> {
     fn new(state: &'a State) -> Self {
-        let parents = state.chats.iter().map(|chat| (chat.id.as_str(), chat.parent_chat.as_deref())).collect::<HashMap<_, _>>();
-        let roots = parents.keys().map(|&id| {
-            let root = std::iter::successors(Some(id), |id| parents.get(id).copied().flatten().filter(|parent| parents.contains_key(parent))).take(64).last().unwrap_or(id);
-            (id, root)
-        }).collect();
+        let parents = state
+            .chats
+            .iter()
+            .map(|chat| (chat.id.as_str(), chat.parent_chat.as_deref()))
+            .collect::<HashMap<_, _>>();
+        let roots = parents
+            .keys()
+            .map(|&id| {
+                let root = std::iter::successors(Some(id), |id| {
+                    parents
+                        .get(id)
+                        .copied()
+                        .flatten()
+                        .filter(|parent| parents.contains_key(parent))
+                })
+                .take(64)
+                .last()
+                .unwrap_or(id);
+                (id, root)
+            })
+            .collect();
         Self { roots }
     }
     fn root(&self, chat: &str) -> Option<&'a str> {
@@ -145,11 +177,27 @@ impl<'a> Teams<'a> {
     /// Milestones of the teams rooted at `wanted`.
     fn milestones(&self, state: &State, wanted: &[&'a str]) -> HashMap<&'a str, u64> {
         let mut counts = wanted.iter().map(|root| (*root, 0)).collect::<HashMap<_, u64>>();
-        let mut count = |chat: &str| if let Some(total) = self.root(chat).and_then(|root| counts.get_mut(root)) { *total += 1 };
-        for run in state.runtime.runs.iter().filter(|run| run.status == "completed" && !run.attempts.is_empty()) {
-            if let Some(chat) = run.chat_id.as_deref() { count(chat) }
+        let mut count = |chat: &str| {
+            if let Some(total) = self.root(chat).and_then(|root| counts.get_mut(root)) {
+                *total += 1
+            }
+        };
+        for run in state
+            .runtime
+            .runs
+            .iter()
+            .filter(|run| run.status == "completed" && !run.attempts.is_empty())
+        {
+            if let Some(chat) = run.chat_id.as_deref() {
+                count(chat)
+            }
         }
-        for claim in state.collective.claims.iter().filter(|claim| claim.status == crate::rooms::claims::Status::Done) {
+        for claim in state
+            .collective
+            .claims
+            .iter()
+            .filter(|claim| claim.status == crate::rooms::claims::Status::Done)
+        {
             count(&claim.owner);
         }
         counts
@@ -169,26 +217,56 @@ fn due(state: &State, time: u64) -> Vec<Due> {
         return Vec::new();
     }
     let teams = Teams::new(state);
-    let roots = state.scores.iter().filter_map(|probe| teams.root(&probe.chat)).collect::<Vec<_>>();
+    let roots = state
+        .scores
+        .iter()
+        .filter_map(|probe| teams.root(&probe.chat))
+        .collect::<Vec<_>>();
     let counts = teams.milestones(state, &roots);
-    state.scores.iter().filter_map(|probe| {
-        let milestones = teams.root(&probe.chat).and_then(|root| counts.get(root)).copied().unwrap_or(0);
-        let trigger = if time >= probe.last_unix.saturating_add(probe.interval_seconds) {
-            Trigger::Schedule
-        } else if milestones > probe.milestones && time >= probe.last_unix.saturating_add(MILESTONE_GAP) {
-            Trigger::Milestone
-        } else {
-            return None;
-        };
-        let target = crate::services::probe_target(state, &probe.service, |service| service.resource.generation.get() == probe.generation)
+    state
+        .scores
+        .iter()
+        .filter_map(|probe| {
+            let milestones = teams
+                .root(&probe.chat)
+                .and_then(|root| counts.get(root))
+                .copied()
+                .unwrap_or(0);
+            let trigger = if time >= probe.last_unix.saturating_add(probe.interval_seconds) {
+                Trigger::Schedule
+            } else if milestones > probe.milestones && time >= probe.last_unix.saturating_add(MILESTONE_GAP) {
+                Trigger::Milestone
+            } else {
+                return None;
+            };
+            let target = crate::services::probe_target(state, &probe.service, |service| {
+                service.resource.generation.get() == probe.generation
+            })
             .map(|service| (service, probe.command.clone()))
-            .ok_or_else(|| "The probe's service has stopped or was replaced; declare the probe again with a running service.".to_owned());
-        Some(Due { chat: probe.chat.clone(), name: probe.name.clone(), trigger, milestones, target })
-    }).collect()
+            .ok_or_else(|| {
+                "The probe's service has stopped or was replaced; declare the probe again with a running service."
+                    .to_owned()
+            });
+            Some(Due {
+                chat: probe.chat.clone(),
+                name: probe.name.clone(),
+                trigger,
+                milestones,
+                target,
+            })
+        })
+        .collect()
 }
 /// Runs the probe command once, under a reap marker unique to this sample.
-fn sample(service: &crate::services::Service, command: &str, timeout: Duration) -> Result<BTreeMap<String, f64>, String> {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+fn sample(
+    service: &crate::services::Service,
+    command: &str,
+    timeout: Duration,
+) -> Result<BTreeMap<String, f64>, String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let owner = format!("score\u{0}{}\u{0}{nonce}", service.resource.id.as_str());
     let output = crate::services::probe(service, command, &owner, timeout).map_err(|error| error.to_string())?;
     if output.timed_out || output.exit_code.is_none() {
@@ -200,14 +278,35 @@ fn sample(service: &crate::services::Service, command: &str, timeout: Duration) 
     parse(&output.text)
 }
 /// Records one sampling attempt. Returns whether the probe still exists.
-fn apply(state: &mut State, chat: &str, name: &str, time: u64, trigger: Trigger, milestones: u64, outcome: Result<BTreeMap<String, f64>, String>) -> bool {
-    let Some(probe) = state.scores.iter_mut().find(|probe| probe.chat == chat && probe.name == name) else { return false };
+fn apply(
+    state: &mut State,
+    chat: &str,
+    name: &str,
+    time: u64,
+    trigger: Trigger,
+    milestones: u64,
+    outcome: Result<BTreeMap<String, f64>, String>,
+) -> bool {
+    let Some(probe) = state
+        .scores
+        .iter_mut()
+        .find(|probe| probe.chat == chat && probe.name == name)
+    else {
+        return false;
+    };
     probe.last_unix = time;
     probe.milestones = milestones;
     match outcome {
         Ok(values) => {
             probe.error.clear();
-            push(&mut probe.samples, Sample { unix: time, trigger, values });
+            push(
+                &mut probe.samples,
+                Sample {
+                    unix: time,
+                    trigger,
+                    values,
+                },
+            );
         }
         Err(error) => probe.error = error.chars().filter(|c| !c.is_control()).take(300).collect(),
     }
@@ -238,9 +337,19 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
                 if crate::shutdown::requested() {
                     return;
                 }
-                let outcome = item.target.and_then(|(service, command)| sample(&service, &command, TIMEOUT));
+                let outcome = item
+                    .target
+                    .and_then(|(service, command)| sample(&service, &command, TIMEOUT));
                 let Ok(mut state) = shared.lock() else { return };
-                if apply(&mut state, &item.chat, &item.name, now(), item.trigger, item.milestones, outcome) {
+                if apply(
+                    &mut state,
+                    &item.chat,
+                    &item.name,
+                    now(),
+                    item.trigger,
+                    item.milestones,
+                    outcome,
+                ) {
                     let _ = crate::storage::save(&state);
                 }
             }
@@ -256,41 +365,94 @@ fn summary(probe: &Probe) -> Value {
 /// `control.run.scores`: every probe in the team (root chat and descendants)
 /// of `chat`, with its series. Read-only.
 pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
-    let session = state.chats.iter().find(|session| session.id == chat).ok_or("Chat not found.")?;
+    let session = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .ok_or("Chat not found.")?;
     crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
     let team = crate::chat::tree(state, chat);
-    let root = team.iter().copied().find(|id| state.chats.iter().any(|session| session.id == *id && session.parent_chat.as_deref().is_none_or(|parent| !team.contains(parent)))).unwrap_or(chat);
-    let probes = state.scores.iter().filter(|probe| team.contains(probe.chat.as_str())).map(summary).collect::<Vec<_>>();
+    let root = team
+        .iter()
+        .copied()
+        .find(|id| {
+            state.chats.iter().any(|session| {
+                session.id == *id
+                    && session
+                        .parent_chat
+                        .as_deref()
+                        .is_none_or(|parent| !team.contains(parent))
+            })
+        })
+        .unwrap_or(chat);
+    let probes = state
+        .scores
+        .iter()
+        .filter(|probe| team.contains(probe.chat.as_str()))
+        .map(summary)
+        .collect::<Vec<_>>();
     Ok(json!({"root":root,"milestones":milestones(state, chat),"probes":probes,
         "note":"Values are the workload's own untrusted claims; Control does not interpret them."}))
 }
 /// One line for the chat view: the latest values of this chat's probes.
 pub fn line(state: &State, chat: &str) -> String {
-    let parts = state.scores.iter().filter(|probe| probe.chat == chat).map(|probe| {
-        let latest = probe.samples.back().map(|sample| sample.values.iter().map(|(key, value)| format!("{key} {value}")).collect::<Vec<_>>().join(", ")).unwrap_or_else(|| "no sample yet".into());
-        let error = if probe.error.is_empty() { String::new() } else { format!(" · last probe failed: {}", probe.error) };
-        format!("{}: {latest} ({} samples){error}", probe.name, probe.samples.len())
-    }).collect::<Vec<_>>();
+    let parts = state
+        .scores
+        .iter()
+        .filter(|probe| probe.chat == chat)
+        .map(|probe| {
+            let latest = probe
+                .samples
+                .back()
+                .map(|sample| {
+                    sample
+                        .values
+                        .iter()
+                        .map(|(key, value)| format!("{key} {value}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_else(|| "no sample yet".into());
+            let error = if probe.error.is_empty() {
+                String::new()
+            } else {
+                format!(" · last probe failed: {}", probe.error)
+            };
+            format!("{}: {latest} ({} samples){error}", probe.name, probe.samples.len())
+        })
+        .collect::<Vec<_>>();
     if parts.is_empty() {
         return String::new();
     }
-    format!("<p class='muted tiny chat-scores'>Scores · {}</p>", crate::escape(&parts.join(" · ")))
+    format!(
+        "<p class='muted tiny chat-scores'>Scores · {}</p>",
+        crate::escape(&parts.join(" · "))
+    )
 }
 
 pub enum ScoreCall {
-    Declare { name: String, service_id: String, command: String, interval_seconds: u64 },
-    Clear { name: String },
+    Declare {
+        name: String,
+        service_id: String,
+        command: String,
+        interval_seconds: u64,
+    },
+    Clear {
+        name: String,
+    },
 }
 pub struct Tools;
 impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
-        vec![json!({"name":"control_score_probe","description":"Declare how this chat's workload is scored, so progress is measured by the workload's own numbers rather than by claims or messages. The command runs in one of your services (as the service user, in /workspace, 10 s for this test run and 20 s later) and must print a JSON object of up to 8 numbers on its last line, e.g. {\"blocks_placed\":75,\"beds\":2}, {\"items\":120} or {\"alerts\":3}. It must be quick and read-only: report state your workload already keeps, never act. Control runs it now to check it, then every interval_seconds (default 300) and when your team completes a turn or a claim, and keeps a capped series the operator can read. A probe on the team's root chat scores the whole team. Redeclaring the same name replaces it; clear=true removes it. Up to 4 per chat.","inputSchema":{"type":"object","properties":{
+        vec![
+            json!({"name":"control_score_probe","description":"Declare how this chat's workload is scored, so progress is measured by the workload's own numbers rather than by claims or messages. The command runs in one of your services (as the service user, in /workspace, 10 s for this test run and 20 s later) and must print a JSON object of up to 8 numbers on its last line, e.g. {\"blocks_placed\":75,\"beds\":2}, {\"items\":120} or {\"alerts\":3}. It must be quick and read-only: report state your workload already keeps, never act. Control runs it now to check it, then every interval_seconds (default 300) and when your team completes a turn or a claim, and keeps a capped series the operator can read. A probe on the team's root chat scores the whole team. Redeclaring the same name replaces it; clear=true removes it. Up to 4 per chat.","inputSchema":{"type":"object","properties":{
             "name":{"type":"string","minLength":1,"maxLength":32,"default":"score"},
             "service_id":{"type":"string"},
             "command":{"type":"string","minLength":1,"maxLength":MAX_COMMAND_BYTES},
             "interval_seconds":{"type":"integer","minimum":MIN_INTERVAL,"maximum":MAX_INTERVAL,"default":DEFAULT_INTERVAL},
             "clear":{"type":"boolean","default":false}},"additionalProperties":false},
-            "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})]
+            "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
+        ]
     }
     fn known(&self, name: &str) -> bool {
         name == "control_score_probe"
@@ -310,9 +472,15 @@ pub fn decode(args: &Value) -> io::Result<ScoreCall> {
         #[serde(default)]
         clear: bool,
     }
-    let input = serde_json::from_value::<Input>(args.clone()).map_err(|_| io::Error::other("Expected name, service_id, command, interval_seconds or clear"))?;
+    let input = serde_json::from_value::<Input>(args.clone())
+        .map_err(|_| io::Error::other("Expected name, service_id, command, interval_seconds or clear"))?;
     let name = input.name.unwrap_or_else(|| "score".into());
-    if name.is_empty() || name.chars().count() > 32 || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
+    if name.is_empty()
+        || name.chars().count() > 32
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+    {
         return Err(io::Error::other("A probe name is 1 to 32 letters, digits, '_' or '-'"));
     }
     if input.clear {
@@ -322,27 +490,47 @@ pub fn decode(args: &Value) -> io::Result<ScoreCall> {
         return Err(io::Error::other("Declaring a probe needs service_id and command"));
     };
     if command.trim().is_empty() || command.len() > MAX_COMMAND_BYTES {
-        return Err(io::Error::other(format!("The command must be 1 to {MAX_COMMAND_BYTES} bytes")));
+        return Err(io::Error::other(format!(
+            "The command must be 1 to {MAX_COMMAND_BYTES} bytes"
+        )));
     }
     let interval_seconds = input.interval_seconds.unwrap_or(DEFAULT_INTERVAL);
     if !(MIN_INTERVAL..=MAX_INTERVAL).contains(&interval_seconds) {
-        return Err(io::Error::other(format!("interval_seconds must be {MIN_INTERVAL} to {MAX_INTERVAL}")));
+        return Err(io::Error::other(format!(
+            "interval_seconds must be {MIN_INTERVAL} to {MAX_INTERVAL}"
+        )));
     }
-    Ok(ScoreCall::Declare { name, service_id, command, interval_seconds })
+    Ok(ScoreCall::Declare {
+        name,
+        service_id,
+        command,
+        interval_seconds,
+    })
 }
 fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> io::Result<Value> {
     let shared = host.0;
-    let node = control_core::resources::NodeId::try_from(crate::config::node_id().map_err(io::Error::other)?).map_err(|error| io::Error::other(error.to_string()))?;
+    let node = control_core::resources::NodeId::try_from(crate::config::node_id().map_err(io::Error::other)?)
+        .map_err(|error| io::Error::other(error.to_string()))?;
     let (caller, chat) = {
         let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        let run = state.runtime.runs.iter()
-            .find(|run| run.id == attempt.run && run.status == "running" && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
+        let run = state
+            .runtime
+            .runs
+            .iter()
+            .find(|run| {
+                run.id == attempt.run
+                    && run.status == "running"
+                    && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
+            })
             .ok_or_else(|| io::Error::other("Attempt is not active"))?;
         crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
         if crate::delegation::is_judge(run) {
             return Err(io::Error::other("Judges cannot declare score probes"));
         }
-        let chat = run.chat_id.clone().ok_or_else(|| io::Error::other("A chat is required"))?;
+        let chat = run
+            .chat_id
+            .clone()
+            .ok_or_else(|| io::Error::other("A chat is required"))?;
         (run.clone(), chat)
     };
     match call {
@@ -357,35 +545,75 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
             }
             Ok(json!({"cleared":removed,"name":name}))
         }
-        ScoreCall::Declare { name, service_id, command, interval_seconds } => {
+        ScoreCall::Declare {
+            name,
+            service_id,
+            command,
+            interval_seconds,
+        } => {
             let service = {
                 let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-                let replacing = state.scores.iter().any(|probe| probe.chat == chat && probe.name == name);
+                let replacing = state
+                    .scores
+                    .iter()
+                    .any(|probe| probe.chat == chat && probe.name == name);
                 if !replacing && state.scores.iter().filter(|probe| probe.chat == chat).count() >= MAX_PER_CHAT {
-                    return Err(io::Error::other(format!("This chat already has {MAX_PER_CHAT} probes; clear one first")));
+                    return Err(io::Error::other(format!(
+                        "This chat already has {MAX_PER_CHAT} probes; clear one first"
+                    )));
                 }
                 if !replacing && state.scores.len() >= MAX_PROBES {
-                    return Err(io::Error::other("This node already keeps the maximum number of score probes"));
+                    return Err(io::Error::other(
+                        "This node already keeps the maximum number of score probes",
+                    ));
                 }
-                state.services.iter()
-                    .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(&state, service, &node, &caller))
+                state
+                    .services
+                    .iter()
+                    .find(|service| {
+                        service.resource.id.as_str() == service_id
+                            && crate::services::accessible(&state, service, &node, &caller)
+                    })
                     .ok_or_else(|| io::Error::other("Service is not owned by this chat or its team"))?
                     .binding_snapshot()
             };
             // Test before accepting: a probe that cannot score is rejected now,
             // not discovered failing later.
-            let values = sample(&service, &command, TEST_TIMEOUT).map_err(|error| io::Error::other(format!("The probe was not saved: {error}")))?;
+            let values = sample(&service, &command, TEST_TIMEOUT)
+                .map_err(|error| io::Error::other(format!("The probe was not saved: {error}")))?;
             let time = now();
             let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
             let milestones = milestones(&state, &chat);
-            let mut probe = Probe { chat: chat.clone(), name: name.clone(), service: service_id, generation: service.resource.generation.get(), command,
-                interval_seconds, declared_unix: time, last_unix: time, milestones, error: String::new(), samples: VecDeque::new() };
-            push(&mut probe.samples, Sample { unix: time, trigger: Trigger::Declared, values: values.clone() });
+            let mut probe = Probe {
+                chat: chat.clone(),
+                name: name.clone(),
+                service: service_id,
+                generation: service.resource.generation.get(),
+                command,
+                interval_seconds,
+                declared_unix: time,
+                last_unix: time,
+                milestones,
+                error: String::new(),
+                samples: VecDeque::new(),
+            };
+            push(
+                &mut probe.samples,
+                Sample {
+                    unix: time,
+                    trigger: Trigger::Declared,
+                    values: values.clone(),
+                },
+            );
             let previous = state.scores.clone();
-            state.scores.retain(|existing| !(existing.chat == chat && existing.name == name));
+            state
+                .scores
+                .retain(|existing| !(existing.chat == chat && existing.name == name));
             if state.scores.len() >= MAX_PROBES {
                 state.scores = previous;
-                return Err(io::Error::other("This node already keeps the maximum number of score probes"));
+                return Err(io::Error::other(
+                    "This node already keeps the maximum number of score probes",
+                ));
             }
             state.scores.push(probe);
             if let Err(error) = crate::storage::save(&state) {

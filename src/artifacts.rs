@@ -43,13 +43,7 @@ pub(crate) fn excluded(name: &str) -> bool {
         || crate::backend::private_name(name)
         || matches!(
             name,
-            ".git"
-                | ".agents"
-                | ".env"
-                | "discord.env"
-                | "auth.json"
-                | "target"
-                | "node_modules"
+            ".git" | ".agents" | ".env" | "discord.env" | "auth.json" | "target" | "node_modules"
         )
         || name.starts_with(".env.")
 }
@@ -57,9 +51,9 @@ pub(crate) fn valid_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 1024
         && path.split('/').count() <= 32
-        && Path::new(path).components().all(
-            |c| matches!(c, Component::Normal(name) if name.to_str().is_some_and(|s| !excluded(s))),
-        )
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, Component::Normal(name) if name.to_str().is_some_and(|s| !excluded(s))))
 }
 fn hash(bytes: &[u8]) -> String {
     ring::digest::digest(&ring::digest::SHA256, bytes)
@@ -83,10 +77,7 @@ pub(crate) fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<V
     }
     path.push(components.last().unwrap().as_os_str());
     let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags)
-        .open(path)?;
+    let file = fs::OpenOptions::new().read(true).custom_flags(flags).open(path)?;
     if !file.metadata()?.is_file() || file.metadata()?.len() > limit {
         return Err(io::Error::other(
             "Artifact exceeds the file limit or is not a regular file",
@@ -104,78 +95,167 @@ pub(crate) fn safe_read(root: &Path, relative: &str, limit: u64) -> io::Result<V
 /// rules and no-follow reads; omitted files must never look like deletions.
 pub(crate) fn diff_snapshot(root: &Path) -> io::Result<control_diff::Snapshot> {
     use std::os::unix::fs::OpenOptionsExt;
-    fn collect(directory: &fs::File, prefix: &str, snapshot: &mut control_diff::Snapshot, total: &mut usize, visited: &mut usize, depth: usize) -> io::Result<()> {
-        if depth>32 || *visited>=4096 {snapshot.incomplete=true;return Ok(());}
-        let mut entries=diff_directory_names(directory)?;
-        if entries.len()>2048 {snapshot.incomplete=true;return Ok(());}
+    fn collect(
+        directory: &fs::File,
+        prefix: &str,
+        snapshot: &mut control_diff::Snapshot,
+        total: &mut usize,
+        visited: &mut usize,
+        depth: usize,
+    ) -> io::Result<()> {
+        if depth > 32 || *visited >= 4096 {
+            snapshot.incomplete = true;
+            return Ok(());
+        }
+        let mut entries = diff_directory_names(directory)?;
+        if entries.len() > 2048 {
+            snapshot.incomplete = true;
+            return Ok(());
+        }
         entries.sort();
         for name in entries {
-            *visited+=1;
-            if *visited>4096 || *total>=4*1024*1024 || snapshot.files.len()>=512 {snapshot.incomplete=true;break;}
-            let Some(label)=name.to_str() else {snapshot.incomplete=true;continue;};
-            if label=="." || label==".." || excluded(label)
-                || [".ssh",".aws",".config",".secrets",".direnv","dist","credentials.json",".credentials.json",".git-credentials",".netrc","id_rsa","id_ed25519"].contains(&label)
-                || [".pem",".key",".p12",".pfx"].iter().any(|suffix|label.ends_with(suffix)) {continue;}
-            let relative=if prefix.is_empty(){label.into()}else{format!("{prefix}/{label}")};
-            if !valid_path(&relative) {snapshot.incomplete=true;continue;}
-            let Ok(file)=diff_open_child(directory,&name) else {snapshot.skipped.insert(relative);continue;};
-            let metadata=file.metadata()?;
+            *visited += 1;
+            if *visited > 4096 || *total >= 4 * 1024 * 1024 || snapshot.files.len() >= 512 {
+                snapshot.incomplete = true;
+                break;
+            }
+            let Some(label) = name.to_str() else {
+                snapshot.incomplete = true;
+                continue;
+            };
+            if label == "."
+                || label == ".."
+                || excluded(label)
+                || [
+                    ".ssh",
+                    ".aws",
+                    ".config",
+                    ".secrets",
+                    ".direnv",
+                    "dist",
+                    "credentials.json",
+                    ".credentials.json",
+                    ".git-credentials",
+                    ".netrc",
+                    "id_rsa",
+                    "id_ed25519",
+                ]
+                .contains(&label)
+                || [".pem", ".key", ".p12", ".pfx"]
+                    .iter()
+                    .any(|suffix| label.ends_with(suffix))
+            {
+                continue;
+            }
+            let relative = if prefix.is_empty() {
+                label.into()
+            } else {
+                format!("{prefix}/{label}")
+            };
+            if !valid_path(&relative) {
+                snapshot.incomplete = true;
+                continue;
+            }
+            let Ok(file) = diff_open_child(directory, &name) else {
+                snapshot.skipped.insert(relative);
+                continue;
+            };
+            let metadata = file.metadata()?;
             if metadata.is_dir() {
-                if collect(&file,&relative,snapshot,total,visited,depth+1).is_err() {snapshot.incomplete=true;}
-            } else if metadata.is_file() && metadata.len()<=128*1024 {
-                let mut bytes=Vec::new();
-                let read=file.take(128*1024+1).read_to_end(&mut bytes);
-                let text=if read.is_ok() && bytes.len()<=128*1024 && !bytes.contains(&0) {String::from_utf8(bytes).ok()}else{None};
-                match text {
-                    Some(text) if *total+text.len()<=4*1024*1024 => {*total+=text.len();snapshot.files.insert(relative,text);}
-                    _ => {snapshot.skipped.insert(relative);}
+                if collect(&file, &relative, snapshot, total, visited, depth + 1).is_err() {
+                    snapshot.incomplete = true;
                 }
-            } else {snapshot.skipped.insert(relative);}
+            } else if metadata.is_file() && metadata.len() <= 128 * 1024 {
+                let mut bytes = Vec::new();
+                let read = file.take(128 * 1024 + 1).read_to_end(&mut bytes);
+                let text = if read.is_ok() && bytes.len() <= 128 * 1024 && !bytes.contains(&0) {
+                    String::from_utf8(bytes).ok()
+                } else {
+                    None
+                };
+                match text {
+                    Some(text) if *total + text.len() <= 4 * 1024 * 1024 => {
+                        *total += text.len();
+                        snapshot.files.insert(relative, text);
+                    }
+                    _ => {
+                        snapshot.skipped.insert(relative);
+                    }
+                }
+            } else {
+                snapshot.skipped.insert(relative);
+            }
         }
         Ok(())
     }
-    let directory=fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW|libc::O_DIRECTORY|libc::O_CLOEXEC).open(root)?;
-    let mut snapshot=control_diff::Snapshot::default();
-    collect(&directory,"",&mut snapshot,&mut 0,&mut 0,0)?;
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(root)?;
+    let mut snapshot = control_diff::Snapshot::default();
+    collect(&directory, "", &mut snapshot, &mut 0, &mut 0, 0)?;
     Ok(snapshot)
 }
 
 pub(crate) fn diff_open_child(directory: &fs::File, name: &std::ffi::OsStr) -> io::Result<fs::File> {
-    use std::os::{fd::{AsRawFd,FromRawFd},unix::ffi::OsStrExt};
-    let name=std::ffi::CString::new(name.as_bytes()).map_err(|_|io::Error::other("Invalid diff filename"))?;
+    use std::os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::ffi::OsStrExt,
+    };
+    let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| io::Error::other("Invalid diff filename"))?;
     // One relative component and a pinned parent descriptor: no intermediate
     // symlink can redirect a live workspace read into the host filesystem.
-    let fd=unsafe{libc::openat(directory.as_raw_fd(),name.as_ptr(),libc::O_RDONLY|libc::O_NOFOLLOW|libc::O_NONBLOCK|libc::O_CLOEXEC)};
-    if fd<0 {return Err(io::Error::last_os_error());}
-    Ok(unsafe{fs::File::from_raw_fd(fd)})
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
 }
 pub(crate) fn diff_directory_names(directory: &fs::File) -> io::Result<Vec<std::ffi::OsString>> {
     directory_names(directory, Some(2050))
 }
 pub(crate) fn directory_names(directory: &fs::File, limit: Option<usize>) -> io::Result<Vec<std::ffi::OsString>> {
-    use std::os::{fd::IntoRawFd,unix::ffi::OsStrExt};
-    let fd=directory.try_clone()?.into_raw_fd();
+    use std::os::{fd::IntoRawFd, unix::ffi::OsStrExt};
+    let fd = directory.try_clone()?.into_raw_fd();
     // fdopendir owns the duplicated descriptor only on success.
-    let dir=unsafe{libc::fdopendir(fd)};
-    if dir.is_null() {let error=io::Error::last_os_error();unsafe{libc::close(fd)};return Err(error);}
+    let dir = unsafe { libc::fdopendir(fd) };
+    if dir.is_null() {
+        let error = io::Error::last_os_error();
+        unsafe { libc::close(fd) };
+        return Err(error);
+    }
     struct Directory(*mut libc::DIR);
-    impl Drop for Directory {fn drop(&mut self){unsafe{libc::closedir(self.0)};}}
-    let dir=Directory(dir);
-    let mut names=Vec::new();
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            unsafe { libc::closedir(self.0) };
+        }
+    }
+    let dir = Directory(dir);
+    let mut names = Vec::new();
     loop {
-        #[cfg(target_os="macos")]
-        let errno=unsafe{libc::__error()};
-        #[cfg(target_os="linux")]
-        let errno=unsafe{libc::__errno_location()};
-        unsafe{*errno=0};
-        let entry=unsafe{libc::readdir(dir.0)};
+        #[cfg(target_os = "macos")]
+        let errno = unsafe { libc::__error() };
+        #[cfg(target_os = "linux")]
+        let errno = unsafe { libc::__errno_location() };
+        unsafe { *errno = 0 };
+        let entry = unsafe { libc::readdir(dir.0) };
         if entry.is_null() {
-            if unsafe{*errno}!=0 {return Err(io::Error::last_os_error());}
+            if unsafe { *errno } != 0 {
+                return Err(io::Error::last_os_error());
+            }
             break;
         }
-        let name=unsafe{std::ffi::CStr::from_ptr((*entry).d_name.as_ptr())};
+        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
         names.push(std::ffi::OsStr::from_bytes(name.to_bytes()).to_owned());
-        if limit.is_some_and(|limit|names.len()>limit) {break;}
+        if limit.is_some_and(|limit| names.len() > limit) {
+            break;
+        }
     }
     Ok(names)
 }
@@ -202,9 +282,15 @@ fn skipped_directory(name: &str) -> bool {
 const OMITTED_LIMIT: usize = 128;
 fn omit(manifest: &mut Manifest, path: String, reason: &str) {
     if manifest.omitted.len() < OMITTED_LIMIT {
-        manifest.omitted.push(Omitted { path, reason: reason.into() });
+        manifest.omitted.push(Omitted {
+            path,
+            reason: reason.into(),
+        });
     } else if manifest.omitted.len() == OMITTED_LIMIT {
-        manifest.omitted.push(Omitted { path: "…".into(), reason: "Further omissions not listed".into() });
+        manifest.omitted.push(Omitted {
+            path: "…".into(),
+            reason: "Further omissions not listed".into(),
+        });
     }
 }
 fn walk(
@@ -218,19 +304,30 @@ fn walk(
 ) -> io::Result<()> {
     let label = |path: &Path| path.strip_prefix(source).unwrap_or(path).to_string_lossy().into_owned();
     if depth > 32 {
-        return Err(io::Error::other(format!("{}: directory depth limit (32) exceeded", label(directory))));
+        return Err(io::Error::other(format!(
+            "{}: directory depth limit (32) exceeded",
+            label(directory)
+        )));
     }
     let mut entries = fs::read_dir(directory)?
         .take(FILE_COUNT * 4 + 1)
         .collect::<io::Result<Vec<_>>>()?;
     if entries.len() > FILE_COUNT * 4 {
-        return Err(io::Error::other(format!("{}: more than {} directory entries", label(directory), FILE_COUNT * 4)));
+        return Err(io::Error::other(format!(
+            "{}: more than {} directory entries",
+            label(directory),
+            FILE_COUNT * 4
+        )));
     }
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         *visited += 1;
         if *visited > FILE_COUNT * 8 {
-            return Err(io::Error::other(format!("{}: tree entry limit ({}) exceeded", label(&entry.path()), FILE_COUNT * 8)));
+            return Err(io::Error::other(format!(
+                "{}: tree entry limit ({}) exceeded",
+                label(&entry.path()),
+                FILE_COUNT * 8
+            )));
         }
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
@@ -315,7 +412,9 @@ pub(crate) fn publish_in(root: &Path, source: &Path, id: &str) -> io::Result<Man
     if let Some(omitted) = manifest.omitted.first() {
         return Err(io::Error::other(format!(
             "{}: {}. Cannot publish an incomplete workspace checkpoint. Outputs are retained in {}.",
-            omitted.path, omitted.reason, source.display()
+            omitted.path,
+            omitted.reason,
+            source.display()
         )));
     }
     manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -410,10 +509,7 @@ pub fn restore(id: &str, destination: &Path) -> io::Result<()> {
 fn restore_in(root: &Path, id: &str, destination: &Path) -> io::Result<()> {
     let manifest = manifest_in(root, id)?;
     for entry in &manifest.files {
-        private_write(
-            &destination.join(&entry.path),
-            &read_in(root, &manifest, &entry.path)?,
-        )?;
+        private_write(&destination.join(&entry.path), &read_in(root, &manifest, &entry.path)?)?;
     }
     fs::create_dir_all(destination)?;
     sync_tree(destination)
@@ -428,32 +524,18 @@ pub fn definitions() -> Vec<serde_json::Value> {
     ]
 }
 fn published<'a>(state: &'a crate::State, id: &str) -> Result<Vec<&'a str>, &'static str> {
-    let chat = state
-        .chats
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or("Chat not found")?;
+    let chat = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found")?;
     crate::identity::authorize(&chat.actor, crate::identity::Action::Task)?;
     Ok(chat
         .messages
         .iter()
         .filter_map(|message| message.run_id.as_ref())
-        .filter_map(|id| {
-            state
-                .runtime
-                .runs
-                .iter()
-                .find(|r| &r.id == id && r.actor == chat.actor)
-        })
+        .filter_map(|id| state.runtime.runs.iter().find(|r| &r.id == id && r.actor == chat.actor))
         .flat_map(|r| &r.attempts)
         .filter_map(|a| a.artifact.as_deref())
         .collect())
 }
-pub fn tool(
-    state: &crate::State,
-    name: &str,
-    args: &serde_json::Value,
-) -> Result<serde_json::Value, &'static str> {
+pub fn tool(state: &crate::State, name: &str, args: &serde_json::Value) -> Result<serde_json::Value, &'static str> {
     use serde_json::json;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -462,8 +544,7 @@ pub fn tool(
         artifact: Option<String>,
         path: Option<String>,
     }
-    let args: Args =
-        serde_json::from_value(args.clone()).map_err(|_| "Invalid artifact arguments")?;
+    let args: Args = serde_json::from_value(args.clone()).map_err(|_| "Invalid artifact arguments")?;
     let ids = published(state, &args.id)?;
     if name == TOOLS[0] {
         let outputs = ids
@@ -473,9 +554,7 @@ pub fn tool(
             .map(|id| manifest(id))
             .collect::<io::Result<Vec<_>>>()
             .map_err(|_| "Published artifact unavailable or invalid")?;
-        return Ok(
-            json!({"id":args.id,"artifacts":outputs,"earlier_omitted":ids.len().saturating_sub(16)}),
-        );
+        return Ok(json!({"id":args.id,"artifacts":outputs,"earlier_omitted":ids.len().saturating_sub(16)}));
     }
     if name != TOOLS[1] {
         return Err("Unknown artifact tool");
@@ -487,8 +566,7 @@ pub fn tool(
         .ok_or("Artifact does not belong to this chat")?;
     let manifest = manifest(id).map_err(|_| "Artifact unavailable or invalid")?;
     let path = args.path.as_deref().ok_or("Select an artifact file")?;
-    let bytes = read(&manifest, path)
-        .map_err(|_| "Artifact unavailable, unsafe or changed since publication")?;
+    let bytes = read(&manifest, path).map_err(|_| "Artifact unavailable, unsafe or changed since publication")?;
     let text = std::str::from_utf8(&bytes)
         .ok()
         .filter(|_| !bytes.contains(&0))
@@ -532,13 +610,14 @@ pub fn render(
 ) -> Result<String, &'static str> {
     use crate::escape;
     let ids = published(state, chat)?;
-    let outputs = visible_outputs(ids.iter().copied(), manifest)
-        .map_err(|_| "Artifact unavailable or invalid")?;
+    let outputs = visible_outputs(ids.iter().copied(), manifest).map_err(|_| "Artifact unavailable or invalid")?;
     let selected = args
         .get("artifact")
         .map(String::as_str)
         .or_else(|| outputs.last().map(|output| output.id.as_str()));
-    let mut html = format!("<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/dm/{chat}'>Back to DM ↗</a></div>");
+    let mut html = format!(
+        "<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/dm/{chat}'>Back to DM ↗</a></div>"
+    );
     let Some(id) = selected.filter(|id| ids.contains(id)) else {
         html.push_str("<p class='muted'>No published files yet.</p></section>");
         return Ok(html);
@@ -549,11 +628,7 @@ pub fn render(
         let version = output.id.as_str();
         html.push_str(&format!(
             "<a href='/dm/{chat}/artifacts?artifact={version}'{}>Output {}</a>",
-            if version == id {
-                " aria-current='page'"
-            } else {
-                ""
-            },
+            if version == id { " aria-current='page'" } else { "" },
             index + 1
         ));
     }
@@ -583,10 +658,7 @@ pub fn render(
                 if value["truncated"] == true {
                     html.push_str("<p class='muted'>Preview truncated.</p>");
                 }
-                html.push_str(&format!(
-                    "<pre>{}</pre>",
-                    escape(value["text"].as_str().unwrap_or(""))
-                ));
+                html.push_str(&format!("<pre>{}</pre>", escape(value["text"].as_str().unwrap_or(""))));
             }
             Err(message) => html.push_str(&format!("<p class='muted'>{}</p>", escape(message))),
         }

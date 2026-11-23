@@ -56,7 +56,9 @@ impl Access {
     /// A fixed operator session for request tests that drive the whole handler.
     #[cfg(test)]
     pub fn for_tests(session: &str) -> Self {
-        Self { session: session.to_owned() }
+        Self {
+            session: session.to_owned(),
+        }
     }
     fn authorized(&self, header: &str) -> bool {
         header
@@ -70,17 +72,33 @@ impl Access {
     pub fn gate(&self, stream: &mut TcpStream, method: &str, target: &str, header: &str) -> bool {
         if method == "GET" && target == "/health/build" {
             let body = serde_json::to_string(&control::build_info::current()).expect("Build metadata is serializable");
-            let _ = control_http::respond(stream, "200 OK", "application/json", body.as_bytes(), "", control_http::Policy::Access);
+            let _ = control_http::respond(
+                stream,
+                "200 OK",
+                "application/json",
+                body.as_bytes(),
+                "",
+                control_http::Policy::Access,
+            );
             return true;
         }
         if method == "GET" && target == "/health" {
-            let _ = control_http::respond(stream, "200 OK", "text/plain", b"Control is running.", "", control_http::Policy::Access);
+            let _ = control_http::respond(
+                stream,
+                "200 OK",
+                "text/plain",
+                b"Control is running.",
+                "",
+                control_http::Policy::Access,
+            );
             return true;
         }
         if method == "GET"
             && let Some(rest) = target.strip_prefix("/unlock")
         {
-            let token = rest.strip_prefix('/').filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+            let token = rest
+                .strip_prefix('/')
+                .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
             let unlocked = token.is_some_and(|token| {
                 crate::config::state("operator-unlock").is_ok_and(|path| {
                     fs::read_to_string(&path).is_ok_and(|expected| equal(token, &expected))
@@ -88,12 +106,32 @@ impl Access {
                 })
             });
             if unlocked {
-                let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /\r\nSet-Cookie: control_operator={}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n",self.session), control_http::Policy::Access);
+                let _ = control_http::respond(
+                    stream,
+                    "303 See Other",
+                    "text/plain",
+                    b"",
+                    &format!(
+                        "Location: /\r\nSet-Cookie: control_operator={}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n",
+                        self.session
+                    ),
+                    control_http::Policy::Access,
+                );
             } else if self.authorized(header) {
                 // A used or stale link from a browser that is already signed in.
-                let _ = control_http::respond(stream, "303 See Other", "text/plain", b"", "Location: /\r\n", control_http::Policy::Access);
+                let _ = control_http::respond(
+                    stream,
+                    "303 See Other",
+                    "text/plain",
+                    b"",
+                    "Location: /\r\n",
+                    control_http::Policy::Access,
+                );
             } else {
-                denied(stream, "This sign-in link was already used or has expired. Links work once.");
+                denied(
+                    stream,
+                    "This sign-in link was already used or has expired. Links work once.",
+                );
             }
             return true;
         }
@@ -105,7 +143,11 @@ impl Access {
     }
 }
 fn denied(stream: &mut TcpStream, reason: &str) {
-    let reason = if reason.is_empty() { String::new() } else { format!("<p>{reason}</p>") };
+    let reason = if reason.is_empty() {
+        String::new()
+    } else {
+        format!("<p>{reason}</p>")
+    };
     let _ = control_http::respond(stream, "401 Unauthorized", "text/html; charset=utf-8", format!("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><title>Control / operator access</title></head><body><h1>Operator access required</h1>{reason}<p>On this laptop, run <code>control open</code> to open an authenticated browser session.</p><p>Discord users and worker containers cannot obtain operator access from the website.</p></body></html>").as_bytes(), "", control_http::Policy::Access);
 }
 fn sign_in_link() -> io::Result<String> {
@@ -136,7 +178,9 @@ fn open_mode(args: &[String]) -> io::Result<OpenMode> {
 pub fn command(args: &[String]) -> io::Result<()> {
     let mode = open_mode(args)?;
     if mode == OpenMode::Help {
-        println!("control open: open a local sign-in link in the default browser\ncontrol open --link: print a one-use local sign-in link without opening a browser");
+        println!(
+            "control open: open a local sign-in link in the default browser\ncontrol open --link: print a one-use local sign-in link without opening a browser"
+        );
         return Ok(());
     }
     let url = sign_in_link()?;

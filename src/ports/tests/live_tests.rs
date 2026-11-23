@@ -1,4 +1,3 @@
-
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,10 +30,7 @@ impl Drop for Server {
 fn wait(mut condition: impl FnMut() -> bool, seconds: u64, label: &str) {
     let start = Instant::now();
     while !condition() {
-        assert!(
-            start.elapsed() < Duration::from_secs(seconds),
-            "Timed out: {label}"
-        );
+        assert!(start.elapsed() < Duration::from_secs(seconds), "Timed out: {label}");
         thread::sleep(Duration::from_millis(50));
     }
 }
@@ -43,9 +39,7 @@ fn assert_closed(result: io::Result<usize>) {
         matches!(result, Ok(0))
             || result.is_err_and(|e| matches!(
                 e.kind(),
-                io::ErrorKind::ConnectionReset
-                    | io::ErrorKind::ConnectionAborted
-                    | io::ErrorKind::BrokenPipe
+                io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::BrokenPipe
             )),
         "Connection did not close"
     );
@@ -77,9 +71,7 @@ impl Echo {
                         let b = b.clone();
                         let c = c.clone();
                         clients.push(thread::spawn(move || {
-                            socket
-                                .set_read_timeout(Some(Duration::from_millis(200)))
-                                .unwrap();
+                            socket.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
                             let mut data = Vec::new();
                             let mut buffer = [0; 64];
                             let mut counted = false;
@@ -94,10 +86,7 @@ impl Echo {
                                         }
                                     }
                                     Err(e)
-                                        if matches!(
-                                            e.kind(),
-                                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                                        ) =>
+                                        if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
                                     {
                                         if c.load(Ordering::Acquire) {
                                             break;
@@ -112,9 +101,7 @@ impl Echo {
                             b.fetch_add(1, Ordering::AcqRel);
                         }));
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(25))
-                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(25)),
                     Err(_) => break,
                 }
             }
@@ -156,17 +143,13 @@ fn main(){
 fn live_service_commands_download_and_connect_two_private_services() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let binary = std::env::var("CONTROL_QA_CONTROL_BIN").unwrap();
-    let root = PathBuf::from("/private/tmp").join(format!(
-        "control-service-interaction-{}-{}",
-        std::process::id(),
-        now()
-    ));
+    let root =
+        PathBuf::from("/private/tmp").join(format!("control-service-interaction-{}-{}", std::process::id(), now()));
     let state_dir = root.join("state");
     let config = root.join("config");
     fs::create_dir_all(&state_dir).unwrap();
     fs::create_dir(&config).unwrap();
-    let node = ring::digest::digest(&ring::digest::SHA256, root.to_string_lossy().as_bytes())
-        .as_ref()[..16]
+    let node = ring::digest::digest(&ring::digest::SHA256, root.to_string_lossy().as_bytes()).as_ref()[..16]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
@@ -174,11 +157,7 @@ fn live_service_commands_download_and_connect_two_private_services() {
     fs::set_permissions(state_dir.join("node-id"), fs::Permissions::from_mode(0o600)).unwrap();
     let cookie = "d".repeat(64);
     fs::write(state_dir.join("operator-session"), &cookie).unwrap();
-    fs::set_permissions(
-        state_dir.join("operator-session"),
-        fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
+    fs::set_permissions(state_dir.join("operator-session"), fs::Permissions::from_mode(0o600)).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
@@ -215,19 +194,10 @@ fn live_service_commands_download_and_connect_two_private_services() {
     let client_chat = crate::chat::create(&mut state);
     state.services[1].resource.owner.chat = client_chat.clone().try_into().unwrap();
     state.runtime.runs[0].chat_id = Some(client_chat);
-    state.runtime.runs[0].resource_grants =
-        vec![state.services[0].grant(), state.services[2].grant()];
+    state.runtime.runs[0].resource_grants = vec![state.services[0].grant(), state.services[2].grant()];
     state.runtime.runs[0].status = "completed".into();
-    let write = |state: &State| {
-        fs::write(
-            state_dir.join("state.json"),
-            serde_json::to_vec(state).unwrap(),
-        )
-        .unwrap()
-    };
-    let read = || {
-        serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap()
-    };
+    let write = |state: &State| fs::write(state_dir.join("state.json"), serde_json::to_vec(state).unwrap()).unwrap();
+    let read = || serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
     write(&state);
     let launch = || {
         let log = fs::OpenOptions::new()
@@ -241,10 +211,7 @@ fn live_service_commands_download_and_connect_two_private_services() {
                 .env("CONTROL_STATE_DIR", &state_dir)
                 .env("CONTROL_CONFIG_DIR", &config)
                 .env("CONTROL_CODEX_AUTH_FILE", root.join("missing-qa-auth.json"))
-                .env(
-                    "CONTROL_CLAUDE_AUTH_FILE",
-                    root.join("missing-qa-claude.json"),
-                )
+                .env("CONTROL_CLAUDE_AUTH_FILE", root.join("missing-qa-claude.json"))
                 .env("CONTROL_ADDR", address.to_string())
                 .env_remove("CONTROL_WORKER_IMAGE")
                 .env_remove("CONTROL_CLAUDE_IMAGE")
@@ -299,18 +266,8 @@ fn live_service_commands_download_and_connect_two_private_services() {
         "two services and retained short probe",
     );
     let probe = serde_json::to_value(&read().services[2]).unwrap();
-    assert!(
-        probe["output"]
-            .as_str()
-            .unwrap()
-            .contains("short probe stdout")
-    );
-    assert!(
-        probe["output"]
-            .as_str()
-            .unwrap()
-            .contains("short probe stderr")
-    );
+    assert!(probe["output"].as_str().unwrap().contains("short probe stdout"));
+    assert!(probe["output"].as_str().unwrap().contains("short probe stderr"));
     assert_eq!(probe["exit_code"], 7);
     server.stop();
     state = read();
@@ -324,15 +281,8 @@ rustc --edition=2024 /workspace/server.rs -o /workspace/server
 nohup /workspace/server > /workspace/server.log 2>&1 < /dev/null &
 printf source-ready
 "#;
-    let source_receipt = crate::services::enqueue_test_command(
-        &mut state,
-        &run,
-        "source-setup",
-        &ids[0],
-        source_command,
-        30,
-    )
-    .unwrap();
+    let source_receipt =
+        crate::services::enqueue_test_command(&mut state, &run, "source-setup", &ids[0], source_command, 30).unwrap();
     let staged=crate::services::enqueue_test_command(&mut state,&run,"client-files",&ids[1],"set -eu; printf persistent > /workspace/settings; if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/34003' 2>/dev/null; then exit 42; fi; printf staged-without-network",10).unwrap();
     let ingress = admit(
         &mut state,
@@ -374,10 +324,7 @@ printf source-ready
         35,
         "service file creation after model turn",
     );
-    assert_eq!(
-        execution(1, staged["execution_id"].as_str().unwrap())["exit_code"],
-        0
-    );
+    assert_eq!(execution(1, staged["execution_id"].as_str().unwrap())["exit_code"], 0);
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(10))
@@ -393,22 +340,11 @@ printf source-ready
             .unwrap();
         assert_eq!(response.status(), 200);
     };
-    let port = |id: &str| {
-        read()
-            .ports
-            .into_iter()
-            .find(|p| p.id.as_str() == id)
-            .unwrap()
-    };
+    let port = |id: &str| read().ports.into_iter().find(|p| p.id.as_str() == id).unwrap();
     assert_eq!(port(&ingress_id).status, Status::Pending);
     post(&ingress_id, "seconds=-1");
     wait(
-        || {
-            port(&ingress_id)
-                .approval
-                .as_ref()
-                .is_some_and(|a| a.host_port != 0)
-        },
+        || port(&ingress_id).approval.as_ref().is_some_and(|a| a.host_port != 0),
         8,
         "source ingress approval",
     );
@@ -425,9 +361,7 @@ printf source-ready
         .collect::<String>();
     let download_thread = thread::spawn(move || {
         let (mut socket, _) = download.accept().unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
+        socket.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
         let mut request = [0; 4096];
         let _ = socket.read(&mut request).unwrap();
         write!(
@@ -460,9 +394,7 @@ printf source-ready
                     host: "127.0.0.1".into(),
                     port: NonZeroU16::new(t.port()).unwrap(),
                 }),
-                peer_port_id: target
-                    .is_none()
-                    .then(|| ingress_id.clone().try_into().unwrap()),
+                peer_port_id: target.is_none().then(|| ingress_id.clone().try_into().unwrap()),
             },
             node.clone().try_into().unwrap(),
             |_| Ok(()),
@@ -508,15 +440,8 @@ rustc --edition=2024 /workspace/client.rs -o /workspace/client
 printf verified-download >> /workspace/completions
 "#
     );
-    let receipt = crate::services::enqueue_test_command(
-        &mut state,
-        &run,
-        "download-connect",
-        &ids[1],
-        &command,
-        60,
-    )
-    .unwrap();
+    let receipt =
+        crate::services::enqueue_test_command(&mut state, &run, "download-connect", &ids[1], &command, 60).unwrap();
     state.runtime.runs[0].status = "completed".into();
     write(&state);
     server = launch();
@@ -528,12 +453,7 @@ printf verified-download >> /workspace/completions
     );
     let outcome = execution(1, execution_id);
     assert_eq!(outcome["exit_code"], 0, "{outcome}");
-    assert!(
-        outcome["output"]
-            .as_str()
-            .unwrap()
-            .contains("peer-connected")
-    );
+    assert!(outcome["output"].as_str().unwrap().contains("peer-connected"));
     println!("{}", outcome["output"].as_str().unwrap());
     download_thread.join().unwrap();
     server.stop();
@@ -548,10 +468,7 @@ printf verified-download >> /workspace/completions
         15,
         "private files and exactly one effect across restart",
     );
-    assert_eq!(
-        execution(1, check["execution_id"].as_str().unwrap())["exit_code"],
-        0
-    );
+    assert_eq!(execution(1, check["execution_id"].as_str().unwrap())["exit_code"], 0);
     server.stop();
     state = read();
     state.runtime.runs[0].status = "running".into();
@@ -572,20 +489,14 @@ printf verified-download >> /workspace/completions
         15,
         "nonzero command reports failure",
     );
-    assert_eq!(
-        execution(1, failed["execution_id"].as_str().unwrap())["exit_code"],
-        7
-    );
+    assert_eq!(execution(1, failed["execution_id"].as_str().unwrap())["exit_code"], 7);
     assert!(
         execution(1, failed["execution_id"].as_str().unwrap())["output"]
             .as_str()
             .unwrap()
             .contains("expected-command-error")
     );
-    assert!(matches!(
-        read().services[1].resource.phase,
-        Phase::Running(_)
-    ));
+    assert!(matches!(read().services[1].resource.phase, Phase::Running(_)));
     server.stop();
     state = read();
     state.runtime.runs[0].status = "running".into();
@@ -609,10 +520,7 @@ printf verified-download >> /workspace/completions
         15,
         "timed-out command stops only its service",
     );
-    assert!(matches!(
-        read().services[0].resource.phase,
-        Phase::Running(_)
-    ));
+    assert!(matches!(read().services[0].resource.phase, Phase::Running(_)));
     server.stop();
     state = read();
     state.runtime.runs[0].status = "running".into();
@@ -666,14 +574,8 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let binary = std::env::var("CONTROL_QA_CONTROL_BIN").unwrap();
     let echo = Echo::start();
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = PathBuf::from(format!(
-        "/private/tmp/control-tcp-live-{}-{stamp}",
-        std::process::id()
-    ));
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = PathBuf::from(format!("/private/tmp/control-tcp-live-{}-{stamp}", std::process::id()));
     let state_dir = root.join("state");
     let config_dir = root.join("config");
     fs::create_dir_all(&state_dir).unwrap();
@@ -688,15 +590,8 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     // Synthetic credential for this private fixture only; never read personal credentials.
     let cookie = "c".repeat(64);
     fs::write(state_dir.join("operator-session"), &cookie).unwrap();
-    fs::set_permissions(
-        state_dir.join("operator-session"),
-        fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let address = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
+    fs::set_permissions(state_dir.join("operator-session"), fs::Permissions::from_mode(0o600)).unwrap();
+    let address = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
     let url = format!("http://{address}");
     let (mut state, run, _) = super::tests::fixture();
     state.runtime.runs[0].status = "completed".into();
@@ -713,12 +608,8 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
         "cat > /tmp/fixture.rs <<'CONTROL_RUST'\n{PROGRAM}\nCONTROL_RUST\nrustc --edition=2024 -O /tmp/fixture.rs -o /workspace/fixture\nexec /workspace/fixture"
     ));
     state.services[0] = serde_json::from_value(value).unwrap();
-    let write = |s: &State| {
-        fs::write(state_dir.join("state.json"), serde_json::to_vec(s).unwrap()).unwrap()
-    };
-    let read = || {
-        serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap()
-    };
+    let write = |s: &State| fs::write(state_dir.join("state.json"), serde_json::to_vec(s).unwrap()).unwrap();
+    let read = || serde_json::from_slice::<State>(&fs::read(state_dir.join("state.json")).unwrap()).unwrap();
     write(&state);
     let launch = || {
         let log = fs::OpenOptions::new()
@@ -732,10 +623,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
                 .env("CONTROL_STATE_DIR", &state_dir)
                 .env("CONTROL_CONFIG_DIR", &config_dir)
                 .env("CONTROL_CODEX_AUTH_FILE", root.join("missing-qa-auth.json"))
-                .env(
-                    "CONTROL_CLAUDE_AUTH_FILE",
-                    root.join("missing-qa-claude.json"),
-                )
+                .env("CONTROL_CLAUDE_AUTH_FILE", root.join("missing-qa-claude.json"))
                 .env("CONTROL_ADDR", address.to_string())
                 .env_remove("CONTROL_WORKER_IMAGE")
                 .env_remove("CONTROL_CLAUDE_IMAGE")
@@ -755,12 +643,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     server.stop();
     state = read();
     let service_id = state.services[0].resource.id.clone();
-    let container = state.services[0]
-        .resource
-        .phase
-        .container()
-        .unwrap()
-        .clone();
+    let container = state.services[0].resource.phase.container().unwrap().clone();
     crate::services::relay_capable(crate::engine::isolation(), &state.services[0]).unwrap();
     crate::services::port_binding(crate::engine::isolation(), &state.services[0], &container).unwrap();
     struct Cleanup(ContainerId);
@@ -869,21 +752,15 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
             .and_then(|r| r.text().ok())
             .is_some_and(|html| {
                 let document = scraper::Html::parse_document(&html);
-                document
-                    .select(&scraper::Selector::parse("article").unwrap())
-                    .any(|a| {
-                        a.select(&scraper::Selector::parse("h3").unwrap())
-                            .any(|h| h.text().collect::<String>() == name)
-                            && a.text().collect::<String>().contains(" · ready")
-                    })
+                document.select(&scraper::Selector::parse("article").unwrap()).any(|a| {
+                    a.select(&scraper::Selector::parse("h3").unwrap())
+                        .any(|h| h.text().collect::<String>() == name)
+                        && a.text().collect::<String>().contains(" · ready")
+                })
             })
     };
     post(named("idle").id.as_str(), "seconds=100&loopback=yes");
-    wait(
-        || ui_ready("idle"),
-        5,
-        "idle egress helper listening before crash",
-    );
+    wait(|| ui_ready("idle"), 5, "idle egress helper listening before crash");
     wait(
         || named("ingress").approval.as_ref().unwrap().host_port != 0,
         8,
@@ -892,9 +769,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     let published = named("ingress").approval.unwrap().host_port;
     let roundtrip = |port: u16| {
         let mut socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         socket.write_all(b"hello").unwrap();
         socket.shutdown(Shutdown::Write).unwrap();
         let mut reply = Vec::new();
@@ -908,13 +783,7 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
         "outbound half-close and held session",
     );
     assert_eq!(
-        crate::engine::query(&[
-            "exec",
-            container.as_str(),
-            "cat",
-            "/workspace/outbound-result"
-        ])
-        .unwrap(),
+        crate::engine::query(&["exec", container.as_str(), "cat", "/workspace/outbound-result"]).unwrap(),
         "half-close-ok"
     );
     let before = echo.accepted.load(Ordering::Acquire);
@@ -934,26 +803,15 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     post(named("idle").id.as_str(), "revoke=yes");
     assert_eq!(named("ingress").approval.unwrap().host_port, published);
     roundtrip(published);
-    println!(
-        "Abrupt host restart and egress rebind: {:?}",
-        restart.elapsed()
-    );
+    println!("Abrupt host restart and egress rebind: {:?}", restart.elapsed());
     post(named("banner").id.as_str(), "seconds=30");
     wait(
-        || {
-            named("banner")
-                .approval
-                .as_ref()
-                .is_some_and(|a| a.host_port != 0)
-        },
+        || named("banner").approval.as_ref().is_some_and(|a| a.host_port != 0),
         3,
         "server-first banner bind",
     );
-    let mut banner =
-        TcpStream::connect(("127.0.0.1", named("banner").approval.unwrap().host_port)).unwrap();
-    banner
-        .set_read_timeout(Some(Duration::from_secs(4)))
-        .unwrap();
+    let mut banner = TcpStream::connect(("127.0.0.1", named("banner").approval.unwrap().host_port)).unwrap();
+    banner.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
     let mut greeting = [0; 7];
     banner.read_exact(&mut greeting).unwrap();
     assert_eq!(&greeting, b"banner\n");
@@ -966,23 +824,17 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     for (prefix, remainder) in [
         (
             b"F".as_slice(),
-            format!(
-                "OO / HTTP/1.1\r\nHost: localhost\r\nCookie: control_operator={cookie}\r\n\r\n"
-            )
-            .into_bytes(),
+            format!("OO / HTTP/1.1\r\nHost: localhost\r\nCookie: control_operator={cookie}\r\n\r\n").into_bytes(),
         ),
         (
             b"POST / HTTP/1.1\r\n".as_slice(),
-            format!("Cookie: control_operator={cookie}\r\nContent-Length: 1\r\n\r\n\0")
-                .into_bytes(),
+            format!("Cookie: control_operator={cookie}\r\nContent-Length: 1\r\n\r\n\0").into_bytes(),
         ),
         (&[0x16], vec![3, 1, 0, 4, 1, 0, 0, 0]),
     ] {
         let mut browser = TcpStream::connect(("127.0.0.1", published)).unwrap();
         browser.set_nodelay(true).unwrap();
-        browser
-            .set_read_timeout(Some(Duration::from_secs(4)))
-            .unwrap();
+        browser.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
         browser.write_all(prefix).unwrap();
         thread::sleep(Duration::from_millis(25));
         let _ = browser.write_all(&remainder);
@@ -990,13 +842,8 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
         assert_closed(browser.read(&mut bytes));
         wait(
             || {
-                crate::engine::query(&[
-                    "exec",
-                    container.as_str(),
-                    "cat",
-                    "/workspace/inbound-size",
-                ])
-                .is_ok_and(|n| n == "0")
+                crate::engine::query(&["exec", container.as_str(), "cat", "/workspace/inbound-size"])
+                    .is_ok_and(|n| n == "0")
             },
             3,
             "browser bytes rejected before service forwarding",
@@ -1025,20 +872,13 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     );
     post(named("expiry").id.as_str(), "seconds=2");
     wait(
-        || {
-            named("expiry")
-                .approval
-                .as_ref()
-                .is_some_and(|a| a.host_port != 0)
-        },
+        || named("expiry").approval.as_ref().is_some_and(|a| a.host_port != 0),
         2,
         "expiry listener bind",
     );
     let expiry_port = named("expiry").approval.unwrap().host_port;
     let mut expiring = TcpStream::connect(("127.0.0.1", expiry_port)).unwrap();
-    expiring
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    expiring.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     expiring.write_all(b"wait").unwrap();
     assert_closed(expiring.read(&mut buffer));
     wait(
@@ -1048,24 +888,14 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     );
     post(named("stall").id.as_str(), "seconds=30");
     wait(
-        || {
-            named("stall")
-                .approval
-                .as_ref()
-                .is_some_and(|a| a.host_port != 0)
-        },
+        || named("stall").approval.as_ref().is_some_and(|a| a.host_port != 0),
         3,
         "stall listener bind",
     );
-    let stalled =
-        TcpStream::connect(("127.0.0.1", named("stall").approval.unwrap().host_port)).unwrap();
-    stalled
-        .set_read_timeout(Some(Duration::from_secs(25)))
-        .unwrap();
+    let stalled = TcpStream::connect(("127.0.0.1", named("stall").approval.unwrap().host_port)).unwrap();
+    stalled.set_read_timeout(Some(Duration::from_secs(25))).unwrap();
     let mut sending = stalled.try_clone().unwrap();
-    sending
-        .set_write_timeout(Some(Duration::from_secs(25)))
-        .unwrap();
+    sending.set_write_timeout(Some(Duration::from_secs(25))).unwrap();
     let writer = thread::spawn(move || {
         let data: [u8; 65536] = std::array::from_fn(|i| i as u8);
         for _ in 0..256 {
@@ -1091,13 +921,10 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
         "Healthy slow reader resumed with exact payload after {:?}",
         stall.elapsed()
     );
-    let mut held =
-        TcpStream::connect(("127.0.0.1", named("stall").approval.unwrap().host_port)).unwrap();
+    let mut held = TcpStream::connect(("127.0.0.1", named("stall").approval.unwrap().host_port)).unwrap();
     held.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut sending = held.try_clone().unwrap();
-    sending
-        .set_write_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    sending.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
     let blocked = thread::spawn(move || {
         let data = [0; 65536];
         for _ in 0..256 {
@@ -1118,17 +945,11 @@ fn live_tcp_ports_preserve_half_close_and_recover_after_host_death() {
     );
     post(named("death").id.as_str(), "seconds=30");
     wait(
-        || {
-            named("death")
-                .approval
-                .as_ref()
-                .is_some_and(|a| a.host_port != 0)
-        },
+        || named("death").approval.as_ref().is_some_and(|a| a.host_port != 0),
         3,
         "death listener bind",
     );
-    let mut held =
-        TcpStream::connect(("127.0.0.1", named("death").approval.unwrap().host_port)).unwrap();
+    let mut held = TcpStream::connect(("127.0.0.1", named("death").approval.unwrap().host_port)).unwrap();
     held.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     held.write_all(b"waiting").unwrap();
     let current = read();

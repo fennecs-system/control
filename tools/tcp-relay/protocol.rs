@@ -77,10 +77,7 @@ impl Credit {
     }
 }
 pub fn write(writer: &mut impl Write, kind: Kind, data: &[u8]) -> io::Result<()> {
-    if data.len() > LIMIT
-        || (kind != Kind::Data && !data.is_empty())
-        || (kind == Kind::Data && data.is_empty())
-    {
+    if data.len() > LIMIT || (kind != Kind::Data && !data.is_empty()) || (kind == Kind::Data && data.is_empty()) {
         return Err(io::Error::other("Invalid relay frame size"));
     }
     let mut header = [0; 5];

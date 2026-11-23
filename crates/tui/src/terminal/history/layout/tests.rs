@@ -29,11 +29,7 @@ fn wrapped_ranges_preserve_utf8_combining_characters_and_span_styles() {
 }
 #[test]
 fn scrolling_beyond_u16_rows_and_resizing_only_indexes_retained_text() {
-    let text = Text::from(
-        (0..100_000)
-            .map(|n| Line::from(format!("row {n}")))
-            .collect::<Vec<_>>(),
-    );
+    let text = Text::from((0..100_000).map(|n| Line::from(format!("row {n}"))).collect::<Vec<_>>());
     let mut cache = Cache::default();
     cache.update(text, 80);
     assert!(!cache.dirty());

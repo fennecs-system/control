@@ -1,11 +1,12 @@
 //! Durable, credential-free commands. Model requests select capabilities, never mounts.
 mod tools;
-pub use tools::{JobCall, Tools};
-use crate::{tool_registry::AttemptRef, usage::Attempt, State};
+use crate::{State, tool_registry::AttemptRef, usage::Attempt};
 use control_effect::sync::{CancelToken, Recv};
-use control_isolation::{Access, Exec, Isolation, Limits, Logs, Network, Observed, RunSpec, Select, Size, States, Target, Tmpfs, User};
+use control_isolation::{
+    Access, Exec, Isolation, Limits, Logs, Network, Observed, RunSpec, Select, Size, States, Target, Tmpfs, User,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{self, Read},
@@ -13,6 +14,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+pub use tools::{JobCall, Tools};
 
 const MAX_JOBS: usize = 32;
 const OUTPUT_BYTES: usize = 16000;
@@ -37,8 +39,23 @@ pub struct Job {
 }
 impl Job {
     /// Reconciliation needs ownership fields, never retained command/output buffers.
-    pub fn identity(&self)->Self {
-        Self{id:self.id.clone(),generation:self.generation.clone(),image:self.image.clone(),node:self.node.clone(),command:String::new(),read_only:self.read_only,build_environment:self.build_environment,review_source:self.review_source,profile:self.profile,deadline_unix:self.deadline_unix,container_id:self.container_id.clone(),status:self.status.clone(),output:String::new(),exit_code:self.exit_code}
+    pub fn identity(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            generation: self.generation.clone(),
+            image: self.image.clone(),
+            node: self.node.clone(),
+            command: String::new(),
+            read_only: self.read_only,
+            build_environment: self.build_environment,
+            review_source: self.review_source,
+            profile: self.profile,
+            deadline_unix: self.deadline_unix,
+            container_id: self.container_id.clone(),
+            status: self.status.clone(),
+            output: String::new(),
+            exit_code: self.exit_code,
+        }
     }
     pub fn name(&self) -> String {
         format!("control-{}-job-{}", self.generation, self.id)
@@ -85,9 +102,16 @@ fn fail(message: &str) -> io::Error {
 
 fn environment_image(attempt: &Attempt, environment: &str) -> io::Result<String> {
     let image = match environment {
-        "worker" => attempt.image.clone().ok_or_else(|| fail("Missing captured worker image"))?,
-        "build" => crate::build_environment::image()?.ok_or_else(|| fail("No declared build environment; build/load the Nix build-image and configure build-image-id"))?,
-        "solver" => crate::solver::image()?.ok_or_else(|| fail("No pinned solver image; run nix run .#setup -- --solver to build it and configure solver-image-id"))?,
+        "worker" => attempt
+            .image
+            .clone()
+            .ok_or_else(|| fail("Missing captured worker image"))?,
+        "build" => crate::build_environment::image()?.ok_or_else(|| {
+            fail("No declared build environment; build/load the Nix build-image and configure build-image-id")
+        })?,
+        "solver" => crate::solver::image()?.ok_or_else(|| {
+            fail("No pinned solver image; run nix run .#setup -- --solver to build it and configure solver-image-id")
+        })?,
         _ => return Err(fail("Unknown declared environment")),
     };
     if !crate::runtime::pinned_image(&image) {
@@ -103,7 +127,9 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
         .find(|r| r.id == run && r.status == "running")
         .ok_or_else(|| fail("Run is not active"))?;
     crate::identity::authorize(&run.actor, run.action).map_err(fail)?;
-    if crate::delegation::pausing(run) {return Err(fail("Attempt is pausing for delegated work"));}
+    if crate::delegation::pausing(run) {
+        return Err(fail("Attempt is pausing for delegated work"));
+    }
     if run.question.as_ref().is_some_and(|q| q.answer.is_none()) {
         return Err(fail("Attempt is pausing for an answer"));
     }
@@ -143,30 +169,16 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     }
     Ok(job.summary())
 }
-fn start(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    nonce: &str,
-    input: Input,
-) -> io::Result<Value> {
+fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, input: Input) -> io::Result<Value> {
     if crate::shutdown::requested() {
         return Err(fail("Control is stopping"));
     }
-    if input.command.is_empty()
-        || input.command.len() > 16000
-        || !(1..=1800).contains(&input.timeout_seconds)
-    {
+    if input.command.is_empty() || input.command.len() > 16000 || !(1..=1800).contains(&input.timeout_seconds) {
         return Err(fail(
             "Command must contain 1–16000 bytes and timeout must be 1–1800 seconds",
         ));
     }
-    if nonce.is_empty()
-        || nonce.len() > 128
-        || !nonce
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
+    if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err(fail("Invalid request nonce"));
     }
     let id: String = ring::digest::digest(&ring::digest::SHA256, nonce.as_bytes()).as_ref()[..16]
@@ -176,13 +188,21 @@ fn start(
     let image = {
         let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
         let attempt = current(&mut state, run, generation)?;
-        if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) { return Ok(job.summary()); }
+        if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) {
+            return Ok(job.summary());
+        }
         environment_image(attempt, &input.environment)?
     };
-    let profile = if input.environment != "worker" { crate::worker_profile::Profile::Lite } else { crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image)? };
+    let profile = if input.environment != "worker" {
+        crate::worker_profile::Profile::Lite
+    } else {
+        crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image)?
+    };
     let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
     let owner_deadline = state.runtime.runs.iter().find(|r| r.id == run).and_then(|r| {
-        r.attempts.last().and_then(|a| crate::attempt_control::deadline(&state, r, a).map(|limit| a.started_unix.saturating_add(limit)))
+        r.attempts.last().and_then(|a| {
+            crate::attempt_control::deadline(&state, r, a).map(|limit| a.started_unix.saturating_add(limit))
+        })
     });
     let started = now();
     let deadline_unix = effective_deadline(started, input.timeout_seconds, owner_deadline)?;
@@ -190,19 +210,17 @@ fn start(
     if attempt.turn_mailbox.as_ref().is_some_and(|m| m.accepted().is_some()) {
         return Err(fail("The attempt has handed off; no new workspace jobs may start"));
     }
-    if environment_image(attempt, &input.environment)? != image { return Err(fail("Captured command image changed")); }
+    if environment_image(attempt, &input.environment)? != image {
+        return Err(fail("Captured command image changed"));
+    }
     if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) {
         return Ok(job.summary());
     }
     if attempt.command_jobs.iter().any(Job::active) {
-        return Err(fail(
-            "An active command already owns this attempt; await or cancel it",
-        ));
+        return Err(fail("An active command already owns this attempt; await or cancel it"));
     }
     if attempt.command_jobs.len() >= MAX_JOBS {
-        return Err(fail(
-            "Attempt command limit reached; continue in a new turn",
-        ));
+        return Err(fail("Attempt command limit reached; continue in a new turn"));
     }
     let job = Job {
         id,
@@ -248,13 +266,21 @@ fn start(
     Ok(summary)
 }
 fn effective_deadline(now: u64, requested: u64, owner: Option<u64>) -> io::Result<u64> {
-    let deadline = owner.map_or(now.saturating_add(requested), |end| end.min(now.saturating_add(requested)));
-    if deadline <= now { return Err(fail("The attempt deadline has elapsed; use a persistent service for work that must outlive this attempt")); }
+    let deadline = owner.map_or(now.saturating_add(requested), |end| {
+        end.min(now.saturating_add(requested))
+    });
+    if deadline <= now {
+        return Err(fail(
+            "The attempt deadline has elapsed; use a persistent service for work that must outlive this attempt",
+        ));
+    }
     Ok(deadline)
 }
 fn create(isolation: &dyn Isolation, job: &Job) -> io::Result<String> {
     let workspace = job.workspace()?.canonicalize()?;
-    if job.build_environment { crate::build_environment::check(isolation, &job.image, &workspace)?; }
+    if job.build_environment {
+        crate::build_environment::check(isolation, &job.image, &workspace)?;
+    }
     let meta = fs::symlink_metadata(&workspace)?;
     if !meta.is_dir() || meta.uid() == 0 {
         return Err(fail("Expected private non-root workspace"));
@@ -271,51 +297,93 @@ fn create(isolation: &dyn Isolation, job: &Job) -> io::Result<String> {
             .unwrap()
             .join("command-scratch")
             .join(&job.id);
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&scratch)?;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(&scratch)?;
         if !fs::symlink_metadata(&scratch)?.is_dir() {
             return Err(fail("Invalid command scratch directory"));
         }
         let scratch = scratch.canonicalize()?;
-        Some(scratch
-            .to_str()
-            .filter(|s| !s.contains([',', '\n', '\r']))
-            .ok_or_else(|| fail("Invalid scratch mount"))?
-            .to_owned())
+        Some(
+            scratch
+                .to_str()
+                .filter(|s| !s.contains([',', '\n', '\r']))
+                .ok_or_else(|| fail("Invalid scratch mount"))?
+                .to_owned(),
+        )
     } else {
         None
     };
-    let owner = User { uid: meta.uid(), gid: meta.gid() };
-    isolation.create(&container(job, path, owner, scratch.as_deref())).map(|id| id.as_str().to_owned())
+    let owner = User {
+        uid: meta.uid(),
+        gid: meta.gid(),
+    };
+    isolation
+        .create(&container(job, path, owner, scratch.as_deref()))
+        .map(|id| id.as_str().to_owned())
 }
 /// The container for one command; `scratch` is the build target a read-only
 /// command writes to.
 fn container(job: &Job, path: &str, owner: User, scratch: Option<&str>) -> RunSpec {
     let name = job.name();
     let (pids, memory) = if job.build_environment { (512, 4) } else { (256, 2) };
-    let access = if job.read_only { Access::ReadOnly } else { Access::ReadWrite };
+    let access = if job.read_only {
+        Access::ReadOnly
+    } else {
+        Access::ReadWrite
+    };
     let spec = RunSpec {
         name: name.clone(),
         image: job.image.as_str().into(),
-        argv: ["bash", "-c", "exec 2>&1; eval -- \"$1\"", "control-command", &job.command].map(str::to_owned).to_vec(),
+        argv: [
+            "bash",
+            "-c",
+            "exec 2>&1; eval -- \"$1\"",
+            "control-command",
+            &job.command,
+        ]
+        .map(str::to_owned)
+        .to_vec(),
         user: Some(owner),
         workdir: Some("/workspace".into()),
-        root: if job.profile.readonly_root() { Access::ReadOnly } else { Access::ReadWrite },
-        limits: Limits { pids: Some(pids), memory: Some(Size::Gib(memory)), cpus: Some(2), ..Limits::default() },
+        root: if job.profile.readonly_root() {
+            Access::ReadOnly
+        } else {
+            Access::ReadWrite
+        },
+        limits: Limits {
+            pids: Some(pids),
+            memory: Some(Size::Gib(memory)),
+            cpus: Some(2),
+            ..Limits::default()
+        },
         network: Network::None,
-        logs: Logs::Local { max_size: Size::Mib(1), max_files: 2 },
+        logs: Logs::Local {
+            max_size: Size::Mib(1),
+            max_files: 2,
+        },
         ..RunSpec::default()
     }
     .label("dev.control.node", &job.node)
     .label("dev.control.attempt", &name)
     .label("dev.control.purpose", "command")
-    .tmpfs(Tmpfs { exec: Exec::Allow, nodev: true, ..Tmpfs::new("/tmp", Size::Gib(1)) })
-    .tmpfs(Tmpfs { nodev: true, ..Tmpfs::new("/home/agent", Size::Mib(128)).owned(owner) })
+    .tmpfs(Tmpfs {
+        exec: Exec::Allow,
+        nodev: true,
+        ..Tmpfs::new("/tmp", Size::Gib(1))
+    })
+    .tmpfs(Tmpfs {
+        nodev: true,
+        ..Tmpfs::new("/home/agent", Size::Mib(128)).owned(owner)
+    })
     .env("HOME", "/home/agent")
     .env("CARGO_BUILD_JOBS", "2")
-    .env(if job.read_only { "CARGO_TARGET_DIR" } else { "CONTROL_WORKSPACE_WRITABLE" }, if job.read_only { "/build-target" } else { "1" })
+    .env(
+        if job.read_only {
+            "CARGO_TARGET_DIR"
+        } else {
+            "CONTROL_WORKSPACE_WRITABLE"
+        },
+        if job.read_only { "/build-target" } else { "1" },
+    )
     .bind(path, "/workspace", access);
     match scratch {
         Some(scratch) => spec.bind(scratch, "/build-target", Access::ReadWrite),
@@ -358,7 +426,10 @@ impl Inspection {
 }
 fn inspect(isolation: &dyn Isolation, job: &Job) -> io::Result<Inspection> {
     let observed = isolation.inspect(&[Target::Name(&job.name())])?;
-    let inspection = <[Observed; 1]>::try_from(observed).ok().and_then(|[observed]| Inspection::of(observed)).ok_or_else(|| fail("Invalid command inspection"))?;
+    let inspection = <[Observed; 1]>::try_from(observed)
+        .ok()
+        .and_then(|[observed]| Inspection::of(observed))
+        .ok_or_else(|| fail("Invalid command inspection"))?;
     verify(job, &inspection)?;
     Ok(inspection)
 }
@@ -366,15 +437,8 @@ fn verify(job: &Job, inspection: &Inspection) -> io::Result<()> {
     let workspace = job.workspace()?.canonicalize()?;
     verify_identity(job, inspection, &workspace)
 }
-fn verify_identity(
-    job: &Job,
-    inspection: &Inspection,
-    workspace: &std::path::Path,
-) -> io::Result<()> {
-    if job
-            .container_id
-            .as_ref()
-            .is_some_and(|id| id != &inspection.id)
+fn verify_identity(job: &Job, inspection: &Inspection, workspace: &std::path::Path) -> io::Result<()> {
+    if job.container_id.as_ref().is_some_and(|id| id != &inspection.id)
         || inspection.name != format!("/{}", job.name())
         || inspection.node != job.node
         || inspection.attempt != job.name()
@@ -384,9 +448,7 @@ fn verify_identity(
         || inspection.network != "none"
         || inspection.readonly_root != job.profile.readonly_root()
     {
-        return Err(fail(
-            "Command container identity changed; replacement was not adopted",
-        ));
+        return Err(fail("Command container identity changed; replacement was not adopted"));
     }
     Ok(())
 }
@@ -403,11 +465,12 @@ pub fn stop(isolation: &dyn Isolation, job: &Job) -> io::Result<()> {
     .map_err(fail)?;
     // A timed-out Docker start may still be in flight. Confirm removal, not just
     // a momentarily stopped state, so no late start can race publication.
-    let select = job.container_id.as_deref().map_or_else(|| Select::Name(job.name()), |id| Select::Id(id.into()));
+    let select = job
+        .container_id
+        .as_deref()
+        .map_or_else(|| Select::Name(job.name()), |id| Select::Id(id.into()));
     if !isolation.list(States::All, &select)?.is_empty() {
-        return Err(fail(
-            "Command resource removal unconfirmed; checkpoint remains fenced",
-        ));
+        return Err(fail("Command resource removal unconfirmed; checkpoint remains fenced"));
     }
     Ok(())
 }
@@ -426,7 +489,10 @@ fn bounded_output(text: &str) -> String {
     format!("[earlier output omitted]\n{}", &text[offset..])
 }
 fn logs(isolation: &dyn Isolation, job: &Job) -> io::Result<String> {
-    let id = job.container_id.as_deref().ok_or_else(|| fail("Missing command container ID"))?;
+    let id = job
+        .container_id
+        .as_deref()
+        .ok_or_else(|| fail("Missing command container ID"))?;
     let mut child = isolation.logs(&id.into(), 200)?;
     let mut reader = child.stdout.take().unwrap();
     let drain = std::thread::spawn(move || {
@@ -461,9 +527,7 @@ fn logs(isolation: &dyn Isolation, job: &Job) -> io::Result<String> {
         },
         Err(_) => false,
     };
-    let text = drain
-        .join()
-        .map_err(|_| fail("Command log reader stopped"))?;
+    let text = drain.join().map_err(|_| fail("Command log reader stopped"))?;
     if success {
         Ok(text)
     } else {
@@ -590,8 +654,7 @@ fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
             "stopping"
         }
         .into();
-        job.output =
-            "Command start failed; its admitted resource was stopped or remains fenced.".into();
+        job.output = "Command start failed; its admitted resource was stopped or remains fenced.".into();
         activity(&shared, &run, &job, true);
         return;
     }
@@ -666,19 +729,9 @@ fn exit_waiter(isolation: &dyn Isolation, job: &Job) -> Option<crate::child::Wat
 /// Before any checkpoint, wait for admitted launches and cancel every writer.
 /// Failure fences publication rather than racing a background container.
 pub fn quiesce(shared: &Arc<Mutex<State>>, run: &str, generation: &str) -> io::Result<()> {
-    quiesce_until(
-        shared,
-        run,
-        generation,
-        Instant::now() + Duration::from_secs(20),
-    )
+    quiesce_until(shared, run, generation, Instant::now() + Duration::from_secs(20))
 }
-fn quiesce_until(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    deadline: Instant,
-) -> io::Result<()> {
+fn quiesce_until(shared: &Arc<Mutex<State>>, run: &str, generation: &str, deadline: Instant) -> io::Result<()> {
     loop {
         let mut state = shared
             .lock()

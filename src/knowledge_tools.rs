@@ -71,10 +71,7 @@ struct Record<'a> {
     revision: Option<u64>,
     admitted: bool,
 }
-fn records<'a>(
-    state: &'a State,
-    run: Option<&'a crate::runtime::Run>,
-) -> impl Iterator<Item = Record<'a>> {
+fn records<'a>(state: &'a State, run: Option<&'a crate::runtime::Run>) -> impl Iterator<Item = Record<'a>> {
     let captured = run
         .and_then(|run| run.context.as_ref())
         .into_iter()
@@ -86,17 +83,13 @@ fn records<'a>(
             revision: Some(doc.revision),
             admitted: false,
         });
-    let local = state
-        .documents
-        .iter()
-        .filter(move |_| run.is_none())
-        .map(|doc| Record {
-            id: format!("document:{}", doc.id),
-            title: &doc.title,
-            body: &doc.body,
-            revision: Some(doc.revision),
-            admitted: false,
-        });
+    let local = state.documents.iter().filter(move |_| run.is_none()).map(|doc| Record {
+        id: format!("document:{}", doc.id),
+        title: &doc.title,
+        body: &doc.body,
+        revision: Some(doc.revision),
+        admitted: false,
+    });
     let accepted = state
         .collective
         .proposals
@@ -112,25 +105,17 @@ fn records<'a>(
         });
     captured.chain(local).chain(accepted)
 }
-pub fn read(
-    state: &State,
-    run: Option<&crate::runtime::Run>,
-    name: &str,
-    args: &Value,
-) -> Result<Value, &'static str> {
+pub fn read(state: &State, run: Option<&crate::runtime::Run>, name: &str, args: &Value) -> Result<Value, &'static str> {
     match canonical(name) {
         "control.knowledge.search" => {
-            let input: Search = serde_json::from_value(args.clone())
-                .map_err(|_| "Expected query and optional limit")?;
+            let input: Search =
+                serde_json::from_value(args.clone()).map_err(|_| "Expected query and optional limit")?;
             let limit = input.limit.unwrap_or(10);
-            if input.query.trim().is_empty()
-                || input.query.chars().count() > 200
-                || !(1..=10).contains(&limit)
-            {
+            if input.query.trim().is_empty() || input.query.chars().count() > 200 || !(1..=10).contains(&limit) {
                 return Err("Use a query of 1–200 characters and limit of 1–10");
             }
             let query = input.query.to_lowercase();
-            let terms=query.split_whitespace().collect::<Vec<_>>();
+            let terms = query.split_whitespace().collect::<Vec<_>>();
             let results=records(state,run).filter(|record| {
                 let title=record.title.to_lowercase();let body=record.body.to_lowercase();
                 terms.iter().all(|term|title.contains(term)||body.contains(term))
@@ -138,8 +123,8 @@ pub fn read(
             Ok(json!({"results":results}))
         }
         "control.knowledge.read" => {
-            let input: Read = serde_json::from_value(args.clone())
-                .map_err(|_| "Expected id and optional offset/limit")?;
+            let input: Read =
+                serde_json::from_value(args.clone()).map_err(|_| "Expected id and optional offset/limit")?;
             let offset = input.offset.unwrap_or(0);
             let limit = input.limit.unwrap_or(4000);
             if input.id.len() > 200 || offset > 32000 || !(1..=4000).contains(&limit) {
@@ -152,14 +137,9 @@ pub fn read(
             let body = chars.by_ref().take(limit).collect::<String>();
             let next = chars.next().map(|_| offset + body.chars().count());
             let mut result = json!({"id":record.id,"title":record.title.chars().take(280).collect::<String>(),"body":body,"revision":record.revision,"admitted":record.admitted,"next_offset":next});
-            if let Some(index) = input
-                .id
-                .strip_prefix("claim:")
-                .and_then(|id| id.parse::<usize>().ok())
-            {
+            if let Some(index) = input.id.strip_prefix("claim:").and_then(|id| id.parse::<usize>().ok()) {
                 let proposal = &state.collective.proposals[index];
-                result["evidence"] =
-                    json!(proposal.evidence.chars().take(1000).collect::<String>());
+                result["evidence"] = json!(proposal.evidence.chars().take(1000).collect::<String>());
                 result["scope"] = json!(proposal.scope.chars().take(300).collect::<String>());
                 result["validity"] = json!(proposal.validity.chars().take(300).collect::<String>());
                 result["source"]=json!(proposal.source.as_ref().map(|source|json!({"actor":source.actor,"chat":source.chat,"run":source.run,"attempt":source.attempt,"lens_count":source.lenses.len(),"document_count":source.documents.len()})));
@@ -175,8 +155,8 @@ fn propose(
     source: Source,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> Result<Value, &'static str> {
-    let mut input: Proposal = serde_json::from_value(args.clone())
-        .map_err(|_| "Expected claim, evidence, scope and validity")?;
+    let mut input: Proposal =
+        serde_json::from_value(args.clone()).map_err(|_| "Expected claim, evidence, scope and validity")?;
     for (text, limit) in [
         (&mut input.claim, 280),
         (&mut input.evidence, 1000),
@@ -186,9 +166,7 @@ fn propose(
         *text = text.trim().to_owned();
         if text.is_empty()
             || text.chars().count() > limit
-            || text
-                .chars()
-                .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+            || text.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
         {
             return Err("Keep claim/evidence/scope/recheck within 280/1000/300/300 characters");
         }
@@ -196,19 +174,11 @@ fn propose(
     if input.chat.as_ref().is_some_and(|chat| chat != &source.chat) {
         return Err("Proposal chat must match the caller");
     }
-    let existing = state
-        .collective
-        .proposals
-        .iter()
-        .enumerate()
-        .find(|(_, p)| {
-            p.source.as_ref().is_some_and(|s| {
-                s.run == source.run
-                    && s.attempt == source.attempt
-                    && s.chat == source.chat
-                    && s.nonce == source.nonce
-            })
-        });
+    let existing = state.collective.proposals.iter().enumerate().find(|(_, p)| {
+        p.source.as_ref().is_some_and(|s| {
+            s.run == source.run && s.attempt == source.attempt && s.chat == source.chat && s.nonce == source.nonce
+        })
+    });
     if let Some((index, previous)) = existing {
         if previous.claim != input.claim
             || previous.evidence != input.evidence
@@ -217,9 +187,7 @@ fn propose(
         {
             return Err("Request identity already used for another proposal");
         }
-        return Ok(
-            json!({"id":format!("claim:{index}"),"status":previous.status,"review":"/knowledge?mode=review"}),
-        );
+        return Ok(json!({"id":format!("claim:{index}"),"status":previous.status,"review":"/knowledge?mode=review"}));
     }
     if state.collective.proposals.len() >= MAX_PROPOSALS {
         return Err("Knowledge proposal capacity reached; operator maintenance required");
@@ -233,17 +201,14 @@ fn propose(
         return Err("That claim already exists; review the existing entry");
     }
     let index = state.collective.proposals.len();
-    state
-        .collective
-        .proposals
-        .push(crate::collective::Knowledge {
-            claim: input.claim,
-            evidence: input.evidence,
-            scope: input.scope,
-            validity: input.validity,
-            status: "pending".into(),
-            source: Some(source),
-        });
+    state.collective.proposals.push(crate::collective::Knowledge {
+        claim: input.claim,
+        evidence: input.evidence,
+        scope: input.scope,
+        validity: input.validity,
+        status: "pending".into(),
+        source: Some(source),
+    });
     if save(state).is_err() {
         state.collective.proposals.pop();
         return Err("Could not save knowledge proposal");
@@ -271,12 +236,7 @@ pub fn worker(
     if canonical(name) != "control.knowledge.propose" {
         return read(state, Some(run), name, args);
     }
-    if nonce.is_empty()
-        || nonce.len() > 128
-        || !nonce
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
+    if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err("Missing or invalid request identity");
     }
     let context = run.context.as_ref();
@@ -318,11 +278,7 @@ pub fn local(
         .ok_or("Local operator chat not found")?;
     let bytes = serde_json::to_vec(args).map_err(|_| "Invalid proposal")?;
     let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-    let nonce = digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let nonce = digest.as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
     let source = Source {
         actor: Actor::LocalOperator,
         chat: session.id.clone(),
@@ -346,7 +302,12 @@ pub(crate) fn pending_json(state: &State, chat: &str) -> Vec<Value> {
 }
 /// Chats with a pending proposal, for the node-wide request view.
 pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
-    state.collective.proposals.iter().filter(|p| p.status == "pending").filter_map(|p| p.source.as_ref().map(|s| s.chat.as_str()))
+    state
+        .collective
+        .proposals
+        .iter()
+        .filter(|p| p.status == "pending")
+        .filter_map(|p| p.source.as_ref().map(|s| s.chat.as_str()))
 }
 /// The in-chat request panel: the same `/review` form as Knowledge → Review.
 pub(crate) fn pending_panel(pending: &[Value]) -> String {
@@ -369,8 +330,16 @@ pub fn review_action(
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> Result<(), &'static str> {
     if path == "/review" {
-        let pending = fields.get("id").and_then(|id| id.parse::<usize>().ok()).and_then(|index| state.collective.proposals.get(index)).is_some_and(|p| p.status == "pending");
-        if !pending || !fields.get("decision").is_some_and(|d| d == "accepted" || d == "rejected") {
+        let pending = fields
+            .get("id")
+            .and_then(|id| id.parse::<usize>().ok())
+            .and_then(|index| state.collective.proposals.get(index))
+            .is_some_and(|p| p.status == "pending");
+        if !pending
+            || !fields
+                .get("decision")
+                .is_some_and(|d| d == "accepted" || d == "rejected")
+        {
             return Err(STALE);
         }
     }

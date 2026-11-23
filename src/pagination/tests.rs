@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn windows_are_bounded_and_stale_cursors_return_to_latest() {

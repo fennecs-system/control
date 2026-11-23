@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn watch() -> Watch {
@@ -51,10 +50,7 @@ fn notification_pages_do_not_spend_context_on_logs_or_hide_source_loss() {
     assert_eq!((page.events.len(), page.cursor, page.gap), (1, 1001, false));
     assert!(matches!(page.events[0].0.event, Event::Notification(_)));
     let logs = select_page(frames.clone(), 0, 1001, true, 200);
-    assert_eq!(
-        (logs.events.len(), logs.cursor, logs.gap),
-        (200, 200, false)
-    );
+    assert_eq!((logs.events.len(), logs.cursor, logs.gap), (200, 200, false));
     frames.remove(400);
     assert!(
         select_page(frames, 0, 1001, false, 200).gap,
@@ -73,10 +69,7 @@ fn notification_pages_do_not_spend_context_on_logs_or_hide_source_loss() {
         false,
         200,
     );
-    assert!(
-        page.gap,
-        "truncated notification evidence requires resynchronisation"
-    );
+    assert!(page.gap, "truncated notification evidence requires resynchronisation");
 }
 
 #[test]
@@ -144,30 +137,17 @@ fn filtering_keeps_raw_spool_and_reports_missing_evidence() {
         seq,
         event: Event::Line(text.as_bytes().to_vec()),
     });
-    fs::write(
-        &path,
-        input.iter().flat_map(Frame::encode).collect::<Vec<_>>(),
-    )
-    .unwrap();
+    fs::write(&path, input.iter().flat_map(Frame::encode).collect::<Vec<_>>()).unwrap();
     for frame in &input {
         watch.observe(frame);
     }
     assert_eq!(watch.lines, 0);
     let page = read_frames(&path, 0, 1);
     assert_eq!(page[0].0, input[0]);
-    assert!(
-        !source_gap(&page, 0, watch.seen, 1),
-        "a full page is not a gap"
-    );
-    assert!(
-        source_gap(&page, 0, watch.seen, 200),
-        "a missing tail is a gap"
-    );
+    assert!(!source_gap(&page, 0, watch.seen, 1), "a full page is not a gap");
+    assert!(source_gap(&page, 0, watch.seen, 200), "a missing tail is a gap");
     assert_eq!(read_frames(&path, 1, 200)[0].0, input[1]);
-    assert_eq!(
-        watch.lines, 0,
-        "reading neither selects nor acknowledges events"
-    );
+    assert_eq!(watch.lines, 0, "reading neither selects nor acknowledges events");
     fs::remove_file(&path).unwrap();
     assert!(source_gap(&read_frames(&path, 0, 200), 0, watch.seen, 200));
     assert!(!source_gap(&[], watch.seen, watch.seen, 200));
@@ -175,13 +155,7 @@ fn filtering_keeps_raw_spool_and_reports_missing_evidence() {
         seq: 5,
         event: Event::Line(b"status: silent gap".to_vec()),
     });
-    assert_eq!(
-        watch.gap,
-        Some(Gap {
-            after: 2,
-            through: 4
-        })
-    );
+    assert_eq!(watch.gap, Some(Gap { after: 2, through: 4 }));
     watch.observe_for_test(6, Some(1));
     assert_eq!(
         (watch.lines, watch.exits.len()),
@@ -252,17 +226,40 @@ fn observed_frames_advance_once_and_a_transient_exit_ends_the_watch() {
 /// salience filter the same evidence stays readable but only changes wake.
 #[test]
 fn filtered_notifications_stay_readable_without_waking_and_survive_restart() {
-    let filter = serde_json::from_value(serde_json::json!({"rules":[[{"kind":"change","field":"/record"},{"kind":"debounce","seconds":5}]]})).unwrap();
-    let mut watch = Watch { notification_channel: true, salience: Some(Box::new(Salience::new(filter))), ..watch() };
-    let notification = |seq: u64, record: &str| Frame { seq, event: Event::Notification(format!(r#"{{"record":"{record}"}}"#).into_bytes()) };
-    let frames = (1..=50).map(|seq| notification(seq, "unchanged")).chain([notification(51, "new")]).collect::<Vec<_>>();
-    for (index, frame) in frames.iter().enumerate() { watch.observe_at(frame, index as u64 * 10); }
-    assert_eq!((watch.pending_notifications(), watch.held_notifications()), (0, 1), "held until quiet");
+    let filter = serde_json::from_value(
+        serde_json::json!({"rules":[[{"kind":"change","field":"/record"},{"kind":"debounce","seconds":5}]]}),
+    )
+    .unwrap();
+    let mut watch = Watch {
+        notification_channel: true,
+        salience: Some(Box::new(Salience::new(filter))),
+        ..watch()
+    };
+    let notification = |seq: u64, record: &str| Frame {
+        seq,
+        event: Event::Notification(format!(r#"{{"record":"{record}"}}"#).into_bytes()),
+    };
+    let frames = (1..=50)
+        .map(|seq| notification(seq, "unchanged"))
+        .chain([notification(51, "new")])
+        .collect::<Vec<_>>();
+    for (index, frame) in frames.iter().enumerate() {
+        watch.observe_at(frame, index as u64 * 10);
+    }
+    assert_eq!(
+        (watch.pending_notifications(), watch.held_notifications()),
+        (0, 1),
+        "held until quiet"
+    );
     let mut restored: Watch = serde_json::from_slice(&serde_json::to_vec(&watch).unwrap()).unwrap();
     assert!(!restored.release(5_000));
     assert!(restored.release(5_500), "the debounce releases after restart");
     let notifications = restored.notifications.as_deref().unwrap();
-    assert_eq!((notifications.pending, notifications.through), (1, 51), "one wake with the latest record");
+    assert_eq!(
+        (notifications.pending, notifications.through),
+        (1, 51),
+        "one wake with the latest record"
+    );
     assert_eq!(notifications.recent, [r#"{"record":"new"}"#]);
     // A change that reverts within the quiet period never wakes.
     restored.observe_at(&notification(52, "unchanged"), 6_000);
@@ -270,12 +267,21 @@ fn filtered_notifications_stay_readable_without_waking_and_survive_restart() {
     assert!(!restored.release(20_000));
     assert_eq!(restored.pending_notifications(), 1);
     let summary = restored.summary();
-    assert_eq!((summary["salience"]["woke"].clone(), summary["salience"]["retained"].clone()), (1.into(), 53.into()));
+    assert_eq!(
+        (
+            summary["salience"]["woke"].clone(),
+            summary["salience"]["retained"].clone()
+        ),
+        (1.into(), 53.into())
+    );
     // Every notification remains in the readable event view.
     let spooled = frames.into_iter().map(|frame| (frame, false)).collect::<Vec<_>>();
     assert_eq!(select_page(spooled, 0, 51, false, 200).events.len(), 51);
     // Unfiltered and legacy watches keep waking on every notification.
-    let mut plain = Watch { notification_channel: true, ..self::watch() };
+    let mut plain = Watch {
+        notification_channel: true,
+        ..self::watch()
+    };
     plain.observe(&notification(1, "a"));
     plain.observe(&notification(2, "a"));
     assert_eq!(plain.pending_notifications(), 2);
@@ -284,13 +290,35 @@ fn filtered_notifications_stay_readable_without_waking_and_survive_restart() {
 
 #[test]
 fn start_and_stop_return_a_brief_while_status_keeps_provenance() {
-    let watch = Watch { notification_channel: true, created_by: Some(Creator { run: "r".into(), attempt: "a".into() }), ..self::watch() };
+    let watch = Watch {
+        notification_channel: true,
+        created_by: Some(Creator {
+            run: "r".into(),
+            attempt: "a".into(),
+        }),
+        ..self::watch()
+    };
     let (summary, brief) = (watch.summary(), watch.brief());
-    assert_eq!((summary["created_by"]["run"].as_str(), summary["service_generation"].as_u64()), (Some("r"), Some(1)));
-    assert!(brief.get("created_by").is_none() && brief.get("service_generation").is_none(), "{brief}");
+    assert_eq!(
+        (
+            summary["created_by"]["run"].as_str(),
+            summary["service_generation"].as_u64()
+        ),
+        (Some("r"), Some(1))
+    );
+    assert!(
+        brief.get("created_by").is_none() && brief.get("service_generation").is_none(),
+        "{brief}"
+    );
     // The channel's fixed environment and format live in the tool description.
-    assert_eq!(brief["notification_channel"], serde_json::json!({"fd":3,"max_bytes":crate::watch_frame::MAX_LINE}));
-    assert_eq!((brief["watch_id"].as_str(), brief["active"].as_bool()), (Some("w-1"), Some(true)));
+    assert_eq!(
+        brief["notification_channel"],
+        serde_json::json!({"fd":3,"max_bytes":crate::watch_frame::MAX_LINE})
+    );
+    assert_eq!(
+        (brief["watch_id"].as_str(), brief["active"].as_bool()),
+        (Some("w-1"), Some(true))
+    );
 }
 
 mod profile;

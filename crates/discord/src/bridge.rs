@@ -1,14 +1,17 @@
-use control_identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
-use control_ingress as discord;
+use super::{components, delivery::Snapshot, gateway, permissions as discord_permissions};
+use control_client::{
+    channel::{self, Channel, Inbound, Posted, Recipient},
+    operator,
+};
 use control_config as config;
 use control_identity as identity;
-use super::{components, gateway, permissions as discord_permissions, delivery::Snapshot};
-use control_client::{channel::{self, Channel, Inbound, Posted, Recipient}, operator};
+use control_identity::{Action, Actor, DiscordId, DmBinding, DmBindings, Policy};
+use control_ingress as discord;
 use reqwest::{
     blocking::Client,
-    header::{HeaderMap, HeaderValue, AUTHORIZATION},
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -55,12 +58,19 @@ struct StateCache {
 impl StateCache {
     fn load(&mut self, directory: &Path) -> std::rc::Rc<Snapshot> {
         use std::os::unix::fs::MetadataExt;
-        let stamp = [directory.join("state.json"), directory.join(config::STATE_LOG)].map(|path| fs::symlink_metadata(path).ok().filter(|m| m.is_file()).map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len(), m.ino())));
+        let stamp = [directory.join("state.json"), directory.join(config::STATE_LOG)].map(|path| {
+            fs::symlink_metadata(path)
+                .ok()
+                .filter(|m| m.is_file())
+                .map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len(), m.ino()))
+        });
         let stamp = stamp[0].is_some().then_some(stamp);
         if stamp.is_none() || stamp != self.stamp {
             self.value = std::rc::Rc::new(
-                config::read_state_in(directory, isize::MAX as usize).ok().flatten()
-                    .unwrap_or_default()
+                config::read_state_in(directory, isize::MAX as usize)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
             );
             self.stamp = stamp;
         }
@@ -70,15 +80,24 @@ impl StateCache {
 /// Ok, retry after a delay, or a permanent refusal (None) that must not be retried.
 type Sent = Result<Option<DiscordId>, Option<Duration>>;
 fn retry_after(response: reqwest::blocking::Response) -> Duration {
-    Duration::from_secs_f64(response.json::<Value>().ok().and_then(|v| v["retry_after"].as_f64()).unwrap_or(5.0).clamp(1.0, 300.0))
+    Duration::from_secs_f64(
+        response
+            .json::<Value>()
+            .ok()
+            .and_then(|v| v["retry_after"].as_f64())
+            .unwrap_or(5.0)
+            .clamp(1.0, 300.0),
+    )
 }
 fn credential() -> Result<String, &'static str> {
     // Only this explicitly activated process consumes the private credential file.
     // It is never discovered from the checkout or logged.
     let path = config::directory()?.join("discord.env");
-    let contents = String::from_utf8(config::read_regular(&path, 16384, true)
-        .map_err(|_| "discord.env must be a private regular file (mode 0600, at most 16 KiB)")?)
-        .map_err(|_| "Could not load Discord configuration from discord.env.")?;
+    let contents = String::from_utf8(
+        config::read_regular(&path, 16384, true)
+            .map_err(|_| "discord.env must be a private regular file (mode 0600, at most 16 KiB)")?,
+    )
+    .map_err(|_| "Could not load Discord configuration from discord.env.")?;
     for line in contents.lines().map(str::trim) {
         let line = line.strip_prefix("export ").unwrap_or(line);
         if let Some((name, value)) = line.split_once('=') {
@@ -105,7 +124,11 @@ fn credential() -> Result<String, &'static str> {
 const CHANNEL: &str = "discord";
 /// A DM as the channel core addresses it.
 fn recipient(user: DiscordId, channel: DiscordId) -> Recipient {
-    Recipient { person: user.to_string(), conversation: channel.to_string(), home: Some(discord::chat_id(user, channel)) }
+    Recipient {
+        person: user.to_string(),
+        conversation: channel.to_string(),
+        home: Some(discord::chat_id(user, channel)),
+    }
 }
 /// This channel's settings and the DM recipients who may use the operator
 /// interface: architects with a matching binding. Identity alone decides who
@@ -113,15 +136,20 @@ fn recipient(user: DiscordId, channel: DiscordId) -> Recipient {
 /// are forwarded to them.
 fn operators(routes: &[Route]) -> (channel::Settings, Vec<Recipient>) {
     let settings = channel::settings(CHANNEL);
-    let (Ok(policy), Ok(dms)) = (Policy::load(), DmBindings::load()) else { return (settings, Vec::new()) };
+    let (Ok(policy), Ok(dms)) = (Policy::load(), DmBindings::load()) else {
+        return (settings, Vec::new());
+    };
     (settings, operating(&policy, &dms, routes))
 }
 /// The DM routes whose recipient operates under `policy` and `dms`.
 fn operating(policy: &Policy, dms: &DmBindings, routes: &[Route]) -> Vec<Recipient> {
-    routes.iter().filter_map(|route| {
-        let user = route.recipient?;
-        identity::operates(policy, &route.actor(user)?, dms).then(|| recipient(user, route.channel))
-    }).collect()
+    routes
+        .iter()
+        .filter_map(|route| {
+            let user = route.recipient?;
+            identity::operates(policy, &route.actor(user)?, dms).then(|| recipient(user, route.channel))
+        })
+        .collect()
 }
 fn posted(sent: Sent) -> Posted {
     match sent {
@@ -134,16 +162,27 @@ fn posted(sent: Sent) -> Posted {
 /// reference, requests as embeds with buttons (pressed through the gateway).
 impl channel::Transport for Bridge {
     fn capabilities(&self) -> channel::Capabilities {
-        channel::Capabilities { replies: true, buttons: true, edits: true, direct_only: true, max_text: 1800, ..Default::default() }
+        channel::Capabilities {
+            replies: true,
+            buttons: true,
+            edits: true,
+            direct_only: true,
+            max_text: 1800,
+            ..Default::default()
+        }
     }
     fn post(&self, to: &Recipient, text: &str, _reply_to: Option<&str>, key: &str) -> Posted {
-        let Ok(channel) = to.conversation.parse::<DiscordId>() else { return Posted::Refused };
+        let Ok(channel) = to.conversation.parse::<DiscordId>() else {
+            return Posted::Refused;
+        };
         posted(self.send(channel, text, Some(&nonce(key))))
     }
     /// An embed with buttons. If Discord rejects the body (for example a link
     /// button's local URL), it is retried without link buttons, then as text.
     fn post_request(&self, to: &Recipient, request: &channel::Request, text: &str, key: &str) -> Posted {
-        let Ok(channel) = to.conversation.parse::<DiscordId>() else { return Posted::Refused };
+        let Ok(channel) = to.conversation.parse::<DiscordId>() else {
+            return Posted::Refused;
+        };
         let nonce = nonce(key);
         for links in [true, false] {
             let mut body = components::message(request, &self.tag, links);
@@ -157,7 +196,9 @@ impl channel::Transport for Bridge {
         posted(self.send(channel, text, Some(&nonce)))
     }
     fn settle(&self, to: &Recipient, message: &str, settled: &channel::Settled) -> Posted {
-        let (Ok(channel), Ok(message)) = (to.conversation.parse::<DiscordId>(), message.parse::<DiscordId>()) else { return Posted::Refused };
+        let (Ok(channel), Ok(message)) = (to.conversation.parse::<DiscordId>(), message.parse::<DiscordId>()) else {
+            return Posted::Refused;
+        };
         if let Err(failure) = self.allowed(channel) {
             return posted(Err(failure));
         }
@@ -168,7 +209,9 @@ impl channel::Transport for Bridge {
             Ok(r) if r.status().is_client_error() => return Posted::Refused,
             _ => return Posted::Retry,
         };
-        let Some(edit) = components::settled(&current, settled) else { return Posted::Sent(None) };
+        let Some(edit) = components::settled(&current, settled) else {
+            return Posted::Sent(None);
+        };
         posted(Self::outcome(self.client.patch(&url).json(&edit).send()).map_err(Failure::sent))
     }
 }
@@ -190,14 +233,19 @@ impl Failure {
     }
 }
 fn save_cursors(cursors: &HashMap<String, String>) -> Result<(), &'static str> {
-    checkpoint(config::state("discord-cursors.json")?, &serde_json::to_vec(cursors).map_err(|_| "Could not encode conversation cursors.")?)
+    checkpoint(
+        config::state("discord-cursors.json")?,
+        &serde_json::to_vec(cursors).map_err(|_| "Could not encode conversation cursors.")?,
+    )
 }
 fn checkpoint(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), &'static str> {
     let path = path.as_ref();
     let directory = path.parent().ok_or("Invalid bridge progress path")?;
-    let name = path.file_name().and_then(|n| n.to_str()).ok_or("Invalid bridge progress path")?;
-    config::write_in(directory, name, bytes)
-        .map_err(|_| "Could not save bridge progress.")
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid bridge progress path")?;
+    config::write_in(directory, name, bytes).map_err(|_| "Could not save bridge progress.")
 }
 fn load_json<T: serde::de::DeserializeOwned + Default>(path: impl AsRef<Path>) -> T {
     fs::read(path)
@@ -207,25 +255,45 @@ fn load_json<T: serde::de::DeserializeOwned + Default>(path: impl AsRef<Path>) -
 }
 fn design_report(question: &Value) -> Option<String> {
     let id = question["id"].as_str()?;
-    if id.len() > 100 || !id.bytes().all(|b|b.is_ascii_alphanumeric() || b == b'-') { return None; }
+    if id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return None;
+    }
     let title: String = question["input"]["question"].as_str()?.chars().take(500).collect();
     let options = question["input"]["options"].as_array()?;
     let mut report = format!("Reply /answer {id} NUMBER or /answer {id} YOUR_DIRECTION\n\n{title}\n");
     for (index, option) in options.iter().take(4).enumerate() {
         let label: String = option.as_str()?.chars().take(140).collect();
         let recommended = question["input"]["recommended"].as_u64() == Some(index as u64);
-        report.push_str(&format!("\n{}. {}{}",index+1,label,if recommended {" (recommended)"} else {""}));
+        report.push_str(&format!(
+            "\n{}. {}{}",
+            index + 1,
+            label,
+            if recommended { " (recommended)" } else { "" }
+        ));
     }
     Some(report)
 }
 fn delivery_message(change: Option<&control_delivery::Change>, status: &str, link: &str, report: &str) -> String {
-    let prefix=format!("Control: {status}.\nContinue on this laptop: {link}\n\n");
+    let prefix = format!("Control: {status}.\nContinue on this laptop: {link}\n\n");
     let edits = if status == "waiting" { None } else { change };
-    let suffix=edits.map(|event|format!("\n\nChanges · {}\n{}",event.text.chars().take(100).collect::<String>(),control_diff::discord_preview(&event.output))).unwrap_or_default();
-    let budget=1800usize.saturating_sub(prefix.chars().count()+suffix.chars().count());
-    let body=if report.chars().count()>budget {
-        format!("{}\n… Full reply in chat.",report.chars().take(budget.saturating_sub(23)).collect::<String>())
-    }else{report.to_owned()};
+    let suffix = edits
+        .map(|event| {
+            format!(
+                "\n\nChanges · {}\n{}",
+                event.text.chars().take(100).collect::<String>(),
+                control_diff::discord_preview(&event.output)
+            )
+        })
+        .unwrap_or_default();
+    let budget = 1800usize.saturating_sub(prefix.chars().count() + suffix.chars().count());
+    let body = if report.chars().count() > budget {
+        format!(
+            "{}\n… Full reply in chat.",
+            report.chars().take(budget.saturating_sub(23)).collect::<String>()
+        )
+    } else {
+        report.to_owned()
+    };
     format!("{prefix}{body}{suffix}")
 }
 /// A Discord message nonce (at most 25 characters) for one delivery receipt.
@@ -266,7 +334,10 @@ fn sender(row: &Value, route: &Route, bot: DiscordId) -> Option<DiscordId> {
 }
 fn rejected(row: &Value, route: &Route, bot: DiscordId) -> Option<&'static str> {
     sender(row, route, bot)?;
-    discord::direct_rejection(row["content"].as_str().unwrap_or(""), row["attachments"].as_array().is_some_and(|a| !a.is_empty()))
+    discord::direct_rejection(
+        row["content"].as_str().unwrap_or(""),
+        row["attachments"].as_array().is_some_and(|a| !a.is_empty()),
+    )
 }
 fn incoming(row: &Value, route: &Route, bot: DiscordId) -> Option<discord::Incoming> {
     let user = sender(row, route, bot)?;
@@ -295,9 +366,7 @@ impl Bridge {
         if !response.status().is_success() {
             return Err("Discord denied a permission-metadata request.");
         }
-        response
-            .json()
-            .map_err(|_| "Invalid Discord permission metadata.")
+        response.json().map_err(|_| "Invalid Discord permission metadata.")
     }
     fn audit_permissions(&self) -> Result<(), &'static str> {
         let guilds = self.metadata("/users/@me/guilds?limit=200")?;
@@ -313,17 +382,11 @@ impl Bridge {
             let roles = roles.as_array().ok_or("Invalid role metadata")?;
             let channels = self.metadata(&format!("/guilds/{id}/channels"))?;
             let channels = channels.as_array().ok_or("Invalid channel metadata")?;
-            let (mut evaluated, mut visible, mut history, mut manage, mut admin, mut unknown) =
-                (0, 0, 0, 0, false, 0);
+            let (mut evaluated, mut visible, mut history, mut manage, mut admin, mut unknown) = (0, 0, 0, 0, false, 0);
             let mut visible_types = HashMap::<u64, usize>::new();
             for channel in channels.iter().filter(|c| c["type"].as_u64() != Some(4)) {
-                match discord_permissions::effective(
-                    &id.to_string(),
-                    &self.bot_id.to_string(),
-                    &member,
-                    roles,
-                    channel,
-                ) {
+                match discord_permissions::effective(&id.to_string(), &self.bot_id.to_string(), &member, roles, channel)
+                {
                     Ok(mut permissions) => {
                         if guild["owner"].as_bool() == Some(true) {
                             permissions = u128::MAX;
@@ -332,16 +395,11 @@ impl Bridge {
                         visible += usize::from(permissions & discord_permissions::VIEW != 0);
                         if permissions & discord_permissions::VIEW != 0 {
                             *visible_types
-                                .entry(
-                                    channel["type"]
-                                        .as_u64()
-                                        .ok_or("Invalid channel type metadata")?,
-                                )
+                                .entry(channel["type"].as_u64().ok_or("Invalid channel type metadata")?)
                                 .or_default() += 1;
                         }
                         history += usize::from(
-                            permissions
-                                & (discord_permissions::VIEW | discord_permissions::HISTORY)
+                            permissions & (discord_permissions::VIEW | discord_permissions::HISTORY)
                                 == (discord_permissions::VIEW | discord_permissions::HISTORY),
                         );
                         manage += usize::from(permissions & discord_permissions::MANAGE_ROLES != 0);
@@ -359,8 +417,7 @@ impl Bridge {
         )?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|_| "Could not encode permission audit")?
+            serde_json::to_string_pretty(&report).map_err(|_| "Could not encode permission audit")?
         );
         Ok(())
     }
@@ -374,9 +431,7 @@ impl Bridge {
         if !response.status().is_success() {
             return Err("Discord denied application metadata access.");
         }
-        let app: Value = response
-            .json()
-            .map_err(|_| "Invalid application metadata response.")?;
+        let app: Value = response.json().map_err(|_| "Invalid application metadata response.")?;
         let app_id = app["id"]
             .as_str()
             .and_then(|s| s.parse::<DiscordId>().ok())
@@ -390,9 +445,7 @@ impl Bridge {
         if !response.status().is_success() {
             return Err("Discord denied bot server membership access.");
         }
-        let guilds: Vec<Value> = response
-            .json()
-            .map_err(|_| "Invalid bot server membership response.")?;
+        let guilds: Vec<Value> = response.json().map_err(|_| "Invalid bot server membership response.")?;
         let owner = Policy::load()?
             .principals
             .into_iter()
@@ -402,17 +455,10 @@ impl Bridge {
         let mut shared = 0;
         let mut unknown = 0;
         for guild in &guilds {
-            let Some(id) = guild["id"]
-                .as_str()
-                .and_then(|s| s.parse::<DiscordId>().ok())
-            else {
+            let Some(id) = guild["id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()) else {
                 continue;
             };
-            match self
-                .client
-                .get(format!("{API}/guilds/{id}/members/{owner}"))
-                .send()
-            {
+            match self.client.get(format!("{API}/guilds/{id}/members/{owner}")).send() {
                 Ok(r) if r.status().is_success() => shared += 1,
                 Ok(r) if r.status().as_u16() == 404 => {}
                 _ => unknown += 1,
@@ -425,15 +471,14 @@ impl Bridge {
         )?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|_| "Could not encode diagnostic report.")?
+            serde_json::to_string_pretty(&report).map_err(|_| "Could not encode diagnostic report.")?
         );
         Ok(())
     }
     fn connect() -> Result<Self, &'static str> {
         let token = credential()?;
-        let mut auth = HeaderValue::from_str(&format!("Bot {token}"))
-            .map_err(|_| "Invalid Discord credential format.")?;
+        let mut auth =
+            HeaderValue::from_str(&format!("Bot {token}")).map_err(|_| "Invalid Discord credential format.")?;
         auth.set_sensitive(true);
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, auth);
@@ -451,9 +496,7 @@ impl Bridge {
         if !response.status().is_success() {
             return Err("Discord rejected the bot credential. Check DISCORD_TOKEN locally.");
         }
-        let user: Value = response
-            .json()
-            .map_err(|_| "Invalid Discord identity response.")?;
+        let user: Value = response.json().map_err(|_| "Invalid Discord identity response.")?;
         if user["bot"].as_bool() != Some(true) {
             return Err("The configured credential does not identify a Discord bot.");
         }
@@ -473,10 +516,7 @@ impl Bridge {
     }
     fn status(&self, routes: &[Route], ready: bool, message: &str) {
         let value = json!({"ready":ready,"updated_unix":now(),"message":message,"bot_id":self.bot_id,"bot_name":self.bot_name,"dm_users":routes.iter().filter_map(|r|r.recipient).collect::<Vec<_>>(),"transport":"REST / direct messages; gateway for buttons"});
-        if let (Ok(bytes), Ok(path)) = (
-            serde_json::to_vec(&value),
-            config::state("discord-status.json"),
-        ) {
+        if let (Ok(bytes), Ok(path)) = (serde_json::to_vec(&value), config::state("discord-status.json")) {
             let _ = checkpoint(path, &bytes);
         }
     }
@@ -501,14 +541,13 @@ impl Bridge {
                 return Err("Discord rate-limited DM setup; the bridge will retry.");
             }
             if !response.status().is_success() {
-                eprintln!("An authorized DM channel could not be opened; check bot access and recipient privacy settings.");
+                eprintln!(
+                    "An authorized DM channel could not be opened; check bot access and recipient privacy settings."
+                );
                 continue;
             }
-            let row: Value = response
-                .json()
-                .map_err(|_| "Invalid DM channel response.")?;
-            let channel =
-                dm_channel(&row, user).ok_or("Discord returned a mismatched DM recipient.")?;
+            let row: Value = response.json().map_err(|_| "Invalid DM channel response.")?;
+            let channel = dm_channel(&row, user).ok_or("Discord returned a mismatched DM recipient.")?;
             routes.push(Route {
                 channel,
                 recipient: Some(user),
@@ -542,7 +581,9 @@ impl Bridge {
     fn send(&self, channel: DiscordId, content: &str, nonce: Option<&str>) -> Sent {
         let content: String = content.chars().take(1800).collect();
         let body = match nonce {
-            Some(nonce) => json!({"content":content,"allowed_mentions":{"parse":[]},"nonce":nonce,"enforce_nonce":true}),
+            Some(nonce) => {
+                json!({"content":content,"allowed_mentions":{"parse":[]},"nonce":nonce,"enforce_nonce":true})
+            }
             None => json!({"content":content,"allowed_mentions":{"parse":[]}}),
         };
         self.send_body(channel, &body).map_err(Failure::sent)
@@ -552,16 +593,34 @@ impl Bridge {
         let bindings = DmBindings::load().map_err(|_| Some(Duration::from_secs(5)))?;
         let mut authorize = identity::authorizer();
         let allowed = bindings.recipients.iter().any(|r| {
-            r.channel_id == channel && authorize(&Actor::DiscordDm { user_id: r.user_id, channel_id: channel }, Action::Task).is_ok()
+            r.channel_id == channel
+                && authorize(
+                    &Actor::DiscordDm {
+                        user_id: r.user_id,
+                        channel_id: channel,
+                    },
+                    Action::Task,
+                )
+                .is_ok()
         });
         if allowed { Ok(()) } else { Err(None) }
     }
     /// Posts a message body, with the credential redacted from its text.
     fn send_body(&self, channel: DiscordId, body: &Value) -> Result<Option<DiscordId>, Failure> {
-        self.allowed(channel).map_err(|delay| delay.map_or(Failure::Refused, Failure::Retry))?;
+        self.allowed(channel)
+            .map_err(|delay| delay.map_or(Failure::Refused, Failure::Retry))?;
         let text = body.to_string();
-        let body = if text.contains(&self.token) { serde_json::from_str(&text.replace(&self.token, "[REDACTED]")).map_err(|_| Failure::Refused)? } else { body.clone() };
-        Self::outcome(self.client.post(format!("{API}/channels/{channel}/messages")).json(&body).send())
+        let body = if text.contains(&self.token) {
+            serde_json::from_str(&text.replace(&self.token, "[REDACTED]")).map_err(|_| Failure::Refused)?
+        } else {
+            body.clone()
+        };
+        Self::outcome(
+            self.client
+                .post(format!("{API}/channels/{channel}/messages"))
+                .json(&body)
+                .send(),
+        )
     }
     fn outcome(response: reqwest::Result<reqwest::blocking::Response>) -> Result<Option<DiscordId>, Failure> {
         match response {
@@ -576,26 +635,33 @@ impl Bridge {
     /// Decides a button press or modal answer through the channel core, as
     /// a typed reply would, if it comes from an operator in their own DM.
     fn press(&self, routes: &[Route], press: &components::Press) {
-        let Some(route) = routes.iter().find(|r| r.channel == press.channel && r.recipient == Some(press.user)) else { return };
+        let Some(route) = routes
+            .iter()
+            .find(|r| r.channel == press.channel && r.recipient == Some(press.user))
+        else {
+            return;
+        };
         let (settings, operating) = operators(std::slice::from_ref(route));
-        let Some(to) = operating.iter().find(|to| to.person == press.user.to_string()) else { return };
-        let pressed = self.channel.borrow_mut().press(self, &settings, to, &press.message, &press.action, press.text.as_deref());
+        let Some(to) = operating.iter().find(|to| to.person == press.user.to_string()) else {
+            return;
+        };
+        let pressed = self.channel.borrow_mut().press(
+            self,
+            &settings,
+            to,
+            &press.message,
+            &press.action,
+            press.text.as_deref(),
+        );
         if let channel::Pressed::Reply(text) = pressed {
             let _ = self.reply(route.channel, &text);
         }
     }
-    fn receive(
-        &self,
-        route: &Route,
-        cursors: &mut HashMap<String, String>,
-    ) -> Result<bool, &'static str> {
+    fn receive(&self, route: &Route, cursors: &mut HashMap<String, String>) -> Result<bool, &'static str> {
         let recipient = route
             .recipient
             .ok_or("Server-channel reads are disabled: this bridge is DM-only.")?;
-        identity::authorize(
-            &route.actor(recipient).ok_or("Invalid DM route")?,
-            Action::Task,
-        )?;
+        identity::authorize(&route.actor(recipient).ok_or("Invalid DM route")?, Action::Task)?;
         let channel = route.channel.to_string();
         let (settings, operating) = operators(std::slice::from_ref(route));
         let endpoint = format!("{API}/channels/{channel}/messages");
@@ -609,15 +675,10 @@ impl Bridge {
             if !response.status().is_success() {
                 return Err("Discord denied access to a configured conversation.");
             }
-            let rows: Vec<Value> = response
-                .json()
-                .map_err(|_| "Invalid Discord history response.")?;
+            let rows: Vec<Value> = response.json().map_err(|_| "Invalid Discord history response.")?;
             cursors.insert(
                 channel.clone(),
-                rows.first()
-                    .and_then(|r| r["id"].as_str())
-                    .unwrap_or("0")
-                    .into(),
+                rows.first().and_then(|r| r["id"].as_str()).unwrap_or("0").into(),
             );
             return Ok(true);
         }
@@ -634,15 +695,8 @@ impl Bridge {
         if !response.status().is_success() {
             return Err("Discord message read rejected; check bot access.");
         }
-        let mut rows: Vec<Value> = response
-            .json()
-            .map_err(|_| "Invalid Discord message response.")?;
-        rows.sort_by_key(|r| {
-            r["id"]
-                .as_str()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0)
-        });
+        let mut rows: Vec<Value> = response.json().map_err(|_| "Invalid Discord message response.")?;
+        rows.sort_by_key(|r| r["id"].as_str().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0));
         for row in rows {
             let Some(id) = row["id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()) else {
                 continue;
@@ -667,45 +721,69 @@ impl Bridge {
             if let Some(message) = incoming(&row, route, self.bot_id) {
                 let actor = message.actor();
                 if identity::authorize(&actor, message.action).is_ok() {
-                    let native = if message.action == Action::Improve && ["on", "off"].contains(&message.objective.as_str()) {
-                        Some(format!("Improve mode change queued.\n{}", discord::chat_link(&actor).unwrap_or_default()))
-                    } else if message.action == Action::Task {
-                        discord::native_reply(&actor, &message.objective)
-                    } else {
-                        None
-                    };
+                    let native =
+                        if message.action == Action::Improve && ["on", "off"].contains(&message.objective.as_str()) {
+                            Some(format!(
+                                "Improve mode change queued.\n{}",
+                                discord::chat_link(&actor).unwrap_or_default()
+                            ))
+                        } else if message.action == Action::Task {
+                            discord::native_reply(&actor, &message.objective)
+                        } else {
+                            None
+                        };
                     let path = config::state("discord-inbox")?.join(format!("{id}.json"));
                     // Already written or ingested before the cursor checkpoint: do not acknowledge twice.
-                    let duplicate = Path::new(&path).exists() || self.snapshot()?.discord_seen.contains(&id.to_string());
+                    let duplicate =
+                        Path::new(&path).exists() || self.snapshot()?.discord_seen.contains(&id.to_string());
                     if !duplicate {
                         checkpoint(
                             &path,
-                            &serde_json::to_vec(&message)
-                                .map_err(|_| "Could not encode Discord task.")?,
+                            &serde_json::to_vec(&message).map_err(|_| "Could not encode Discord task.")?,
                         )?;
                     }
                     if duplicate && native.is_none() {
-                    } else if message.objective.strip_prefix("/cancel").is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace)) {
+                    } else if message
+                        .objective
+                        .strip_prefix("/cancel")
+                        .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
+                    {
                         let link = discord::chat_link(&actor).unwrap_or_default();
                         let _ = self.reply(route.channel, &format!("Cancellation queued.\n{link}"));
-                    } else if message.objective.strip_prefix("/steer").is_some_and(|tail| tail.starts_with(char::is_whitespace)) {
+                    } else if message
+                        .objective
+                        .strip_prefix("/steer")
+                        .is_some_and(|tail| tail.starts_with(char::is_whitespace))
+                    {
                         let link = discord::chat_link(&actor).unwrap_or_default();
-                        let _ = self.reply(route.channel, &format!("Queued for the next turn; the current task keeps running.\n{link}"));
+                        let _ = self.reply(
+                            route.channel,
+                            &format!("Queued for the next turn; the current task keeps running.\n{link}"),
+                        );
                     } else if let Some(reply) = native {
                         if !self.reply(route.channel, &reply) {
                             return Ok(false);
                         }
                     } else {
                         let link = discord::chat_link(&actor).unwrap_or_default();
-                        let _=self.reply(route.channel,&format!("Received.\nContinue on this laptop: {link}\nI’ll reply here when the task finishes."));
+                        let _ = self.reply(
+                            route.channel,
+                            &format!(
+                                "Received.\nContinue on this laptop: {link}\nI’ll reply here when the task finishes."
+                            ),
+                        );
                     }
                 } else if identity::authorize(&actor, Action::Task).is_ok() {
                     let _=self.reply(route.channel,"Only the architect can request Control source changes. You can still DM me a normal task in your own isolated workspace.");
                 }
             } else if let Some(reason) = rejected(&row, route, self.bot_id)
-                && route.recipient.and_then(|user| route.actor(user)).is_some_and(|actor| identity::authorize(&actor, Action::Task).is_ok()) {
-                    let _ = self.reply(route.channel, reason);
-                }
+                && route
+                    .recipient
+                    .and_then(|user| route.actor(user))
+                    .is_some_and(|actor| identity::authorize(&actor, Action::Task).is_ok())
+            {
+                let _ = self.reply(route.channel, reason);
+            }
             cursors.insert(channel.clone(), id.to_string());
         }
         Ok(true)
@@ -731,7 +809,9 @@ impl Bridge {
                 outbound.backoff.remove(receipt);
                 outbound.undelivered.insert(receipt.into());
                 if let Ok(path) = config::state("discord-undelivered.json") {
-                    let _ = serde_json::to_vec(&outbound.undelivered).map_err(|_| "").and_then(|b| checkpoint(path, &b));
+                    let _ = serde_json::to_vec(&outbound.undelivered)
+                        .map_err(|_| "")
+                        .and_then(|b| checkpoint(path, &b));
                 }
                 true
             }
@@ -744,10 +824,18 @@ impl Bridge {
         if outbound.unsaved {
             let _ = outbound.save_receipts();
         }
-        let events = control_delivery::read(&control_delivery::path()?, outbound.cursor).map_err(|_| "Could not read the delivery outbox.")?;
+        let events = control_delivery::read(&control_delivery::path()?, outbound.cursor)
+            .map_err(|_| "Could not read the delivery outbox.")?;
         // Recipients who receive design questions as operator requests.
         let (forwarding, operating) = operators(routes);
-        let questions: Vec<DiscordId> = if forwarding.enabled && forwarding.chats.is_empty() && forwarding.kinds.contains(&operator::Kind::Question) { operating.iter().filter_map(|to| to.conversation.parse().ok()).collect() } else { Vec::new() };
+        let questions: Vec<DiscordId> = if forwarding.enabled
+            && forwarding.chats.is_empty()
+            && forwarding.kinds.contains(&operator::Kind::Question)
+        {
+            operating.iter().filter_map(|to| to.conversation.parse().ok()).collect()
+        } else {
+            Vec::new()
+        };
         let mut authorize = identity::authorizer();
         // Events parked until their authorization or route is available again;
         // anything not yet retried stays parked if a receipt cannot be saved.
@@ -775,7 +863,14 @@ impl Bridge {
         }
         Ok(())
     }
-    fn deliver_one(&self, run: &control_delivery::Delivery, routes: &[Route], questions: &[DiscordId], outbound: &mut Outbound, authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>) -> Result<Outcome, &'static str> {
+    fn deliver_one(
+        &self,
+        run: &control_delivery::Delivery,
+        routes: &[Route],
+        questions: &[DiscordId],
+        outbound: &mut Outbound,
+        authorize: &mut impl FnMut(&Actor, Action) -> Result<identity::Workspace, &'static str>,
+    ) -> Result<Outcome, &'static str> {
         {
             {
                 let (actor, action, status) = (&run.actor, run.action, run.status.as_str());
@@ -795,11 +890,13 @@ impl Bridge {
                 }
                 // Policy files or a DM route can be unavailable for a moment.
                 if authorize(actor, action).is_err()
-                    || !routes.iter().any(|r| r.channel == channel && r.recipient.is_some() == direct)
+                    || !routes
+                        .iter()
+                        .any(|r| r.channel == channel && r.recipient.is_some() == direct)
                 {
                     return Ok(Outcome::Park);
                 }
-                let decision = (status == "waiting").then(||design_report(&run.question)).flatten();
+                let decision = (status == "waiting").then(|| design_report(&run.question)).flatten();
                 let report = if let Some(report) = decision.as_deref() {
                     report
                 } else if action == Action::Improve && !direct {
@@ -810,7 +907,12 @@ impl Bridge {
                     run.report.as_str()
                 };
                 let link = discord::session_link(actor, run.chat.as_deref()).unwrap_or_default();
-                if !self.attempt(&receipt, channel, &delivery_message(run.change.as_ref(),status,&link,report), outbound) {
+                if !self.attempt(
+                    &receipt,
+                    channel,
+                    &delivery_message(run.change.as_ref(), status, &link, report),
+                    outbound,
+                ) {
                     return Ok(Outcome::Stop);
                 }
                 outbound.delivered.insert(receipt);
@@ -823,14 +925,22 @@ impl Bridge {
     /// Worker-queued notices (for example a DM that could not become a task).
     fn outbox(&self, routes: &[Route], outbound: &mut Outbound) -> Result<(), &'static str> {
         let directory = config::state("discord-outbox")?;
-        let Ok(entries) = fs::read_dir(&directory) else { return Ok(()) };
+        let Ok(entries) = fs::read_dir(&directory) else {
+            return Ok(());
+        };
         for entry in entries.flatten().take(64) {
             let path = entry.path();
-            if entry.file_type().is_ok_and(|t| t.is_symlink()) || path.extension().and_then(|s| s.to_str()) != Some("json") {
+            if entry.file_type().is_ok_and(|t| t.is_symlink())
+                || path.extension().and_then(|s| s.to_str()) != Some("json")
+            {
                 continue;
             }
             let notice: Value = load_json(&path);
-            let (Some(channel), Some(user), Some(text)) = (notice["channel_id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()), notice["user_id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()), notice["text"].as_str()) else {
+            let (Some(channel), Some(user), Some(text)) = (
+                notice["channel_id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()),
+                notice["user_id"].as_str().and_then(|s| s.parse::<DiscordId>().ok()),
+                notice["text"].as_str(),
+            ) else {
                 let _ = fs::remove_file(&path);
                 continue;
             };
@@ -880,16 +990,12 @@ impl Outbound {
 }
 fn run(check_only: bool) -> Result<(), &'static str> {
     Policy::load()?;
-    fs::create_dir_all(config::state("discord-inbox")?)
-        .map_err(|_| "Could not create bridge inbox.")?;
+    fs::create_dir_all(config::state("discord-inbox")?).map_err(|_| "Could not create bridge inbox.")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(
-            config::state_directory()?,
-            fs::Permissions::from_mode(0o700),
-        )
-        .map_err(|_| "Could not restrict local bridge storage.")?;
+        fs::set_permissions(config::state_directory()?, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "Could not restrict local bridge storage.")?;
     }
     let bridge = Bridge::connect()?;
     let mut routes = bridge.routes(&[])?;
@@ -933,7 +1039,10 @@ fn run(check_only: bool) -> Result<(), &'static str> {
         if let Err(m) = save_cursors(&cursors) {
             eprintln!("{m}");
         }
-        if let Err(m) = bridge.deliver(&routes, &mut outbound).and_then(|()| bridge.outbox(&routes, &mut outbound)) {
+        if let Err(m) = bridge
+            .deliver(&routes, &mut outbound)
+            .and_then(|()| bridge.outbox(&routes, &mut outbound))
+        {
             eprintln!("{m}");
         }
         let (settings, recipients) = operators(&routes);
@@ -982,10 +1091,7 @@ pub fn command(args: &[String]) {
         }
         return;
     }
-    if args
-        .get(1)
-        .is_some_and(|a| a == "--bind" || a == "--channel")
-    {
+    if args.get(1).is_some_and(|a| a == "--bind" || a == "--channel") {
         let result = (|| -> Result<(), &'static str> {
             let mut policy = Policy::load()?;
             if args[1] == "--bind" {
@@ -1007,7 +1113,9 @@ pub fn command(args: &[String]) {
     }
     let check = args.iter().any(|s| s == "--check");
     if !check && !args.iter().any(|s| s == "--enable") {
-        println!("Discord bridge is off. Use --check to verify bot access or --enable to listen for DMs. No .env file was read.");
+        println!(
+            "Discord bridge is off. Use --check to verify bot access or --enable to listen for DMs. No .env file was read."
+        );
         return;
     }
     if let Err(message) = run(check) {

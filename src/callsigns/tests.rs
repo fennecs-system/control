@@ -43,10 +43,22 @@ fn exhausted_lists_append_a_number() {
     let mut shown = Vec::new();
     assign(ids.into_iter(), &["Red", "Blue"], 8, |c| shown.push(c));
     let words: &'static [&'static str] = &["Red", "Blue"];
-    let shown = shown.into_iter().map(|c| c.text(words).into_owned()).collect::<Vec<_>>();
+    let shown = shown
+        .into_iter()
+        .map(|c| c.text(words).into_owned())
+        .collect::<Vec<_>>();
     assert_eq!(shown.iter().filter(|name| !name.contains(' ')).count(), 2);
-    assert_eq!(shown.iter().collect::<std::collections::HashSet<_>>().len(), 5, "{shown:?}");
-    assert!(shown[2..].iter().all(|name| name.ends_with(" 2") || name.ends_with(" 3")), "{shown:?}");
+    assert_eq!(
+        shown.iter().collect::<std::collections::HashSet<_>>().len(),
+        5,
+        "{shown:?}"
+    );
+    assert!(
+        shown[2..]
+            .iter()
+            .all(|name| name.ends_with(" 2") || name.ends_with(" 3")),
+        "{shown:?}"
+    );
 }
 
 #[test]
@@ -58,7 +70,10 @@ fn renames_are_shown_and_do_not_move_other_callsigns() {
     assert_eq!(all(&state.chats), before);
     assert_eq!(name(&state.chats, &renamed).as_deref(), Some("player1"));
     assert_eq!(label(&state.chats[3], before[3]), "player1");
-    assert_eq!(label(&state.chats[4], before[4]), name(&state.chats, &state.chats[4].id).unwrap());
+    assert_eq!(
+        label(&state.chats[4], before[4]),
+        name(&state.chats, &state.chats[4].id).unwrap()
+    );
 }
 
 #[test]
@@ -76,7 +91,8 @@ fn names_are_short_and_printable() {
 #[test]
 fn chats_saved_without_names_derive_them_on_read() {
     // A session written before names existed has no `name` member.
-    let old = serde_json::json!({"id":"c-old-0","actor":{"type":"local_operator"},"title":"mc263-client","messages":[]});
+    let old =
+        serde_json::json!({"id":"c-old-0","actor":{"type":"local_operator"},"title":"mc263-client","messages":[]});
     let session: Session = serde_json::from_value(old).unwrap();
     assert!(session.name.is_none());
     let chats = [session];

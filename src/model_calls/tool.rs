@@ -1,8 +1,8 @@
 //! `control.model.generate`: bounded text inference on a configured private
 //! endpoint. It reuses the summary models' endpoint registry and limits, grants
 //! no tools, forwards no credentials and never falls back to a hosted model.
-use super::{generate, Endpoint, Generation};
-use serde_json::{json, Value};
+use super::{Endpoint, Generation, generate};
+use serde_json::{Value, json};
 use std::{io, sync::Mutex};
 
 pub const NAME: &str = "control.model.generate";
@@ -30,7 +30,10 @@ pub(crate) fn select<'a>(models: &'a [Endpoint], id: Option<&str>) -> io::Result
     let names = || endpoints.iter().map(|m| m.id.as_str()).collect::<Vec<_>>().join(", ");
     match id {
         Some(id) => endpoints.iter().copied().find(|m| m.id == id).ok_or_else(|| {
-            io::Error::other(format!("No local endpoint model named {id:?}. Configured: [{}]", names()))
+            io::Error::other(format!(
+                "No local endpoint model named {id:?}. Configured: [{}]",
+                names()
+            ))
         }),
         None if endpoints.len() == 1 => Ok(endpoints[0]),
         None => Err(io::Error::other(format!(
@@ -44,12 +47,20 @@ pub fn call(args: &Value, cancel: &dyn Fn() -> bool) -> io::Result<Value> {
     let input: Input = serde_json::from_value(args.clone())
         .map_err(|_| io::Error::other("Expected prompt with optional model, system and max_output_tokens"))?;
     if input.prompt.trim().is_empty() || input.system.as_ref().is_some_and(|s| s.len() > SYSTEM_BYTES) {
-        return Err(io::Error::other("Prompt must be non-empty and system at most 8192 bytes"));
+        return Err(io::Error::other(
+            "Prompt must be non-empty and system at most 8192 bytes",
+        ));
     }
     let mut runtime = crate::runtime::Runtime::default();
     crate::providers::load_settings(&mut runtime)?;
     let endpoint = select(&runtime.compaction.models, input.model.as_deref())?;
-    run(endpoint, input.system.as_deref().unwrap_or(SYSTEM), &input.prompt, input.max_output_tokens, cancel)
+    run(
+        endpoint,
+        input.system.as_deref().unwrap_or(SYSTEM),
+        &input.prompt,
+        input.max_output_tokens,
+        cancel,
+    )
 }
 pub(crate) fn run(
     endpoint: &Endpoint,
@@ -91,6 +102,8 @@ pub(crate) fn bench(endpoint: &Endpoint, runs: usize, cancel: &dyn Fn() -> bool)
     }).collect::<io::Result<Vec<_>>>()?;
     let mut elapsed: Vec<u64> = results.iter().filter_map(|r| r["elapsed_ms"].as_u64()).collect();
     elapsed.sort_unstable();
-    Ok(json!({"model":endpoint.id,"revision":endpoint.revision,"runs":results,"median_elapsed_ms":elapsed[elapsed.len()/2],
-        "note":"End-to-end latency through Control's adapter. Measure server memory separately (for example docker stats or ps)."}))
+    Ok(
+        json!({"model":endpoint.id,"revision":endpoint.revision,"runs":results,"median_elapsed_ms":elapsed[elapsed.len()/2],
+        "note":"End-to-end latency through Control's adapter. Measure server memory separately (for example docker stats or ps)."}),
+    )
 }

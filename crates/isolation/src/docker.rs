@@ -3,8 +3,9 @@
 //! into typed values (`parse`); the trait methods are the only place this
 //! crate starts a process.
 use crate::{
-    Access, ContainerId, Exec, ExecSpec, ImageId, Input, Isolation, Listed, ListedVolume, Logs, Mount, Network, ObservedVolume, Observed, Pid1, Proc, Process, RunSpec,
-    SecretMount, Select, Size, Source, States, Stats, Streams, Target, Tmpfs,
+    Access, ContainerId, Exec, ExecSpec, ImageId, Input, Isolation, Listed, ListedVolume, Logs, Mount, Network,
+    Observed, ObservedVolume, Pid1, Proc, Process, RunSpec, SecretMount, Select, Size, Source, States, Stats, Streams,
+    Target, Tmpfs,
 };
 use std::{
     collections::HashMap,
@@ -23,7 +24,15 @@ pub use parse::quota_capable;
 mod engine_cli;
 
 /// Engine client settings a scrubbed CLI keeps from the environment.
-const CONNECTION: [&str; 7] = ["PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY"];
+const CONNECTION: [&str; 7] = [
+    "PATH",
+    "HOME",
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+];
 /// How long an engine request may take before it is abandoned.
 const REQUEST: Duration = Duration::from_secs(5);
 /// A cold Docker Desktop or colima engine can take well over 5 s to answer `info`.
@@ -53,7 +62,11 @@ impl Docker {
     /// environment; used for containers that run model or workspace code.
     pub fn scrubbed() -> Command {
         let mut command = Self::cli();
-        command.env_clear().envs(CONNECTION.iter().filter_map(|name| Some((name, std::env::var_os(name)?))));
+        command.env_clear().envs(
+            CONNECTION
+                .iter()
+                .filter_map(|name| Some((name, std::env::var_os(name)?))),
+        );
         command
     }
     /// The `run` arguments for an attached container removed when it exits.
@@ -74,9 +87,17 @@ impl Docker {
             words(["exec"]),
             switch("--interactive", spec.input != Input::Closed),
             switch("--tty", spec.input == Input::Terminal),
-            spec.user.map(|user| pair("--user", &format!("{}:{}", user.uid, user.gid))).unwrap_or_default(),
-            spec.env.iter().flat_map(|(name, value)| pair("--env", &format!("{name}={value}"))).collect(),
-            spec.workdir.as_deref().map(|workdir| pair("--workdir", workdir)).unwrap_or_default(),
+            spec.user
+                .map(|user| pair("--user", &format!("{}:{}", user.uid, user.gid)))
+                .unwrap_or_default(),
+            spec.env
+                .iter()
+                .flat_map(|(name, value)| pair("--env", &format!("{name}={value}")))
+                .collect(),
+            spec.workdir
+                .as_deref()
+                .map(|workdir| pair("--workdir", workdir))
+                .unwrap_or_default(),
             words([spec.container.as_str()]),
             spec.argv.clone(),
         ]
@@ -84,7 +105,12 @@ impl Docker {
     }
 }
 fn arguments(mode: Mode, spec: &RunSpec) -> io::Result<Vec<String>> {
-    let mounts = spec.mounts.iter().map(mount).chain(spec.secrets.iter().map(secret)).collect::<io::Result<Vec<_>>>()?;
+    let mounts = spec
+        .mounts
+        .iter()
+        .map(mount)
+        .chain(spec.secrets.iter().map(secret))
+        .collect::<io::Result<Vec<_>>>()?;
     let seccomp = spec.seccomp.as_deref().map(path).transpose()?;
     let limits = &spec.limits;
     Ok([
@@ -101,12 +127,19 @@ fn arguments(mode: Mode, spec: &RunSpec) -> io::Result<Vec<String>> {
         // The engine's default, stated: a created container never restarts itself.
         switch("--restart=no", mode == Mode::Created),
         pair("--name", &spec.name),
-        spec.labels.iter().flat_map(|(name, value)| pair("--label", &format!("{name}={value}"))).collect(),
+        spec.labels
+            .iter()
+            .flat_map(|(name, value)| pair("--label", &format!("{name}={value}")))
+            .collect(),
         switch("--network=none", spec.network == Network::None),
-        spec.user.map(|user| pair("--user", &format!("{}:{}", user.uid, user.gid))).unwrap_or_default(),
+        spec.user
+            .map(|user| pair("--user", &format!("{}:{}", user.uid, user.gid)))
+            .unwrap_or_default(),
         switch("--read-only", spec.root == Access::ReadOnly),
         words(["--cap-drop=ALL", "--security-opt=no-new-privileges"]),
-        seccomp.map(|profile| pair("--security-opt", &format!("seccomp={profile}"))).unwrap_or_default(),
+        seccomp
+            .map(|profile| pair("--security-opt", &format!("seccomp={profile}")))
+            .unwrap_or_default(),
         switch("--security-opt=systempaths=unconfined", spec.proc == Proc::Unmasked),
         joined("--pids-limit", limits.pids),
         joined("--memory", limits.memory.map(size)),
@@ -114,10 +147,18 @@ fn arguments(mode: Mode, spec: &RunSpec) -> io::Result<Vec<String>> {
         joined("--cpus", limits.cpus),
         logs(&spec.logs),
         spec.tmpfs.iter().flat_map(|fs| pair("--tmpfs", &tmpfs(fs))).collect(),
-        spec.disk.map(|disk| pair("--storage-opt", &format!("size={}", disk_size(disk)))).unwrap_or_default(),
+        spec.disk
+            .map(|disk| pair("--storage-opt", &format!("size={}", disk_size(disk))))
+            .unwrap_or_default(),
         mounts.iter().flat_map(|mount| pair("--mount", mount)).collect(),
-        spec.workdir.as_deref().map(|workdir| pair("--workdir", workdir)).unwrap_or_default(),
-        spec.env.iter().flat_map(|(name, value)| pair("--env", &format!("{name}={value}"))).collect(),
+        spec.workdir
+            .as_deref()
+            .map(|workdir| pair("--workdir", workdir))
+            .unwrap_or_default(),
+        spec.env
+            .iter()
+            .flat_map(|(name, value)| pair("--env", &format!("{name}={value}")))
+            .collect(),
         joined("--entrypoint", spec.entrypoint.as_deref()),
         words([spec.image.as_str()]),
         spec.argv.clone(),
@@ -135,7 +176,10 @@ fn list_arguments(states: States, select: &Select) -> Vec<String> {
     let filters = match select {
         Select::Id(id) => vec![format!("id={}", id.as_str())],
         Select::Name(name) => vec![format!("name=^/{name}$")],
-        Select::Labels(labels) => labels.iter().map(|(name, value)| format!("label={name}={value}")).collect(),
+        Select::Labels(labels) => labels
+            .iter()
+            .map(|(name, value)| format!("label={name}={value}"))
+            .collect(),
         Select::Any => Vec::new(),
     };
     [
@@ -153,11 +197,17 @@ fn query<S: AsRef<std::ffi::OsStr>>(arguments: impl IntoIterator<Item = S>) -> i
 }
 /// A process the caller reads, with only the engine connection settings.
 fn reader<S: AsRef<std::ffi::OsStr>>(arguments: impl IntoIterator<Item = S>, stdout: Stdio) -> io::Result<Child> {
-    Docker::scrubbed().args(arguments).stdin(Stdio::null()).stdout(stdout).stderr(Stdio::null()).spawn()
+    Docker::scrubbed()
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(Stdio::null())
+        .spawn()
 }
 impl Isolation for Docker {
     fn ready(&self) -> bool {
-        bounded_output(Docker::cli().args(["info", "--format", "{{.OSType}}"]), READY, false).is_ok_and(|output| output.trim() == "linux")
+        bounded_output(Docker::cli().args(["info", "--format", "{{.OSType}}"]), READY, false)
+            .is_ok_and(|output| output.trim() == "linux")
     }
     fn disk_quota(&self) -> io::Result<bool> {
         // Probed once per process; a failed probe is retried.
@@ -180,7 +230,11 @@ impl Isolation for Docker {
     fn create(&self, spec: &RunSpec) -> io::Result<ContainerId> {
         // Creation requests carry no credential mounts or provider arguments, so
         // bounded engine diagnostics are kept: an unsupported quota is told apart.
-        parse::container_id(&bounded_output(Docker::cli().args(Self::create_arguments(spec)?), REQUEST, true)?)
+        parse::container_id(&bounded_output(
+            Docker::cli().args(Self::create_arguments(spec)?),
+            REQUEST,
+            true,
+        )?)
     }
     fn start(&self, id: &ContainerId) -> io::Result<()> {
         query(["start", id.as_str()]).map(drop)
@@ -192,7 +246,11 @@ impl Isolation for Docker {
         query(["rm", "--force", target(container)]).map(drop)
     }
     fn inspect(&self, targets: &[Target<'_>]) -> io::Result<Vec<Observed>> {
-        parse::inspection(&query(["inspect"].into_iter().chain(targets.iter().map(|container| target(*container))))?)
+        parse::inspection(&query(
+            ["inspect"]
+                .into_iter()
+                .chain(targets.iter().map(|container| target(*container))),
+        )?)
     }
     fn list(&self, states: States, select: &Select) -> io::Result<Vec<Listed>> {
         parse::listing(&query(list_arguments(states, select))?)
@@ -204,27 +262,56 @@ impl Isolation for Docker {
         reader(["wait", id.as_str()], Stdio::null())
     }
     fn logs(&self, id: &ContainerId, tail: u32) -> io::Result<Child> {
-        reader(["logs".to_owned(), "--tail".to_owned(), tail.to_string(), id.as_str().to_owned()], Stdio::piped())
+        reader(
+            [
+                "logs".to_owned(),
+                "--tail".to_owned(),
+                tail.to_string(),
+                id.as_str().to_owned(),
+            ],
+            Stdio::piped(),
+        )
     }
     fn stats(&self, ids: &[&ContainerId]) -> io::Result<HashMap<String, Stats>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        Ok(parse::stats(&query(["stats", "--no-stream", "--no-trunc", "--format", STATS].into_iter().chain(ids.iter().map(|id| id.as_str())))?))
+        Ok(parse::stats(&query(
+            ["stats", "--no-stream", "--no-trunc", "--format", STATS]
+                .into_iter()
+                .chain(ids.iter().map(|id| id.as_str())),
+        )?))
     }
     fn top(&self, id: &ContainerId) -> io::Result<Vec<Process>> {
         Ok(parse::top(&query(["top", id.as_str(), "-o", "pid,user,args"])?))
     }
     fn volume_create(&self, name: &str, labels: &[(&str, &str)]) -> io::Result<()> {
-        let labels = labels.iter().flat_map(|(key, value)| ["--label".to_owned(), format!("{key}={value}")]);
-        query(["volume", "create", "--driver", "local"].map(str::to_owned).into_iter().chain(labels).chain([name.to_owned()])).map(drop)
+        let labels = labels
+            .iter()
+            .flat_map(|(key, value)| ["--label".to_owned(), format!("{key}={value}")]);
+        query(
+            ["volume", "create", "--driver", "local"]
+                .map(str::to_owned)
+                .into_iter()
+                .chain(labels)
+                .chain([name.to_owned()]),
+        )
+        .map(drop)
     }
     fn volume_inspect(&self, name: &str) -> io::Result<Vec<ObservedVolume>> {
         parse::volumes(&query(["volume", "inspect", name])?)
     }
     fn volumes(&self, labels: &[(&str, &str)]) -> io::Result<Vec<ListedVolume>> {
-        let filters = labels.iter().flat_map(|(key, value)| ["--filter".to_owned(), format!("label={key}={value}")]);
-        parse::volume_listing(&query(["volume", "ls"].map(str::to_owned).into_iter().chain(filters).chain(["--format".to_owned(), VOLUMES.to_owned()]))?)
+        let filters = labels
+            .iter()
+            .flat_map(|(key, value)| ["--filter".to_owned(), format!("label={key}={value}")]);
+        parse::volume_listing(&query(
+            ["volume", "ls"]
+                .map(str::to_owned)
+                .into_iter()
+                .chain(filters)
+                .chain(["--format".to_owned(), VOLUMES.to_owned()]),
+        )?)
     }
     fn volume_remove(&self, name: &str) -> io::Result<()> {
         query(["volume", "rm", name]).map(drop)
@@ -251,7 +338,10 @@ pub fn bounded_output(command: &mut Command, timeout: Duration, diagnostic: bool
         });
         receiver
     });
-    let stdout = child.stdout.take().ok_or_else(|| io::Error::other("No engine response"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("No engine response"))?;
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut output = Vec::new();
@@ -267,7 +357,10 @@ pub fn bounded_output(command: &mut Command, timeout: Duration, diagnostic: bool
                         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                         .map_err(|_| io::Error::other("Container engine diagnostic timed out"))??;
                     let message = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
-                    return Err(io::Error::other(format!("Container engine request failed: {}", message.trim())));
+                    return Err(io::Error::other(format!(
+                        "Container engine request failed: {}",
+                        message.trim()
+                    )));
                 }
                 return Err(io::Error::other("Container engine request failed"));
             }
@@ -319,14 +412,20 @@ fn logs(logs: &Logs) -> Vec<String> {
     match logs {
         Logs::Engine => Vec::new(),
         Logs::None => words(["--log-driver=none"]),
-        Logs::Local { max_size, max_files } => vec!["--log-driver=local".into(), format!("--log-opt=max-size={}", size(*max_size)), format!("--log-opt=max-file={max_files}")],
+        Logs::Local { max_size, max_files } => vec![
+            "--log-driver=local".into(),
+            format!("--log-opt=max-size={}", size(*max_size)),
+            format!("--log-opt=max-file={max_files}"),
+        ],
     }
 }
 /// The engine's mount syntax is comma-separated, so a path must not carry one.
 fn path(path: &Path) -> io::Result<&str> {
     path.to_str()
         .filter(|p| path.is_absolute() && !p.contains([',', '\n', '\r']))
-        .ok_or_else(|| io::Error::other("Container mount paths must be absolute UTF-8 paths without commas or newlines."))
+        .ok_or_else(|| {
+            io::Error::other("Container mount paths must be absolute UTF-8 paths without commas or newlines.")
+        })
 }
 fn readonly(access: Access) -> &'static str {
     match access {
@@ -336,12 +435,26 @@ fn readonly(access: Access) -> &'static str {
 }
 fn mount(mount: &Mount) -> io::Result<String> {
     Ok(match &mount.source {
-        Source::Bind(source) => format!("type=bind,src={},dst={}{}", path(source)?, mount.target, readonly(mount.access)),
-        Source::Volume(name) => format!("type=volume,source={name},target={}{}", mount.target, readonly(mount.access)),
+        Source::Bind(source) => format!(
+            "type=bind,src={},dst={}{}",
+            path(source)?,
+            mount.target,
+            readonly(mount.access)
+        ),
+        Source::Volume(name) => format!(
+            "type=volume,source={name},target={}{}",
+            mount.target,
+            readonly(mount.access)
+        ),
     })
 }
 fn secret(secret: &SecretMount) -> io::Result<String> {
-    Ok(format!("type=bind,src={},dst={}{}", path(&secret.source)?, secret.target, readonly(secret.access)))
+    Ok(format!(
+        "type=bind,src={},dst={}{}",
+        path(&secret.source)?,
+        secret.target,
+        readonly(secret.access)
+    ))
 }
 fn tmpfs(tmpfs: &Tmpfs) -> String {
     let exec = match tmpfs.exec {

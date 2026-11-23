@@ -43,8 +43,18 @@ fn main() {
     let only = only.as_deref();
     time("tree_push", N, only, || conversation(N).0.len() as u64);
     let (tree, ids) = conversation(N);
-    time("focus_root", N, only, || ids.iter().map(|id| tree.focus(*id).unwrap().root().id().index() as u64).sum());
-    time("ancestors_depth", N, only, || ids.iter().step_by(97).map(|id| tree.focus(*id).unwrap().depth() as u64).sum::<u64>() * 97);
+    time("focus_root", N, only, || {
+        ids.iter()
+            .map(|id| tree.focus(*id).unwrap().root().id().index() as u64)
+            .sum()
+    });
+    time("ancestors_depth", N, only, || {
+        ids.iter()
+            .step_by(97)
+            .map(|id| tree.focus(*id).unwrap().depth() as u64)
+            .sum::<u64>()
+            * 97
+    });
     time("subtree_walk", N, only, || {
         let mut roots = 0u64;
         let mut seen = 0u64;
@@ -57,11 +67,17 @@ fn main() {
         }
         seen + roots
     });
-    time("fold_subtree_sizes", N, only, || *tree.fold(|_, kids| 1 + kids.copied().sum::<u64>()).first().unwrap());
+    time("fold_subtree_sizes", N, only, || {
+        *tree.fold(|_, kids| 1 + kids.copied().sum::<u64>()).first().unwrap()
+    });
     let timeline: Vec<u64> = (0..N as u64).collect();
     time("store_extend_window", N, only, || {
         let w = Store::new(&timeline[..], 0).unwrap();
-        w.extend(|s| s.window(2).iter().sum::<u64>()).into_iter().fold(0, u64::wrapping_add)
+        w.extend(|s| s.window(2).iter().sum::<u64>())
+            .into_iter()
+            .fold(0, u64::wrapping_add)
     });
-    time("lens_cut_1M", N / 10, only, || (0..N as u64 / 10).map(|i| cut(N as u64 + i, 32).count() as u64).sum());
+    time("lens_cut_1M", N / 10, only, || {
+        (0..N as u64 / 10).map(|i| cut(N as u64 + i, 32).count() as u64).sum()
+    });
 }

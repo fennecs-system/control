@@ -8,7 +8,11 @@ use std::{
 
 pub fn directory() -> Result<PathBuf, &'static str> {
     #[cfg(any(test, feature = "test-isolation"))]
-    return isolated(std::env::var_os("CONTROL_CONFIG_DIR"), "config", &operator_directories());
+    return isolated(
+        std::env::var_os("CONTROL_CONFIG_DIR"),
+        "config",
+        &operator_directories(),
+    );
     #[cfg(not(any(test, feature = "test-isolation")))]
     resolve(
         std::env::var_os("CONTROL_CONFIG_DIR"),
@@ -27,10 +31,7 @@ pub fn read_regular(path: &Path, limit: usize, private: bool) -> io::Result<Vec<
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)?;
     let meta = file.metadata()?;
-    if !meta.is_file()
-        || meta.len() > limit as u64
-        || (private && meta.permissions().mode() & 0o077 != 0)
-    {
+    if !meta.is_file() || meta.len() > limit as u64 || (private && meta.permissions().mode() & 0o077 != 0) {
         return Err(io::Error::other(
             "Expected a bounded regular file with appropriate permissions",
         ));
@@ -136,7 +137,15 @@ pub const STATE_LOG: &str = "state.log";
 /// them, so the step is `External` and they refuse to read it.
 pub fn state_schema() -> control_journal::lens::Schema {
     use control_journal::lens::{Lens, Schema};
-    Schema { version: 2, lenses: vec![vec![], vec![Lens::External { name: "runtime.runs".into() }]] }
+    Schema {
+        version: 2,
+        lenses: vec![
+            vec![],
+            vec![Lens::External {
+                name: "runtime.runs".into(),
+            }],
+        ],
+    }
 }
 
 /// The one loader for state outside the server: the snapshot plus its log's
@@ -148,10 +157,16 @@ pub fn read_state<T: serde::de::DeserializeOwned>(limit: usize) -> io::Result<Op
 }
 /// [`read_state`] for an explicit state directory.
 pub fn read_state_in<T: serde::de::DeserializeOwned>(directory: &Path, limit: usize) -> io::Result<Option<T>> {
-    control_journal::snapshot::read(&directory.join("state.json"), &directory.join(STATE_LOG), &state_schema(), |path| {
-        read_regular(path, limit, false)
-    })?
-    .map(|document| serde_json::from_value(document).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "State does not match its schema")))
+    control_journal::snapshot::read(
+        &directory.join("state.json"),
+        &directory.join(STATE_LOG),
+        &state_schema(),
+        |path| read_regular(path, limit, false),
+    )?
+    .map(|document| {
+        serde_json::from_value(document)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "State does not match its schema"))
+    })
     .transpose()
 }
 
@@ -172,11 +187,8 @@ pub fn node_id() -> Result<String, &'static str> {
     if !metadata.is_file() || metadata.len() > 64 || metadata.permissions().mode() & 0o077 != 0 {
         return Err("Node identity must be a private regular file");
     }
-    let bytes =
-        fs::read(path).map_err(|_| "Node identity unavailable; initialize the state directory")?;
-    let id = std::str::from_utf8(&bytes)
-        .map_err(|_| "Invalid node identity")?
-        .trim();
+    let bytes = fs::read(path).map_err(|_| "Node identity unavailable; initialize the state directory")?;
+    let id = std::str::from_utf8(&bytes).map_err(|_| "Invalid node identity")?.trim();
     if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid node identity");
     }
@@ -206,7 +218,10 @@ fn url_for(addr: &str) -> String {
             format!("http://{bound}")
         }
         Err(_) => {
-            let port = addr.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok()).unwrap_or(8080);
+            let port = addr
+                .rsplit_once(':')
+                .and_then(|(_, p)| p.parse::<u16>().ok())
+                .unwrap_or(8080);
             format!("http://127.0.0.1:{port}")
         }
     }
@@ -215,7 +230,10 @@ fn url_for(addr: &str) -> String {
 /// The node's wall clock in whole Unix seconds, as state records store it; 0 if
 /// the clock reads before the epoch.
 pub fn unix_seconds() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// Model run time limit: `CONTROL_WORKER_TIMEOUT_SECS` or `worker-timeout-secs` in the
@@ -353,10 +371,7 @@ pub fn initialize(template: &[u8]) -> io::Result<()> {
 }
 fn initialize_in(directory: &Path, template: &[u8]) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(directory)?;
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(directory)?;
     let metadata = fs::symlink_metadata(directory)?;
     if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
         return Err(io::Error::other(
@@ -411,11 +426,7 @@ pub fn write_in(directory: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-fn resolve(
-    explicit: Option<OsString>,
-    xdg: Option<OsString>,
-    home: Option<OsString>,
-) -> Result<PathBuf, &'static str> {
+fn resolve(explicit: Option<OsString>, xdg: Option<OsString>, home: Option<OsString>) -> Result<PathBuf, &'static str> {
     let path = explicit
         .map(PathBuf::from)
         .or_else(|| xdg.map(|p| PathBuf::from(p).join("control")))

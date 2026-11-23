@@ -1,8 +1,8 @@
 //! Approval eligibility and publication over borrowed records; no I/O or policy.
 //! The host admits candidates and checkpoints publication with request receipts.
+use super::conversations::{Message, Session};
 use super::runs::Run;
 use control_context::agent_policy::{MessageSpeaker, RunKind};
-use super::conversations::{Message, Session};
 
 /// Chat note headings for operator decisions. Notes stored before messages
 /// recorded a speaker are recognised by these exact headings.
@@ -66,28 +66,33 @@ pub(crate) enum Eligibility {
 /// ownership; they are not plans to retain across another writer or an await.
 pub(crate) fn decide(runs: &[Run], chat: &str, origins: &[&str], cancelled_through: Option<u64>) -> Eligibility {
     let in_chat = |run: &&Run| run.chat_id.as_deref() == Some(chat);
-    if runs.iter().filter(in_chat).any(|run| {
-        matches!(
-            run.status.as_str(),
-            "queued" | "running" | "waiting" | "cancelling"
-        )
-    }) {
+    if runs
+        .iter()
+        .filter(in_chat)
+        .any(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
+    {
         return Eligibility::Wait;
     }
-    let requested = runs
-        .iter()
-        .rposition(|run| origins.contains(&run.id.as_str()));
+    let requested = runs.iter().rposition(|run| origins.contains(&run.id.as_str()));
     let counts = |run: &&Run| !run.absorbed_by().is_some_and(|active| origins.contains(&active));
     let latest = runs.iter().rposition(|run| in_chat(&run) && counts(&run));
     let steered = requested.is_some_and(|at| {
-        runs[at + 1..].iter().filter(in_chat).filter(counts).any(|run| {
-            run.kind.speaker() == MessageSpeaker::User && run.kind != RunKind::DesignAnswer
-        })
+        runs[at + 1..]
+            .iter()
+            .filter(in_chat)
+            .filter(counts)
+            .any(|run| run.kind.speaker() == MessageSpeaker::User && run.kind != RunKind::DesignAnswer)
     });
-    let cancelled = requested.zip(cancelled_through).is_some_and(|(at, through)| runs[at].queue_order <= through);
+    let cancelled = requested
+        .zip(cancelled_through)
+        .is_some_and(|(at, through)| runs[at].queue_order <= through);
     match (requested, latest) {
         // A turn cut off before its handoff resumes from its host checkpoint.
-        (Some(_), Some(at)) if !steered && !cancelled && (runs[at].status == "completed" || crate::attempt_control::cut_off(&runs[at])) => {
+        (Some(_), Some(at))
+            if !steered
+                && !cancelled
+                && (runs[at].status == "completed" || crate::attempt_control::cut_off(&runs[at])) =>
+        {
             Eligibility::Candidate(at)
         }
         _ => Eligibility::Note,

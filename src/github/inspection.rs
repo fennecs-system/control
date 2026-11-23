@@ -17,8 +17,16 @@ impl AttemptTools for Tools {
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         if name == "control_github_write" {
-            let operation = serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Expected a typed GitHub operation"))?;
-            return super::operations::execute(cx.host.0, Caller::Attempt { run: cx.attempt.run, generation: cx.attempt.generation }, operation);
+            let operation = serde_json::from_value(args.clone())
+                .map_err(|_| io::Error::other("Expected a typed GitHub operation"))?;
+            return super::operations::execute(
+                cx.host.0,
+                Caller::Attempt {
+                    run: cx.attempt.run,
+                    generation: cx.attempt.generation,
+                },
+                operation,
+            );
         }
         let query: Query = serde_json::from_value(args.clone())
             .map_err(|_| io::Error::other("Expected a PR number, section and optional page"))?;
@@ -151,13 +159,11 @@ pub(super) fn project(value: &Value, fields: &[&str], body_bytes: usize) -> Valu
         .chain(std::iter::once(("author", &value["user"]["login"])))
     {
         let value = if let Some(text) = value.as_str() {
-            let mut end = text
-                .len()
-                .min(if matches!(name, "body" | "patch" | "diff_hunk") {
-                    body_bytes
-                } else {
-                    256
-                });
+            let mut end = text.len().min(if matches!(name, "body" | "patch" | "diff_hunk") {
+                body_bytes
+            } else {
+                256
+            });
             while !text.is_char_boundary(end) {
                 end -= 1;
             }
@@ -232,14 +238,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
             Section::Reviews => (
                 format!("{prefix}/reviews"),
                 None,
-                &[
-                    "id",
-                    "body",
-                    "state",
-                    "commit_id",
-                    "html_url",
-                    "submitted_at",
-                ],
+                &["id", "body", "state", "commit_id", "html_url", "submitted_at"],
             ),
             Section::ReviewComments => (
                 format!("{prefix}/comments"),
@@ -274,14 +273,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
             Section::Statuses => (
                 format!("commits/{head}/statuses"),
                 None,
-                &[
-                    "id",
-                    "state",
-                    "context",
-                    "description",
-                    "target_url",
-                    "created_at",
-                ],
+                &["id", "state", "context", "description", "target_url", "created_at"],
             ),
             Section::Overview => unreachable!(),
         };
@@ -296,10 +288,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
         }
         let page = api.request(
             "GET",
-            &request_path(
-                repo,
-                &format!("{path}?per_page={PAGE_SIZE}&page={}", query.page),
-            ),
+            &request_path(repo, &format!("{path}?per_page={PAGE_SIZE}&page={}", query.page)),
             None,
         )?;
         let items = key
@@ -307,12 +296,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
             .as_array()
             .filter(|items| items.len() <= PAGE_SIZE)
             .ok_or_else(|| io::Error::other("GitHub returned an invalid or unavailable page"))?;
-        result["items"] = json!(
-            items
-                .iter()
-                .map(|item| project(item, fields, 1024))
-                .collect::<Vec<_>>()
-        );
+        result["items"] = json!(items.iter().map(|item| project(item, fields, 1024)).collect::<Vec<_>>());
         result["next_page"] = if items.len() == PAGE_SIZE && query.page < 1000 {
             json!(query.page + 1)
         } else {

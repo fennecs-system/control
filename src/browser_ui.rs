@@ -34,7 +34,11 @@ fn artifact(name: &str) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 fn respond(stream: &mut TcpStream, status: &str, mime: &str, body: &[u8], extra: &str) {
-    let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Cache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\nConnection: close\r\n\r\n", body.len());
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n{extra}Cache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
     let _ = stream.write_all(body);
 }
 pub fn handle(stream: &mut TcpStream, method: &str, target: &str, body: &[u8]) -> bool {
@@ -46,28 +50,18 @@ pub fn handle(stream: &mut TcpStream, method: &str, target: &str, body: &[u8]) -
         if let Some(name) = path.strip_prefix("/tools/browser/artifacts/") {
             match artifact(name) {
                 Ok(bytes) => respond(stream, "200 OK", "image/png", &bytes, ""),
-                Err(_) => respond(
-                    stream,
-                    "404 Not Found",
-                    "text/plain",
-                    b"Capture not found.",
-                    "",
-                ),
+                Err(_) => respond(stream, "404 Not Found", "text/plain", b"Capture not found.", ""),
             }
             return true;
         }
         if path == "/tools/browser" {
             let query = crate::fields(query);
             let preview = query.get("capture").filter(|s| valid_name(s)).map(|s| format!("<a href='/tools/browser/artifacts/{s}'><img class='browser-capture' src='/tools/browser/artifacts/{s}' alt='Browser capture'></a>")).unwrap_or_default();
-            let content = format!("<h2>Browser</h2><p><a href='/tools/browser/access'>Web access</a></p><p class='muted'>Offline HTML preview · Firefox</p><form method='post' action='/tools/browser/capture'><label>HTML file<input name='input' required placeholder='path/to/preview.html' maxlength='1000'></label><div class='browser-viewport'><label>Width<input name='width' type='number' min='240' max='2560' value='1280' required></label><label>Height<input name='height' type='number' min='240' max='2560' value='800' required></label></div><button class='primary'>Capture</button></form>{preview}");
-            let page = crate::render(&crate::State::default(), "browser", "none", &content);
-            respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                page.as_bytes(),
-                "",
+            let content = format!(
+                "<h2>Browser</h2><p><a href='/tools/browser/access'>Web access</a></p><p class='muted'>Offline HTML preview · Firefox</p><form method='post' action='/tools/browser/capture'><label>HTML file<input name='input' required placeholder='path/to/preview.html' maxlength='1000'></label><div class='browser-viewport'><label>Width<input name='width' type='number' min='240' max='2560' value='1280' required></label><label>Height<input name='height' type='number' min='240' max='2560' value='800' required></label></div><button class='primary'>Capture</button></form>{preview}"
             );
+            let page = crate::render(&crate::State::default(), "browser", "none", &content);
+            respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes(), "");
             return true;
         }
     }
@@ -75,10 +69,7 @@ pub fn handle(stream: &mut TcpStream, method: &str, target: &str, body: &[u8]) -
         let fields = crate::fields(&String::from_utf8_lossy(body));
         let result = (|| -> io::Result<_> {
             let root = fs::canonicalize(".")?;
-            let input = crate::mcp_stdio::source(
-                &root,
-                fields.get("input").map(String::as_str).unwrap_or(""),
-            )?;
+            let input = crate::mcp_stdio::source(&root, fields.get("input").map(String::as_str).unwrap_or(""))?;
             let dimension = |key: &str| {
                 fields
                     .get(key)

@@ -40,17 +40,29 @@ pub(crate) struct Finished {
 /// Runs `spec` through `isolation`.
 pub(crate) fn run(isolation: &dyn Isolation, spec: Spec) -> io::Result<Finished> {
     let run = spec.run.clone();
-    run_with(|streams| isolation.spawn(&run, streams), spec, || {
-        let _ = isolation.remove(control_isolation::Target::Name(&run.name));
-    })
+    run_with(
+        |streams| isolation.spawn(&run, streams),
+        spec,
+        || {
+            let _ = isolation.remove(control_isolation::Target::Name(&run.name));
+        },
+    )
 }
 /// The runner behind [`run`], with the start and the deadline's removal
 /// supplied so tests can drive it without an engine.
-fn run_with(spawn: impl FnOnce(Streams) -> io::Result<Child>, spec: Spec, remove: impl FnOnce()) -> io::Result<Finished> {
+fn run_with(
+    spawn: impl FnOnce(Streams) -> io::Result<Child>,
+    spec: Spec,
+    remove: impl FnOnce(),
+) -> io::Result<Finished> {
     let start = Instant::now();
-    let stderr = if spec.stderr_bytes.is_some() { Stream::Piped } else { Stream::Null };
-    let mut child = spawn(Streams::new(Stream::Piped, Stream::Piped, stderr))
-        .map_err(|_| io::Error::other(spec.unavailable))?;
+    let stderr = if spec.stderr_bytes.is_some() {
+        Stream::Piped
+    } else {
+        Stream::Null
+    };
+    let mut child =
+        spawn(Streams::new(Stream::Piped, Stream::Piped, stderr)).map_err(|_| io::Error::other(spec.unavailable))?;
     let stdout = child.stdout.take().unwrap();
     let out = std::thread::spawn(move || head(stdout, spec.stdout_bytes));
     let err = match (child.stderr.take(), spec.stderr_bytes) {
@@ -69,12 +81,23 @@ fn run_with(spawn: impl FnOnce(Streams) -> io::Result<Child>, spec: Spec, remove
         let _ = child.wait();
     }
     let delivered = feed.join().unwrap_or(false);
-    let (stdout, stdout_truncated) = out.join().map_err(|_| io::Error::other("Tool container output reader failed"))??;
+    let (stdout, stdout_truncated) = out
+        .join()
+        .map_err(|_| io::Error::other("Tool container output reader failed"))??;
     let stderr = match err {
-        Some(err) => err.join().map_err(|_| io::Error::other("Tool container diagnostics reader failed"))??,
+        Some(err) => err
+            .join()
+            .map_err(|_| io::Error::other("Tool container diagnostics reader failed"))??,
         None => Vec::new(),
     };
-    Ok(Finished { status, delivered, stdout, stdout_truncated, stderr, elapsed })
+    Ok(Finished {
+        status,
+        delivered,
+        stdout,
+        stdout_truncated,
+        stderr,
+        elapsed,
+    })
 }
 fn wait(child: &mut Child, start: Instant, deadline: Duration) -> Option<ExitStatus> {
     loop {

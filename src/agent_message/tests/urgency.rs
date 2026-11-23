@@ -6,17 +6,35 @@ use super::*;
 const STATUS: &str = "Verified 090 deposited 5 oak logs in the shared chest";
 
 fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 fn send(state: &mut State, run: &str, generation: &str, nonce: &str, chat: &str, text: &str, urgent: bool) -> Value {
-    handle(state, &AttemptRef { run, generation, nonce },
-        MessageCall { chat_id: chat.into(), text: text.into(), services: vec![], urgent }, |_| Ok(())).unwrap()
+    handle(
+        state,
+        &AttemptRef { run, generation, nonce },
+        MessageCall {
+            chat_id: chat.into(),
+            text: text.into(),
+            services: vec![],
+            urgent,
+        },
+        |_| Ok(()),
+    )
+    .unwrap()
 }
 fn queued(state: &State) -> usize {
     state.runtime.runs.iter().filter(|run| run.status == "queued").count()
 }
 fn wakes<'a>(state: &'a State, chat: &str) -> Vec<&'a crate::runtime::Run> {
-    state.runtime.runs.iter().filter(|run| run.bot_turn.is_some() && run.chat_id.as_deref() == Some(chat)).collect()
+    state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| run.bot_turn.is_some() && run.chat_id.as_deref() == Some(chat))
+        .collect()
 }
 /// Alice (running) and Cass (an approved, idle persistent bot) under one lead.
 fn bot_peer() -> (State, String, String) {
@@ -37,14 +55,39 @@ fn only_urgent_messages_wake_and_only_where_they_could_before() {
     let (mut state, lead, child, _) = family();
     let lead_run = state.runtime.runs[0].id.clone();
     let quiet = send(&mut state, &lead_run, "attempt-a", "quiet", &child, STATUS, false);
-    assert_eq!((quiet["queued"].as_bool(), quiet["retained"].as_bool(), quiet.get("urgent")), (Some(false), Some(true), None));
+    assert_eq!(
+        (
+            quiet["queued"].as_bool(),
+            quiet["retained"].as_bool(),
+            quiet.get("urgent")
+        ),
+        (Some(false), Some(true), None)
+    );
     let record = state.runtime.runs.last().unwrap();
-    assert_eq!((record.status.as_str(), record.source.as_str()), ("completed", "agent-message"));
+    assert_eq!(
+        (record.status.as_str(), record.source.as_str()),
+        ("completed", "agent-message")
+    );
     assert!(record.attempts.is_empty());
     assert_eq!(queued(&state), 0, "a status update queues no turn");
-    let loud = send(&mut state, &lead_run, "attempt-a", "loud", &child, "Stop: the chest moved", true);
-    assert_eq!((loud["queued"].as_bool(), loud["urgent"].as_bool()), (Some(true), Some(true)));
-    assert_eq!(queued(&state), 1, "an urgent message to a descendant queues its follow-up");
+    let loud = send(
+        &mut state,
+        &lead_run,
+        "attempt-a",
+        "loud",
+        &child,
+        "Stop: the chest moved",
+        true,
+    );
+    assert_eq!(
+        (loud["queued"].as_bool(), loud["urgent"].as_bool()),
+        (Some(true), Some(true))
+    );
+    assert_eq!(
+        queued(&state),
+        1,
+        "an urgent message to a descendant queues its follow-up"
+    );
     let _ = lead;
 
     // A sibling that is not a bot is never woken by a peer, urgent or not.
@@ -66,12 +109,23 @@ fn only_urgent_messages_wake_and_only_where_they_could_before() {
     crate::bots::reconcile_at_ms(&mut state, start).unwrap();
     crate::bots::reconcile_at_ms(&mut state, start + 31_000).unwrap();
     assert!(wakes(&state, &cass).is_empty(), "a status record does not wake a bot");
-    send(&mut state, &alice_run, "peer-attempt", "request", &cass, "Please smelt the ore now", true);
+    send(
+        &mut state,
+        &alice_run,
+        "peer-attempt",
+        "request",
+        &cass,
+        "Please smelt the ore now",
+        true,
+    );
     crate::bots::reconcile_at_ms(&mut state, start + 32_000).unwrap();
     let woken = wakes(&state, &cass);
     assert_eq!(woken.len(), 1, "an urgent request wakes the bot");
     let objective = woken[0].objective.as_str();
-    assert!(objective.contains("Unread agent messages (2;"), "the wake carries both as a digest: {objective}");
+    assert!(
+        objective.contains("Unread agent messages (2;"),
+        "the wake carries both as a digest: {objective}"
+    );
     assert!(objective.contains(STATUS) && objective.contains("(urgent): Please smelt"));
 }
 
@@ -109,14 +163,38 @@ fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
 
     crate::bots::reconcile_at_ms(&mut state, sent + 31_000).unwrap();
-    let digest = state.runtime.runs.iter().filter(|run| run.source == "agent-digest").collect::<Vec<_>>();
+    let digest = state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| run.source == "agent-digest")
+        .collect::<Vec<_>>();
     assert_eq!(digest.len(), 1, "one coalesced turn, not one per message");
     let run = digest[0];
-    assert_eq!((run.status.as_str(), run.kind, run.chat_id.as_deref()), ("queued", RunKind::AgentMessage, Some(child.as_str())));
-    assert!(run.objective.contains("(2 message(s)") && run.objective.contains(STATUS) && run.objective.contains("furnace is lit"));
+    assert_eq!(
+        (run.status.as_str(), run.kind, run.chat_id.as_deref()),
+        ("queued", RunKind::AgentMessage, Some(child.as_str()))
+    );
+    assert!(
+        run.objective.contains("(2 message(s)")
+            && run.objective.contains(STATUS)
+            && run.objective.contains("furnace is lit")
+    );
     crate::bots::reconcile_at_ms(&mut state, sent + 3_600_000).unwrap();
-    assert_eq!(state.runtime.runs.iter().filter(|run| run.source == "agent-digest").count(), 1, "delivered once");
-    assert!(state.agent_messages.iter().all(|sent| !sent.digest), "delivered messages leave the overdue scan");
+    assert_eq!(
+        state
+            .runtime
+            .runs
+            .iter()
+            .filter(|run| run.source == "agent-digest")
+            .count(),
+        1,
+        "delivered once"
+    );
+    assert!(
+        state.agent_messages.iter().all(|sent| !sent.digest),
+        "delivered messages leave the overdue scan"
+    );
 
     // Any other turn of the recipient takes the messages instead.
     let (mut state, _, child, _) = family();
@@ -128,7 +206,10 @@ fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     crate::bots::reconcile_at_ms(&mut state, now() + 3_600_000).unwrap();
     assert_eq!(queued(&state), 0, "the operator's turn already carried the message");
-    assert!(state.agent_messages.iter().all(|sent| !sent.digest), "a message another turn took is retired");
+    assert!(
+        state.agent_messages.iter().all(|sent| !sent.digest),
+        "a message another turn took is retired"
+    );
     let _ = lead;
 }
 
@@ -137,20 +218,46 @@ fn digests_are_bounded_and_count_what_they_omit() {
     let (mut state, alice_run, cass) = bot_peer();
     let long = "x".repeat(1_900);
     for index in 0..20 {
-        send(&mut state, &alice_run, "peer-attempt", &format!("n{index}"), &cass, &format!("{index} {long}"), false);
+        send(
+            &mut state,
+            &alice_run,
+            "peer-attempt",
+            &format!("n{index}"),
+            &cass,
+            &format!("{index} {long}"),
+            false,
+        );
     }
-    send(&mut state, &alice_run, "peer-attempt", "urgent", &cass, "Need the key now", true);
+    send(
+        &mut state,
+        &alice_run,
+        "peer-attempt",
+        "urgent",
+        &cass,
+        "Need the key now",
+        true,
+    );
     crate::bots::reconcile_at_ms(&mut state, now()).unwrap();
     let woken = wakes(&state, &cass);
     assert_eq!(woken.len(), 1);
     let objective = woken[0].objective.as_str();
     let digest = &objective[objective.find("Unread agent messages").unwrap()..];
     assert!(digest.starts_with("Unread agent messages (21;"));
-    assert_eq!(digest.lines().filter(|line| line.starts_with("- ")).count(), 9, "eight quotes and a remainder line");
+    assert_eq!(
+        digest.lines().filter(|line| line.starts_with("- ")).count(),
+        9,
+        "eight quotes and a remainder line"
+    );
     assert!(digest.contains("- and 13 more"));
     assert!(digest.len() < 2_048, "digest stays compact: {} bytes", digest.len());
-    assert!(digest.contains("(urgent): Need the key now"), "urgent messages are quoted first");
-    assert!(digest.contains(": 19 x") && !digest.contains(": 0 x"), "then the newest; the oldest are counted");
+    assert!(
+        digest.contains("(urgent): Need the key now"),
+        "urgent messages are quoted first"
+    );
+    assert!(
+        digest.contains(": 19 x") && !digest.contains(": 0 x"),
+        "then the newest; the oldest are counted"
+    );
 }
 
 /// A message sent while its recipient's turn runs reaches that turn's next
@@ -164,19 +271,44 @@ fn a_message_delivered_into_a_running_turn_does_not_also_start_one() {
     state.runtime.runs[index].status = "queued".into();
     let admitted = crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let child_run = state.runtime.runs[admitted].id.clone();
-    send(&mut state, &lead_run, "attempt-a", "loud", &child, "Stop: the chest moved", true);
+    send(
+        &mut state,
+        &lead_run,
+        "attempt-a",
+        "loud",
+        &child,
+        "Stop: the chest moved",
+        true,
+    );
     assert_eq!(queued(&state), 1, "queued in case the turn ends first");
     let block = crate::turn_context::inbox(&mut state, &child_run, |_| Ok(())).unwrap();
     assert_eq!(block.matches("Stop: the chest moved").count(), 1, "{block}");
-    assert!(crate::turn_context::inbox(&mut state, &child_run, |_| Ok(())).is_none(), "exactly once");
+    assert!(
+        crate::turn_context::inbox(&mut state, &child_run, |_| Ok(())).is_none(),
+        "exactly once"
+    );
     let mut state: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     crate::bots::reconcile_at_ms(&mut state, now()).unwrap();
     assert_eq!(queued(&state), 0, "already delivered: no second turn");
     let settled = state.runtime.runs.last().unwrap();
     assert_eq!((settled.status.as_str(), settled.attempts.len()), ("completed", 0));
     // After the turn ends, an undelivered urgent message still starts one.
-    state.runtime.runs.iter_mut().find(|run| run.id == child_run).unwrap().status = "completed".into();
-    send(&mut state, &lead_run, "attempt-a", "later", &child, "Now the gate", true);
+    state
+        .runtime
+        .runs
+        .iter_mut()
+        .find(|run| run.id == child_run)
+        .unwrap()
+        .status = "completed".into();
+    send(
+        &mut state,
+        &lead_run,
+        "attempt-a",
+        "later",
+        &child,
+        "Now the gate",
+        true,
+    );
     crate::bots::reconcile_at_ms(&mut state, now()).unwrap();
     assert_eq!(queued(&state), 1);
 }

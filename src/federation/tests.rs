@@ -1,4 +1,3 @@
-
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 const TIME: u64 = 1_793_145_600;
@@ -50,10 +49,7 @@ fn dropping_store_releases_ownership_even_with_an_inherited_descriptor() {
     drop(store);
     let reopened = Store::open(&dir.0).unwrap();
     drop(inherited);
-    assert!(
-        Store::open(&dir.0).is_err(),
-        "The new owner must retain exclusivity"
-    );
+    assert!(Store::open(&dir.0).is_err(), "The new owner must retain exclusivity");
     drop(reopened);
     assert!(Store::open(&dir.0).is_ok());
 }
@@ -294,25 +290,12 @@ fn symlinks_fifos_oversized_files_and_public_keys_are_rejected() {
     drop(store);
     symlink(temp.0.join("identity.pk8"), temp.0.join("link")).unwrap();
     assert!(read(&temp.0.join("link"), 1024, false).is_err());
-    fs::set_permissions(
-        temp.0.join("identity.pk8"),
-        fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
+    fs::set_permissions(temp.0.join("identity.pk8"), fs::Permissions::from_mode(0o644)).unwrap();
     assert!(Store::open(&temp.0).is_err());
-    fs::set_permissions(
-        temp.0.join("identity.pk8"),
-        fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
+    fs::set_permissions(temp.0.join("identity.pk8"), fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(Store::open(&temp.0).unwrap().id(), id);
     let path = temp.0.join("large");
-    let file = options()
-        .unwrap()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .unwrap();
+    let file = options().unwrap().write(true).create_new(true).open(&path).unwrap();
     file.set_len((CARRIER + 1) as u64).unwrap();
     assert!(read(&path, CARRIER, false).is_err());
     let fifo = temp.0.join("fifo");

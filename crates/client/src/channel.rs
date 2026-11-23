@@ -19,7 +19,10 @@ use super::operator::{self, Kind, Pending};
 use super::{Hive, updates::Updates};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{path::PathBuf, time::{Duration, Instant}};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 pub mod request;
 pub use request::{Refusal, Request, Settled};
@@ -115,7 +118,14 @@ pub struct Settings {
 }
 impl Default for Settings {
     fn default() -> Self {
-        Self { enabled: false, kinds: Kind::ALL.to_vec(), chats: Vec::new(), prefix: "!".into(), brief: false, brief_hour: 8 }
+        Self {
+            enabled: false,
+            kinds: Kind::ALL.to_vec(),
+            chats: Vec::new(),
+            prefix: "!".into(),
+            brief: false,
+            brief_hour: 8,
+        }
     }
 }
 impl Settings {
@@ -123,7 +133,9 @@ impl Settings {
         // Settings saved before folder requests were forwarded list the four
         // older kinds; folder access follows port access and knowledge
         // proposals follow questions.
-        let listed = self.kinds.contains(&kind) || (kind == Kind::Folder && self.kinds.contains(&Kind::Port)) || (kind == Kind::Knowledge && self.kinds.contains(&Kind::Question));
+        let listed = self.kinds.contains(&kind)
+            || (kind == Kind::Folder && self.kinds.contains(&Kind::Port))
+            || (kind == Kind::Knowledge && self.kinds.contains(&Kind::Question));
         self.enabled && listed && (self.chats.is_empty() || self.chats.iter().any(|c| c == chat))
     }
     /// Valid prefixes are 1–3 visible ASCII punctuation characters.
@@ -134,7 +146,9 @@ impl Settings {
     pub fn command<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
         let text = text.trim();
         match text.strip_prefix(self.prefix.as_str()) {
-            Some(rest) if self.prefix != "/" && rest.starts_with(|c: char| c.is_ascii_alphabetic()) => format!("/{rest}").into(),
+            Some(rest) if self.prefix != "/" && rest.starts_with(|c: char| c.is_ascii_alphabetic()) => {
+                format!("/{rest}").into()
+            }
             _ => text.into(),
         }
     }
@@ -148,7 +162,10 @@ impl Settings {
         let mut rest = text;
         while let Some(c) = rest.chars().next() {
             let boundary = previous.is_none_or(|p: char| p.is_whitespace() || p == '(' || p == '`');
-            if c == '/' && boundary && command_word(rest[1..].split(|n: char| !n.is_ascii_lowercase()).next().unwrap_or("")) {
+            if c == '/'
+                && boundary
+                && command_word(rest[1..].split(|n: char| !n.is_ascii_lowercase()).next().unwrap_or(""))
+            {
                 out.push_str(&self.prefix);
             } else {
                 out.push(c);
@@ -160,9 +177,20 @@ impl Settings {
     }
     /// `help`: every command from the shared tables, in this channel's spelling.
     pub fn help(&self) -> String {
-        let server = control_context::commands::DEFINITIONS.iter().filter(|d| d.id != "answer").map(|d| (d.text, d.description));
-        let rows = chats::COMMANDS.iter().copied().chain(operator::COMMANDS.iter().copied()).chain(server).chain([("/help", "This list")]);
-        let lines = rows.map(|(usage, description)| format!("{usage} — {description}")).collect::<Vec<_>>().join("\n");
+        let server = control_context::commands::DEFINITIONS
+            .iter()
+            .filter(|d| d.id != "answer")
+            .map(|d| (d.text, d.description));
+        let rows = chats::COMMANDS
+            .iter()
+            .copied()
+            .chain(operator::COMMANDS.iter().copied())
+            .chain(server)
+            .chain([("/help", "This list")]);
+        let lines = rows
+            .map(|(usage, description)| format!("{usage} — {description}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         self.present(&format!("Commands (anything else goes to the selected DM):\n{lines}"))
     }
 }
@@ -170,9 +198,16 @@ impl Settings {
 /// Whether `word` names a command in the shared tables; `present` respells
 /// only those, leaving other `/text` (paths, URLs) alone.
 fn command_word(word: &str) -> bool {
-    let tables = chats::COMMANDS.iter().chain(operator::COMMANDS).map(|(usage, _)| *usage)
-        .chain(control_context::commands::DEFINITIONS.iter().map(|d| d.text)).chain(["/help"]);
-    !word.is_empty() && tables.filter_map(|usage| usage.strip_prefix('/')).any(|usage| usage.split(|c: char| !c.is_ascii_lowercase()).next() == Some(word))
+    let tables = chats::COMMANDS
+        .iter()
+        .chain(operator::COMMANDS)
+        .map(|(usage, _)| *usage)
+        .chain(control_context::commands::DEFINITIONS.iter().map(|d| d.text))
+        .chain(["/help"]);
+    !word.is_empty()
+        && tables
+            .filter_map(|usage| usage.strip_prefix('/'))
+            .any(|usage| usage.split(|c: char| !c.is_ascii_lowercase()).next() == Some(word))
 }
 
 /// Every channel's settings.
@@ -269,14 +304,24 @@ pub struct Notice {
 }
 /// Every pending request in a `control.requests.list` view, as (chat, kind, ID).
 fn open_requests(groups: &Value) -> std::collections::HashSet<(&str, Kind, &str)> {
-    groups.as_array().into_iter().flatten()
+    groups
+        .as_array()
+        .into_iter()
+        .flatten()
         .filter_map(|group| Some((group["chat_id"].as_str()?, group)))
         .flat_map(|(chat, group)| operator::pending(group).into_iter().map(move |p| (chat, p.kind, p.id)))
         .collect()
 }
 impl Notice {
     pub fn pending(&self) -> Pending<'_> {
-        Pending { kind: self.kind, id: &self.id, heading: Default::default(), body: "", usage: None, loopback: self.loopback }
+        Pending {
+            kind: self.kind,
+            id: &self.id,
+            heading: Default::default(),
+            body: "",
+            usage: None,
+            loopback: self.loopback,
+        }
     }
 }
 /// The chat a conversation talks to after `/resume ID`, and how far its
@@ -319,7 +364,9 @@ fn mine<'a>(to: &'a Recipient) -> impl Fn(&str, &str) -> bool + 'a {
 }
 impl Ledger {
     pub fn sent(&self, to: &Recipient, chat: &str, kind: Kind, id: &str) -> bool {
-        self.notices.iter().any(|n| mine(to)(&n.person, &n.conversation) && n.chat == chat && n.kind == kind && n.id == id)
+        self.notices
+            .iter()
+            .any(|n| mine(to)(&n.person, &n.conversation) && n.chat == chat && n.kind == kind && n.id == id)
     }
     pub fn record(&mut self, notice: Notice) {
         self.notices.push(notice);
@@ -329,7 +376,11 @@ impl Ledger {
     /// The request a message refers to: a reply to its notification, or a
     /// typed command naming it. Only that recipient's notifications match.
     pub fn target(&self, to: &Recipient, inbound: Inbound<'_>) -> Option<&Notice> {
-        let notices = self.notices.iter().rev().filter(|n| mine(to)(&n.person, &n.conversation));
+        let notices = self
+            .notices
+            .iter()
+            .rev()
+            .filter(|n| mine(to)(&n.person, &n.conversation));
         match inbound.replied {
             Some(message) => notices.into_iter().find(|n| n.message == message),
             None => {
@@ -346,7 +397,13 @@ impl Ledger {
     pub fn select(&mut self, to: &Recipient, chat: Option<(String, usize)>) {
         self.active.retain(|a| !mine(to)(&a.person, &a.conversation));
         if let Some((chat, delivered)) = chat {
-            self.active.push(Active { person: to.person.clone(), conversation: to.conversation.clone(), chat, delivered, revision: Value::Null });
+            self.active.push(Active {
+                person: to.person.clone(),
+                conversation: to.conversation.clone(),
+                chat,
+                delivered,
+                revision: Value::Null,
+            });
         }
     }
     pub fn relay(&mut self, relayed: Relayed) {
@@ -365,8 +422,16 @@ impl Ledger {
         if let Some(navigation) = navigation(inbound.text) {
             return Some(Routed::Navigate(navigation));
         }
-        let relayed = inbound.replied.and_then(|message| self.relayed.iter().rev().find(|r| mine(to)(&r.person, &r.conversation) && r.message == message));
-        relayed.map(|r| &r.chat).or(self.active(to).map(|a| &a.chat)).map(|chat| Routed::Chat(chat.clone()))
+        let relayed = inbound.replied.and_then(|message| {
+            self.relayed
+                .iter()
+                .rev()
+                .find(|r| mine(to)(&r.person, &r.conversation) && r.message == message)
+        });
+        relayed
+            .map(|r| &r.chat)
+            .or(self.active(to).map(|a| &a.chat))
+            .map(|chat| Routed::Chat(chat.clone()))
     }
 }
 
@@ -398,14 +463,28 @@ pub enum Pressed {
 /// `/chats`: the recent chats in a `control.chats.list` view, with how to
 /// select one and how to return to this conversation's own chat.
 pub fn chat_list(to: &Recipient, list: &Value) -> String {
-    let recent = chats::recent(&chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[])), RECENT);
-    let back = to.home.as_ref().map(|home| format!(", /resume {home} for this conversation's own DM")).unwrap_or_default();
-    format!("Recent DMs. Reply /resume ID to talk to one, /new for a new DM{back}.\n\n{}", chats::resume_list(&recent))
+    let recent = chats::recent(
+        &chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[])),
+        RECENT,
+    );
+    let back = to
+        .home
+        .as_ref()
+        .map(|home| format!(", /resume {home} for this conversation's own DM"))
+        .unwrap_or_default();
+    format!(
+        "Recent DMs. Reply /resume ID to talk to one, /new for a new DM{back}.\n\n{}",
+        chats::resume_list(&recent)
+    )
 }
 
 /// The notification for one pending request.
 pub fn notice_text(title: &str, link: &str, pending: &Pending<'_>) -> String {
-    let mut text = format!("Control · {}\n{}", title.chars().take(100).collect::<String>(), pending.heading);
+    let mut text = format!(
+        "Control · {}\n{}",
+        title.chars().take(100).collect::<String>(),
+        pending.heading
+    );
     if !pending.body.is_empty() {
         text.push_str(&format!("\n{}", pending.body.chars().take(1200).collect::<String>()));
     }
@@ -417,11 +496,21 @@ pub fn notice_text(title: &str, link: &str, pending: &Pending<'_>) -> String {
 }
 /// A finished chat reply, within the service's length.
 pub fn reply_text(title: &str, status: &str, link: &str, reply: &str, max: usize) -> String {
-    let head = format!("Control · {} · {status}\n{link}\n\n", title.chars().take(100).collect::<String>());
-    let reply = if reply.is_empty() { "No report was produced." } else { reply };
+    let head = format!(
+        "Control · {} · {status}\n{link}\n\n",
+        title.chars().take(100).collect::<String>()
+    );
+    let reply = if reply.is_empty() {
+        "No report was produced."
+    } else {
+        reply
+    };
     let budget = max.saturating_sub(head.chars().count());
     if reply.chars().count() > budget {
-        format!("{head}{}\n… Full reply in chat.", reply.chars().take(budget.saturating_sub(22)).collect::<String>())
+        format!(
+            "{head}{}\n… Full reply in chat.",
+            reply.chars().take(budget.saturating_sub(22)).collect::<String>()
+        )
     } else {
         format!("{head}{reply}")
     }
@@ -441,15 +530,26 @@ impl Channel {
     }
     /// Channel `name` with its saved routing table.
     pub fn open(name: &str) -> Self {
-        let ledger = Self::path(name).ok().and_then(|path| std::fs::read(path).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        Self { name: name.into(), hive: None, refreshed: None, revisions: Value::Null, ledger }
+        let ledger = Self::path(name)
+            .ok()
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        Self {
+            name: name.into(),
+            hive: None,
+            refreshed: None,
+            revisions: Value::Null,
+            ledger,
+        }
     }
     fn save(&self) {
         let saved = Self::path(&self.name).and_then(|path| {
             let directory = path.parent().ok_or("Invalid channel path")?;
             std::fs::create_dir_all(directory).map_err(|_| "Could not create channel state.")?;
             let bytes = serde_json::to_vec(&self.ledger).map_err(|_| "Could not encode channel routing.")?;
-            control_config::write_in(directory, &format!("{}.json", self.name), &bytes).map_err(|_| "Could not save channel routing.")
+            control_config::write_in(directory, &format!("{}.json", self.name), &bytes)
+                .map_err(|_| "Could not save channel routing.")
         });
         if let Err(message) = saved {
             eprintln!("{message}");
@@ -458,7 +558,8 @@ impl Channel {
     /// The operator interface, connected on first use and after a failure.
     fn hive(&mut self) -> Result<&mut Hive, &'static str> {
         if self.hive.is_none() {
-            let hive = Hive::connect(&control_config::server_url()).map_err(|_| "Operator interface unavailable; is control serve running?")?;
+            let hive = Hive::connect(&control_config::server_url())
+                .map_err(|_| "Operator interface unavailable; is control serve running?")?;
             let updates = hive.updates().map_err(|_| "Operator update stream unavailable.")?;
             self.hive = Some((hive, updates));
             self.refreshed = None;
@@ -481,25 +582,53 @@ impl Channel {
         if text == "/help" {
             return Some(Routed::Help);
         }
-        self.ledger.route(to, Inbound { replied: inbound.replied, text: &text }, settings.enabled)
+        self.ledger.route(
+            to,
+            Inbound {
+                replied: inbound.replied,
+                text: &text,
+            },
+            settings.enabled,
+        )
     }
     /// Carries out a routed message and returns the reply for the recipient,
     /// in this channel's command spelling.
-    pub fn run(&mut self, transport: &impl Transport, settings: &Settings, to: &Recipient, routed: Routed, text: &str) -> String {
+    pub fn run(
+        &mut self,
+        transport: &impl Transport,
+        settings: &Settings,
+        to: &Recipient,
+        routed: Routed,
+        text: &str,
+    ) -> String {
         let text = settings.command(text);
         let result = match routed {
             Routed::Help => Ok(settings.help()),
             Routed::Decide(notice) => {
                 let result = self.decide(&notice, &text);
                 if result.is_ok() {
-                    self.settle(transport, &notice, &Settled { text: "Decided by you".into(), severity: request::Severity::Success });
+                    self.settle(
+                        transport,
+                        &notice,
+                        &Settled {
+                            text: "Decided by you".into(),
+                            severity: request::Severity::Success,
+                        },
+                    );
                 }
                 result
             }
             Routed::Navigate(navigation) => self.navigate(to, navigation),
-            Routed::Chat(chat) if text.is_empty() => Ok(format!("Control: send the message as text.\n{}", Self::link(&chat))),
-            Routed::Chat(chat) => self.hive().map_err(str::to_owned)
-                .and_then(|hive| operator::execute(hive, &chat, &operator::Command::Send(text.as_ref().into())).map_err(|e| e.to_string()))
+            Routed::Chat(chat) if text.is_empty() => {
+                Ok(format!("Control: send the message as text.\n{}", Self::link(&chat)))
+            }
+            Routed::Chat(chat) => self
+                .hive()
+                .map_err(str::to_owned)
+                .and_then(|hive| {
+                    operator::execute(hive, &chat, &operator::Command::Send(text.as_ref().into()))
+                        .map_err(|e| e.to_string())
+                })
                 .map(|()| format!("Sent.\n{}", Self::link(&chat))),
         };
         self.answer(settings, result)
@@ -519,15 +648,29 @@ impl Channel {
     /// same decision path as a typed reply, then settles the message. `None`
     /// means the message is not one of `to`'s request notifications from this
     /// node: the adapter ignores the press.
-    pub fn press(&mut self, transport: &impl Transport, settings: &Settings, to: &Recipient, message: &str, action: &str, text: Option<&str>) -> Pressed {
+    pub fn press(
+        &mut self,
+        transport: &impl Transport,
+        settings: &Settings,
+        to: &Recipient,
+        message: &str,
+        action: &str,
+        text: Option<&str>,
+    ) -> Pressed {
         let (notice, reply) = match self.ledger.press(to, message, action, text) {
             Err(Refusal::Unknown) => return Pressed::Ignored,
-            Err(Refusal::Settled) => return Pressed::Reply("Control: that request was already decided or is no longer pending.".into()),
-            Err(Refusal::Invalid) => return Pressed::Reply("Control: that action does not apply to this request.".into()),
+            Err(Refusal::Settled) => {
+                return Pressed::Reply("Control: that request was already decided or is no longer pending.".into());
+            }
+            Err(Refusal::Invalid) => {
+                return Pressed::Reply("Control: that action does not apply to this request.".into());
+            }
             Ok(pressed) => pressed,
         };
         if !settings.enabled {
-            return Pressed::Reply("Control: request forwarding is off, so decide this request on the website or in the TUI.".into());
+            return Pressed::Reply(
+                "Control: request forwarding is off, so decide this request on the website or in the TUI.".into(),
+            );
         }
         let result = self.decide(&notice, &settings.command(&reply));
         let edited = match &result {
@@ -538,17 +681,29 @@ impl Channel {
         };
         let answer = self.answer(settings, result);
         // The edited message already shows a successful decision.
-        if edited && !answer.starts_with("Control: ") { Pressed::Settled } else { Pressed::Reply(answer) }
+        if edited && !answer.starts_with("Control: ") {
+            Pressed::Settled
+        } else {
+            Pressed::Reply(answer)
+        }
     }
     /// Marks `notice` settled and, if it carries actions, edits its message.
     /// Returns whether the message was edited.
     fn settle(&mut self, transport: &impl Transport, notice: &Notice, settled: &Settled) -> bool {
-        let Some(slot) = self.ledger.notices.iter_mut().find(|n| n.person == notice.person && n.conversation == notice.conversation && n.message == notice.message) else { return false };
+        let Some(slot) = self.ledger.notices.iter_mut().find(|n| {
+            n.person == notice.person && n.conversation == notice.conversation && n.message == notice.message
+        }) else {
+            return false;
+        };
         slot.settled = true;
         if !slot.actions {
             return false;
         }
-        let to = Recipient { person: notice.person.clone(), conversation: notice.conversation.clone(), home: None };
+        let to = Recipient {
+            person: notice.person.clone(),
+            conversation: notice.conversation.clone(),
+            home: None,
+        };
         match transport.settle(&to, &notice.message, settled) {
             Posted::Sent(_) => true,
             Posted::Retry => {
@@ -579,12 +734,18 @@ impl Channel {
             return Ok("Back to this conversation's own DM.".into());
         }
         // `/use` applies to the selected chat, else the conversation's own chat.
-        let target = self.ledger.active(to).map(|a| a.chat.clone()).or_else(|| to.home.clone());
+        let target = self
+            .ledger
+            .active(to)
+            .map(|a| a.chat.clone())
+            .or_else(|| to.home.clone());
         let hive = self.hive()?;
         let fail = |e: std::io::Error| e.to_string();
         match navigation {
             // Naming no gene changes nothing; say how to use it.
-            Navigation::Use(None) => Ok("Usage: /use GENE… (space or comma separated), or /use none to clear. /genes lists them.".into()),
+            Navigation::Use(None) => {
+                Ok("Usage: /use GENE… (space or comma separated), or /use none to clear. /genes lists them.".into())
+            }
             Navigation::Genes => {
                 let library = hive.tool("control.lenses.list", json!({})).map_err(fail)?;
                 Ok(chats::gene_list(&library))
@@ -592,8 +753,16 @@ impl Channel {
             Navigation::Use(Some(lenses)) => {
                 let chat = target.ok_or("Select a DM with /chats first.")?;
                 let detail = chats::use_lenses(hive, &chat, &lenses).map_err(fail)?;
-                let names = if lenses.is_empty() { "no genes".to_owned() } else { lenses.join(" + ") };
-                Ok(format!("Future messages in {}: {names}.\n{}", detail["title"].as_str().unwrap_or("this DM"), Self::link(&chat)))
+                let names = if lenses.is_empty() {
+                    "no genes".to_owned()
+                } else {
+                    lenses.join(" + ")
+                };
+                Ok(format!(
+                    "Future messages in {}: {names}.\n{}",
+                    detail["title"].as_str().unwrap_or("this DM"),
+                    Self::link(&chat)
+                ))
             }
             Navigation::Personas => {
                 let library = hive.tool("control.personas.list", json!({})).map_err(fail)?;
@@ -602,13 +771,33 @@ impl Channel {
             Navigation::Persona(persona) => {
                 let chat = target.ok_or("Select a DM with /chats first.")?;
                 let detail = chats::use_persona(hive, &chat, &persona).map_err(fail)?;
-                let named = detail["persona"].as_str().map_or("no persona".to_owned(), |p| format!("persona {p} (DNA {})", detail["lenses"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default()));
-                Ok(format!("Future messages in {}: {named}.\n{}", detail["title"].as_str().unwrap_or("this DM"), Self::link(&chat)))
+                let named = detail["persona"].as_str().map_or("no persona".to_owned(), |p| {
+                    format!(
+                        "persona {p} (DNA {})",
+                        detail["lenses"]
+                            .as_array()
+                            .map(|a| a
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(" + "))
+                            .unwrap_or_default()
+                    )
+                });
+                Ok(format!(
+                    "Future messages in {}: {named}.\n{}",
+                    detail["title"].as_str().unwrap_or("this DM"),
+                    Self::link(&chat)
+                ))
             }
             Navigation::Rename(name) => {
                 let chat = target.ok_or("Select a DM with /chats first.")?;
                 let detail = chats::rename(hive, &chat, &name).map_err(fail)?;
-                Ok(format!("Renamed this DM to {}.\n{}", detail["title"].as_str().unwrap_or(&name), Self::link(&chat)))
+                Ok(format!(
+                    "Renamed this DM to {}.\n{}",
+                    detail["title"].as_str().unwrap_or(&name),
+                    Self::link(&chat)
+                ))
             }
             Navigation::List => {
                 let list = hive.tool("control.chats.list", json!({})).map_err(fail)?;
@@ -618,13 +807,20 @@ impl Channel {
                 let detail = hive.tool("control.chat.read", json!({"id":id})).map_err(fail)?;
                 let count = detail["messages"].as_array().map_or(0, Vec::len);
                 self.ledger.select(to, Some((id.clone(), count)));
-                Ok(format!("Now talking to {}. Messages go to that DM and its replies come here; /chats to switch.\n{}", detail["title"].as_str().unwrap_or("Chat"), Self::link(&id)))
+                Ok(format!(
+                    "Now talking to {}. Messages go to that DM and its replies come here; /chats to switch.\n{}",
+                    detail["title"].as_str().unwrap_or("Chat"),
+                    Self::link(&id)
+                ))
             }
             Navigation::New => {
                 let detail = hive.tool("control.chat.create", json!({})).map_err(fail)?;
                 let id = detail["id"].as_str().unwrap_or("").to_owned();
                 self.ledger.select(to, Some((id.clone(), 0)));
-                Ok(format!("New DM started. Messages go to it and its replies come here.\n{}", Self::link(&id)))
+                Ok(format!(
+                    "New DM started. Messages go to it and its replies come here.\n{}",
+                    Self::link(&id)
+                ))
             }
         }
     }
@@ -634,13 +830,20 @@ impl Channel {
     /// then re-reads only what moved: pending requests when a decision revision
     /// changed and forwarding is on, and a selected chat when its revision
     /// changed (relayed whether or not requests are forwarded).
-    pub fn follow(&mut self, transport: &impl Transport, settings: &Settings, recipients: &[Recipient]) -> Result<(), &'static str> {
+    pub fn follow(
+        &mut self,
+        transport: &impl Transport,
+        settings: &Settings,
+        recipients: &[Recipient],
+    ) -> Result<(), &'static str> {
         if recipients.is_empty() || (!settings.enabled && !settings.brief && self.ledger.active.is_empty()) {
             self.hive = None;
             return Ok(());
         }
         self.hive()?;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
         if let Some(today) = brief_due(settings, &self.ledger.briefed, now)
             && let Some((hive, _)) = self.hive.as_mut()
             && let Ok(brief) = hive.tool("control.intel.brief", json!({"save":true}))
@@ -651,7 +854,9 @@ impl Channel {
         }
         let stale = self.refreshed.is_none_or(|at| at.elapsed() >= Duration::from_secs(10));
         let first = self.refreshed.is_none();
-        let Some((hive, updates)) = self.hive.as_mut() else { return Ok(()) };
+        let Some((hive, updates)) = self.hive.as_mut() else {
+            return Ok(());
+        };
         if !(updates.changed() || first || (stale && !updates.connected())) {
             return Ok(());
         }
@@ -661,7 +866,11 @@ impl Channel {
         };
         self.refreshed = Some(Instant::now());
         let mut retry = false;
-        let revisions = json!([list[0]["decision_revision"], list[0]["port_revision"], list[0]["bot_revision"]]);
+        let revisions = json!([
+            list[0]["decision_revision"],
+            list[0]["port_revision"],
+            list[0]["bot_revision"]
+        ]);
         if !settings.enabled {
             // Turning forwarding on later reads the pending requests afresh.
             self.revisions = Value::Null;
@@ -677,13 +886,23 @@ impl Channel {
         let entries = chats::entries(list.as_array().map(Vec::as_slice).unwrap_or(&[]));
         for index in 0..self.ledger.active.len() {
             let active = self.ledger.active[index].clone();
-            let Some(to) = recipients.iter().find(|to| mine(to)(&active.person, &active.conversation)) else { continue };
-            let Some(entry) = entries.iter().find(|entry| entry.id == active.chat) else { continue };
+            let Some(to) = recipients
+                .iter()
+                .find(|to| mine(to)(&active.person, &active.conversation))
+            else {
+                continue;
+            };
+            let Some(entry) = entries.iter().find(|entry| entry.id == active.chat) else {
+                continue;
+            };
             if *entry.revision == active.revision {
                 continue;
             }
             let Some((hive, _)) = self.hive.as_mut() else { break };
-            let Ok(detail) = hive.tool("control.chat.read", json!({"id":active.chat})) else { retry = true; continue };
+            let Ok(detail) = hive.tool("control.chat.read", json!({"id":active.chat})) else {
+                retry = true;
+                continue;
+            };
             retry |= self.relay(transport, to, index, entry.title, entry.revision, &detail);
         }
         self.save();
@@ -704,8 +923,14 @@ impl Channel {
                 let key = format!("{}:brief:{}:{}:{day}:{index}", self.name, to.person, to.conversation);
                 match transport.post(to, part, None, &key) {
                     Posted::Sent(_) => {}
-                    Posted::Retry => { sent = false; break; }
-                    Posted::Refused => { eprintln!("A channel refused the intel brief."); break; }
+                    Posted::Retry => {
+                        sent = false;
+                        break;
+                    }
+                    Posted::Refused => {
+                        eprintln!("A channel refused the intel brief.");
+                        break;
+                    }
                 }
             }
         }
@@ -713,13 +938,26 @@ impl Channel {
     }
     /// Sends each forwarded pending request in `groups` (`control.requests.list`)
     /// once per recipient. Returns whether a send should be retried.
-    pub fn notify(&mut self, transport: &impl Transport, settings: &Settings, recipients: &[Recipient], groups: &Value) -> bool {
+    pub fn notify(
+        &mut self,
+        transport: &impl Transport,
+        settings: &Settings,
+        recipients: &[Recipient],
+        groups: &Value,
+    ) -> bool {
         let mut retry = false;
         let actions = transport.capabilities().buttons;
         for group in groups.as_array().into_iter().flatten() {
-            let (Some(chat), title) = (group["chat_id"].as_str(), group["title"].as_str().unwrap_or("Chat")) else { continue };
+            let (Some(chat), title) = (group["chat_id"].as_str(), group["title"].as_str().unwrap_or("Chat")) else {
+                continue;
+            };
             for pending in operator::pending(group) {
-                if pending.id.is_empty() || !settings.forwards(chat, pending.kind) || recipients.iter().all(|to| self.ledger.sent(to, chat, pending.kind, pending.id)) {
+                if pending.id.is_empty()
+                    || !settings.forwards(chat, pending.kind)
+                    || recipients
+                        .iter()
+                        .all(|to| self.ledger.sent(to, chat, pending.kind, pending.id))
+                {
                     continue;
                 }
                 let link = Self::link(chat);
@@ -729,14 +967,31 @@ impl Channel {
                     if self.ledger.sent(to, chat, pending.kind, pending.id) {
                         continue;
                     }
-                    let key = format!("{}:request:{}:{}:{chat}:{}:{}", self.name, to.person, to.conversation, pending.kind.as_str(), pending.id);
+                    let key = format!(
+                        "{}:request:{}:{}:{chat}:{}:{}",
+                        self.name,
+                        to.person,
+                        to.conversation,
+                        pending.kind.as_str(),
+                        pending.id
+                    );
                     let posted = match &rich {
                         Some(rich) => transport.post_request(to, rich, &text, &key),
                         None => transport.post(to, &text, None, &key),
                     };
                     match posted {
                         Posted::Sent(Some(message)) => {
-                            self.ledger.record(Notice { person: to.person.clone(), conversation: to.conversation.clone(), message, chat: chat.into(), kind: pending.kind, id: pending.id.into(), loopback: pending.loopback, settled: false, actions });
+                            self.ledger.record(Notice {
+                                person: to.person.clone(),
+                                conversation: to.conversation.clone(),
+                                message,
+                                chat: chat.into(),
+                                kind: pending.kind,
+                                id: pending.id.into(),
+                                loopback: pending.loopback,
+                                settled: false,
+                                actions,
+                            });
                             self.save();
                         }
                         // Without a message ID a reply could not be routed: retry.
@@ -749,9 +1004,17 @@ impl Channel {
         // Requests decided elsewhere (the website, the TUI, another recipient)
         // or expired: their messages stop offering actions.
         let open = open_requests(groups);
-        let closed = self.ledger.notices.iter()
-            .filter(|n| !n.settled && recipients.iter().any(|to| mine(to)(&n.person, &n.conversation)) && !open.contains(&(n.chat.as_str(), n.kind, n.id.as_str())))
-            .cloned().collect::<Vec<_>>();
+        let closed = self
+            .ledger
+            .notices
+            .iter()
+            .filter(|n| {
+                !n.settled
+                    && recipients.iter().any(|to| mine(to)(&n.person, &n.conversation))
+                    && !open.contains(&(n.chat.as_str(), n.kind, n.id.as_str()))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         for notice in &closed {
             self.settle(transport, notice, &request::closed());
         }
@@ -762,18 +1025,34 @@ impl Channel {
     }
     /// Relays the finished replies of selection `index` from a `control.chat.read`
     /// view, in order. Returns whether a send should be retried.
-    pub fn relay(&mut self, transport: &impl Transport, to: &Recipient, index: usize, title: &str, revision: &Value, detail: &Value) -> bool {
+    pub fn relay(
+        &mut self,
+        transport: &impl Transport,
+        to: &Recipient,
+        index: usize,
+        title: &str,
+        revision: &Value,
+        detail: &Value,
+    ) -> bool {
         let active = self.ledger.active[index].clone();
         let (replies, next) = chats::replies(detail, active.delivered);
         let link = Self::link(&active.chat);
         let max = transport.capabilities().max_text.max(200);
         let mut delivered = next;
         for reply in replies {
-            let key = format!("{}:reply:{}:{}:{}:{}", self.name, to.person, to.conversation, active.chat, reply.index);
+            let key = format!(
+                "{}:reply:{}:{}:{}:{}",
+                self.name, to.person, to.conversation, active.chat, reply.index
+            );
             match transport.post(to, &reply_text(title, reply.status, &link, reply.text, max), None, &key) {
                 Posted::Sent(message) => {
                     if let Some(message) = message {
-                        self.ledger.relay(Relayed { person: to.person.clone(), conversation: to.conversation.clone(), message, chat: active.chat.clone() });
+                        self.ledger.relay(Relayed {
+                            person: to.person.clone(),
+                            conversation: to.conversation.clone(),
+                            message,
+                            chat: active.chat.clone(),
+                        });
                     }
                 }
                 Posted::Refused => eprintln!("A channel refused a chat reply."),

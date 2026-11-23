@@ -41,21 +41,13 @@ fn reads_use_only_the_bound_repository_and_capture_the_actual_pr_head() {
         (Section::Files, "pulls/17/files".into(), json!([])),
         (Section::Comments, "issues/17/comments".into(), json!([])),
         (Section::Reviews, "pulls/17/reviews".into(), json!([])),
-        (
-            Section::ReviewComments,
-            "pulls/17/comments".into(),
-            json!([]),
-        ),
+        (Section::ReviewComments, "pulls/17/comments".into(), json!([])),
         (
             Section::Checks,
             format!("commits/{HEAD}/check-runs"),
             json!({"check_runs":[]}),
         ),
-        (
-            Section::Statuses,
-            format!("commits/{HEAD}/statuses"),
-            json!([]),
-        ),
+        (Section::Statuses, format!("commits/{HEAD}/statuses"), json!([])),
     ] {
         let api = Mock::new(page);
         let value = inspect(&api, "example/project", &query(section)).unwrap();
@@ -64,10 +56,7 @@ fn reads_use_only_the_bound_repository_and_capture_the_actual_pr_head() {
             api.paths.borrow()[1],
             format!("/repos/example/project/{suffix}?per_page=5&page=1")
         );
-        assert!(
-            value.get("success").is_none(),
-            "empty checks are not a passing build"
-        );
+        assert!(value.get("success").is_none(), "empty checks are not a passing build");
         if matches!(section, Section::Checks | Section::Statuses) {
             assert!(
                 value["notice"]
@@ -159,7 +148,8 @@ fn ordinary_stale_judge_and_changed_owner_attempts_cannot_inspect() {
         role: crate::delegation::Role::Judge,
         root: "fixture".into(),
         depth: 1,
-        parent: Some("parent".into()), bundle: None
+        parent: Some("parent".into()),
+        bundle: None,
     });
     assert!(authorize(&state, caller).is_err());
     state.runtime.runs[0].persona = None;

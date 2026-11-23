@@ -23,12 +23,30 @@ pub fn http(stream: &mut impl Write, method: &str, path: &str, body: &[u8]) -> b
     let result = update(method, &fields, channel::save_settings);
     let back = "/?view=integrations";
     let _ = match result {
-        Ok(()) => control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: {back}\r\n"), control_http::Policy::Page),
-        Err(error) => control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(error, back).as_bytes(), "", control_http::Policy::Page),
+        Ok(()) => control_http::respond(
+            stream,
+            "303 See Other",
+            "text/plain",
+            b"",
+            &format!("Location: {back}\r\n"),
+            control_http::Policy::Page,
+        ),
+        Err(error) => control_http::respond(
+            stream,
+            "400 Bad Request",
+            "text/html; charset=utf-8",
+            crate::error_page(error, back).as_bytes(),
+            "",
+            control_http::Policy::Page,
+        ),
     };
     true
 }
-fn update(method: &str, fields: &std::collections::HashMap<String, String>, save: impl FnOnce(&str, channel::Settings) -> Result<(), &'static str>) -> Result<(), &'static str> {
+fn update(
+    method: &str,
+    fields: &std::collections::HashMap<String, String>,
+    save: impl FnOnce(&str, channel::Settings) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
     if method != "POST" {
         return Err("Use POST");
     }
@@ -38,7 +56,9 @@ fn update(method: &str, fields: &std::collections::HashMap<String, String>, save
     }
     let mut settings = channel::settings(name);
     settings.enabled = fields.get("enabled").is_some_and(|value| value == "yes");
-    settings.prefix = fields.get("prefix").map_or(settings.prefix, |prefix| prefix.trim().to_owned());
+    settings.prefix = fields
+        .get("prefix")
+        .map_or(settings.prefix, |prefix| prefix.trim().to_owned());
     save(name, settings)
 }
 

@@ -1,6 +1,6 @@
 //! Bounded std-only microbenchmarks in the existing credential-free playground.
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io;
 
 pub fn definition() -> Value {
@@ -62,9 +62,8 @@ pub fn call(args: &Value) -> io::Result<Value> {
     execute(args, |source| crate::toolbox::playground_mode(source, true))
 }
 fn execute(args: &Value, run: impl FnOnce(&str) -> io::Result<Value>) -> io::Result<Value> {
-    let input: Input = serde_json::from_value(args.clone()).map_err(|_| {
-        io::Error::other("Expected benchmark code and optional setup, iterations and samples")
-    })?;
+    let input: Input = serde_json::from_value(args.clone())
+        .map_err(|_| io::Error::other("Expected benchmark code and optional setup, iterations and samples"))?;
     let source = source(&input)?;
     let mut result = run(&source)?;
     result["kind"] = json!("rust_microbenchmark");
@@ -74,23 +73,12 @@ fn execute(args: &Value, run: impl FnOnce(&str) -> io::Result<Value>) -> io::Res
     }
     let measured = result["output"]
         .as_str()
-        .and_then(|s| {
-            s.lines()
-                .rev()
-                .find_map(|line| line.strip_prefix("CONTROL_BENCH_V1 "))
-        })
-        .ok_or_else(|| {
-            io::Error::other("Benchmark did not return timing samples; inspect program output")
-        })?;
-    let raw: Vec<u64> = serde_json::from_str(measured)
-        .map_err(|_| io::Error::other("Invalid benchmark timing samples"))?;
-    if raw.len() != input.samples
-        || raw.iter().any(|n| *n > 3_000_000_000)
-        || result["truncated"] == true
-    {
-        return Err(io::Error::other(
-            "Benchmark timings exceed their declared bounds",
-        ));
+        .and_then(|s| s.lines().rev().find_map(|line| line.strip_prefix("CONTROL_BENCH_V1 ")))
+        .ok_or_else(|| io::Error::other("Benchmark did not return timing samples; inspect program output"))?;
+    let raw: Vec<u64> =
+        serde_json::from_str(measured).map_err(|_| io::Error::other("Invalid benchmark timing samples"))?;
+    if raw.len() != input.samples || raw.iter().any(|n| *n > 3_000_000_000) || result["truncated"] == true {
+        return Err(io::Error::other("Benchmark timings exceed their declared bounds"));
     }
     let mut per_iteration = raw
         .iter()

@@ -67,20 +67,28 @@ pub fn read(path: &Path, cursor: Cursor) -> io::Result<Vec<(Delivery, Cursor)>> 
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
     };
-    let intact = cursor.offset == 0 || (file.metadata()?.len() >= cursor.offset && {
-        let mut last = vec![0; cursor.len as usize];
-        file.seek(SeekFrom::Start(cursor.offset - cursor.len))?;
-        file.read_exact(&mut last).is_ok() && hash(&last) == cursor.hash
-    });
+    let intact = cursor.offset == 0
+        || (file.metadata()?.len() >= cursor.offset && {
+            let mut last = vec![0; cursor.len as usize];
+            file.seek(SeekFrom::Start(cursor.offset - cursor.len))?;
+            file.read_exact(&mut last).is_ok() && hash(&last) == cursor.hash
+        });
     let start = if intact { cursor.offset } else { 0 };
     file.seek(SeekFrom::Start(start))?;
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
     let mut events = Vec::new();
     let mut offset = start;
-    for line in data.split_inclusive(|b| *b == b'\n').filter(|line| line.ends_with(b"\n")) {
+    for line in data
+        .split_inclusive(|b| *b == b'\n')
+        .filter(|line| line.ends_with(b"\n"))
+    {
         offset += line.len() as u64;
-        let next = Cursor { offset, len: line.len() as u64, hash: hash(line) };
+        let next = Cursor {
+            offset,
+            len: line.len() as u64,
+            hash: hash(line),
+        };
         if let Ok(event) = serde_json::from_slice(&line[..line.len() - 1]) {
             events.push((event, next));
         }

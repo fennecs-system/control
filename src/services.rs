@@ -3,31 +3,34 @@
 mod commands;
 mod compute;
 mod copy;
-mod page;
 pub(crate) mod operator;
-pub use page::http;
+mod page;
 pub(crate) use page::command;
+pub use page::http;
 #[cfg(test)]
 pub(crate) use page::stop;
 mod tools;
 mod workspace;
-pub use tools::{ServiceCall, ServiceOps, Tools};
 pub(crate) use commands::activity as command_activity;
 pub(crate) use commands::finished as finished_commands;
 pub(crate) use commands::{ProbeOutput, probe_target};
+pub use tools::{ServiceCall, ServiceOps, Tools};
 /// [`commands::probe`] on the node's engine, for observations and scores.
 pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Duration) -> io::Result<ProbeOutput> {
     commands::probe(crate::engine::isolation(), service, command, owner, timeout)
 }
-#[cfg(test)]
-pub(crate) use commands::enqueue_test as enqueue_test_command;
 use crate::{
     State,
     identity::{self, Action, Actor},
     tool_registry::AttemptRef,
 };
+#[cfg(test)]
+pub(crate) use commands::enqueue_test as enqueue_test_command;
 use control_core::resources::*;
-use control_isolation::{Access, Exec, ExecSpec, Isolation, Limits, Logs, Mount, Network, RunSpec, Select, Size, Source, States, Stream, Streams, Target, Tmpfs, User};
+use control_isolation::{
+    Access, Exec, ExecSpec, Isolation, Limits, Logs, Mount, Network, RunSpec, Select, Size, Source, States, Stream,
+    Streams, Target, Tmpfs, User,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -65,9 +68,7 @@ impl TryFrom<String> for CommandText {
 }
 impl<'de> Deserialize<'de> for CommandText {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        String::deserialize(d)?
-            .try_into()
-            .map_err(serde::de::Error::custom)
+        String::deserialize(d)?.try_into().map_err(serde::de::Error::custom)
     }
 }
 /// Missing durable fields mean the original tmpfs layout. Never reinterpret a
@@ -83,7 +84,9 @@ enum Storage {
     Workspace { limit_mb: Option<NonZeroU32> },
 }
 impl Storage {
-    fn is_memory(&self) -> bool { *self == Self::Memory }
+    fn is_memory(&self) -> bool {
+        *self == Self::Memory
+    }
     fn limit_mb(self) -> Option<NonZeroU32> {
         match self {
             Self::Disk { limit_mb } | Self::Workspace { limit_mb } => limit_mb,
@@ -92,7 +95,10 @@ impl Storage {
     }
     /// The engine's storage options, as it reports them back.
     fn options(self) -> HashMap<String, String> {
-        self.limit_mb().map(|limit| ("size".to_owned(), format!("{limit}M"))).into_iter().collect()
+        self.limit_mb()
+            .map(|limit| ("size".to_owned(), format!("{limit}M")))
+            .into_iter()
+            .collect()
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -104,7 +110,7 @@ pub struct Service {
     command: CommandText,
     uid: NonZeroU32,
     gid: u32,
-    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     workspace_exec: bool,
     #[serde(default, skip_serializing_if = "crate::worker_profile::Profile::is_lite")]
     profile: crate::worker_profile::Profile,
@@ -138,7 +144,8 @@ pub struct Grant {
 }
 impl Grant {
     pub(crate) fn matches(&self, service: &Service) -> bool {
-        self.id == service.resource.id && self.owner == service.resource.owner
+        self.id == service.resource.id
+            && self.owner == service.resource.owner
             && self.generation == service.resource.generation
     }
 }
@@ -150,29 +157,37 @@ pub(crate) fn accessible(state: &State, service: &Service, node: &NodeId, run: &
 }
 /// Owned by `run`'s chat or granted to it: what it may share onward.
 pub(crate) fn direct(service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
-    service.resource.owner.node == *node && service.actor == run.actor
+    service.resource.owner.node == *node
+        && service.actor == run.actor
         && !crate::delegation::is_judge(run)
         && (run.chat_id.as_deref() == Some(service.resource.owner.chat.as_str())
-            || run.resource_grants.iter().any(|grant|grant.matches(service)))
+            || run.resource_grants.iter().any(|grant| grant.matches(service)))
 }
 /// A teammate in the same task tree (its top-level chat and every chat
 /// spawned beneath it), with the same actor and node. Judges never qualify.
 pub(crate) fn teammate(state: &State, service: &Service, node: &NodeId, run: &crate::runtime::Run) -> bool {
-    service.resource.owner.node == *node && service.actor == run.actor
+    service.resource.owner.node == *node
+        && service.actor == run.actor
         && !crate::delegation::is_judge(run)
-        && run.chat_id.as_deref().is_some_and(|chat|
-            crate::chat::team_root(state, chat) == crate::chat::team_root(state, service.resource.owner.chat.as_str()))
+        && run.chat_id.as_deref().is_some_and(|chat| {
+            crate::chat::team_root(state, chat) == crate::chat::team_root(state, service.resource.owner.chat.as_str())
+        })
 }
 /// The index of service `id` that `run` may act on.
 fn target(state: &State, node: &NodeId, run: &crate::runtime::Run, id: &str) -> io::Result<usize> {
-    state.services.iter()
+    state
+        .services
+        .iter()
         .position(|service| service.resource.id.as_str() == id && accessible(state, service, node, run))
         .ok_or_else(|| fail("Service is not owned by this chat or its team"))
 }
 pub(crate) fn grants(state: &State, run: &crate::runtime::Run) -> Vec<Grant> {
-    state.services.iter().filter(|service|
-        accessible(state, service, &service.resource.owner.node, run)
-    ).map(Service::grant).collect()
+    state
+        .services
+        .iter()
+        .filter(|service| accessible(state, service, &service.resource.owner.node, run))
+        .map(Service::grant)
+        .collect()
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -182,15 +197,34 @@ struct Origin {
 }
 impl Service {
     pub(crate) fn grant(&self) -> Grant {
-        Grant { id:self.resource.id.clone(),owner:self.resource.owner.clone(),generation:self.resource.generation }
+        Grant {
+            id: self.resource.id.clone(),
+            owner: self.resource.owner.clone(),
+            generation: self.resource.generation,
+        }
     }
-    pub(crate) fn binding_snapshot(&self)->Self {
-        Self {resource:self.resource.clone(),origin:self.origin.clone(),actor:self.actor.clone(),command:self.command.clone(),uid:self.uid,gid:self.gid,workspace_exec:self.workspace_exec,profile:self.profile,shape:self.shape,pids_limit:self.pids_limit,storage:self.storage,diagnostic:String::new(),output:String::new(),exit_code:None,executions:Vec::new(),command_receipts:Vec::new()}
+    pub(crate) fn binding_snapshot(&self) -> Self {
+        Self {
+            resource: self.resource.clone(),
+            origin: self.origin.clone(),
+            actor: self.actor.clone(),
+            command: self.command.clone(),
+            uid: self.uid,
+            gid: self.gid,
+            workspace_exec: self.workspace_exec,
+            profile: self.profile,
+            shape: self.shape,
+            pids_limit: self.pids_limit,
+            storage: self.storage,
+            diagnostic: String::new(),
+            output: String::new(),
+            exit_code: None,
+            executions: Vec::new(),
+            command_receipts: Vec::new(),
+        }
     }
     pub(crate) fn owned_by(&self, node: &NodeId, chat: &str, actor: &Actor) -> bool {
-        self.resource.owner.node == *node
-            && self.resource.owner.chat.as_str() == chat
-            && self.actor == *actor
+        self.resource.owner.node == *node && self.resource.owner.chat.as_str() == chat && self.actor == *actor
     }
     fn name(&self) -> String {
         format!(
@@ -202,19 +236,48 @@ impl Service {
     fn readonly_root(&self) -> bool {
         self.storage == Storage::Memory && self.profile.readonly_root()
     }
-    fn limits(&self) -> compute::Limits { compute::limits(self.shape, self.profile) }
+    fn limits(&self) -> compute::Limits {
+        compute::limits(self.shape, self.profile)
+    }
     /// The one process limit used to create and to verify the container. Records
     /// without a captured value were created with the profile default; keeping it
     /// means a changed formula or setting never fences a live service.
     /// The numeric owner its processes run as.
-    fn user(&self) -> User { User { uid: self.uid.get(), gid: self.gid } }
-    fn pids_limit(&self) -> u64 { self.pids_limit.unwrap_or_else(|| self.profile.service_pids()) }
+    fn user(&self) -> User {
+        User {
+            uid: self.uid.get(),
+            gid: self.gid,
+        }
+    }
+    fn pids_limit(&self) -> u64 {
+        self.pids_limit.unwrap_or_else(|| self.profile.service_pids())
+    }
     /// Commands still running inside this service, for the process tree.
-    pub(crate) fn running_commands(&self) -> Vec<String> { self.executions.iter().filter_map(commands::Execution::running_label).collect() }
-    pub(crate) fn label(&self) -> String { self.command.0.lines().next().unwrap_or_default().chars().take(80).collect() }
-    pub(crate) fn live(&self) -> bool { self.resource.phase.reserves_capacity() }
-    pub(crate) fn shape_name(&self) -> &'static str { self.shape.map_or("default", compute::Shape::name) }
-    pub(crate) fn phase_name(&self) -> &'static str { page::phase(&self.resource.phase) }
+    pub(crate) fn running_commands(&self) -> Vec<String> {
+        self.executions
+            .iter()
+            .filter_map(commands::Execution::running_label)
+            .collect()
+    }
+    pub(crate) fn label(&self) -> String {
+        self.command
+            .0
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(80)
+            .collect()
+    }
+    pub(crate) fn live(&self) -> bool {
+        self.resource.phase.reserves_capacity()
+    }
+    pub(crate) fn shape_name(&self) -> &'static str {
+        self.shape.map_or("default", compute::Shape::name)
+    }
+    pub(crate) fn phase_name(&self) -> &'static str {
+        page::phase(&self.resource.phase)
+    }
     fn summary(&self) -> Value {
         json!({"service_id":self.resource.id,"platform":format!("linux/{}", std::env::consts::ARCH),"shape":self.shape,"limits":self.limits(),"pids_limit":self.pids_limit(),"phase":self.resource.phase,"scope":self.resource.scope,"storage":self.storage,"workspace":workspace::Workspace::of(self).map(|workspace|json!({"path":"/workspace","volume":workspace.name(),"retained_on_removal":true,"shared_with":"same_chat_services"})),"workspace_executable":self.workspace_exec,"expires_unix":(!self.resource.lease.is_until_stopped()).then(||self.resource.lease.expires()),"until_stopped":self.resource.lease.is_until_stopped(),"diagnostic":self.diagnostic,"output":self.output,"exit_code":self.exit_code,"executions":self.executions.iter().map(|e|e.brief()).collect::<Vec<_>>()})
     }
@@ -227,9 +290,14 @@ impl Service {
         if !ports.is_empty() {
             value["ports"] = json!(ports);
         }
-        let watches = state.watches.iter()
-            .filter(|w| !w.stopped && w.service == self.resource.id.as_str() && w.generation == self.resource.generation.get())
-            .map(|w| json!({"watch_id":w.id,"name":w.name,"active":w.active()})).collect::<Vec<_>>();
+        let watches = state
+            .watches
+            .iter()
+            .filter(|w| {
+                !w.stopped && w.service == self.resource.id.as_str() && w.generation == self.resource.generation.get()
+            })
+            .map(|w| json!({"watch_id":w.id,"name":w.name,"active":w.active()}))
+            .collect::<Vec<_>>();
         if !watches.is_empty() {
             value["watches"] = json!(watches);
         }
@@ -251,11 +319,28 @@ impl Service {
             map.insert("workspace".into(), json!("/workspace (retained volume)"));
         }
         // The caller's chat's executions, from this turn or earlier ones.
-        let chat = state.runtime.runs.iter().find(|r| r.id == run).and_then(|r| r.chat_id.as_deref());
-        let mine = |id: &str| id == run || chat.is_some_and(|chat| state.runtime.runs.iter().any(|r| r.id == id && r.chat_id.as_deref() == Some(chat)));
+        let chat = state
+            .runtime
+            .runs
+            .iter()
+            .find(|r| r.id == run)
+            .and_then(|r| r.chat_id.as_deref());
+        let mine = |id: &str| {
+            id == run
+                || chat.is_some_and(|chat| {
+                    state
+                        .runtime
+                        .runs
+                        .iter()
+                        .any(|r| r.id == id && r.chat_id.as_deref() == Some(chat))
+                })
+        };
         let own = self.executions.iter().filter(|e| mine(e.run())).collect::<Vec<_>>();
         let skip = own.len().saturating_sub(OWN_EXECUTIONS);
-        map.insert("executions".into(), json!(own[skip..].iter().map(|e| e.brief()).collect::<Vec<_>>()));
+        map.insert(
+            "executions".into(),
+            json!(own[skip..].iter().map(|e| e.brief()).collect::<Vec<_>>()),
+        );
         if skip > 0 {
             map.insert("older_executions".into(), json!(skip));
         }
@@ -280,11 +365,7 @@ pub struct Input {
 fn default_lease() -> i64 {
     -1
 }
-fn caller<'a>(
-    s: &'a State,
-    run: &str,
-    generation: &str,
-) -> io::Result<(&'a crate::runtime::Run, &'a str)> {
+fn caller<'a>(s: &'a State, run: &str, generation: &str) -> io::Result<(&'a crate::runtime::Run, &'a str)> {
     let run = s
         .runtime
         .runs
@@ -295,29 +376,40 @@ fn caller<'a>(
     if crate::delegation::is_judge(run)
         || run.attempts.last().and_then(|a| a.workspace_id.as_deref()) != Some(generation)
     {
-        return Err(fail(
-            "Service request belongs to an inactive or read-only attempt",
-        ));
+        return Err(fail("Service request belongs to an inactive or read-only attempt"));
     }
     Ok((
         run,
-        run.chat_id
-            .as_deref()
-            .ok_or_else(|| fail("Service requires a chat"))?,
+        run.chat_id.as_deref().ok_or_else(|| fail("Service requires a chat"))?,
     ))
 }
 /// The caller's active services and ten recent completed ones; node capacity
 /// only with `detail`.
 fn listing(s: &State, owned: impl Fn(&&Service) -> bool, run: &str, detail: bool) -> Value {
-    let services = s.services.iter().filter(&owned).filter(|service|service.resource.phase.reserves_capacity()).chain(s.services.iter().rev().filter(&owned).filter(|service|!service.resource.phase.reserves_capacity()).take(10)).map(|service|service.view(s, run, detail)).collect::<Vec<_>>();
-    if detail { json!({"compute":compute::status(&s.services),"services":services}) } else { json!({"services":services}) }
+    let services = s
+        .services
+        .iter()
+        .filter(&owned)
+        .filter(|service| service.resource.phase.reserves_capacity())
+        .chain(
+            s.services
+                .iter()
+                .rev()
+                .filter(&owned)
+                .filter(|service| !service.resource.phase.reserves_capacity())
+                .take(10),
+        )
+        .map(|service| service.view(s, run, detail))
+        .collect::<Vec<_>>();
+    if detail {
+        json!({"compute":compute::status(&s.services),"services":services})
+    } else {
+        json!({"services":services})
+    }
 }
 pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
     let (run, generation, nonce) = (attempt.run, attempt.generation, attempt.nonce);
-    let node: NodeId = crate::config::node_id()
-        .map_err(fail)?
-        .try_into()
-        .map_err(fail)?;
+    let node: NodeId = crate::config::node_id().map_err(fail)?.try_into().map_err(fail)?;
     let (stop, list, id, detail) = match call {
         ServiceCall::Start(input) => return start(shared, run, generation, nonce, node, input),
         ServiceCall::Exec(input) => return commands::exec(shared, run, generation, nonce, &node, input),
@@ -349,7 +441,9 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         )?;
         let service = &s.services[index];
         // A teammate's stop reveals no output or executions of the owner's chat.
-        return Ok(if own { service.view(&s, run, false) } else {
+        return Ok(if own {
+            service.view(&s, run, false)
+        } else {
             json!({"service_id":service.resource.id,"chat_id":service.resource.owner.chat,"phase":service.phase_name(),"workspace_retained":workspace::Workspace::of(service).is_some()})
         });
     }
@@ -368,7 +462,14 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     }
     Ok(value)
 }
-fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, node: NodeId, input: Input) -> io::Result<Value> {
+fn start(
+    shared: &Arc<Mutex<State>>,
+    run: &str,
+    generation: &str,
+    nonce: &str,
+    node: NodeId,
+    input: Input,
+) -> io::Result<Value> {
     let s = shared.lock().map_err(|_| fail("State unavailable"))?;
     let (active, _) = caller(&s, run, generation)?;
     let image: ImageId = active
@@ -391,16 +492,18 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, n
     quota_supported(&input, || isolation.disk_quota())?;
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
     // Revalidate the captured image after the engine query outside the state lock.
-    if caller(&s, run, generation)?.0.attempts.last().and_then(|a| a.image.as_deref()) != Some(image.as_str()) {
+    if caller(&s, run, generation)?
+        .0
+        .attempts
+        .last()
+        .and_then(|a| a.image.as_deref())
+        != Some(image.as_str())
+    {
         return Err(fail("Captured service image changed"));
     }
     admit_profile(
         &mut s,
-        Request {
-            run,
-            generation,
-            nonce,
-        },
+        Request { run, generation, nonce },
         input,
         node,
         now(),
@@ -412,7 +515,9 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, n
 /// so it never reserves capacity and is never silently dropped.
 fn quota_supported(input: &Input, quota: impl FnOnce() -> io::Result<bool>) -> io::Result<()> {
     if input.storage_limit_mb.is_some() && !quota()? {
-        return Err(fail("storage_limit_mb is unsupported on this node: its container storage driver cannot cap a writable layer. Nothing was started or reserved; retry without storage_limit_mb"));
+        return Err(fail(
+            "storage_limit_mb is unsupported on this node: its container storage driver cannot cap a writable layer. Nothing was started or reserved; retry without storage_limit_mb",
+        ));
     }
     Ok(())
 }
@@ -423,8 +528,23 @@ struct Request<'a> {
     nonce: &'a str,
 }
 #[cfg(test)]
-fn admit(s: &mut State, request: Request<'_>, input: Input, node: NodeId, time: u64, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<Value> {
-    admit_profile(s, request, input, node, time, crate::worker_profile::Profile::Lite, save)
+fn admit(
+    s: &mut State,
+    request: Request<'_>,
+    input: Input,
+    node: NodeId,
+    time: u64,
+    save: impl FnOnce(&State) -> io::Result<()>,
+) -> io::Result<Value> {
+    admit_profile(
+        s,
+        request,
+        input,
+        node,
+        time,
+        crate::worker_profile::Profile::Lite,
+        save,
+    )
 }
 fn admit_profile(
     s: &mut State,
@@ -435,33 +555,22 @@ fn admit_profile(
     profile: crate::worker_profile::Profile,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> io::Result<Value> {
-    let Request {
-        run,
-        generation,
-        nonce,
-    } = request;
+    let Request { run, generation, nonce } = request;
     let (run, chat) = caller(s, run, generation)?;
     let lease = if input.lease_seconds == -1 {
         Lease::until_stopped(time)
     } else {
-        u64::try_from(input.lease_seconds).map_err(|_|control_core::resources::Invalid).and_then(|seconds|Lease::new(time,seconds))
-    }.map_err(fail)?;
-    if nonce.is_empty()
-        || nonce.len() > 128
-        || !nonce
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
+        u64::try_from(input.lease_seconds)
+            .map_err(|_| control_core::resources::Invalid)
+            .and_then(|seconds| Lease::new(time, seconds))
+    }
+    .map_err(fail)?;
+    if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err(fail("Invalid request identity"));
     }
     let digest = ring::digest::digest(
         &ring::digest::SHA256,
-        format!(
-            "{}\0{chat}\0{}\0{generation}\0{nonce}",
-            node.as_str(),
-            run.id
-        )
-        .as_bytes(),
+        format!("{}\0{chat}\0{}\0{generation}\0{nonce}", node.as_str(), run.id).as_bytes(),
     );
     let id: ResourceId = format!(
         "svc-{}",
@@ -476,16 +585,28 @@ fn admit_profile(
         if existing.command.0 != input.command.0
             || existing.shape != input.shape
             || existing.resource.lease.seconds() != lease.seconds()
-            || match existing.storage { Storage::Disk { limit_mb } | Storage::Workspace { limit_mb } => limit_mb != input.storage_limit_mb, Storage::Memory => input.storage_limit_mb.is_some() }
+            || match existing.storage {
+                Storage::Disk { limit_mb } | Storage::Workspace { limit_mb } => limit_mb != input.storage_limit_mb,
+                Storage::Memory => input.storage_limit_mb.is_some(),
+            }
         {
-            return Err(fail("Request identity already has a different command, shape or storage policy"));
+            return Err(fail(
+                "Request identity already has a different command, shape or storage policy",
+            ));
         }
         return Ok(existing.summary());
     }
     // The node compute budget below bounds live services. The record ceiling
     // only keeps state and engine inventory bounded; it is not a resource cap.
-    if s.services.iter().filter(|service| service.resource.phase.reserves_capacity()).count() >= MAX_RECORDS {
-        return Err(fail(format!("Service capacity reached: {MAX_RECORDS} live service records per node; stop an owned service before starting more")));
+    if s.services
+        .iter()
+        .filter(|service| service.resource.phase.reserves_capacity())
+        .count()
+        >= MAX_RECORDS
+    {
+        return Err(fail(format!(
+            "Service capacity reached: {MAX_RECORDS} live service records per node; stop an owned service before starting more"
+        )));
     }
     let (limits, capacity) = (compute::limits(input.shape, profile), compute::capacity());
     compute::admit_within(&s.services, limits, capacity)?;
@@ -513,8 +634,7 @@ fn admit_profile(
         lease,
         phase: Phase::Requested,
     };
-    let uid = NonZeroU32::new(unsafe { libc::getuid() })
-        .ok_or_else(|| fail("Services require a non-root operator"))?;
+    let uid = NonZeroU32::new(unsafe { libc::getuid() }).ok_or_else(|| fail("Services require a non-root operator"))?;
     let service = Service {
         resource,
         origin,
@@ -526,7 +646,9 @@ fn admit_profile(
         profile,
         shape: input.shape,
         pids_limit: Some(compute::pids_limit(limits.memory_bytes, profile, capacity)),
-        storage: Storage::Workspace { limit_mb: input.storage_limit_mb },
+        storage: Storage::Workspace {
+            limit_mb: input.storage_limit_mb,
+        },
         diagnostic: String::new(),
         output: String::new(),
         exit_code: None,
@@ -548,9 +670,7 @@ fn admit_profile(
                                     == Some(service.origin.attempt.as_str())
                         })
                 })
-                .ok_or_else(|| {
-                    fail("Service history is full for active attempts; continue in a new turn")
-                })?,
+                .ok_or_else(|| fail("Service history is full for active attempts; continue in a new turn"))?,
         )
     } else {
         None
@@ -579,9 +699,19 @@ fn transition(
     let decision = decide(resource, resource.stamp(), event, time).map_err(fail)?;
     if resource.phase != decision.phase || (observed && !s.services[index].diagnostic.is_empty()) {
         // A refused creation keeps the engine's reason for status and the page.
-        let failed = matches!(decision.phase, Phase::Stopping { reason: StopReason::Failed, .. } | Phase::Stopped(StopReason::Failed));
+        let failed = matches!(
+            decision.phase,
+            Phase::Stopping {
+                reason: StopReason::Failed,
+                ..
+            } | Phase::Stopped(StopReason::Failed)
+        );
         let previous = std::mem::replace(&mut s.services[index].resource.phase, decision.phase);
-        let diagnostic = if failed { s.services[index].diagnostic.clone() } else { std::mem::take(&mut s.services[index].diagnostic) };
+        let diagnostic = if failed {
+            s.services[index].diagnostic.clone()
+        } else {
+            std::mem::take(&mut s.services[index].diagnostic)
+        };
         if let Err(error) = save(s) {
             s.services[index].resource.phase = previous;
             s.services[index].diagnostic = diagnostic;
@@ -670,12 +800,26 @@ fn container(service: &Service, workspace: Option<&str>) -> RunSpec {
         name: service.name(),
         image: r.image.as_str().into(),
         entrypoint: Some("control-service-runner".into()),
-        argv: vec![r.lease.expires().to_string(), r.lease.seconds().to_string(), service.command.0.to_string()],
+        argv: vec![
+            r.lease.expires().to_string(),
+            r.lease.seconds().to_string(),
+            service.command.0.to_string(),
+        ],
         user: Some(owner),
         workdir: Some("/workspace".into()),
         labels: labels.into(),
-        tmpfs: tmpfs_sizes(service).map(|(path, size, exec)| Tmpfs { nodev: true, exec, ..Tmpfs::new(path, Size::Mib(size)).owned(owner) }).collect(),
-        root: if service.readonly_root() { Access::ReadOnly } else { Access::ReadWrite },
+        tmpfs: tmpfs_sizes(service)
+            .map(|(path, size, exec)| Tmpfs {
+                nodev: true,
+                exec,
+                ..Tmpfs::new(path, Size::Mib(size)).owned(owner)
+            })
+            .collect(),
+        root: if service.readonly_root() {
+            Access::ReadOnly
+        } else {
+            Access::ReadWrite
+        },
         limits: Limits {
             pids: Some(service.pids_limit()),
             memory: Some(Size::Bytes(limits.memory_bytes)),
@@ -683,38 +827,78 @@ fn container(service: &Service, workspace: Option<&str>) -> RunSpec {
             ..Limits::default()
         },
         network: Network::None,
-        logs: Logs::Local { max_size: Size::Mib(1), max_files: 2 },
-        disk: service.storage.limit_mb().map(|limit| Size::Mib(u64::from(limit.get()))),
+        logs: Logs::Local {
+            max_size: Size::Mib(1),
+            max_files: 2,
+        },
+        disk: service
+            .storage
+            .limit_mb()
+            .map(|limit| Size::Mib(u64::from(limit.get()))),
         ..RunSpec::default()
     }
     .env("HOME", "/home/agent");
     match workspace {
-        Some(volume) => RunSpec { mounts: vec![Mount { source: Source::Volume(volume.into()), target: "/workspace".into(), access: Access::ReadWrite }], ..spec },
+        Some(volume) => RunSpec {
+            mounts: vec![Mount {
+                source: Source::Volume(volume.into()),
+                target: "/workspace".into(),
+                access: Access::ReadWrite,
+            }],
+            ..spec
+        },
         None => spec,
     }
 }
 /// Each in-memory filesystem's path, size in MiB and exec policy.
 fn tmpfs_sizes(service: &Service) -> impl Iterator<Item = (&'static str, u64, Exec)> {
-    [("/workspace", service.profile.service_workspace_mb()), ("/tmp", 128), ("/home/agent", 32)]
-        .into_iter()
-        .filter(|(path, _)| service.storage == Storage::Memory || *path == "/tmp")
-        .map(|(path, size)| (path, size, if path == "/workspace" && service.workspace_exec { Exec::Allow } else { Exec::Engine }))
+    [
+        ("/workspace", service.profile.service_workspace_mb()),
+        ("/tmp", 128),
+        ("/home/agent", 32),
+    ]
+    .into_iter()
+    .filter(|(path, _)| service.storage == Storage::Memory || *path == "/tmp")
+    .map(|(path, size)| {
+        (
+            path,
+            size,
+            if path == "/workspace" && service.workspace_exec {
+                Exec::Allow
+            } else {
+                Exec::Engine
+            },
+        )
+    })
 }
 /// The tmpfs options the engine reports for `service`, as it was given them.
 fn tmpfs(service: &Service) -> HashMap<String, String> {
     tmpfs_sizes(service)
         .map(|(path, size, exec)| {
             let exec = if exec == Exec::Allow { "exec," } else { "" };
-            (path.to_owned(), format!("rw,{exec}nosuid,nodev,uid={},gid={},size={size}m", service.uid, service.gid))
+            (
+                path.to_owned(),
+                format!(
+                    "rw,{exec}nosuid,nodev,uid={},gid={},size={size}m",
+                    service.uid, service.gid
+                ),
+            )
         })
         .collect()
 }
 /// The verified, running container of `service` and the user to run as, for
 /// commands Control runs in it on a chat's behalf. Queries the engine: call
 /// without the state lock.
-pub(crate) fn exec_target(isolation: &dyn Isolation, service: &Service) -> io::Result<(control_isolation::ContainerId, User)> {
+pub(crate) fn exec_target(
+    isolation: &dyn Isolation,
+    service: &Service,
+) -> io::Result<(control_isolation::ContainerId, User)> {
     identity::authorize(&service.actor, Action::Task).map_err(fail)?;
-    let id = service.resource.phase.container().ok_or_else(|| fail("Service is not running"))?;
+    let id = service
+        .resource
+        .phase
+        .container()
+        .ok_or_else(|| fail("Service is not running"))?;
     let observed = inspect_one(isolation, id)?;
     verify(service, &observed)?;
     if observed.status != "running" || service.resource.lease.expired(now()) {
@@ -724,12 +908,16 @@ pub(crate) fn exec_target(isolation: &dyn Isolation, service: &Service) -> io::R
 }
 /// The one container `id` names, as `verify` reads it.
 fn inspect_one(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<Inspection> {
-    let [observed] = <[_; 1]>::try_from(isolation.inspect(&[Target::Id(&id.as_str().into())])?).map_err(|_| fail("Invalid service container inspection"))?;
+    let [observed] = <[_; 1]>::try_from(isolation.inspect(&[Target::Id(&id.as_str().into())])?)
+        .map_err(|_| fail("Invalid service container inspection"))?;
     inspection(observed)
 }
 /// A label of the service's image, empty when absent.
 fn image_label(isolation: &dyn Isolation, image: &ImageId, name: &str) -> io::Result<String> {
-    Ok(isolation.image_labels(&image.as_str().into())?.remove(name).unwrap_or_default())
+    Ok(isolation
+        .image_labels(&image.as_str().into())?
+        .remove(name)
+        .unwrap_or_default())
 }
 /// Whether the service's image runner supervises watches (label 3 or later).
 pub(crate) fn supports_watches(isolation: &dyn Isolation, service: &Service) -> io::Result<bool> {
@@ -753,9 +941,7 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
         || inspection.chat.as_deref() != Some(r.owner.chat.as_str())
         || inspection.generation.as_deref() != Some(r.generation.get().to_string().as_str())
         || inspection.image != r.image.as_str()
-        || r.phase
-            .container()
-            .is_some_and(|id| id.as_str() != inspection.id)
+        || r.phase.container().is_some_and(|id| id.as_str() != inspection.id)
         || inspection.network != "none"
         || inspection.readonly != service.readonly_root()
         || inspection.privileged
@@ -778,18 +964,9 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
         || inspection.command.first().map(String::as_str) != Some(deadline.as_str())
         || inspection.command.get(1) != Some(&r.lease.seconds().to_string())
         || inspection.command.get(2).map(String::as_str) != Some(service.command.0.as_ref())
-        || matches!(
-            r.phase,
-            Phase::Requested | Phase::Stopped(_) | Phase::Fenced { .. }
-        )
-        || (matches!(
-            r.phase,
-            Phase::Creating
-                | Phase::Stopping {
-                    container: None,
-                    ..
-                }
-        ) && inspection.status != "created")
+        || matches!(r.phase, Phase::Requested | Phase::Stopped(_) | Phase::Fenced { .. })
+        || (matches!(r.phase, Phase::Creating | Phase::Stopping { container: None, .. })
+            && inspection.status != "created")
     {
         return Err(fail(
             "Service container does not match its durable ownership and offline scope",
@@ -801,17 +978,42 @@ fn verify<'a>(service: &'a Service, inspection: &Inspection) -> io::Result<Verif
     })
 }
 /// A live verified offline service capability, never an arbitrary container ID.
-pub(crate) struct PortBinding { id: ContainerId, user: User, expires: u64 }
+pub(crate) struct PortBinding {
+    id: ContainerId,
+    user: User,
+    expires: u64,
+}
 #[derive(Clone, Copy)]
-pub(crate) enum RelayMode { Connect, Multiplex }
+pub(crate) enum RelayMode {
+    Connect,
+    Multiplex,
+}
 impl PortBinding {
-    pub(crate) fn spawn(&self, isolation: &dyn Isolation, mode: RelayMode, port: std::num::NonZeroU16, expires: u64) -> io::Result<std::process::Child> {
-        if expires <= now() || expires > self.expires { return Err(fail("Port lease exceeds its service")); }
+    pub(crate) fn spawn(
+        &self,
+        isolation: &dyn Isolation,
+        mode: RelayMode,
+        port: std::num::NonZeroU16,
+        expires: u64,
+    ) -> io::Result<std::process::Child> {
+        if expires <= now() || expires > self.expires {
+            return Err(fail("Port lease exceeds its service"));
+        }
         let relay = ExecSpec {
             container: self.id.as_str().into(),
             user: Some(self.user),
             input: control_isolation::Input::Attached,
-            argv: ["/bin/control-tcp-relay", match mode { RelayMode::Connect => "connect", RelayMode::Multiplex => "listen-multi" }, &port.to_string(), &expires.to_string()].map(str::to_owned).to_vec(),
+            argv: [
+                "/bin/control-tcp-relay",
+                match mode {
+                    RelayMode::Connect => "connect",
+                    RelayMode::Multiplex => "listen-multi",
+                },
+                &port.to_string(),
+                &expires.to_string(),
+            ]
+            .map(str::to_owned)
+            .to_vec(),
             ..ExecSpec::default()
         };
         isolation.exec(&relay, Streams::new(Stream::Piped, Stream::Piped, Stream::Null))
@@ -821,28 +1023,52 @@ impl PortBinding {
 const RELAY: &str = "5";
 pub(crate) fn relay_capable(isolation: &dyn Isolation, service: &Service) -> io::Result<()> {
     // Image IDs are immutable. Avoid an extra engine query on every connection.
-    static CAPABLE:std::sync::OnceLock<Mutex<std::collections::HashSet<ImageId>>>=std::sync::OnceLock::new();
-    let cache=CAPABLE.get_or_init(Mutex::default);
-    if cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?.contains(&service.resource.image) {return Ok(());}
+    static CAPABLE: std::sync::OnceLock<Mutex<std::collections::HashSet<ImageId>>> = std::sync::OnceLock::new();
+    let cache = CAPABLE.get_or_init(Mutex::default);
+    if cache
+        .lock()
+        .map_err(|_| fail("Relay capability cache unavailable"))?
+        .contains(&service.resource.image)
+    {
+        return Ok(());
+    }
     let marker = image_label(isolation, &service.resource.image, "dev.control.tcp-relay")?;
     if marker.trim() != RELAY {
-        return Err(fail("Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays"));
+        return Err(fail(
+            "Rebuild the immutable worker images with Nix setup, then start a new service to enable TCP relays",
+        ));
     }
-    let mut cached=cache.lock().map_err(|_|fail("Relay capability cache unavailable"))?;
-    if cached.len()<MAX_RECORDS{cached.insert(service.resource.image.clone());}
+    let mut cached = cache.lock().map_err(|_| fail("Relay capability cache unavailable"))?;
+    if cached.len() < MAX_RECORDS {
+        cached.insert(service.resource.image.clone());
+    }
     Ok(())
 }
-pub(crate) fn port_binding(isolation: &dyn Isolation, service: &Service, expected: &ContainerId) -> io::Result<PortBinding> {
-    if !matches!(&service.resource.phase, Phase::Running(id) if id == expected) || service.resource.lease.expired(now()) { return Err(fail("Service is not running under this lease and generation")); }
+pub(crate) fn port_binding(
+    isolation: &dyn Isolation,
+    service: &Service,
+    expected: &ContainerId,
+) -> io::Result<PortBinding> {
+    if !matches!(&service.resource.phase, Phase::Running(id) if id == expected) || service.resource.lease.expired(now())
+    {
+        return Err(fail("Service is not running under this lease and generation"));
+    }
     relay_capable(isolation, service)?;
     let observation = inspect_one(isolation, expected)?;
     let binding = verify(service, &observation)?;
-    if observation.status != "running" { return Err(fail("Service is not running")); }
-    Ok(PortBinding { id: binding.id, user: service.user(), expires: service.resource.lease.expires() })
+    if observation.status != "running" {
+        return Err(fail("Service is not running"));
+    }
+    Ok(PortBinding {
+        id: binding.id,
+        user: service.user(),
+        expires: service.resource.lease.expires(),
+    })
 }
 /// Every service container of `node`, keyed by engine ID.
 fn inventory(isolation: &dyn Isolation, node: &str) -> io::Result<HashMap<String, Inspection>> {
-    let labels = [("dev.control.node", node), ("dev.control.purpose", "service")].map(|(key, value)| (key.to_owned(), value.to_owned()));
+    let labels = [("dev.control.node", node), ("dev.control.purpose", "service")]
+        .map(|(key, value)| (key.to_owned(), value.to_owned()));
     let listed = isolation.list(States::All, &Select::Labels(labels.into()))?;
     if listed.is_empty() {
         return Ok(HashMap::new());
@@ -850,8 +1076,15 @@ fn inventory(isolation: &dyn Isolation, node: &str) -> io::Result<HashMap<String
     if listed.len() > MAX_RECORDS {
         return Err(fail("Too many service containers; inspect node resources"));
     }
-    let ids = listed.iter().map(|container| Target::Id(&container.id)).collect::<Vec<_>>();
-    isolation.inspect(&ids)?.into_iter().map(|observed| inspection(observed).map(|record| (record.id.clone(), record))).collect()
+    let ids = listed
+        .iter()
+        .map(|container| Target::Id(&container.id))
+        .collect::<Vec<_>>();
+    isolation
+        .inspect(&ids)?
+        .into_iter()
+        .map(|observed| inspection(observed).map(|record| (record.id.clone(), record)))
+        .collect()
 }
 /// Checks the recorded ID without label filters before declaring it absent.
 fn exists(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<bool> {
@@ -859,7 +1092,9 @@ fn exists(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<bool> {
 }
 fn create_container(isolation: &dyn Isolation, service: &Service) -> io::Result<ContainerId> {
     let workspace = workspace::Workspace::of(service);
-    if let Some(workspace) = &workspace { workspace.ensure(isolation)?; }
+    if let Some(workspace) = &workspace {
+        workspace.ensure(isolation)?;
+    }
     isolation
         .create(&container(service, workspace.as_ref().map(workspace::Workspace::name)))
         .map_err(|error| if !service.storage.options().is_empty() && ["storage-opt", "quota", "StorageOpt"].iter().any(|word|error.to_string().contains(word)) {
@@ -873,9 +1108,7 @@ fn create_container(isolation: &dyn Isolation, service: &Service) -> io::Result<
         .map_err(fail)
 }
 fn start_container(isolation: &dyn Isolation, binding: &Verified<'_>) -> io::Result<()> {
-    if !matches!(binding.service.resource.phase, Phase::Starting(_))
-        || binding.service.resource.lease.expired(now())
-    {
+    if !matches!(binding.service.resource.phase, Phase::Starting(_)) || binding.service.resource.lease.expired(now()) {
         return Err(fail("Service is no longer eligible to start"));
     }
     isolation.start(&binding.id.as_str().into())
@@ -895,26 +1128,37 @@ fn apply(
     save: &impl Fn(&State) -> io::Result<()>,
 ) -> io::Result<Option<(Service, Effect)>> {
     let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let Some(index) = s.services.iter().position(|s| {
-        s.resource.id == snapshot.resource.id
-            && s.resource.generation == snapshot.resource.generation
-    }) else {
+    let Some(index) = s
+        .services
+        .iter()
+        .position(|s| s.resource.id == snapshot.resource.id && s.resource.generation == snapshot.resource.generation)
+    else {
         return Ok(None);
     };
-    if s.services[index].resource.phase != snapshot.resource.phase
-        && !matches!(event, Event::Created(_))
-    {
+    if s.services[index].resource.phase != snapshot.resource.phase && !matches!(event, Event::Created(_)) {
         return Ok(None);
     }
     let effect = transition(&mut s, index, event, time, save)?;
     Ok(effect.map(|effect| (s.services[index].binding_snapshot(), effect)))
 }
-fn retain_output(shared:&Arc<Mutex<State>>, snapshot:&Service, output:String, exit_code:Option<i32>, save:&impl Fn(&State)->io::Result<()>) -> io::Result<()> {
-    let mut state=shared.lock().map_err(|_|fail("State unavailable"))?;
-    let Some(index)=state.services.iter().position(|s|s.resource==snapshot.resource) else { return Err(fail("Service changed before retaining output")); };
-    let previous=std::mem::replace(&mut state.services[index].output,output);
-    let previous_exit=std::mem::replace(&mut state.services[index].exit_code,exit_code);
-    if let Err(error)=save(&state) {state.services[index].output=previous;state.services[index].exit_code=previous_exit;return Err(error);}
+fn retain_output(
+    shared: &Arc<Mutex<State>>,
+    snapshot: &Service,
+    output: String,
+    exit_code: Option<i32>,
+    save: &impl Fn(&State) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let Some(index) = state.services.iter().position(|s| s.resource == snapshot.resource) else {
+        return Err(fail("Service changed before retaining output"));
+    };
+    let previous = std::mem::replace(&mut state.services[index].output, output);
+    let previous_exit = std::mem::replace(&mut state.services[index].exit_code, exit_code);
+    if let Err(error) = save(&state) {
+        state.services[index].output = previous;
+        state.services[index].exit_code = previous_exit;
+        return Err(error);
+    }
     Ok(())
 }
 fn drive(
@@ -928,10 +1172,7 @@ fn drive(
         let s = shared.lock().map_err(|_| fail("State unavailable"))?;
         s.services
             .iter()
-            .filter(|s| {
-                s.resource.phase.reserves_capacity()
-                    && !matches!(s.resource.phase, Phase::Fenced { .. })
-            })
+            .filter(|s| s.resource.phase.reserves_capacity() && !matches!(s.resource.phase, Phase::Fenced { .. }))
             .map(Service::binding_snapshot)
             .collect::<Vec<_>>()
     };
@@ -943,18 +1184,10 @@ fn drive(
     for service in services {
         let r = &service.resource;
         if r.owner.node.as_str() != node {
-            apply(
-                shared,
-                &service,
-                Event::Fence(Fault::IdentityMismatch),
-                time,
-                &save,
-            )?;
+            apply(shared, &service, Event::Fence(Fault::IdentityMismatch), time, &save)?;
             continue;
         }
-        let event = if !matches!(r.phase, Phase::Stopping { .. })
-            && authorize(&service.actor, Action::Task).is_err()
-        {
+        let event = if !matches!(r.phase, Phase::Stopping { .. }) && authorize(&service.actor, Action::Task).is_err() {
             Event::Stop(StopReason::Revoked)
         } else {
             Event::Tick
@@ -971,11 +1204,7 @@ fn drive(
                         .phase
                         .container()
                         .and_then(|id| observations.get(id.as_str()))
-                        .or_else(|| {
-                            observations
-                                .values()
-                                .find(|o| o.name == format!("/{}", service.name()))
-                        });
+                        .or_else(|| observations.values().find(|o| o.name == format!("/{}", service.name())));
                     let event = if let Some(o) = observation {
                         if verify(&service, o).is_err() {
                             Event::Fence(Fault::IdentityMismatch)
@@ -1002,17 +1231,28 @@ fn drive(
                             Effect::Create => create(shared, isolation, &next, time, &save)?,
                             Effect::Start => {
                                 if eligible(shared, &next, time)? {
-                                    start_container(isolation, &verify(
-                                        &next,
-                                        observation
-                                            .ok_or_else(|| fail("Missing service observation"))?,
-                                    )?)?;
+                                    start_container(
+                                        isolation,
+                                        &verify(
+                                            &next,
+                                            observation.ok_or_else(|| fail("Missing service observation"))?,
+                                        )?,
+                                    )?;
                                 }
                             }
                             Effect::Remove => {
-                                let binding=verify(&next, observation.ok_or_else(||fail("Missing service observation"))?)?;
-                                let output=commands::logs(isolation, &binding.id)?;
-                                retain_output(shared,&next,output,observation.and_then(|o|o.exit_code).filter(|_|observation.is_some_and(|o|o.status=="exited"||o.status=="dead")),&save)?;
+                                let binding =
+                                    verify(&next, observation.ok_or_else(|| fail("Missing service observation"))?)?;
+                                let output = commands::logs(isolation, &binding.id)?;
+                                retain_output(
+                                    shared,
+                                    &next,
+                                    output,
+                                    observation.and_then(|o| o.exit_code).filter(|_| {
+                                        observation.is_some_and(|o| o.status == "exited" || o.status == "dead")
+                                    }),
+                                    &save,
+                                )?;
                                 remove_container(isolation, &binding)?;
                             }
                             Effect::Inspect => {}
@@ -1033,8 +1273,16 @@ fn drive(
 /// starts a corrected service instead of a retry loop holding its reservation.
 /// The stop still inspects before releasing, so a container a refused request
 /// left behind is verified and removed. The chat's workspace is never touched.
-fn create(shared: &Arc<Mutex<State>>, isolation: &dyn Isolation, service: &Service, time: u64, save: &impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
-    if !eligible(shared, service, time)? { return Ok(()); }
+fn create(
+    shared: &Arc<Mutex<State>>,
+    isolation: &dyn Isolation,
+    service: &Service,
+    time: u64,
+    save: &impl Fn(&State) -> io::Result<()>,
+) -> io::Result<()> {
+    if !eligible(shared, service, time)? {
+        return Ok(());
+    }
     match create_container(isolation, service) {
         Ok(id) => apply(shared, service, Event::Created(id), time, save).map(drop),
         Err(error) => {
@@ -1081,21 +1329,32 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
         let Ok(node) = crate::config::node_id() else {
             return;
         };
-        while let Err(error)=commands::recover(&shared,crate::storage::save) {
-            let _=diagnose(&shared,None,&error,&crate::storage::save);
-            if crate::shutdown::pause(Duration::from_secs(2)) {return;}
+        while let Err(error) = commands::recover(&shared, crate::storage::save) {
+            let _ = diagnose(&shared, None, &error, &crate::storage::save);
+            if crate::shutdown::pause(Duration::from_secs(2)) {
+                return;
+            }
         }
         let mut executions = Vec::new();
-        serve(commands::changes(), TICK, &crate::shutdown::token(), || {
-            if let Err(error) = drive(&shared, crate::engine::isolation(), &node, now(), crate::storage::save) {
-                let _ = diagnose(&shared, None, &error, &crate::storage::save);
-            }
-        }, |executions: &mut Vec<_>| {
-            if let Err(error)=commands::dispatch(&shared, executions) {
-                let _=diagnose(&shared,None,&error,&crate::storage::save);
-            }
-        }, &mut executions);
-        for execution in executions { let _=execution.join(); }
+        serve(
+            commands::changes(),
+            TICK,
+            &crate::shutdown::token(),
+            || {
+                if let Err(error) = drive(&shared, crate::engine::isolation(), &node, now(), crate::storage::save) {
+                    let _ = diagnose(&shared, None, &error, &crate::storage::save);
+                }
+            },
+            |executions: &mut Vec<_>| {
+                if let Err(error) = commands::dispatch(&shared, executions) {
+                    let _ = diagnose(&shared, None, &error, &crate::storage::save);
+                }
+            },
+            &mut executions,
+        );
+        for execution in executions {
+            let _ = execution.join();
+        }
     })
 }
 /// Engine reconciliation period; also the dispatch fallback if a wake is lost.
@@ -1130,21 +1389,28 @@ fn serve<T>(
 /// identities, never every container bearing a service label.
 pub fn verified_names(isolation: &dyn Isolation, services: &[Service], node: &str) -> io::Result<Vec<String>> {
     let observations = inventory(isolation, node)?;
-    verified_discovery_names(services,&observations)
+    verified_discovery_names(services, &observations)
 }
-fn verified_discovery_names(services:&[Service],observations:&HashMap<String,Inspection>)->io::Result<Vec<String>>{
+fn verified_discovery_names(
+    services: &[Service],
+    observations: &HashMap<String, Inspection>,
+) -> io::Result<Vec<String>> {
     let mut names = Vec::new();
     for o in observations.values() {
         let service = services
             .iter()
             .find(|s| o.name == format!("/{}", s.name()))
             .ok_or_else(|| fail("Unregistered service container"))?;
-        if matches!(service.resource.phase,Phase::Requested){
+        if matches!(service.resource.phase, Phase::Requested) {
             // Dispatch can snapshot Requested just before the supervisor saves
             // Creating and creates a dormant container. Classify only; do not
             // relax the capability verifier or adopt an unknown execution.
-            let mut creating=service.clone();creating.resource.phase=Phase::Creating;verify(&creating,o)?;
-        }else{verify(service, o)?;}
+            let mut creating = service.clone();
+            creating.resource.phase = Phase::Creating;
+            verify(&creating, o)?;
+        } else {
+            verify(service, o)?;
+        }
         names.push(service.name());
     }
     Ok(names)

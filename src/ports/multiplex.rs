@@ -93,10 +93,7 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
             // generation/grant checks; no client-provided target exists.
             let socket = (|| {
                 live_service(shared, port, cancel)?;
-                if !shared
-                    .lock()
-                    .is_ok_and(|state| peer_listening(&state, port))
-                {
+                if !shared.lock().is_ok_and(|state| peer_listening(&state, port)) {
                     return Err(io::Error::other("Peer ingress is not listening"));
                 }
                 let target = port
@@ -120,11 +117,7 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
         },
     )
 }
-pub(super) fn egress(
-    shared: Arc<Mutex<State>>,
-    port: Port,
-    cancel: Arc<AtomicBool>,
-) -> io::Result<()> {
+pub(super) fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io::Result<()> {
     while live_service(&shared, &port, &cancel).is_ok() {
         if let Err(error) = listen(&shared, &port, &cancel) {
             receipt(&shared, &port, false, &error.to_string());

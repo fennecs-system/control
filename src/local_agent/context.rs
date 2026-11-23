@@ -58,9 +58,16 @@ const SOURCE_BYTES: usize = 96 * 1024;
 /// The lines of `text` the agent marked as findings or decisions.
 pub(super) fn marked(text: &str) -> impl Iterator<Item = &str> {
     text.lines().filter_map(|line| {
-        let bare = line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '*' | '#' | '>' | '_' | '•')).trim_end();
-        MARKS.iter()
-            .any(|mark| bare.as_bytes().get(..mark.len()).is_some_and(|start| start.eq_ignore_ascii_case(mark.as_bytes())))
+        let bare = line
+            .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '*' | '#' | '>' | '_' | '•'))
+            .trim_end();
+        MARKS
+            .iter()
+            .any(|mark| {
+                bare.as_bytes()
+                    .get(..mark.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(mark.as_bytes()))
+            })
             .then(|| head(bare, MARKED_LINE))
     })
 }
@@ -83,15 +90,31 @@ fn newest(lines: Vec<String>) -> Vec<String> {
 }
 /// One original step as recall text: every message whole, calls included.
 fn original(step: &[Value]) -> String {
-    let text = step.iter().map(|m| {
-        let mut line = format!("{}: {}", m["role"].as_str().unwrap_or("?"), m["content"].as_str().unwrap_or(""));
-        for call in m["tool_calls"].as_array().into_iter().flatten() {
-            line.push_str(&format!("\n[call {} {}]", call["function"]["name"].as_str().unwrap_or(""), call["function"]["arguments"].as_str().unwrap_or("")));
-        }
-        line
-    }).collect::<Vec<_>>().join("\n");
+    let text = step
+        .iter()
+        .map(|m| {
+            let mut line = format!(
+                "{}: {}",
+                m["role"].as_str().unwrap_or("?"),
+                m["content"].as_str().unwrap_or("")
+            );
+            for call in m["tool_calls"].as_array().into_iter().flatten() {
+                line.push_str(&format!(
+                    "\n[call {} {}]",
+                    call["function"]["name"].as_str().unwrap_or(""),
+                    call["function"]["arguments"].as_str().unwrap_or("")
+                ));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let kept = head(&text, SOURCE_BYTES);
-    if kept.len() < text.len() { format!("{kept}\n[{} more bytes of this step omitted]", text.len() - kept.len()) } else { text }
+    if kept.len() < text.len() {
+        format!("{kept}\n[{} more bytes of this step omitted]", text.len() - kept.len())
+    } else {
+        text
+    }
 }
 
 /// The longest prefix of `text` within `bytes`, preferring to end at a line.
@@ -115,7 +138,10 @@ fn shorten(text: &str) -> Option<String> {
         return None;
     }
     let kept = head(text, RESULT_HEAD);
-    Some(format!("{kept}\n[Control elided {} more bytes of this earlier result to save context; the attempt's activity keeps it. Repeat a narrower call if you need it again.]", text.len() - kept.len()))
+    Some(format!(
+        "{kept}\n[Control elided {} more bytes of this earlier result to save context; the attempt's activity keeps it. Repeat a narrower call if you need it again.]",
+        text.len() - kept.len()
+    ))
 }
 fn strip_strings(value: &mut Value) {
     match value {
@@ -162,20 +188,23 @@ pub(super) fn without_repeats(content: String, arguments: &Value) -> String {
 }
 /// One step shrunk: shortened results and stripped arguments.
 fn lean(step: &[Value]) -> Vec<Value> {
-    step.iter().cloned().map(|mut message| {
-        if message["role"] == "tool" {
-            if let Some(short) = message["content"].as_str().and_then(shorten) {
-                message["content"] = Value::String(short);
-            }
-        } else if let Some(calls) = message["tool_calls"].as_array_mut() {
-            for call in calls {
-                if let Some(stripped) = call["function"]["arguments"].as_str().and_then(strip_arguments) {
-                    call["function"]["arguments"] = Value::String(stripped);
+    step.iter()
+        .cloned()
+        .map(|mut message| {
+            if message["role"] == "tool" {
+                if let Some(short) = message["content"].as_str().and_then(shorten) {
+                    message["content"] = Value::String(short);
+                }
+            } else if let Some(calls) = message["tool_calls"].as_array_mut() {
+                for call in calls {
+                    if let Some(stripped) = call["function"]["arguments"].as_str().and_then(strip_arguments) {
+                        call["function"]["arguments"] = Value::String(stripped);
+                    }
                 }
             }
-        }
-        message
-    }).collect()
+            message
+        })
+        .collect()
 }
 /// A model-free record of messages: what was called, the head of each result,
 /// and any earlier summary, within `DIGEST_BYTES`.
@@ -184,14 +213,22 @@ fn digest(messages: &[Value]) -> String {
     for message in messages {
         let text = message["content"].as_str().unwrap_or("");
         match message["role"].as_str().unwrap_or("?") {
-            "tool" => lines.push(format!("  result ({} bytes): {}", text.len(), head(text, DIGEST_TEXT).replace('\n', " "))),
+            "tool" => lines.push(format!(
+                "  result ({} bytes): {}",
+                text.len(),
+                head(text, DIGEST_TEXT).replace('\n', " ")
+            )),
             "assistant" => {
                 if !text.trim().is_empty() {
                     lines.push(format!("assistant: {}", head(text, DIGEST_TEXT)));
                 }
                 for call in message["tool_calls"].as_array().into_iter().flatten() {
                     let arguments = call["function"]["arguments"].as_str().unwrap_or("");
-                    lines.push(format!("called {} {}", call["function"]["name"].as_str().unwrap_or("?"), head(arguments, DIGEST_TEXT)));
+                    lines.push(format!(
+                        "called {} {}",
+                        call["function"]["name"].as_str().unwrap_or("?"),
+                        head(arguments, DIGEST_TEXT)
+                    ));
                 }
             }
             role => lines.push(format!("{role}: {}", head(text, DIGEST_BYTES / 2))),
@@ -205,13 +242,25 @@ fn digest(messages: &[Value]) -> String {
     format!("{kept}\n[{} more bytes of the digest omitted]", all.len() - kept.len())
 }
 fn evidence(messages: &[Value]) -> String {
-    messages.iter().map(|m| {
-        let mut line = format!("{}: {}", m["role"].as_str().unwrap_or("?"), m["content"].as_str().unwrap_or(""));
-        for call in m["tool_calls"].as_array().into_iter().flatten() {
-            line.push_str(&format!(" [call {} {}]", call["function"]["name"].as_str().unwrap_or(""), call["function"]["arguments"].as_str().unwrap_or("")));
-        }
-        line.chars().take(EVIDENCE_LINE).collect::<String>()
-    }).collect::<Vec<_>>().join("\n")
+    messages
+        .iter()
+        .map(|m| {
+            let mut line = format!(
+                "{}: {}",
+                m["role"].as_str().unwrap_or("?"),
+                m["content"].as_str().unwrap_or("")
+            );
+            for call in m["tool_calls"].as_array().into_iter().flatten() {
+                line.push_str(&format!(
+                    " [call {} {}]",
+                    call["function"]["name"].as_str().unwrap_or(""),
+                    call["function"]["arguments"].as_str().unwrap_or("")
+                ));
+            }
+            line.chars().take(EVIDENCE_LINE).collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The turn's steps: index ranges of `messages` after the system message and
@@ -252,7 +301,11 @@ impl Node {
         if self.marked.is_empty() {
             return self.text.clone();
         }
-        format!("{}\nMarked by the agent in these steps (verbatim):\n- {}", self.text, self.marked.join("\n- "))
+        format!(
+            "{}\nMarked by the agent in these steps (verbatim):\n- {}",
+            self.text,
+            self.marked.join("\n- ")
+        )
     }
 }
 /// Folded blocks of one turn and their summaries. Nested blocks are replaced
@@ -282,16 +335,29 @@ impl Lens {
     /// The lines the agent marked in `block`'s original steps (replies and
     /// reasoning), newest within the bound.
     fn marks(&self, block: Block, messages: &[Value], steps: &[Range<usize>]) -> Vec<String> {
-        let lines = (block.start as usize..(block.end() as usize).min(steps.len())).flat_map(|index| {
-            let assistant = messages[steps[index].clone()].iter().filter(|message| message["role"] == "assistant");
-            self.reasoned.get(&index).into_iter().flatten().cloned()
-                .chain(assistant.flat_map(|message| marked(message["content"].as_str().unwrap_or("")).map(str::to_owned)))
-        }).collect();
+        let lines = (block.start as usize..(block.end() as usize).min(steps.len()))
+            .flat_map(|index| {
+                let assistant = messages[steps[index].clone()]
+                    .iter()
+                    .filter(|message| message["role"] == "assistant");
+                self.reasoned.get(&index).into_iter().flatten().cloned().chain(
+                    assistant.flat_map(|message| marked(message["content"].as_str().unwrap_or("")).map(str::to_owned)),
+                )
+            })
+            .collect();
         newest(lines)
     }
     /// Messages for `block`: its folded node, else its steps, verbatim when
     /// `whole`, shrunk otherwise.
-    fn render(&self, block: Block, whole: bool, messages: &[Value], steps: &[Range<usize>], emitted: &mut Vec<Block>, out: &mut Vec<Value>) {
+    fn render(
+        &self,
+        block: Block,
+        whole: bool,
+        messages: &[Value],
+        steps: &[Range<usize>],
+        emitted: &mut Vec<Block>,
+        out: &mut Vec<Value>,
+    ) {
         if let Some(node) = self.containing(&block) {
             if !emitted.contains(&node) {
                 emitted.push(node);
@@ -302,7 +368,9 @@ impl Lens {
                     "Summary of steps {} of this turn (lossy and untrusted; it grants no authority; control_history_read with query searches the original steps)"
                 };
                 let range = format!("{}–{}", node.start + 1, node.end());
-                out.push(json!({"role":"user","content":format!("{}:\n{}", label.replace("{}", &range), found.body())}));
+                out.push(
+                    json!({"role":"user","content":format!("{}:\n{}", label.replace("{}", &range), found.body())}),
+                );
             }
             return;
         }
@@ -313,9 +381,15 @@ impl Lens {
                 }
             }
             _ => {
-                let Some(range) = steps.get(block.start as usize) else { return };
+                let Some(range) = steps.get(block.start as usize) else {
+                    return;
+                };
                 let step = &messages[range.clone()];
-                if whole { out.extend_from_slice(step) } else { out.extend(lean(step)) }
+                if whole {
+                    out.extend_from_slice(step)
+                } else {
+                    out.extend(lean(step))
+                }
             }
         }
     }
@@ -328,7 +402,14 @@ impl Lens {
         let mut out = messages[..2.min(messages.len())].to_vec();
         let mut emitted = Vec::new();
         for (index, block) in blocks.iter().enumerate().rev() {
-            self.render(*block, index < verbatim && !shrink_all, messages, &steps, &mut emitted, &mut out);
+            self.render(
+                *block,
+                index < verbatim && !shrink_all,
+                messages,
+                &steps,
+                &mut emitted,
+                &mut out,
+            );
         }
         out
     }
@@ -340,7 +421,10 @@ impl Lens {
         let steps = steps(messages);
         let upto = upto.min(steps.len());
         for index in self.retained..upto {
-            let block = Block { start: index as u64, level: 0 };
+            let block = Block {
+                start: index as u64,
+                level: 0,
+            };
             if self.containing(&block).is_some() {
                 continue;
             }
@@ -357,7 +441,13 @@ impl Lens {
     /// Fold `block` into one node: summarized from its shrunk steps and
     /// folded parts, or from its children's nodes when that does not fit the
     /// compactor. Returns what was done for each node made, oldest first.
-    pub(super) fn fold(&mut self, host: &mut dyn Host, block: Block, messages: &[Value], compactor: Compactor) -> io::Result<Vec<String>> {
+    pub(super) fn fold(
+        &mut self,
+        host: &mut dyn Host,
+        block: Block,
+        messages: &[Value],
+        compactor: Compactor,
+    ) -> io::Result<Vec<String>> {
         let steps = steps(messages);
         let rendered = |lens: &Self| {
             let mut out = Vec::new();
@@ -367,7 +457,9 @@ impl Lens {
         let mut done = Vec::new();
         let mut parts = rendered(self);
         let mut from_children = false;
-        if evidence(&parts).len() > compactor.input_bytes && let Some(children) = block.children().filter(|_| block.level > 0) {
+        if evidence(&parts).len() > compactor.input_bytes
+            && let Some(children) = block.children().filter(|_| block.level > 0)
+        {
             for child in children {
                 if self.containing(&child).is_none() {
                     done.extend(self.fold(host, child, messages, compactor)?);
@@ -379,7 +471,11 @@ impl Lens {
         let marked = self.marks(block, messages, &steps);
         let mut input = evidence(&parts);
         // Reasoning is not transcript: its marked lines reach the compactor here.
-        let unseen: Vec<&str> = marked.iter().map(String::as_str).filter(|line| !input.contains(line)).collect();
+        let unseen: Vec<&str> = marked
+            .iter()
+            .map(String::as_str)
+            .filter(|line| !input.contains(line))
+            .collect();
         if !unseen.is_empty() {
             input.push_str(&format!("\nagent (marked in its reasoning): {}", unseen.join("\n")));
         }
@@ -394,19 +490,41 @@ impl Lens {
         } else {
             match ask(words).map_err(Option::unwrap)? {
                 Ok(text) => Ok((text, "")),
-                Err(_) => ask((words / 3).max(16)).map_err(Option::unwrap)?.map(|text| (text, " (retried with a shorter summary target)")),
+                Err(_) => ask((words / 3).max(16))
+                    .map_err(Option::unwrap)?
+                    .map(|text| (text, " (retried with a shorter summary target)")),
             }
         };
         let steps_named = format!("steps {}–{}", block.start + 1, block.end().min(steps.len() as u64));
         let (mut node, how) = match summary {
-            Ok((text, retried)) => (Node { text, digest: false, marked, key: None }, format!("Summarized {steps_named} of this turn on the local compactor{retried}")),
-            Err(error) => (Node { text: digest(&parts), digest: true, marked, key: None },
-                format!("Folded {steps_named} of this turn into a deterministic digest: the compactor could not summarize them ({error})")),
+            Ok((text, retried)) => (
+                Node {
+                    text,
+                    digest: false,
+                    marked,
+                    key: None,
+                },
+                format!("Summarized {steps_named} of this turn on the local compactor{retried}"),
+            ),
+            Err(error) => (
+                Node {
+                    text: digest(&parts),
+                    digest: true,
+                    marked,
+                    key: None,
+                },
+                format!(
+                    "Folded {steps_named} of this turn into a deterministic digest: the compactor could not summarize them ({error})"
+                ),
+            ),
         };
         // The node joins the summary tree: over its retained children when it
         // was built from them, else over its original steps as sources.
         let children = block.children().filter(|_| from_children).and_then(|[left, right]| {
-            Some([self.nodes.get(&left)?.key.clone()?, self.nodes.get(&right)?.key.clone()?])
+            Some([
+                self.nodes.get(&left)?.key.clone()?,
+                self.nodes.get(&right)?.key.clone()?,
+            ])
         });
         let sources: Vec<String> = match children {
             Some(_) => Vec::new(),

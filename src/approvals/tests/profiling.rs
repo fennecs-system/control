@@ -18,11 +18,7 @@ fn profile_approval_resume() {
                 let mut run = template.clone();
                 run.id = format!("run-{index}");
                 run.queue_order = index as u64;
-                run.kind = if index == 0 {
-                    RunKind::Task
-                } else {
-                    RunKind::BotWake
-                };
+                run.kind = if index == 0 { RunKind::Task } else { RunKind::BotWake };
                 run
             })
             .collect();

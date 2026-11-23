@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::runtime::RunKind;
 #[test]
@@ -34,11 +33,15 @@ fn live_owned_resource_stop_and_mismatch_preserves_unrelated_writer() {
     ])
     .unwrap();
     let wrong = stop_resource(crate::engine::isolation(), &name, "wrong-node", &image, &workspace);
-    let still_running =
-        crate::engine::query(&["ps", "--quiet", "--filter", &format!("id={}", id.trim())]).unwrap();
-    let stopped = stop_resource(crate::engine::isolation(), &name, "lifecycle-fixture", &image, &workspace);
-    let absent =
-        crate::engine::query(&["ps", "--quiet", "--filter", &format!("id={}", id.trim())]).unwrap();
+    let still_running = crate::engine::query(&["ps", "--quiet", "--filter", &format!("id={}", id.trim())]).unwrap();
+    let stopped = stop_resource(
+        crate::engine::isolation(),
+        &name,
+        "lifecycle-fixture",
+        &image,
+        &workspace,
+    );
+    let absent = crate::engine::query(&["ps", "--quiet", "--filter", &format!("id={}", id.trim())]).unwrap();
     std::fs::remove_dir(&workspace).unwrap();
     assert!(wrong.is_err());
     assert!(!still_running.trim().is_empty());
@@ -114,11 +117,7 @@ fn reconcile_owns_earlier_attempts_skips_checks_and_names_the_blocker() {
         reconcile_with(
             &owners,
             "node",
-            vec![(
-                "control-stranger".into(),
-                "other-node".into(),
-                String::new()
-            )],
+            vec![("control-stranger".into(), "other-node".into(), String::new())],
             |_, _| Ok(()),
             |_, _| Ok(())
         )
@@ -168,12 +167,27 @@ fn injected_engine_races_failures_and_exact_id_termination() {
         id: id.clone(),
         name: format!("/{name}"),
         image_ref: "sha256:image".into(),
-        labels: [("dev.control.node", node), ("dev.control.attempt", name)].map(|(k, v)| (k.to_owned(), v.to_owned())).into(),
+        labels: [("dev.control.node", node), ("dev.control.attempt", name)]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
         running: true,
-        mounts: vec![ObservedMount { kind: MountKind::Bind, name: None, driver: None, source: expected(&a, name).unwrap().to_string_lossy().into_owned(), destination: "/workspace".into(), writable: true }],
+        mounts: vec![ObservedMount {
+            kind: MountKind::Bind,
+            name: None,
+            driver: None,
+            source: expected(&a, name).unwrap().to_string_lossy().into_owned(),
+            destination: "/workspace".into(),
+            writable: true,
+        }],
         ..Observed::default()
     };
-    let listed = |name: &str| Reply::Listed(vec![Listed { id: id.clone(), name: name.into(), labels: Default::default() }]);
+    let listed = |name: &str| {
+        Reply::Listed(vec![Listed {
+            id: id.clone(),
+            name: name.into(),
+            labels: Default::default(),
+        }])
+    };
     let calls = std::sync::Mutex::new(Vec::new());
     let engine = Fake(|call: Call| {
         calls.lock().unwrap().push(call.clone());
@@ -190,11 +204,13 @@ fn injected_engine_races_failures_and_exact_id_termination() {
         _ => Err(std::io::Error::other("injected stop failure")),
     });
     assert!(stop_named_with(&failing, &a, name).is_err());
-    let running = Fake(|call| Ok(match call {
-        Call::Inspect(_) => Reply::Observed(vec![observed("node")]),
-        Call::List(..) => listed(name),
-        _ => Reply::Done,
-    }));
+    let running = Fake(|call| {
+        Ok(match call {
+            Call::Inspect(_) => Reply::Observed(vec![observed("node")]),
+            Call::List(..) => listed(name),
+            _ => Reply::Done,
+        })
+    });
     assert!(stop_named_with(&running, &a, name).is_err());
     let killed = std::sync::atomic::AtomicBool::new(false);
     let foreign = Fake(|call| {
@@ -225,25 +241,56 @@ fn owner(generation: &str, active: bool, jobs: &[&str]) -> Owner {
     attempt.command_jobs = jobs.iter().map(|id| serde_json::from_value(serde_json::json!({"id":id,"generation":generation,"image":"i","node":"node",
         "command":"","read_only":false,"build_environment":false,"review_source":false,"deadline_unix":0,"container_id":null,
         "status":"running","output":"","exit_code":null})).unwrap()).collect();
-    Owner { active, attempts: vec![attempt] }
+    Owner {
+        active,
+        attempts: vec![attempt],
+    }
 }
 #[test]
 fn reconcile_matches_each_resource_shape_to_its_first_owner() {
     // `a-attempt-1` is a prefix of `a-attempt-10`; the latter's resources
     // must not be attributed to the former, and the earliest owner wins.
-    let owners = [owner("a-attempt-1", true, &[]), owner("a-attempt-10", false, &["7"]), owner("a-attempt-10", true, &[])];
+    let owners = [
+        owner("a-attempt-1", true, &[]),
+        owner("a-attempt-10", false, &["7"]),
+        owner("a-attempt-10", true, &[]),
+    ];
     let row = |name: &str| (name.to_owned(), "node".to_owned(), "run".to_owned());
     let mut stopped = Vec::new();
-    reconcile_with(&owners, "node", ["control-a-attempt-1", "control-a-attempt-1-tool", "control-a-attempt-10-probe",
-        "control-a-attempt-10-job-7", "control-a-attempt-10-tool"].map(row).to_vec(), |attempt, name| {
-        stopped.push((attempt.workspace_id.clone().unwrap(), name.to_owned()));
-        Ok(())
-    }, |_, _| Ok(())).unwrap();
-    assert_eq!(stopped, [("a-attempt-10".to_owned(), "control-a-attempt-10-probe".to_owned()),
-        ("a-attempt-10".into(), "control-a-attempt-10-job-7".into()), ("a-attempt-10".into(), "control-a-attempt-10-tool".into())]);
+    reconcile_with(
+        &owners,
+        "node",
+        [
+            "control-a-attempt-1",
+            "control-a-attempt-1-tool",
+            "control-a-attempt-10-probe",
+            "control-a-attempt-10-job-7",
+            "control-a-attempt-10-tool",
+        ]
+        .map(row)
+        .to_vec(),
+        |attempt, name| {
+            stopped.push((attempt.workspace_id.clone().unwrap(), name.to_owned()));
+            Ok(())
+        },
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(
+        stopped,
+        [
+            ("a-attempt-10".to_owned(), "control-a-attempt-10-probe".to_owned()),
+            ("a-attempt-10".into(), "control-a-attempt-10-job-7".into()),
+            ("a-attempt-10".into(), "control-a-attempt-10-tool".into())
+        ]
+    );
     // A preview needs a project; an unknown job is not an owned resource.
     for name in ["control-a-attempt-1-preview", "control-a-attempt-10-job-8"] {
-        assert!(reconcile_with(&owners, "node", vec![row(name)], |_, _| Ok(()), |_, _| Ok(())).unwrap_err().contains(name));
+        assert!(
+            reconcile_with(&owners, "node", vec![row(name)], |_, _| Ok(()), |_, _| Ok(()))
+                .unwrap_err()
+                .contains(name)
+        );
     }
 }
 
@@ -252,16 +299,37 @@ fn reconcile_matches_each_resource_shape_to_its_first_owner() {
 fn reconcile_profile() {
     use std::time::Instant;
     for history in [500, 3_000, 12_000] {
-        let owners = (0..history).map(|n| owner(&format!("run-{n}-attempt-1"), n + 24 >= history, &[])).collect::<Vec<_>>();
+        let owners = (0..history)
+            .map(|n| owner(&format!("run-{n}-attempt-1"), n + 24 >= history, &[]))
+            .collect::<Vec<_>>();
         // The newest attempts' containers, as during a live swarm or its cancellation.
-        let listed = (history - 24..history).flat_map(|n| [format!("control-run-{n}-attempt-1"), format!("control-run-{n}-attempt-1-tool")])
-            .map(|name| (name, "node".to_owned(), "run".to_owned())).collect::<Vec<_>>();
-        let mut samples = (0..9).map(|_| {
-            let start = Instant::now();
-            reconcile_with(&owners, "node", std::hint::black_box(listed.clone()), |_, _| Ok(()), |_, _| Ok(())).unwrap();
-            start.elapsed().as_micros()
-        }).collect::<Vec<_>>();
+        let listed = (history - 24..history)
+            .flat_map(|n| {
+                [
+                    format!("control-run-{n}-attempt-1"),
+                    format!("control-run-{n}-attempt-1-tool"),
+                ]
+            })
+            .map(|name| (name, "node".to_owned(), "run".to_owned()))
+            .collect::<Vec<_>>();
+        let mut samples = (0..9)
+            .map(|_| {
+                let start = Instant::now();
+                reconcile_with(
+                    &owners,
+                    "node",
+                    std::hint::black_box(listed.clone()),
+                    |_, _| Ok(()),
+                    |_, _| Ok(()),
+                )
+                .unwrap();
+                start.elapsed().as_micros()
+            })
+            .collect::<Vec<_>>();
         samples.sort_unstable();
-        println!("{}", serde_json::json!({"workload":"lifecycle_reconcile","attempts":history,"containers":listed.len(),"median_us":samples[4],"min_us":samples[0],"max_us":samples[8]}));
+        println!(
+            "{}",
+            serde_json::json!({"workload":"lifecycle_reconcile","attempts":history,"containers":listed.len(),"median_us":samples[4],"min_us":samples[0],"max_us":samples[8]})
+        );
     }
 }

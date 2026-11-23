@@ -8,7 +8,11 @@ fn replay(old: &Value, patch: &[u8]) -> Value {
 }
 fn check(old: &Value, new: &Value) -> usize {
     let (a, b) = (encode(old).unwrap(), encode(new).unwrap());
-    assert_eq!(a.bytes(), serde_json::to_vec(old).unwrap(), "encode writes compact JSON");
+    assert_eq!(
+        a.bytes(),
+        serde_json::to_vec(old).unwrap(),
+        "encode writes compact JSON"
+    );
     match diff(&a, &b) {
         None => {
             assert_eq!(old, new);
@@ -58,7 +62,11 @@ fn values_saved_whole_are_still_diffed_inside() {
     new["chats"][2]["messages"].as_array_mut().unwrap().push(message(40));
     let mut base = encode(&old).unwrap();
     // The third chat as cached bytes: find its node and drop its members.
-    let chats = base.children(0).into_iter().find(|&c| base.key(c) == b"\"chats\"").unwrap();
+    let chats = base
+        .children(0)
+        .into_iter()
+        .find(|&c| base.key(c) == b"\"chats\"")
+        .unwrap();
     let third = base.children(chats)[2];
     forget_members(&mut base, third);
     let mut current = encode(&new).unwrap();
@@ -66,7 +74,11 @@ fn values_saved_whole_are_still_diffed_inside() {
     assert_eq!(replay(&old, &patch), new);
     assert!(patch.len() < 400, "{} bytes: the message, not the chat", patch.len());
     // And the other way round: the new side saved whole.
-    let chats = current.children(0).into_iter().find(|&c| current.key(c) == b"\"chats\"").unwrap();
+    let chats = current
+        .children(0)
+        .into_iter()
+        .find(|&c| current.key(c) == b"\"chats\"")
+        .unwrap();
     let third = current.children(chats)[2];
     forget_members(&mut current, third);
     let patch = diff(&encode(&old).unwrap(), &current).unwrap();
@@ -114,7 +126,10 @@ fn members_and_elements_are_added_changed_and_removed() {
     let mut new = old.clone();
     new["runtime"]["runs"][7]["status"] = json!("interrupted");
     new["runtime"]["runs"].as_array_mut().unwrap().remove(20);
-    new["runtime"]["runs"].as_array_mut().unwrap().push(json!({"id": "run-new", "status": "queued"}));
+    new["runtime"]["runs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "run-new", "status": "queued"}));
     new["runtime"]["notice"] = json!("hello");
     new.as_object_mut().unwrap().remove("note");
     new["chats"].as_array_mut().unwrap().insert(0, json!({"id": "first"}));
@@ -183,7 +198,9 @@ fn indexing_bytes_matches_encoding() {
         let encoded = encode(&document).unwrap();
         assert_eq!(index(encoded.bytes().to_vec()).unwrap(), encoded, "{document}");
     }
-    assert!(index(b"{\"a\":".to_vec()).is_err() && index(b"[1,2".to_vec()).is_err() && index(b"{} x".to_vec()).is_err());
+    assert!(
+        index(b"{\"a\":".to_vec()).is_err() && index(b"[1,2".to_vec()).is_err() && index(b"{} x".to_vec()).is_err()
+    );
 }
 
 #[test]
@@ -192,7 +209,11 @@ fn snapshots_carry_their_name_and_schema_and_are_recognised() {
     for document in [json!({}), state(1, 2)] {
         let encoded = encode(&document).unwrap();
         let bytes = snapshot(&encoded, "n1", &schema);
-        assert_eq!(base(&bytes, "n1", &schema), Some(encoded.clone()), "the file is its own diff base");
+        assert_eq!(
+            base(&bytes, "n1", &schema),
+            Some(encoded.clone()),
+            "the file is its own diff base"
+        );
         assert_eq!(base(&bytes, "n2", &schema), None);
         let mut parsed: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(identify(&mut parsed), (Some("n1".into()), Some(schema.clone())));
@@ -203,7 +224,12 @@ fn snapshots_carry_their_name_and_schema_and_are_recognised() {
 #[test]
 fn a_log_replays_only_its_own_snapshot_and_stops_at_a_bad_line() {
     let line = |s: &str| s.as_bytes().to_vec();
-    let lines = vec![line(r#"{"snapshot":"a","schema":{"version":0}}"#), commit(br#"[["s",["x"],1]]"#), line("[[\"s\",[\"x\"],"), commit(br#"[["s",["x"],3]]"#)];
+    let lines = vec![
+        line(r#"{"snapshot":"a","schema":{"version":0}}"#),
+        commit(br#"[["s",["x"],1]]"#),
+        line("[[\"s\",[\"x\"],"),
+        commit(br#"[["s",["x"],3]]"#),
+    ];
     let (_, valid) = patches(lines.clone(), "a").unwrap();
     assert_eq!(valid.len(), 1, "a corrupt line ends the valid prefix");
     assert!(patches(lines, "b").is_none());

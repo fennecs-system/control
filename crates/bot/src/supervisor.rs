@@ -11,7 +11,11 @@ const HISTORY: usize = 256;
 macro_rules! id {
     ($name:ident, $inner:ty) => {
         #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(transparent))]
+        #[cfg_attr(
+            feature = "serde",
+            derive(serde::Serialize, serde::Deserialize),
+            serde(transparent)
+        )]
         pub struct $name(pub $inner);
     };
 }
@@ -30,7 +34,10 @@ pub struct Topic {
 }
 impl Topic {
     pub fn new(kind: impl Into<String>, name: impl Into<String>) -> Self {
-        Self { kind: kind.into(), name: name.into() }
+        Self {
+            kind: kind.into(),
+            name: name.into(),
+        }
     }
     /// Cursor key; the length prefix keeps `("a:b", "c")` and `("a", "b:c")` apart.
     fn key(&self) -> String {
@@ -54,14 +61,20 @@ pub trait Info: Clone + Debug + PartialEq {
     /// both as distinct reasons.
     fn merge(&mut self, newer: &Self) -> bool;
     /// Failures may interrupt an idle wait; ordinary telemetry does not.
-    fn urgent(&self) -> bool { false }
+    fn urgent(&self) -> bool {
+        false
+    }
     /// Input addressed to this bot releases a wait that selected no topics. A
     /// wait that selected topics keeps it pending for the next turn instead.
-    fn direct(&self) -> bool { false }
+    fn direct(&self) -> bool {
+        false
+    }
     /// Retained input that wakes nobody on its own: it rides with the next
     /// turn another reason starts, or starts one after the definition's
     /// `defer_ms`. Only a wait that selected its topic is released by it.
-    fn deferred(&self) -> bool { false }
+    fn deferred(&self) -> bool {
+        false
+    }
 }
 
 /// Bounds automatic turns: a minimum gap between turns and a cap per window.
@@ -76,7 +89,11 @@ pub struct Budget {
 /// Like an OTP child spec: a permanent bot keeps waking; a temporary one ends
 /// after its first turn completes, a one-shot wake.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "snake_case")
+)]
 pub enum Restart {
     #[default]
     Permanent,
@@ -107,19 +124,28 @@ impl Definition {
         if self.budget.window_ms == 0 || !(1..=HISTORY as u32).contains(&self.budget.turns_per_window) {
             return Err("A budget needs a positive window and 1–256 turns per window");
         }
-        if self.sources.iter().any(|source| matches!(source, Source::Timer { every_ms: 0 })) {
+        if self
+            .sources
+            .iter()
+            .any(|source| matches!(source, Source::Timer { every_ms: 0 }))
+        {
             return Err("Timers need a positive interval");
         }
         Ok(())
     }
     fn timer(&self) -> Option<u64> {
-        self.sources.iter().filter_map(|source| match source {
-            Source::Timer { every_ms } => Some(*every_ms),
-            Source::Topic(_) => None,
-        }).min()
+        self.sources
+            .iter()
+            .filter_map(|source| match source {
+                Source::Timer { every_ms } => Some(*every_ms),
+                Source::Topic(_) => None,
+            })
+            .min()
     }
     fn subscribes(&self, topic: &Topic) -> bool {
-        self.sources.iter().any(|source| matches!(source, Source::Topic(t) if t == topic))
+        self.sources
+            .iter()
+            .any(|source| matches!(source, Source::Topic(t) if t == topic))
     }
 }
 
@@ -140,37 +166,69 @@ pub enum Event<I> {
     Continue(BotId),
     /// Narrow an idle bot's wake conditions without changing its subscriptions.
     /// The host validates the deadline and topic authority before admission.
-    Wait { bot: BotId, topics: Vec<Topic>, until: Option<u64> },
+    Wait {
+        bot: BotId,
+        topics: Vec<Topic>,
+        until: Option<u64>,
+    },
     /// Processing is distinct from ingestion. Clear only reasons whose exact
     /// source watermark was committed with the agent's workspace.
-    Processed { bot: BotId, topic: Topic, through: u64 },
+    Processed {
+        bot: BotId,
+        topic: Topic,
+        through: u64,
+    },
     /// Host-selected origin of a new subscription. Earlier retained events
     /// were never subscribed to; this is not a processing acknowledgement.
-    StartAt { bot: BotId, topic: Topic, after: u64 },
+    StartAt {
+        bot: BotId,
+        topic: Topic,
+        after: u64,
+    },
     Stop(BotId),
     /// A message on `topic`. `from` names the chat that caused it, so a bot is
     /// not woken by its own posts.
-    Info { topic: Topic, cursor: u64, from: Option<ChatId>, info: I },
-    TurnCompleted { bot: BotId, turn: TurnId },
+    Info {
+        topic: Topic,
+        cursor: u64,
+        from: Option<ChatId>,
+        info: I,
+    },
+    TurnCompleted {
+        bot: BotId,
+        turn: TurnId,
+    },
     Tick,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Reason<I> {
-    Info { topic: Topic, through: u64, info: I },
+    Info {
+        topic: Topic,
+        through: u64,
+        info: I,
+    },
     Timer,
     Continue,
     /// More distinct messages arrived than a turn carries. Dropped messages are
     /// acknowledged, not replayed: the bot resynchronises from these topics.
-    Overflow { dropped: u64, topics: Vec<Topic> },
+    Overflow {
+        dropped: u64,
+        topics: Vec<Topic>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect<I> {
     /// Queue one turn in the bot's conversation. The turn ID is the idempotency
     /// key: recovery re-queues only an outstanding turn, never a new one.
-    RequestTurn { bot: BotId, chat: ChatId, turn: TurnId, reasons: Vec<Reason<I>> },
+    RequestTurn {
+        bot: BotId,
+        chat: ChatId,
+        turn: TurnId,
+        reasons: Vec<Reason<I>>,
+    },
     /// The budget is spent; reasons stay pending until `until`.
     BudgetExhausted { bot: BotId, until: u64 },
 }
@@ -184,7 +242,11 @@ pub enum Status {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(bound(serialize = "I: serde::Serialize", deserialize = "I: serde::Deserialize<'de>")))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(bound(serialize = "I: serde::Serialize", deserialize = "I: serde::Deserialize<'de>"))
+)]
 struct Bot<I> {
     definition: Definition,
     generation: u64,
@@ -222,7 +284,10 @@ struct Bot<I> {
 }
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct Wait { topics: Vec<Topic>, until: Option<u64> }
+struct Wait {
+    topics: Vec<Topic>,
+    until: Option<u64>,
+}
 impl Wait {
     fn releases<I: Info>(&self, topic: &Topic, info: &I) -> bool {
         info.urgent() || self.topics.contains(topic) || (info.direct() && self.topics.is_empty())
@@ -258,7 +323,11 @@ impl<I: Info> Bot<I> {
     fn merge(&mut self, reason: &Reason<I>) -> bool {
         match reason {
             Reason::Info { topic, through, info } => self.pending.iter_mut().any(|pending| match pending {
-                Reason::Info { topic: t, through: existing, info: held } if t == topic => {
+                Reason::Info {
+                    topic: t,
+                    through: existing,
+                    info: held,
+                } if t == topic => {
                     let merged = held.merge(info);
                     if merged {
                         *existing = (*existing).max(*through);
@@ -275,16 +344,27 @@ impl<I: Info> Bot<I> {
     /// Whether a message came from this bot, through its current chat or the
     /// chat its outstanding turn runs in.
     fn own(&self, from: Option<&ChatId>) -> bool {
-        from.is_some_and(|from| *from == self.definition.chat || self.turn.as_ref().is_some_and(|(_, chat)| chat == from))
+        from.is_some_and(|from| {
+            *from == self.definition.chat || self.turn.as_ref().is_some_and(|(_, chat)| chat == from)
+        })
     }
     fn recent(&self, now: u64) -> impl Iterator<Item = u64> + '_ {
         let window = self.definition.budget.window_ms;
-        self.turns.iter().copied().filter(move |at| now.saturating_sub(*at) < window)
+        self.turns
+            .iter()
+            .copied()
+            .filter(move |at| now.saturating_sub(*at) < window)
     }
     /// When pending reasons could next become a turn, if blocked only by time.
     /// `None` also covers deadlines beyond the representable range.
     fn ready_at(&self, now: u64) -> Option<u64> {
-        if self.pending.is_empty() || self.turn.is_some() || self.paused || self.stopping || self.wait.is_some() || self.definition.validate().is_err() {
+        if self.pending.is_empty()
+            || self.turn.is_some()
+            || self.paused
+            || self.stopping
+            || self.wait.is_some()
+            || self.definition.validate().is_err()
+        {
             return None;
         }
         let budget = self.definition.budget;
@@ -302,7 +382,11 @@ impl<I: Info> Bot<I> {
     }
     /// Whether a pending reason may start a turn now rather than ride along.
     fn waking(&self) -> bool {
-        self.selected || self.pending.iter().any(|reason| !matches!(reason, Reason::Info { info, .. } if info.deferred()))
+        self.selected
+            || self
+                .pending
+                .iter()
+                .any(|reason| !matches!(reason, Reason::Info { info, .. } if info.deferred()))
     }
     /// When pending deferred input starts a turn by itself, if ever.
     fn deferred_due(&self) -> Option<u64> {
@@ -310,8 +394,15 @@ impl<I: Info> Bot<I> {
     }
     /// Keeps the deferral clock on the oldest deferred reason still pending.
     fn note_deferred(&mut self, now: u64) {
-        let deferred = self.pending.iter().any(|reason| matches!(reason, Reason::Info { info, .. } if info.deferred()));
-        self.deferred_since = if deferred { Some(self.deferred_since.unwrap_or(now)) } else { None };
+        let deferred = self
+            .pending
+            .iter()
+            .any(|reason| matches!(reason, Reason::Info { info, .. } if info.deferred()));
+        self.deferred_since = if deferred {
+            Some(self.deferred_since.unwrap_or(now))
+        } else {
+            None
+        };
         self.selected &= deferred;
     }
 }
@@ -321,7 +412,11 @@ impl<I: Info> Bot<I> {
 /// application's messages. Deterministic for a given sequence of events and
 /// times; per-bot transitions are serialized.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(bound(serialize = "I: serde::Serialize", deserialize = "I: serde::Deserialize<'de>")))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(bound(serialize = "I: serde::Serialize", deserialize = "I: serde::Deserialize<'de>"))
+)]
 pub struct Supervisor<I> {
     bots: BTreeMap<BotId, Bot<I>>,
     generation: u64,
@@ -330,17 +425,26 @@ pub struct Supervisor<I> {
 }
 impl<I> Default for Supervisor<I> {
     fn default() -> Self {
-        Self { bots: BTreeMap::new(), generation: 0, revision: 0, next_turn: 0 }
+        Self {
+            bots: BTreeMap::new(),
+            generation: 0,
+            revision: 0,
+            next_turn: 0,
+        }
     }
 }
 impl<I: Info> Supervisor<I> {
     /// Evidence referenced by a pending or outstanding callback must remain readable.
     pub fn retains(&self, topic: &Topic) -> bool {
-        self.bots.values().any(|bot| bot.held.contains(topic) || bot.overflowed.contains(topic) || bot.pending.iter().any(|reason| match reason {
-            Reason::Info { topic: pending, .. } => pending == topic,
-            Reason::Overflow { topics, .. } => topics.contains(topic),
-            Reason::Timer | Reason::Continue => false,
-        }))
+        self.bots.values().any(|bot| {
+            bot.held.contains(topic)
+                || bot.overflowed.contains(topic)
+                || bot.pending.iter().any(|reason| match reason {
+                    Reason::Info { topic: pending, .. } => pending == topic,
+                    Reason::Overflow { topics, .. } => topics.contains(topic),
+                    Reason::Timer | Reason::Continue => false,
+                })
+        })
     }
     pub fn definitions(&self) -> impl Iterator<Item = &Definition> {
         self.bots.values().map(|bot| &bot.definition)
@@ -361,7 +465,9 @@ impl<I: Info> Supervisor<I> {
     /// Whether a planned or recovered turn may still be queued: it must be the
     /// bot's outstanding turn and the bot must not be stopping.
     pub fn eligible(&self, bot: &BotId, turn: &TurnId) -> bool {
-        self.bots.get(bot).is_some_and(|b| !b.stopping && b.turn.as_ref().is_some_and(|(id, _)| id == turn))
+        self.bots
+            .get(bot)
+            .is_some_and(|b| !b.stopping && b.turn.as_ref().is_some_and(|(id, _)| id == turn))
     }
     /// Dispatch rechecks pause separately from an already requested/running turn.
     /// Pausing retains the request; resuming does not allocate another turn.
@@ -371,9 +477,11 @@ impl<I: Info> Supervisor<I> {
     /// Whether retained source evidence is newer than both admission and
     /// published processing. The application can skip reoffering old records.
     pub fn unseen(&self, bot: &BotId, topic: &Topic, through: u64) -> bool {
-        self.bots.get(bot).is_some_and(|b| !b.stopping
-            && b.cursors.get(&topic.key()).is_none_or(|seen| through > *seen)
-            && b.processed.get(&topic.key()).is_none_or(|seen| through > *seen))
+        self.bots.get(bot).is_some_and(|b| {
+            !b.stopping
+                && b.cursors.get(&topic.key()).is_none_or(|seen| through > *seen)
+                && b.processed.get(&topic.key()).is_none_or(|seen| through > *seen)
+        })
     }
     /// The published processing watermark of a bot's topic (0 when none).
     /// Consecutive turns of `bot` woken by nothing but a timer (at most three).
@@ -381,17 +489,36 @@ impl<I: Info> Supervisor<I> {
         self.bots.get(bot).map_or(0, |bot| bot.idle)
     }
     pub fn processed(&self, bot: &BotId, topic: &Topic) -> u64 {
-        self.bots.get(bot).and_then(|b| b.processed.get(&topic.key()).copied()).unwrap_or(0)
+        self.bots
+            .get(bot)
+            .and_then(|b| b.processed.get(&topic.key()).copied())
+            .unwrap_or(0)
     }
     /// Turns requested but not yet completed, for reconciliation after restart.
     pub fn outstanding(&self) -> impl Iterator<Item = (&BotId, &ChatId, &TurnId)> {
-        self.bots.iter().filter_map(|(id, bot)| bot.turn.as_ref().map(|(turn, chat)| (id, chat, turn)))
+        self.bots
+            .iter()
+            .filter_map(|(id, bot)| bot.turn.as_ref().map(|(turn, chat)| (id, chat, turn)))
     }
     /// The earliest time a `Tick` could produce an effect; drivers wait until
     /// then or the next event instead of polling.
     pub fn next_deadline(&self, now: Now) -> Option<Now> {
-        self.bots.values().flat_map(|bot| [bot.timer_due.filter(|_| !bot.paused && bot.wait.is_none()), bot.wait.as_ref().filter(|_| !bot.paused).and_then(|wait| wait.until),
-            bot.wait.as_ref().filter(|wait| !bot.paused && wait.topics.is_empty()).and_then(|_| bot.deferred_due()), bot.ready_at(now.0)]).flatten().min().map(Now)
+        self.bots
+            .values()
+            .flat_map(|bot| {
+                [
+                    bot.timer_due.filter(|_| !bot.paused && bot.wait.is_none()),
+                    bot.wait.as_ref().filter(|_| !bot.paused).and_then(|wait| wait.until),
+                    bot.wait
+                        .as_ref()
+                        .filter(|wait| !bot.paused && wait.topics.is_empty())
+                        .and_then(|_| bot.deferred_due()),
+                    bot.ready_at(now.0),
+                ]
+            })
+            .flatten()
+            .min()
+            .map(Now)
     }
     fn define(&mut self, definition: Definition, now: u64) {
         if definition.validate().is_err() {
@@ -458,48 +585,66 @@ impl<I: Info> Supervisor<I> {
             }
             Event::Rearm(id) => {
                 if let Some(bot) = self.bots.get_mut(&id)
-                    && bot.definition.restart == Restart::Temporary && bot.turn.is_some()
-                    && !bot.stopping && !bot.paused
+                    && bot.definition.restart == Restart::Temporary
+                    && bot.turn.is_some()
+                    && !bot.stopping
+                    && !bot.paused
                 {
                     bot.rearm = true;
                 }
             }
             Event::Continue(id) => {
-                if let Some(bot)=self.bots.get_mut(&id)
-                    && bot.definition.restart==Restart::Permanent && !bot.stopping {
+                if let Some(bot) = self.bots.get_mut(&id)
+                    && bot.definition.restart == Restart::Permanent
+                    && !bot.stopping
+                {
                     bot.wait = None;
-                    bot.accept(None,Reason::Continue);
+                    bot.accept(None, Reason::Continue);
                 }
             }
-            Event::Wait { bot:id, topics, until } => {
+            Event::Wait { bot: id, topics, until } => {
                 if let Some(bot) = self.bots.get_mut(&id)
-                    && !bot.stopping && until.is_none_or(|until| until > now)
-                    && topics.len() <= 16 && topics.iter().all(|topic| bot.definition.subscribes(topic)) {
+                    && !bot.stopping
+                    && until.is_none_or(|until| until > now)
+                    && topics.len() <= 16
+                    && topics.iter().all(|topic| bot.definition.subscribes(topic))
+                {
                     // An explicit dependency wait supersedes idle check-ins,
                     // including timers accumulated during the active turn.
-                    bot.pending.retain(|reason| !matches!(reason, Reason::Continue | Reason::Timer));
+                    bot.pending
+                        .retain(|reason| !matches!(reason, Reason::Continue | Reason::Timer));
                     // Evidence admitted before the wait releases it at once,
                     // so registering a wait late never loses its wake.
-                    let wait = Wait{topics,until};
-                    let released = bot.pending.iter().filter_map(|reason| match reason {
-                        Reason::Info{topic,info,..} if wait.releases(topic, info) => Some(info.deferred()),
-                        _ => None,
-                    }).collect::<Vec<_>>();
+                    let wait = Wait { topics, until };
+                    let released = bot
+                        .pending
+                        .iter()
+                        .filter_map(|reason| match reason {
+                            Reason::Info { topic, info, .. } if wait.releases(topic, info) => Some(info.deferred()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
                     // Deferred input the wait selected wakes like any other.
                     bot.selected |= released.contains(&true);
                     bot.wait = released.is_empty().then_some(wait);
                 }
             }
-            Event::Processed { bot:id,topic,through } => {
-                if let Some(bot)=self.bots.get_mut(&id) {
+            Event::Processed {
+                bot: id,
+                topic,
+                through,
+            } => {
+                if let Some(bot) = self.bots.get_mut(&id) {
                     let cursor = bot.processed.entry(topic.key()).or_default();
                     *cursor = (*cursor).max(through);
                     bot.pending.retain(|reason| !matches!(reason,Reason::Info{topic:t,through:pending,..} if t==&topic && *pending<=through));
                     bot.note_deferred(now);
                     // A later ingestion watermark keeps its gap visible.
-                    if bot.cursors.get(&topic.key()).is_some_and(|seen|*seen<=through) {
-                        bot.overflowed.retain(|t|t!=&topic);
-                        if bot.overflowed.is_empty(){bot.dropped=0;}
+                    if bot.cursors.get(&topic.key()).is_some_and(|seen| *seen <= through) {
+                        bot.overflowed.retain(|t| t != &topic);
+                        if bot.overflowed.is_empty() {
+                            bot.dropped = 0;
+                        }
                     }
                 }
             }
@@ -517,17 +662,30 @@ impl<I: Info> Supervisor<I> {
                     }
                 }
             }
-            Event::Info { topic, cursor, from, info } => {
+            Event::Info {
+                topic,
+                cursor,
+                from,
+                info,
+            } => {
                 let key = topic.key();
                 for bot in self.bots.values_mut().filter(|bot| !bot.stopping) {
                     if bot.definition.subscribes(&topic) && !bot.own(from.as_ref()) {
                         if bot.cursors.get(&key).is_none_or(|seen| cursor > *seen)
                             && bot.processed.get(&key).is_none_or(|seen| cursor > *seen)
-                            && bot.wait.as_ref().is_some_and(|wait| wait.releases(&topic, &info)) {
+                            && bot.wait.as_ref().is_some_and(|wait| wait.releases(&topic, &info))
+                        {
                             bot.wait = None;
                             bot.selected |= info.deferred();
                         }
-                        bot.accept(Some((key.clone(), cursor)), Reason::Info { topic: topic.clone(), through: cursor, info: info.clone() });
+                        bot.accept(
+                            Some((key.clone(), cursor)),
+                            Reason::Info {
+                                topic: topic.clone(),
+                                through: cursor,
+                                info: info.clone(),
+                            },
+                        );
                         bot.note_deferred(now);
                     }
                 }
@@ -551,19 +709,27 @@ impl<I: Info> Supervisor<I> {
             Event::Tick => {}
         }
         for bot in self.bots.values_mut().filter(|bot| !bot.stopping && !bot.paused) {
-            if bot.wait.as_ref().is_some_and(|wait| wait.until.is_some_and(|until| until <= now)) {
+            if bot
+                .wait
+                .as_ref()
+                .is_some_and(|wait| wait.until.is_some_and(|until| until <= now))
+            {
                 bot.wait = None;
                 bot.accept(None, Reason::Timer);
             }
             // Deferred input that waited its bound releases an open wait;
             // a wait that selected topics keeps it for the next turn.
-            if bot.wait.as_ref().is_some_and(|wait| wait.topics.is_empty()) && bot.deferred_due().is_some_and(|due| due <= now) {
+            if bot.wait.as_ref().is_some_and(|wait| wait.topics.is_empty())
+                && bot.deferred_due().is_some_and(|due| due <= now)
+            {
                 bot.wait = None;
             }
             if let (Some(due), Some(every)) = (bot.timer_due, bot.definition.timer())
                 && due <= now
             {
-                if bot.wait.is_none() { bot.accept(None, Reason::Timer); }
+                if bot.wait.is_none() {
+                    bot.accept(None, Reason::Timer);
+                }
                 bot.timer_due = now.checked_add(every);
             }
         }
@@ -572,13 +738,26 @@ impl<I: Info> Supervisor<I> {
         let mut planned = Vec::new();
         for (id, bot) in &mut self.bots {
             let Some(ready) = bot.ready_at(now) else {
-                if bot.waking() && bot.turn.is_none() && bot.wait.is_none() && !bot.paused && !bot.stopping && !bot.exhausted {
+                if bot.waking()
+                    && bot.turn.is_none()
+                    && bot.wait.is_none()
+                    && !bot.paused
+                    && !bot.stopping
+                    && !bot.exhausted
+                {
                     bot.exhausted = true;
                     self.revision += 1;
                     planned.push(Planned {
-                        stamp: Stamp { resource: id.clone(), generation: bot.generation, revision: self.revision },
+                        stamp: Stamp {
+                            resource: id.clone(),
+                            generation: bot.generation,
+                            revision: self.revision,
+                        },
                         durability: Durability::None,
-                        effect: Effect::BudgetExhausted { bot: id.clone(), until: u64::MAX },
+                        effect: Effect::BudgetExhausted {
+                            bot: id.clone(),
+                            until: u64::MAX,
+                        },
                     });
                 }
                 continue;
@@ -594,27 +773,61 @@ impl<I: Info> Supervisor<I> {
                 bot.turns.push_back(now);
                 bot.exhausted = false;
                 let mut reasons = std::mem::take(&mut bot.pending);
-                bot.idle = if reasons.iter().all(|reason| matches!(reason, Reason::Timer)) { bot.idle.saturating_add(1).min(3) } else { 0 };
+                bot.idle = if reasons.iter().all(|reason| matches!(reason, Reason::Timer)) {
+                    bot.idle.saturating_add(1).min(3)
+                } else {
+                    0
+                };
                 bot.deferred_since = None;
                 bot.selected = false;
                 if bot.dropped > 0 {
-                    reasons.push(Reason::Overflow { dropped: std::mem::take(&mut bot.dropped), topics: std::mem::take(&mut bot.overflowed) });
+                    reasons.push(Reason::Overflow {
+                        dropped: std::mem::take(&mut bot.dropped),
+                        topics: std::mem::take(&mut bot.overflowed),
+                    });
                 }
-                bot.held = reasons.iter().flat_map(|reason| match reason {
-                    Reason::Info { topic, .. } => std::slice::from_ref(topic),
-                    Reason::Overflow { topics, .. } => topics.as_slice(),
-                    Reason::Timer | Reason::Continue => &[],
-                }).cloned().collect();
-                Effect::RequestTurn { bot: id.clone(), chat: bot.definition.chat.clone(), turn, reasons }
-            } else if bot.recent(now).count() >= bot.definition.budget.turns_per_window as usize && !bot.exhausted && (bot.waking() || bot.deferred_due().is_some_and(|due| due <= now)) {
+                bot.held = reasons
+                    .iter()
+                    .flat_map(|reason| match reason {
+                        Reason::Info { topic, .. } => std::slice::from_ref(topic),
+                        Reason::Overflow { topics, .. } => topics.as_slice(),
+                        Reason::Timer | Reason::Continue => &[],
+                    })
+                    .cloned()
+                    .collect();
+                Effect::RequestTurn {
+                    bot: id.clone(),
+                    chat: bot.definition.chat.clone(),
+                    turn,
+                    reasons,
+                }
+            } else if bot.recent(now).count() >= bot.definition.budget.turns_per_window as usize
+                && !bot.exhausted
+                && (bot.waking() || bot.deferred_due().is_some_and(|due| due <= now))
+            {
                 bot.exhausted = true;
-                Effect::BudgetExhausted { bot: id.clone(), until: ready }
+                Effect::BudgetExhausted {
+                    bot: id.clone(),
+                    until: ready,
+                }
             } else {
                 continue;
             };
             self.revision += 1;
-            let durability = if matches!(effect, Effect::RequestTurn { .. }) { Durability::Intent } else { Durability::None };
-            planned.push(Planned { stamp: Stamp { resource: id.clone(), generation: bot.generation, revision: self.revision }, durability, effect });
+            let durability = if matches!(effect, Effect::RequestTurn { .. }) {
+                Durability::Intent
+            } else {
+                Durability::None
+            };
+            planned.push(Planned {
+                stamp: Stamp {
+                    resource: id.clone(),
+                    generation: bot.generation,
+                    revision: self.revision,
+                },
+                durability,
+                effect,
+            });
         }
         planned
     }

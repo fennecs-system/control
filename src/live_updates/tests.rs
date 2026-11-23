@@ -8,10 +8,7 @@ use std::{
 fn stream_refreshes_on_connect_changes_and_cancels_without_another_poll() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut client = BufReader::new(TcpStream::connect(listener.local_addr().unwrap()).unwrap());
-    client
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.get_ref().set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let changes = Changes::new();
     let cancel = CancelToken::new();
     let (source, stop) = (changes.clone(), cancel.clone());
@@ -42,9 +39,7 @@ fn stream_refreshes_on_connect_changes_and_cancels_without_another_poll() {
 
 #[test]
 fn subscription_limit_is_released_on_drop() {
-    let guards: Vec<_> = (0..MAX_SUBSCRIBERS)
-        .map(|_| Subscriber::acquire().unwrap())
-        .collect();
+    let guards: Vec<_> = (0..MAX_SUBSCRIBERS).map(|_| Subscriber::acquire().unwrap()).collect();
     assert!(Subscriber::acquire().is_none());
     drop(guards);
     assert!(Subscriber::acquire().is_some());

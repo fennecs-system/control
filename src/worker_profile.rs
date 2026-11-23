@@ -60,7 +60,10 @@ impl Profile {
         if !crate::runtime::pinned_image(image) {
             return Err(io::Error::other("Worker image must be pinned by digest"));
         }
-        let marker = isolation.image_labels(&image.into())?.remove("dev.control.worker-profile").unwrap_or_default();
+        let marker = isolation
+            .image_labels(&image.into())?
+            .remove("dev.control.worker-profile")
+            .unwrap_or_default();
         Self::from_marker(marker.trim())
     }
 
@@ -68,9 +71,7 @@ impl Profile {
         match marker {
             "" | "<no value>" | "lite" => Ok(Self::Lite),
             "full-v1" => Ok(Self::Full),
-            _ => Err(io::Error::other(
-                "Unsupported worker profile; rebuild the pinned image",
-            )),
+            _ => Err(io::Error::other("Unsupported worker profile; rebuild the pinned image")),
         }
     }
 }

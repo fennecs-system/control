@@ -18,7 +18,10 @@ pub(super) fn advisor_note(text: &str) -> Vec<Line<'static>> {
     let edge = Style::default().fg(CYAN).bg(CARD);
     let body = Style::default().fg(Color::Rgb(233, 232, 237)).bg(CARD);
     let mut lines = vec![Line::styled(format!("┌ {label} · read-only evidence"), edge)];
-    lines.extend(note.lines().map(|line| Line::from(vec![Span::styled("│ ", edge), Span::styled(line.to_owned(), body)]).style(body)));
+    lines.extend(
+        note.lines()
+            .map(|line| Line::from(vec![Span::styled("│ ", edge), Span::styled(line.to_owned(), body)]).style(body)),
+    );
     lines.push(Line::styled("└", edge));
     lines
 }
@@ -39,12 +42,7 @@ pub(super) struct History<'a> {
 impl Widget for History<'_> {
     fn render(self, area: Rect, buffer: &mut Buffer) {
         let inset = gutter(area.width);
-        let body = Rect::new(
-            area.x + inset,
-            area.y,
-            content_width(area.width),
-            area.height,
-        );
+        let body = Rect::new(area.x + inset, area.y, content_width(area.width), area.height);
         self.paragraph
             .style(
                 Style::default()
@@ -58,10 +56,7 @@ impl Widget for History<'_> {
         // wrapped rows without pre-wrapping or padding every historical message.
         for y in body.top()..body.bottom() {
             if (body.left()..body.right()).any(|x| buffer[(x, y)].bg == CARD) {
-                buffer.set_style(
-                    Rect::new(area.x, y, area.width, 1),
-                    Style::default().bg(CARD),
-                );
+                buffer.set_style(Rect::new(area.x, y, area.width, 1), Style::default().bg(CARD));
                 if inset > 0 {
                     buffer[(area.x, y)].set_symbol("▏").set_fg(PURPLE);
                 }

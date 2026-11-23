@@ -1,7 +1,7 @@
 //! Owner-enabled room follow-ups. Reuses inbox cursors and the normal queue;
 //! no polling model, extra thread, lifetime reply quota or per-post model call.
-use crate::runtime::RunKind;
 use super::*;
+use crate::runtime::RunKind;
 use std::collections::HashSet;
 
 const COOLDOWN_SECONDS: u64 = 30;
@@ -20,22 +20,14 @@ impl Listener {
 }
 
 pub(crate) fn status(state: &State, chat: &str) -> Option<Value> {
-    let watch = state
-        .collective
-        .room_watches
-        .iter()
-        .find(|watch| watch.chat == chat)?;
+    let watch = state.collective.room_watches.iter().find(|watch| watch.chat == chat)?;
     let listener = watch.listener.as_ref()?;
     Some(json!({"room":watch.room,"state":if listener.paused {"paused"}else{"listening"}}))
 }
 
 /// Called only by the authenticated chat command, never by room text or worker
 /// tools. An agent can consume its inbox, but cannot enable or renew this intent.
-pub(crate) fn configure(
-    state: &mut State,
-    chat: &str,
-    enabled: bool,
-) -> Result<&'static str, &'static str> {
+pub(crate) fn configure(state: &mut State, chat: &str, enabled: bool) -> Result<&'static str, &'static str> {
     let session = state
         .chats
         .iter()
@@ -50,9 +42,11 @@ pub(crate) fn configure(
         if let Some(index) = existing {
             let watch = &state.collective.room_watches[index];
             if let Some(run) = watch.delivered.as_deref().and_then(|id| {
-                state.runtime.runs.iter().find(|run| {
-                    run.id == id && run.source == "room-listener" && run.actor == session.actor
-                })
+                state
+                    .runtime
+                    .runs
+                    .iter()
+                    .find(|run| run.id == id && run.source == "room-listener" && run.actor == session.actor)
             }) {
                 let id = run.id.clone();
                 let actor = session.actor.clone();
@@ -73,8 +67,7 @@ pub(crate) fn configure(
         .filter(|room| crate::rooms::valid(room))
         .ok_or("Link a room before listening.")?;
     if existing.is_some_and(|index| {
-        state.collective.room_watches[index].actor != session.actor
-            || state.collective.room_watches[index].room != room
+        state.collective.room_watches[index].actor != session.actor || state.collective.room_watches[index].room != room
     }) {
         return Err("Room subscription scope changed. Stop the old listener first.");
     }
@@ -142,7 +135,8 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
     let mut latest = HashMap::new();
     for (index, run) in state.runtime.runs.iter().enumerate() {
         if let Some(chat) = run.chat_id.as_deref() {
-            latest.entry(chat)
+            latest
+                .entry(chat)
                 .and_modify(|head: &mut (u64, usize)| *head = (*head).max((run.queue_order, index)))
                 .or_insert((run.queue_order, index));
         }
@@ -151,12 +145,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
         .runtime
         .runs
         .iter()
-        .filter(|run| {
-            matches!(
-                run.status.as_str(),
-                "queued" | "running" | "waiting" | "cancelling"
-            )
-        })
+        .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
         .filter_map(|run| run.chat_id.as_deref())
         .collect::<HashSet<_>>();
     let mut authorize = identity::authorizer();
@@ -166,10 +155,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
         .iter()
         .enumerate()
         .filter_map(|(index, watch)| {
-            let listener = watch
-                .listener
-                .as_ref()
-                .filter(|listener| !listener.paused)?;
+            let listener = watch.listener.as_ref().filter(|listener| !listener.paused)?;
             let last = latest.get(watch.chat.as_str()).map(|&(_, index)| index);
             let valid = last.filter(|&index| {
                 let latest = &state.runtime.runs[index];
@@ -199,16 +185,16 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
             if state.runtime.runs[latest].status != "completed" {
                 return None;
             }
-            let batch = batch_from(
-                watch,
-                &state.collective.posts,
-                watch.cursor.max(listener.through),
-            );
+            let batch = batch_from(watch, &state.collective.posts, watch.cursor.max(listener.through));
             if batch.through == listener.through {
                 return None;
             }
             let through = batch.through;
-            if !batch.posts.iter().any(|post| post.delivery == crate::rooms::Delivery::Notify) {
+            if !batch
+                .posts
+                .iter()
+                .any(|post| post.delivery == crate::rooms::Delivery::Notify)
+            {
                 return Some((index, Plan::Advance(through)));
             }
             Some((index, Plan::Queue { through, latest }))
@@ -232,26 +218,19 @@ pub(super) fn reconcile(
                     .iter()
                     .find(|session| session.id == chat)
                     .map(|session| session.revision);
-                let listener = state.collective.room_watches[index]
-                    .listener
-                    .as_mut()
-                    .unwrap();
+                let listener = state.collective.room_watches[index].listener.as_mut().unwrap();
                 if let Plan::Advance(through) = progress {
                     listener.through = through;
                 } else {
                     listener.paused = true;
-                    if let Some(session) = state.chats.iter_mut().find(|session| session.id == chat)
-                    {
+                    if let Some(session) = state.chats.iter_mut().find(|session| session.id == chat) {
                         session.revision = session.revision.saturating_add(1);
                     }
                 }
                 if save(state).is_err() {
                     state.collective.room_watches[index] = previous;
-                    if let Some((session, revision)) = state
-                        .chats
-                        .iter_mut()
-                        .find(|session| session.id == chat)
-                        .zip(revision)
+                    if let Some((session, revision)) =
+                        state.chats.iter_mut().find(|session| session.id == chat).zip(revision)
                     {
                         session.revision = revision;
                     }
@@ -273,14 +252,11 @@ pub(super) fn reconcile(
         listener.through = through;
         listener.next_unix = now.saturating_add(COOLDOWN_SECONDS);
         watch.delivered = Some(next.clone());
-        let session = state
-            .chats
-            .iter_mut()
-            .find(|session| session.id == chat)
-            .unwrap();
+        let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
         let revision = session.revision;
         let messages = session.messages.len();
-        session.messages.push(crate::chat::Message { speaker: Default::default(),
+        session.messages.push(crate::chat::Message {
+            speaker: Default::default(),
             text: format!("Room #{room} updated"),
             run_id: Some(next),
             reply: String::new(),
@@ -290,11 +266,7 @@ pub(super) fn reconcile(
             state.runtime.runs.truncate(runs_len);
             state.runtime.notice = notice;
             state.collective.room_watches[index] = previous;
-            let session = state
-                .chats
-                .iter_mut()
-                .find(|session| session.id == chat)
-                .unwrap();
+            let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
             session.messages.truncate(messages);
             session.revision = revision;
             return Err("Could not save room follow-up; messages remain pending.");

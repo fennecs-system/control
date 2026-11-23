@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn schemas_and_transport_policy_share_one_registration() {
@@ -64,7 +63,10 @@ fn every_worker_schema_is_registered_for_ui_and_provider_discovery() {
 #[test]
 fn attempt_tools_route_each_name_to_exactly_one_group() {
     let workers = worker_definitions(true);
-    assert!(!worker_definitions(false).iter().any(|tool|matches!(tool["name"].as_str(), Some("control_github_read" | "control_github_write"))));
+    assert!(!worker_definitions(false).iter().any(|tool| matches!(
+        tool["name"].as_str(),
+        Some("control_github_read" | "control_github_write")
+    )));
     assert!(!control_context::tool_policy::after_handoff("control_github_write"));
     let mut seen = std::collections::HashSet::new();
     for &tools in &ATTEMPT_TOOLS {
@@ -74,21 +76,12 @@ fn attempt_tools_route_each_name_to_exactly_one_group() {
         for definition in definitions {
             let name = definition["name"].as_str().unwrap();
             assert_eq!(
-                ATTEMPT_TOOLS
-                    .iter()
-                    .filter(|other| other.known(name))
-                    .count(),
+                ATTEMPT_TOOLS.iter().filter(|other| other.known(name)).count(),
                 1,
                 "{name}"
             );
-            assert!(
-                std::ptr::addr_eq(attempt_tools(name).unwrap(), tools),
-                "{name}"
-            );
-            assert!(
-                workers.iter().any(|worker| worker["name"] == name),
-                "{name}"
-            );
+            assert!(std::ptr::addr_eq(attempt_tools(name).unwrap(), tools), "{name}");
+            assert!(workers.iter().any(|worker| worker["name"] == name), "{name}");
             assert!(seen.insert(name.to_owned()), "{name}");
         }
     }

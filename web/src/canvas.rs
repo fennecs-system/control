@@ -3,7 +3,7 @@
 //! element, then rewrites the `viewBox` as the view moves. Links stay ordinary
 //! links: a press only becomes a drag after it travels a few pixels.
 use std::{cell::RefCell, rc::Rc};
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
 /// Pixels a press may travel and still count as a click.
 const DRAG_SLOP: f64 = 4.0;
@@ -18,13 +18,27 @@ const STEP: f64 = 1.25;
 const NUDGE: f64 = 48.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rect { pub x: f64, pub y: f64, pub w: f64, pub h: f64 }
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
 impl Rect {
     /// An SVG `viewBox` value: four numbers separated by spaces or commas.
     pub fn parse(view_box: &str) -> Option<Rect> {
-        let mut numbers = view_box.split(|c: char| c.is_whitespace() || c == ',').filter(|s| !s.is_empty()).map(str::parse::<f64>);
-        let rect = Rect { x: numbers.next()?.ok()?, y: numbers.next()?.ok()?, w: numbers.next()?.ok()?, h: numbers.next()?.ok()? };
-        (numbers.next().is_none() && rect.w > 0.0 && rect.h > 0.0 && [rect.x, rect.y].iter().all(|v| v.is_finite())).then_some(rect)
+        let mut numbers = view_box
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|s| !s.is_empty())
+            .map(str::parse::<f64>);
+        let rect = Rect {
+            x: numbers.next()?.ok()?,
+            y: numbers.next()?.ok()?,
+            w: numbers.next()?.ok()?,
+            h: numbers.next()?.ok()?,
+        };
+        (numbers.next().is_none() && rect.w > 0.0 && rect.h > 0.0 && [rect.x, rect.y].iter().all(|v| v.is_finite()))
+            .then_some(rect)
     }
     /// A CSS `aspect-ratio` value with this rectangle's proportions.
     pub fn aspect(&self) -> String {
@@ -43,10 +57,28 @@ impl Rect {
 /// (`data-canvas='ground'`, for drawings that grow up from a baseline) fits
 /// the drawing to the element's bottom edge instead of its middle.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct View { bounds: Rect, width: f64, height: f64, x: f64, y: f64, scale: f64, moved: bool, ground: bool }
+pub struct View {
+    bounds: Rect,
+    width: f64,
+    height: f64,
+    x: f64,
+    y: f64,
+    scale: f64,
+    moved: bool,
+    ground: bool,
+}
 impl View {
     pub fn new(bounds: Rect, width: f64, height: f64) -> View {
-        let mut view = View { bounds, width: 1.0, height: 1.0, x: bounds.x, y: bounds.y, scale: 1.0, moved: false, ground: false };
+        let mut view = View {
+            bounds,
+            width: 1.0,
+            height: 1.0,
+            x: bounds.x,
+            y: bounds.y,
+            scale: 1.0,
+            moved: false,
+            ground: false,
+        };
         view.resize(width, height);
         view
     }
@@ -60,7 +92,9 @@ impl View {
     }
     /// The scale at which the whole drawing fits, never enlarged past [`MAX_FIT`].
     fn fit_scale(&self) -> f64 {
-        (self.width / self.bounds.w).min(self.height / self.bounds.h).min(MAX_FIT)
+        (self.width / self.bounds.w)
+            .min(self.height / self.bounds.h)
+            .min(MAX_FIT)
     }
     /// Centres the whole drawing in the element (on its bottom edge when grounded).
     pub fn fit(&mut self) {
@@ -105,14 +139,24 @@ impl View {
     }
     /// The `viewBox` showing this view; it has the element's aspect ratio.
     pub fn view_box(&self) -> String {
-        format!("{:.2} {:.2} {:.2} {:.2}", self.x, self.y, self.width / self.scale, self.height / self.scale)
+        format!(
+            "{:.2} {:.2} {:.2} {:.2}",
+            self.x,
+            self.y,
+            self.width / self.scale,
+            self.height / self.scale
+        )
     }
 }
 
 /// The zoom factor for one wheel event. Trackpad pinches arrive as wheel
 /// events with Ctrl held and small deltas, so they are scaled up.
 pub fn wheel_factor(delta: f64, mode: u32, pinch: bool, page: f64) -> f64 {
-    let pixels = match mode { 1 => delta * 16.0, 2 => delta * page, _ => delta };
+    let pixels = match mode {
+        1 => delta * 16.0,
+        2 => delta * page,
+        _ => delta,
+    };
     (-pixels * if pinch { 0.01 } else { 0.002 }).exp()
 }
 
@@ -141,7 +185,8 @@ impl Canvas {
             (self.travel, self.dragged) = (0.0, false);
         }
         self.pointers.retain(|(id, ..)| *id != event.pointer_id());
-        self.pointers.push((event.pointer_id(), event.client_x() as f64, event.client_y() as f64));
+        self.pointers
+            .push((event.pointer_id(), event.client_x() as f64, event.client_y() as f64));
     }
     fn grab(&mut self) {
         if !self.dragged {
@@ -153,7 +198,9 @@ impl Canvas {
         }
     }
     fn drag(&mut self, event: &web_sys::PointerEvent) {
-        let Some(index) = self.pointers.iter().position(|(id, ..)| *id == event.pointer_id()) else { return };
+        let Some(index) = self.pointers.iter().position(|(id, ..)| *id == event.pointer_id()) else {
+            return;
+        };
         if event.buttons() == 0 {
             // Released outside the page before any drag captured it.
             return self.release(event);
@@ -195,7 +242,8 @@ impl Canvas {
         event.prevent_default();
         let (left, top) = self.origin();
         let factor = wheel_factor(event.delta_y(), event.delta_mode(), event.ctrl_key(), self.view.height);
-        self.view.zoom(factor, event.client_x() as f64 - left, event.client_y() as f64 - top);
+        self.view
+            .zoom(factor, event.client_x() as f64 - left, event.client_y() as f64 - top);
         self.draw();
     }
     fn command(&mut self, command: &str) -> bool {
@@ -231,20 +279,34 @@ pub const CONTROLS: &str = "<button type='button' data-zoom='in' aria-label='Zoo
 /// that holds the zoom buttons of the canvas whose element id is `id`; None
 /// for a canvas without a plain id.
 pub fn slot_selector(id: &str) -> Option<String> {
-    (!id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then(|| format!("[data-canvas-controls='{id}']"))
+    (!id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .then(|| format!("[data-canvas-controls='{id}']"))
 }
 
 /// Fills the canvas's toolbar slot with [`CONTROLS`] and shows it. The slot
 /// is hidden and empty until now, so a page without the client has no gap.
-fn mount_controls(document: &web_sys::Document, root: &web_sys::HtmlElement) -> Result<Option<web_sys::Element>, JsValue> {
-    let Some(selector) = slot_selector(&root.id()) else { return Ok(None) };
-    let Some(slot) = document.query_selector(&selector)? else { return Ok(None) };
+fn mount_controls(
+    document: &web_sys::Document,
+    root: &web_sys::HtmlElement,
+) -> Result<Option<web_sys::Element>, JsValue> {
+    let Some(selector) = slot_selector(&root.id()) else {
+        return Ok(None);
+    };
+    let Some(slot) = document.query_selector(&selector)? else {
+        return Ok(None);
+    };
     slot.set_inner_html(CONTROLS);
     slot.remove_attribute("hidden")?;
     Ok(Some(slot))
 }
 
-fn listen<E: JsCast + 'static>(target: &web_sys::EventTarget, name: &str, capture: bool, canvas: &Rc<RefCell<Canvas>>, handle: fn(&mut Canvas, &E)) -> Result<(), JsValue> {
+fn listen<E: JsCast + 'static>(
+    target: &web_sys::EventTarget,
+    name: &str,
+    capture: bool,
+    canvas: &Rc<RefCell<Canvas>>,
+    handle: fn(&mut Canvas, &E),
+) -> Result<(), JsValue> {
     let canvas = canvas.clone();
     let callback = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
         if let Ok(mut canvas) = canvas.try_borrow_mut() {
@@ -254,14 +316,22 @@ fn listen<E: JsCast + 'static>(target: &web_sys::EventTarget, name: &str, captur
     let options = web_sys::AddEventListenerOptions::new();
     options.set_capture(capture);
     options.set_passive(false);
-    target.add_event_listener_with_callback_and_add_event_listener_options(name, callback.as_ref().unchecked_ref(), &options)?;
+    target.add_event_listener_with_callback_and_add_event_listener_options(
+        name,
+        callback.as_ref().unchecked_ref(),
+        &options,
+    )?;
     callback.forget();
     Ok(())
 }
 
 fn attach_one(document: &web_sys::Document, root: web_sys::HtmlElement) -> Result<(), JsValue> {
-    let Some(svg) = root.query_selector("svg")? else { return Ok(()) };
-    let Some(bounds) = svg.get_attribute("viewBox").as_deref().and_then(Rect::parse) else { return Ok(()) };
+    let Some(svg) = root.query_selector("svg")? else {
+        return Ok(());
+    };
+    let Some(bounds) = svg.get_attribute("viewBox").as_deref().and_then(Rect::parse) else {
+        return Ok(());
+    };
     // The drawing keeps setting the canvas's proportions (CSS bounds its
     // height) once its viewBox follows the view, so zooming never resizes it.
     if let Some(svg) = svg.dyn_ref::<web_sys::SvgElement>() {
@@ -274,7 +344,14 @@ fn attach_one(document: &web_sys::Document, root: web_sys::HtmlElement) -> Resul
         view = view.grounded();
     }
     let controls = mount_controls(document, &root)?;
-    let canvas = Rc::new(RefCell::new(Canvas { root: root.clone(), svg, view, pointers: Vec::new(), travel: 0.0, dragged: false }));
+    let canvas = Rc::new(RefCell::new(Canvas {
+        root: root.clone(),
+        svg,
+        view,
+        pointers: Vec::new(),
+        travel: 0.0,
+        dragged: false,
+    }));
     canvas.borrow().draw();
     let target: &web_sys::EventTarget = root.as_ref();
     listen(target, "pointerdown", false, &canvas, Canvas::press)?;
@@ -282,7 +359,9 @@ fn attach_one(document: &web_sys::Document, root: web_sys::HtmlElement) -> Resul
     listen(target, "pointerup", false, &canvas, Canvas::release)?;
     listen(target, "pointercancel", false, &canvas, Canvas::release)?;
     listen(target, "wheel", false, &canvas, Canvas::wheel)?;
-    listen(target, "dragstart", false, &canvas, |_, event: &web_sys::Event| event.prevent_default())?;
+    listen(target, "dragstart", false, &canvas, |_, event: &web_sys::Event| {
+        event.prevent_default()
+    })?;
     // A drag that started on a link must not follow it.
     listen(target, "click", true, &canvas, |canvas, event: &web_sys::MouseEvent| {
         if std::mem::take(&mut canvas.dragged) {
@@ -291,18 +370,33 @@ fn attach_one(document: &web_sys::Document, root: web_sys::HtmlElement) -> Resul
         }
     })?;
     if let Some(controls) = &controls {
-        listen(controls.as_ref(), "click", false, &canvas, |canvas, event: &web_sys::MouseEvent| {
-            let button = event.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).and_then(|t| t.closest("[data-zoom]").ok().flatten());
-            if let Some(command) = button.and_then(|b| b.get_attribute("data-zoom")) {
-                canvas.command(&command);
-            }
-        })?;
+        listen(
+            controls.as_ref(),
+            "click",
+            false,
+            &canvas,
+            |canvas, event: &web_sys::MouseEvent| {
+                let button = event
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    .and_then(|t| t.closest("[data-zoom]").ok().flatten());
+                if let Some(command) = button.and_then(|b| b.get_attribute("data-zoom")) {
+                    canvas.command(&command);
+                }
+            },
+        )?;
     }
-    listen(target, "keydown", false, &canvas, |canvas, event: &web_sys::KeyboardEvent| {
-        if !event.ctrl_key() && !event.meta_key() && !event.alt_key() && canvas.command(&event.key()) {
-            event.prevent_default();
-        }
-    })?;
+    listen(
+        target,
+        "keydown",
+        false,
+        &canvas,
+        |canvas, event: &web_sys::KeyboardEvent| {
+            if !event.ctrl_key() && !event.meta_key() && !event.alt_key() && canvas.command(&event.key()) {
+                event.prevent_default();
+            }
+        },
+    )?;
     let resized = canvas.clone();
     let observer = Closure::<dyn FnMut()>::new(move || {
         if let Ok(mut canvas) = resized.try_borrow_mut() {
@@ -320,7 +414,10 @@ fn attach_one(document: &web_sys::Document, root: web_sys::HtmlElement) -> Resul
 pub fn attach(document: &web_sys::Document) -> Result<bool, JsValue> {
     let roots = document.query_selector_all("[data-canvas]")?;
     for index in 0..roots.length() {
-        if let Some(root) = roots.item(index).and_then(|node| node.dyn_into::<web_sys::HtmlElement>().ok()) {
+        if let Some(root) = roots
+            .item(index)
+            .and_then(|node| node.dyn_into::<web_sys::HtmlElement>().ok())
+        {
             attach_one(document, root)?;
         }
     }

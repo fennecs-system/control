@@ -109,13 +109,19 @@ pub fn decided(action: &str) -> Settled {
         "loopback" => ("Allowed by you, including loopback".to_owned(), Severity::Success),
         "deny" => ("Denied by you".to_owned(), Severity::Muted),
         "answer" => ("Answered by you".to_owned(), Severity::Success),
-        option => (format!("Answered by you: option {}", option.trim_start_matches('o')), Severity::Success),
+        option => (
+            format!("Answered by you: option {}", option.trim_start_matches('o')),
+            Severity::Success,
+        ),
     };
     Settled { text, severity }
 }
 /// What the message says once its request is no longer pending.
 pub fn closed() -> Settled {
-    Settled { text: "No longer pending".into(), severity: Severity::Muted }
+    Settled {
+        text: "No longer pending".into(),
+        severity: Severity::Muted,
+    }
 }
 
 /// Why a press was not carried out.
@@ -134,15 +140,26 @@ impl Ledger {
     /// The request and reply text that pressing `action` on `message` stands
     /// for. Only `to`'s own notifications match; `text` is the prompted
     /// answer and is accepted only for `answer`.
-    pub fn press(&self, to: &Recipient, message: &str, action: &str, text: Option<&str>) -> Result<(Notice, String), Refusal> {
-        let notice = self.notices.iter().rev()
+    pub fn press(
+        &self,
+        to: &Recipient,
+        message: &str,
+        action: &str,
+        text: Option<&str>,
+    ) -> Result<(Notice, String), Refusal> {
+        let notice = self
+            .notices
+            .iter()
+            .rev()
             .find(|n| n.person == to.person && n.conversation == to.conversation && n.message == message)
             .ok_or(Refusal::Unknown)?;
         if notice.settled {
             return Err(Refusal::Settled);
         }
         let reply = match (action, text.map(str::trim)) {
-            ("answer", Some(text)) if matches!(notice.kind, Kind::Question | Kind::Notice) && !text.is_empty() => text.to_owned(),
+            ("answer", Some(text)) if matches!(notice.kind, Kind::Question | Kind::Notice) && !text.is_empty() => {
+                text.to_owned()
+            }
             (action, None) => reply(notice.kind, action).ok_or(Refusal::Invalid)?.to_owned(),
             _ => return Err(Refusal::Invalid),
         };
@@ -153,7 +170,11 @@ impl Ledger {
 /// Text without control characters, at most `max` characters; newlines kept
 /// when `lines`.
 fn clean(text: &str, max: usize, lines: bool) -> String {
-    let mut out: String = text.chars().filter(|c| !c.is_control() || (lines && *c == '\n')).take(max).collect();
+    let mut out: String = text
+        .chars()
+        .filter(|c| !c.is_control() || (lines && *c == '\n'))
+        .take(max)
+        .collect();
     if text.chars().count() > max {
         out.pop();
         out.push('…');
@@ -171,7 +192,10 @@ fn item<'a>(view: &'a Value, pending: &Pending<'_>) -> &'a Value {
         Kind::Folder => ("pending_folders", "/request"),
         Kind::Knowledge => ("pending_knowledge", "/claim_id"),
     };
-    view[list].as_array().into_iter().flatten()
+    view[list]
+        .as_array()
+        .into_iter()
+        .flatten()
         .find(|item| item.pointer(key).and_then(Value::as_str) == Some(pending.id))
         .unwrap_or(&Value::Null)
 }
@@ -182,8 +206,18 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
     let item = item(view, pending);
     let id = clean(pending.id, 100, false);
     let mut fields = vec![("DM", clean(title, 100, false))];
-    let open = Action { id: "open", label: "Open DM".into(), style: Style::Secondary, act: Act::Open(link.into()) };
-    let decide = |id: &'static str, label: &str, style| Action { id, label: label.into(), style, act: Act::Reply };
+    let open = Action {
+        id: "open",
+        label: "Open DM".into(),
+        style: Style::Secondary,
+        act: Act::Open(link.into()),
+    };
+    let decide = |id: &'static str, label: &str, style| Action {
+        id,
+        label: label.into(),
+        style,
+        act: Act::Reply,
+    };
     let request = match pending.kind {
         Kind::Question => {
             let input = &item["question"]["input"];
@@ -191,22 +225,46 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
             let recommended = input["recommended"].as_u64();
             let options = input["options"].as_array().map(Vec::as_slice).unwrap_or(&[]);
             let mut actions = Vec::new();
-            let mut body = question.map(|q| clean(q, 1500, true)).unwrap_or_else(|| clean(pending.body, 1500, true));
+            let mut body = question
+                .map(|q| clean(q, 1500, true))
+                .unwrap_or_else(|| clean(pending.body, 1500, true));
             if question.is_some() && !options.is_empty() {
                 body.push('\n');
             }
-            for (n, option) in options.iter().filter_map(Value::as_str).enumerate().filter(|_| question.is_some()) {
-                let tag = if recommended == Some(n as u64) { " (recommended)" } else { "" };
+            for (n, option) in options
+                .iter()
+                .filter_map(Value::as_str)
+                .enumerate()
+                .filter(|_| question.is_some())
+            {
+                let tag = if recommended == Some(n as u64) {
+                    " (recommended)"
+                } else {
+                    ""
+                };
                 body.push_str(&format!("\n**{}.** {}{tag}", n + 1, clean(option, 300, false)));
                 if let Some(action) = OPTION_IDS.get(n) {
-                    let style = if tag.is_empty() { Style::Secondary } else { Style::Primary };
-                    actions.push(decide(action, &format!("{}. {}", n + 1, clean(option, 60, false)), style));
+                    let style = if tag.is_empty() {
+                        Style::Secondary
+                    } else {
+                        Style::Primary
+                    };
+                    actions.push(decide(
+                        action,
+                        &format!("{}. {}", n + 1, clean(option, 60, false)),
+                        style,
+                    ));
                 }
             }
             if let Some(n) = recommended.filter(|n| (*n as usize) < options.len()) {
                 fields.push(("Recommended", format!("Option {}", n + 1)));
             }
-            actions.push(Action { id: "answer", label: "Answer…".into(), style: Style::Primary, act: Act::Prompt });
+            actions.push(Action {
+                id: "answer",
+                label: "Answer…".into(),
+                style: Style::Primary,
+                act: Act::Prompt,
+            });
             actions.push(open);
             Request {
                 title: "Decision requested".into(),
@@ -220,7 +278,9 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
         }
         Kind::Bot => {
             if let Some(chat) = item["chat_id"].as_str() {
-                let shown = item["name"].as_str().map_or_else(|| chat.to_owned(), |name| format!("{name} ({chat})"));
+                let shown = item["name"]
+                    .as_str()
+                    .map_or_else(|| chat.to_owned(), |name| format!("{name} ({chat})"));
                 fields.push(("Bot chat", clean(&shown, 140, false)));
             }
             if let Some(minutes) = item["every_minutes"].as_u64() {
@@ -234,7 +294,11 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
                 body: "An agent asks to run a persistent bot.".into(),
                 fields,
                 severity: Severity::Warning,
-                actions: vec![decide("allow", "Approve", Style::Success), decide("deny", "Deny", Style::Danger), open],
+                actions: vec![
+                    decide("allow", "Approve", Style::Success),
+                    decide("deny", "Deny", Style::Danger),
+                    open,
+                ],
                 link: link.into(),
                 hint: format!("Or reply allow or deny, or /bot allow {id}"),
             }
@@ -243,7 +307,9 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
             let name = item["name"].as_str().map(|name| clean(name, 100, false));
             let target = match (&item["target"]["host"], &item["target"]["port"]) {
                 (Value::String(host), port) if !port.is_null() => Some(format!("{}:{port}", clean(host, 200, false))),
-                _ => item["peer_port_id"].as_str().map(|peer| format!("peer ingress {}", clean(peer, 100, false))),
+                _ => item["peer_port_id"]
+                    .as_str()
+                    .map(|peer| format!("peer ingress {}", clean(peer, 100, false))),
             };
             for (label, value) in [("Name", name), ("Target", target)] {
                 if let Some(value) = value {
@@ -259,14 +325,30 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
             let mut actions = Vec::new();
             let (body, severity, hint) = if pending.loopback {
                 actions.push(decide("loopback", "Allow loopback", Style::Danger));
-                ("The exact target is a loopback address on this machine. Review it before allowing.", Severity::Danger, format!("Or reply allow --loopback or deny, or /port allow {id} --loopback"))
+                (
+                    "The exact target is a loopback address on this machine. Review it before allowing.",
+                    Severity::Danger,
+                    format!("Or reply allow --loopback or deny, or /port allow {id} --loopback"),
+                )
             } else {
                 actions.push(decide("allow", "Allow", Style::Success));
-                ("An agent asks to open a network port.", Severity::Warning, format!("Or reply allow or deny, or /port allow {id}"))
+                (
+                    "An agent asks to open a network port.",
+                    Severity::Warning,
+                    format!("Or reply allow or deny, or /port allow {id}"),
+                )
             };
             actions.push(decide("deny", "Deny", Style::Secondary));
             actions.push(open);
-            Request { title: "Port request".into(), body: body.into(), fields, severity, actions, link: link.into(), hint }
+            Request {
+                title: "Port request".into(),
+                body: body.into(),
+                fields,
+                severity,
+                actions,
+                link: link.into(),
+                hint,
+            }
         }
         Kind::Notice => {
             if let Some(team) = item["team"].as_str() {
@@ -277,7 +359,15 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
                 body: clean(pending.body, 1500, true),
                 fields,
                 severity: Severity::Attention,
-                actions: vec![Action { id: "answer", label: "Reply…".into(), style: Style::Primary, act: Act::Prompt }, open],
+                actions: vec![
+                    Action {
+                        id: "answer",
+                        label: "Reply…".into(),
+                        style: Style::Primary,
+                        act: Act::Prompt,
+                    },
+                    open,
+                ],
                 link: link.into(),
                 hint: "No decision is needed; reply to steer the team that sent it.".into(),
             }
@@ -290,7 +380,8 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
             }
             Request {
                 title: "Folder request".into(),
-                body: "A task asks for access to a host folder. Review the exact path in Control before approving.".into(),
+                body: "A task asks for access to a host folder. Review the exact path in Control before approving."
+                    .into(),
                 fields,
                 severity: Severity::Warning,
                 actions: vec![open],
@@ -299,7 +390,11 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
             }
         }
         Kind::Knowledge => {
-            for (label, key, max) in [("Evidence", "evidence", 1000), ("Scope", "scope", 300), ("Recheck when", "validity", 300)] {
+            for (label, key, max) in [
+                ("Evidence", "evidence", 1000),
+                ("Scope", "scope", 300),
+                ("Recheck when", "validity", 300),
+            ] {
                 fields.push((label, clean(item[key].as_str().unwrap_or(""), max, false)));
             }
             Request {
@@ -307,13 +402,21 @@ pub fn request(settings: &Settings, title: &str, link: &str, pending: &Pending<'
                 body: clean(item["claim"].as_str().unwrap_or(pending.body), 300, false),
                 fields,
                 severity: Severity::Attention,
-                actions: vec![decide("allow", "Accept entry", Style::Success), decide("deny", "Reject", Style::Secondary), open],
+                actions: vec![
+                    decide("allow", "Accept entry", Style::Success),
+                    decide("deny", "Reject", Style::Secondary),
+                    open,
+                ],
                 link: link.into(),
                 hint: format!("Or reply accept or reject, or /knowledge accept {id}"),
             }
         }
     };
-    Request { body: settings.present(&request.body), hint: settings.present(&request.hint), ..request }
+    Request {
+        body: settings.present(&request.body),
+        hint: settings.present(&request.hint),
+        ..request
+    }
 }
 
 #[cfg(test)]

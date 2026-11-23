@@ -71,11 +71,7 @@ pub(crate) fn serve(stream: &mut TcpStream) -> io::Result<()> {
     let token = crate::shutdown::token();
     stream_updates(stream, changes(), &token)
 }
-fn stream_updates(
-    stream: &mut TcpStream,
-    changes: &Arc<Changes>,
-    token: &CancelToken,
-) -> io::Result<()> {
+fn stream_updates(stream: &mut TcpStream, changes: &Arc<Changes>, token: &CancelToken) -> io::Result<()> {
     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n")?;
     let mut seen = changes.generation();
     // Reconnects always refresh. Reading the generation before writing means a
@@ -95,8 +91,7 @@ fn stream_updates(
 
 #[cfg(test)]
 pub(crate) fn fixture_stream(stream: &mut TcpStream, token: &CancelToken) -> io::Result<()> {
-    let _subscriber =
-        Subscriber::acquire().ok_or_else(|| io::Error::other("fixture stream limit"))?;
+    let _subscriber = Subscriber::acquire().ok_or_else(|| io::Error::other("fixture stream limit"))?;
     stream_updates(stream, changes(), token)
 }
 

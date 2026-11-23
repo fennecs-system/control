@@ -12,15 +12,22 @@ pub enum WakePolicy {
     },
 }
 impl Default for WakePolicy {
-    fn default() -> Self { Self::AnyLine {} }
+    fn default() -> Self {
+        Self::AnyLine {}
+    }
 }
 
 fn prefixes<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<Vec<String>, D::Error> {
     let prefixes = Vec::<String>::deserialize(decoder)?;
-    if prefixes.is_empty() || prefixes.len() > 8 || prefixes.iter().any(|p|
-        p.is_empty() || p.len() > 128 || p.chars().any(char::is_control)
-    ) {
-        return Err(serde::de::Error::custom("Use 1–8 nonempty literal prefixes, each at most 128 bytes without control characters"));
+    if prefixes.is_empty()
+        || prefixes.len() > 8
+        || prefixes
+            .iter()
+            .any(|p| p.is_empty() || p.len() > 128 || p.chars().any(char::is_control))
+    {
+        return Err(serde::de::Error::custom(
+            "Use 1–8 nonempty literal prefixes, each at most 128 bytes without control characters",
+        ));
     }
     Ok(prefixes)
 }

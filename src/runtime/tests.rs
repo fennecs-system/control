@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn run_history_shows_attempts_and_measured_tokens() {
@@ -17,32 +16,37 @@ fn run_history_shows_attempts_and_measured_tokens() {
         },
         crate::usage::Attempt::default(),
     ];
-    assert!(run_record(&runtime.runs[0]).contains("2 attempt(s) · 120 input (0 cached) · 30 output tokens (1/2 measured)"));
+    assert!(
+        run_record(&runtime.runs[0]).contains("2 attempt(s) · 120 input (0 cached) · 30 output tokens (1/2 measured)")
+    );
     // A running attempt shows its live totals as a lower bound so far.
     runtime.runs[0].attempts.push(crate::usage::Attempt {
         status: "running".into(),
-        tokens: Some(crate::usage::Tokens { input_tokens: 1000, cached_input_tokens: 900, output_tokens: 20 }),
+        tokens: Some(crate::usage::Tokens {
+            input_tokens: 1000,
+            cached_input_tokens: 900,
+            output_tokens: 20,
+        }),
         accounting: crate::usage::Accounting::Partial,
         ..Default::default()
     });
-    assert!(run_record(&runtime.runs[0]).contains("3 attempt(s) · 1120 input (900 cached) · 50 output tokens so far (2/3 measured)"));
+    assert!(
+        run_record(&runtime.runs[0])
+            .contains("3 attempt(s) · 1120 input (900 cached) · 50 output tokens so far (2/3 measured)")
+    );
 }
 #[test]
 fn failed_cancel_form_checkpoint_restores_target_run_and_notice() {
     for status in ["queued", "running"] {
         let mut state = crate::State::default();
-        state
-            .runtime
-            .enqueue("Keep my work".into(), RunKind::Task, "test");
+        state.runtime.enqueue("Keep my work".into(), RunKind::Task, "test");
         state.runtime.runs[0].status = status.into();
         state.runtime.runs[0].result = "Existing progress".into();
         state.runtime.notice = "Before cancellation".into();
         let id = state.runtime.runs[0].id.clone();
         let checkpoint = RunStatusCheckpoint::capture(&state.runtime, |run| run.id == id);
         let before = serde_json::to_vec(&state).unwrap();
-        state
-            .runtime
-            .action("/cancel-run", &HashMap::from([("id".into(), id)]));
+        state.runtime.action("/cancel-run", &HashMap::from([("id".into(), id)]));
         assert!(
             checkpoint
                 .save(&mut state, |_| Err(std::io::Error::other("disk full")))
@@ -56,10 +60,7 @@ fn workers_require_content_addressed_images() {
     assert!(!pinned_image("control-worker:latest"));
     assert!(!pinned_image("control-worker@sha256:short"));
     assert!(pinned_image(&format!("sha256:{}", "a".repeat(64))));
-    assert!(pinned_image(&format!(
-        "control-worker@sha256:{}",
-        "a".repeat(64)
-    )));
+    assert!(pinned_image(&format!("control-worker@sha256:{}", "a".repeat(64))));
 }
 #[test]
 fn retry_does_not_repeat_completed_work() {
@@ -74,10 +75,7 @@ fn retry_does_not_repeat_completed_work() {
 fn snapshots_exclude_secrets_and_symlinks() {
     let root = std::env::temp_dir().join(format!(
         "control-snapshot-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
     ));
     let source = root.join("source");
     let dest = root.join("dest");
@@ -93,11 +91,7 @@ fn snapshots_exclude_secrets_and_symlinks() {
     fs::write(source.join("src/main.rs"), "fn main() {}").unwrap();
     fs::create_dir_all(source.join("tests")).unwrap();
     fs::create_dir_all(source.join(".github/workflows")).unwrap();
-    fs::write(
-        source.join("tests/integration.rs"),
-        "#[test] fn fixture() {}",
-    )
-    .unwrap();
+    fs::write(source.join("tests/integration.rs"), "#[test] fn fixture() {}").unwrap();
     fs::write(source.join(".github/workflows/rust.yml"), "name: fixture").unwrap();
     fs::create_dir_all(source.join("tools/playground")).unwrap();
     fs::write(source.join("tools/playground/main.rs"), "fn main() {}").unwrap();

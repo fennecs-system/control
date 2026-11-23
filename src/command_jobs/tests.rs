@@ -1,4 +1,3 @@
-
 #[test]
 fn command_deadline_respects_owner_without_limiting_persistent_service_lifetime() {
     assert_eq!(super::effective_deadline(300, 600, Some(600)).unwrap(), 600);
@@ -17,11 +16,7 @@ fn call(
 ) -> io::Result<Value> {
     Tools.call(
         &AttemptCall {
-            attempt: AttemptRef {
-                run,
-                generation,
-                nonce,
-            },
+            attempt: AttemptRef { run, generation, nonce },
             host: &LocalHost(shared),
         },
         name,
@@ -193,10 +188,7 @@ fn immutable_job_identity_and_isolation_are_checked_before_adoption() {
     assert!(verify_identity(&full, &changed, expected).is_ok());
     assert!(verify_identity(&full, &inspection, expected).is_err());
     let restored: Job = serde_json::from_value(serde_json::to_value(&full).unwrap()).unwrap();
-    assert_eq!(
-        restored.identity().profile,
-        crate::worker_profile::Profile::Full
-    );
+    assert_eq!(restored.identity().profile, crate::worker_profile::Profile::Full);
     assert!(verify_identity(&restored, &changed, expected).is_ok());
 }
 #[test]
@@ -222,12 +214,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     struct Cleanup(Arc<Mutex<State>>);
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            let jobs = self
-                .0
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .runtime
-                .runs[0]
+            let jobs = self.0.lock().unwrap_or_else(|error| error.into_inner()).runtime.runs[0]
                 .attempts
                 .iter()
                 .flat_map(|a| a.command_jobs.clone())
@@ -258,9 +245,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
             &json!({"job_id":id}),
         )
         .unwrap();
-        if value["status"] == "running"
-            && value["output"].as_str().unwrap().contains("early-output")
-        {
+        if value["status"] == "running" && value["output"].as_str().unwrap().contains("early-output") {
             saw_live = true;
             let saw_activity = state.lock().unwrap().runtime.runs[0].attempts[0]
                 .activity
@@ -382,18 +367,10 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
         .unwrap();
         if value["status"] == "completed" {
             assert_eq!(value["exit_code"], 0);
-            assert!(
-                value["output"]
-                    .as_str()
-                    .unwrap()
-                    .contains("readonly-verified")
-            );
+            assert!(value["output"].as_str().unwrap().contains("readonly-verified"));
             break;
         }
-        assert!(
-            Instant::now() < until,
-            "read-only verification failed: {value}"
-        );
+        assert!(Instant::now() < until, "read-only verification failed: {value}");
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!workspace.join("forbidden-judge-write").exists());
@@ -437,8 +414,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     assert!(inspect(crate::engine::isolation(), &job).unwrap().running);
     // Reconstruct owner records exactly as a restarted process would. Inactive attempts
     // retain their independent captured image and immutable container ID.
-    let recovered: State =
-        serde_json::from_slice(&serde_json::to_vec(&*state.lock().unwrap()).unwrap()).unwrap();
+    let recovered: State = serde_json::from_slice(&serde_json::to_vec(&*state.lock().unwrap()).unwrap()).unwrap();
     let mut recovered = recovered;
     recovered.runtime.runs[0].status = "interrupted".into();
     crate::lifecycle::reconcile(
@@ -479,12 +455,10 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
         assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(50));
     }
-    state.lock().unwrap().runtime.runs[0]
-        .attempts
-        .push(Attempt {
-            workspace_id: Some(format!("{generation}-retry")),
-            ..Default::default()
-        });
+    state.lock().unwrap().runtime.runs[0].attempts.push(Attempt {
+        workspace_id: Some(format!("{generation}-retry")),
+        ..Default::default()
+    });
     assert!(
         call(
             &state,
@@ -500,11 +474,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     let locked = state.lock().unwrap();
     assert!(locked.runtime.runs[0].attempts[1].activity.is_empty());
     assert_eq!(
-        locked.runtime.runs[0].attempts[0]
-            .command_jobs
-            .last()
-            .unwrap()
-            .status,
+        locked.runtime.runs[0].attempts[0].command_jobs.last().unwrap().status,
         "cancelled"
     );
     drop(locked);
@@ -532,11 +502,29 @@ fn command_create_vectors_are_pinned() {
     };
     let name = job.name();
     let values = [("name", name.as_str())];
-    pin_equivalent(&control_isolation::Docker::create_arguments(&container(&job, "/golden/workspace", control_isolation::User { uid: 501, gid: 20 }, Some("/golden/scratch"))).unwrap(), &fill(READ_ONLY, &values));
+    pin_equivalent(
+        &control_isolation::Docker::create_arguments(&container(
+            &job,
+            "/golden/workspace",
+            control_isolation::User { uid: 501, gid: 20 },
+            Some("/golden/scratch"),
+        ))
+        .unwrap(),
+        &fill(READ_ONLY, &values),
+    );
     job.read_only = false;
     job.build_environment = true;
     job.profile = crate::worker_profile::Profile::Full;
-    pin_equivalent(&control_isolation::Docker::create_arguments(&container(&job, "/golden/workspace", control_isolation::User { uid: 501, gid: 20 }, None)).unwrap(), &fill(WRITABLE_BUILD, &values));
+    pin_equivalent(
+        &control_isolation::Docker::create_arguments(&container(
+            &job,
+            "/golden/workspace",
+            control_isolation::User { uid: 501, gid: 20 },
+            None,
+        ))
+        .unwrap(),
+        &fill(WRITABLE_BUILD, &values),
+    );
 }
 const READ_ONLY: &[&str] = &[
     "create",

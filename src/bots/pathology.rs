@@ -115,7 +115,12 @@ pub(super) struct Limits {
 impl Limits {
     pub(super) fn of(limits: &crate::scheduler::Limits) -> Self {
         let small = |value: usize| u32::try_from(value).unwrap_or(u32::MAX).max(2);
-        Self { churn: small(limits.pathology_churn_commands), repeat: small(limits.pathology_repeat_failures), poll: small(limits.pathology_poll_commands), burn: limits.pathology_burn_tokens.max(1) }
+        Self {
+            churn: small(limits.pathology_churn_commands),
+            repeat: small(limits.pathology_repeat_failures),
+            poll: small(limits.pathology_poll_commands),
+            burn: limits.pathology_burn_tokens.max(1),
+        }
     }
 }
 
@@ -176,8 +181,30 @@ fn excerpt(command: &str) -> String {
     }
 }
 /// Builders, compilers and package managers: making tools, not using them.
-const BUILDERS: [&str; 22] = ["cargo", "rustc", "npm", "npx", "pnpm", "yarn", "pip", "pip3", "uv", "go", "make", "cmake", "gcc", "g++", "cc", "clang",
-    "tsc", "javac", "mvn", "gradle", "patch", "nix-build"];
+const BUILDERS: [&str; 22] = [
+    "cargo",
+    "rustc",
+    "npm",
+    "npx",
+    "pnpm",
+    "yarn",
+    "pip",
+    "pip3",
+    "uv",
+    "go",
+    "make",
+    "cmake",
+    "gcc",
+    "g++",
+    "cc",
+    "clang",
+    "tsc",
+    "javac",
+    "mvn",
+    "gradle",
+    "patch",
+    "nix-build",
+];
 /// Whether a command writes files or builds tools: a redirect into a file
 /// (not `/dev/null` or another descriptor), `tee`, in-place edits, `chmod +x`,
 /// `git apply` or a builder. Status-only commands never count.
@@ -190,16 +217,20 @@ pub(super) fn builds(command: &str) -> bool {
         let target = after.trim_start_matches('>').trim_start();
         !target.starts_with('&') && !target.starts_with("/dev/null") && !after.starts_with('&') && !target.is_empty()
     });
-    redirect || command.split(['|', ';', '&', '\n']).any(|part| {
-        let mut words = part.split_whitespace().skip_while(|word| matches!(*word, "sudo" | "env" | "timeout" | "nice" | "command" | "exec") || word.contains('='));
-        let first = words.next().unwrap_or("");
-        let first = first.rsplit('/').next().unwrap_or(first);
-        let rest = part.split_whitespace().collect::<Vec<_>>();
-        BUILDERS.contains(&first) || first == "tee"
-            || (first == "sed" && rest.iter().any(|word| word.starts_with("-i")))
-            || (first == "chmod" && rest.contains(&"+x"))
-            || (first == "git" && rest.contains(&"apply"))
-    })
+    redirect
+        || command.split(['|', ';', '&', '\n']).any(|part| {
+            let mut words = part.split_whitespace().skip_while(|word| {
+                matches!(*word, "sudo" | "env" | "timeout" | "nice" | "command" | "exec") || word.contains('=')
+            });
+            let first = words.next().unwrap_or("");
+            let first = first.rsplit('/').next().unwrap_or(first);
+            let rest = part.split_whitespace().collect::<Vec<_>>();
+            BUILDERS.contains(&first)
+                || first == "tee"
+                || (first == "sed" && rest.iter().any(|word| word.starts_with("-i")))
+                || (first == "chmod" && rest.contains(&"+x"))
+                || (first == "git" && rest.contains(&"apply"))
+        })
 }
 fn fingerprint(parts: &[&str]) -> u64 {
     let mut hash = Fx::default();
@@ -239,27 +270,59 @@ pub(super) fn fold(known: Option<&Snapshot>, scan: &Scan<'_>, advanced: bool, li
             }
             if failed {
                 let normal = normal(command);
-                match failures.iter_mut().find(|(known, text, ..)| *known == chat && *text == normal) {
+                match failures
+                    .iter_mut()
+                    .find(|(known, text, ..)| *known == chat && *text == normal)
+                {
                     Some((_, _, count, latest)) => (*count, *latest) = (*count + 1, command),
                     None => failures.push((chat, normal, 1, command)),
                 }
             }
         }
         for (chat, normal, count, command) in failures.into_iter().filter(|(.., count, _)| *count >= limits.repeat) {
-            loops.push((fingerprint(&[chat, &normal]), Loop { chat: chat.to_owned(), command: excerpt(command), failures: count }));
+            loops.push((
+                fingerprint(&[chat, &normal]),
+                Loop {
+                    chat: chat.to_owned(),
+                    command: excerpt(command),
+                    failures: count,
+                },
+            ));
         }
         loops.sort_by_key(|(print, _)| *print);
-        let mut polling = reads.into_iter().filter(|(_, count)| *count >= limits.poll).map(|(chat, commands)| Polling { chat: chat.to_owned(), commands }).collect::<Vec<_>>();
+        let mut polling = reads
+            .into_iter()
+            .filter(|(_, count)| *count >= limits.poll)
+            .map(|(chat, commands)| Polling {
+                chat: chat.to_owned(),
+                commands,
+            })
+            .collect::<Vec<_>>();
         polling.sort_by(|a, b| a.chat.cmp(&b.chat));
         if let Some(known) = known {
-            found.loops = loops.iter().filter(|(print, _)| known.loops.binary_search(print).is_err()).take(LISTED).map(|(_, found)| found.clone()).collect();
-            found.polling = polling.iter().filter(|poll| known.polling.binary_search(&poll.chat).is_err()).take(LISTED).cloned().collect();
+            found.loops = loops
+                .iter()
+                .filter(|(print, _)| known.loops.binary_search(print).is_err())
+                .take(LISTED)
+                .map(|(_, found)| found.clone())
+                .collect();
+            found.polling = polling
+                .iter()
+                .filter(|poll| known.polling.binary_search(&poll.chat).is_err())
+                .take(LISTED)
+                .cloned()
+                .collect();
         }
         next.loops = loops.iter().map(|(print, _)| *print).collect();
         next.polling = polling.into_iter().map(|poll| poll.chat).collect();
         let mut counted = built.iter().map(|(id, _)| (*id).to_owned()).collect::<Vec<_>>();
         counted.sort_unstable();
-        let fresh = known.map_or(0, |known| counted.iter().filter(|id| known.counted.binary_search(id).is_err()).count());
+        let fresh = known.map_or(0, |known| {
+            counted
+                .iter()
+                .filter(|id| known.counted.binary_search(id).is_err())
+                .count()
+        });
         let mut builders = built.iter().map(|(_, chat)| (*chat).to_owned()).collect::<Vec<_>>();
         builders.sort_unstable();
         builders.dedup();
@@ -277,13 +340,18 @@ pub(super) fn fold(known: Option<&Snapshot>, scan: &Scan<'_>, advanced: bool, li
     if progress {
         (next.churn, next.churned) = (0, false);
     } else if next.churn >= limits.churn && !next.churned {
-        found.churn = Some(Churn { commands: next.churn, members: next.builders.clone() });
+        found.churn = Some(Churn {
+            commands: next.churn,
+            members: next.builders.clone(),
+        });
         next.churned = true;
     }
     if progress || scan.tokens < known.tokens {
         (next.tokens, next.burned) = (scan.tokens, false);
     } else if scan.tokens - known.tokens >= limits.burn && !known.burned {
-        found.burn = Some(Burn { tokens: scan.tokens - known.tokens });
+        found.burn = Some(Burn {
+            tokens: scan.tokens - known.tokens,
+        });
         next.burned = true;
     }
     (next, found)
@@ -295,7 +363,10 @@ pub(super) fn raised(samples: &std::collections::VecDeque<crate::scores::Sample>
     let mut previous: Option<&crate::scores::Sample> = None;
     for sample in samples {
         if let Some(before) = previous
-            && sample.values.iter().any(|(key, value)| before.values.get(key).is_some_and(|old| value > old))
+            && sample
+                .values
+                .iter()
+                .any(|(key, value)| before.values.get(key).is_some_and(|old| value > old))
         {
             latest = latest.max(sample.unix);
         }

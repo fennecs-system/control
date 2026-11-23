@@ -7,9 +7,7 @@ pub struct Tokens {
 impl Tokens {
     pub fn add(&mut self, other: Self) {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
-        self.cached_input_tokens = self
-            .cached_input_tokens
-            .saturating_add(other.cached_input_tokens);
+        self.cached_input_tokens = self.cached_input_tokens.saturating_add(other.cached_input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
     }
 }
@@ -83,24 +81,48 @@ fn grouped(n: u64) -> String {
 /// A running attempt's totals are those reported so far (`…`); a stopped
 /// attempt's per-call sums are a lower bound (`≥`). Nothing is said about
 /// tokens before a model call. A lone attempt label means nothing to show.
-pub fn attempt_status(index: usize, tokens: Option<Tokens>, accounting: Accounting, running: bool, omitted: usize) -> Vec<StatusPart> {
+pub fn attempt_status(
+    index: usize,
+    tokens: Option<Tokens>,
+    accounting: Accounting,
+    running: bool,
+    omitted: usize,
+) -> Vec<StatusPart> {
     let n = index + 1;
     let mut parts = vec![part(format!("attempt {n}"), format!("Attempt {n}"))];
     match (tokens, accounting) {
         (Some(t), _) => {
             let (at_least, more, wording) = match (running, accounting) {
                 (true, _) => ("", "…", " so far; the attempt is still running"),
-                (false, Accounting::Partial) => ("≥", "", ", at least; the provider stopped before reporting its totals"),
+                (false, Accounting::Partial) => {
+                    ("≥", "", ", at least; the provider stopped before reporting its totals")
+                }
                 _ => ("", "", ""),
             };
-            let (input, cached, output) = (grouped(t.input_tokens), grouped(t.cached_input_tokens), grouped(t.output_tokens));
-            parts.push(part(format!("↑ {at_least}{input} in ({cached} cached)"), format!("{input} input tokens ({cached} cached){wording}")));
-            parts.push(part(format!("↓ {at_least}{output} out{more}"), format!("{output} output tokens{wording}")));
+            let (input, cached, output) = (
+                grouped(t.input_tokens),
+                grouped(t.cached_input_tokens),
+                grouped(t.output_tokens),
+            );
+            parts.push(part(
+                format!("↑ {at_least}{input} in ({cached} cached)"),
+                format!("{input} input tokens ({cached} cached){wording}"),
+            ));
+            parts.push(part(
+                format!("↓ {at_least}{output} out{more}"),
+                format!("{output} output tokens{wording}"),
+            ));
         }
         (None, Accounting::Unknown | Accounting::Partial | Accounting::Reported) => parts.push(if running {
-            part("tokens pending…".into(), "The provider has not reported token usage yet".into())
+            part(
+                "tokens pending…".into(),
+                "The provider has not reported token usage yet".into(),
+            )
         } else {
-            part("tokens unreported".into(), "The provider reported no token usage".into())
+            part(
+                "tokens unreported".into(),
+                "The provider reported no token usage".into(),
+            )
         }),
         (None, Accounting::Unrecorded | Accounting::NotLaunched) => {}
     }

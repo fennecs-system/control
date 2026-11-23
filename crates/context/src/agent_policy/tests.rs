@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -27,10 +26,7 @@ fn only_automatic_events_are_attributed_to_control() {
         "bot-decision",
         "bot-wake",
     ] {
-        assert_eq!(
-            MessageSpeaker::for_run_kind(Some(kind)),
-            MessageSpeaker::Control
-        );
+        assert_eq!(MessageSpeaker::for_run_kind(Some(kind)), MessageSpeaker::Control);
     }
     for kind in [
         None,

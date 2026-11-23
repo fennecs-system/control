@@ -38,10 +38,7 @@ struct Plan {
     edits: super::Edits,
 }
 fn prepare(state: &State, chat: &str, read: Read) -> io::Result<Plan> {
-    if read.path.len() > 63
-        || read.path.iter().any(|i| *i > 1)
-        || !(1..=16384).contains(&read.limit_bytes)
-    {
+    if read.path.len() > 63 || read.path.iter().any(|i| *i > 1) || !(1..=16384).contains(&read.limit_bytes) {
         return Err(io::Error::other("Invalid bounded tree read"));
     }
     let session = state
@@ -49,8 +46,7 @@ fn prepare(state: &State, chat: &str, read: Read) -> io::Result<Plan> {
         .iter()
         .find(|c| c.id == chat)
         .ok_or_else(|| io::Error::other("Chat not found"))?;
-    crate::identity::authorize(&session.actor, crate::identity::Action::Task)
-        .map_err(io::Error::other)?;
+    crate::identity::authorize(&session.actor, crate::identity::Action::Task).map_err(io::Error::other)?;
     let roots: Vec<_> = state
         .runtime
         .compaction
@@ -73,9 +69,7 @@ fn prepare(state: &State, chat: &str, read: Read) -> io::Result<Plan> {
         .as_ref()
         .is_some_and(|key| !roots.iter().any(|n| &n.key == key))
     {
-        return Err(io::Error::other(
-            "Summary root is outside this conversation",
-        ));
+        return Err(io::Error::other("Summary root is outside this conversation"));
     }
     Ok(Plan {
         chat: chat.into(),
@@ -113,10 +107,8 @@ pub(super) fn load(directory: &std::path::Path, key: &str) -> io::Result<Node> {
     if key.len() != 64 || !key.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err(io::Error::other("Invalid tree reference"));
     }
-    let bytes =
-        crate::config::read_regular(&directory.join(format!("{key}.json")), NODE_BYTES, true)?;
-    let node: Node =
-        serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Invalid summary node"))?;
+    let bytes = crate::config::read_regular(&directory.join(format!("{key}.json")), NODE_BYTES, true)?;
+    let node: Node = serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Invalid summary node"))?;
     if node.key != key
         || node.checksum != node_checksum(&node)
         || node.level > 63
@@ -141,9 +133,7 @@ fn execute(plan: Plan, directory: &std::path::Path) -> io::Result<Value> {
     let revision = plan.edits.active(block).filter(|_| !plan.read.source);
     let text = if plan.read.source {
         if !node.children.is_empty() {
-            return Err(io::Error::other(
-                "Expand children before reading original source",
-            ));
+            return Err(io::Error::other("Expand children before reading original source"));
         }
         node.sources
             .iter()
@@ -159,18 +149,12 @@ fn execute(plan: Plan, directory: &std::path::Path) -> io::Result<Value> {
     if plan.read.offset > text.len() || !text.is_char_boundary(plan.read.offset) {
         return Err(io::Error::other("Invalid UTF-8 source offset"));
     }
-    let mut end = plan
-        .read
-        .offset
-        .saturating_add(plan.read.limit_bytes)
-        .min(text.len());
+    let mut end = plan.read.offset.saturating_add(plan.read.limit_bytes).min(text.len());
     while !text.is_char_boundary(end) {
         end -= 1;
     }
     if end == plan.read.offset && end < text.len() {
-        return Err(io::Error::other(
-            "Byte budget is smaller than the next UTF-8 character",
-        ));
+        return Err(io::Error::other("Byte budget is smaller than the next UTF-8 character"));
     }
     let mut value = json!({"chat":plan.chat,"root":key,"path":plan.read.path,"key":node.key,"start":node.start,"end":node.start+(1u64<<node.level),
         "children":node.children,"source":plan.read.source,"text":&text[plan.read.offset..end],"total_bytes":text.len(),"next_offset":(end<text.len()).then_some(end),
@@ -198,14 +182,10 @@ impl AttemptTools for Tools {
         name == "control_history_read"
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
-        let read: Read = serde_json::from_value(args.clone())
-            .map_err(|_| io::Error::other("Invalid history-read arguments"))?;
+        let read: Read =
+            serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Invalid history-read arguments"))?;
         let plan = {
-            let state = cx
-                .host
-                .0
-                .lock()
-                .map_err(|_| io::Error::other("State unavailable"))?;
+            let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
             let run = state
                 .runtime
                 .runs
@@ -213,8 +193,7 @@ impl AttemptTools for Tools {
                 .find(|r| {
                     r.id == cx.attempt.run
                         && r.status == "running"
-                        && r.attempts.last().and_then(|a| a.workspace_id.as_deref())
-                            == Some(cx.attempt.generation)
+                        && r.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(cx.attempt.generation)
                 })
                 .ok_or_else(|| io::Error::other("Attempt is not active"))?;
             crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
@@ -240,15 +219,52 @@ impl AttemptTools for Tools {
 /// bounds and authorization.
 fn route(state: &State, chat: &str, actor: &crate::identity::Actor, read: Read) -> io::Result<Next> {
     if let Some(query) = read.query.as_deref() {
-        prepare(state, chat, Read { root: None, query: None, ..read.clone() })?;
-        return Ok(Next::Search(super::turn::plan(state, chat, actor, query, read.limit_bytes)?));
+        prepare(
+            state,
+            chat,
+            Read {
+                root: None,
+                query: None,
+                ..read.clone()
+            },
+        )?;
+        return Ok(Next::Search(super::turn::plan(
+            state,
+            chat,
+            actor,
+            query,
+            read.limit_bytes,
+        )?));
     }
-    if let Some((generation, root)) = read.root.as_deref().and_then(|key| super::turn::locate(state, chat, actor, key)) {
-        prepare(state, chat, Read { root: None, ..read.clone() })?;
-        let root = Root { key: root.key, start: root.start, level: root.level };
+    if let Some((generation, root)) = read
+        .root
+        .as_deref()
+        .and_then(|key| super::turn::locate(state, chat, actor, key))
+    {
+        prepare(
+            state,
+            chat,
+            Read {
+                root: None,
+                ..read.clone()
+            },
+        )?;
+        let root = Root {
+            key: root.key,
+            start: root.start,
+            level: root.level,
+        };
         // A turn tree counts steps, not conversation positions: the chat's
         // operator edits do not apply to it.
-        return Ok(Next::Turn(Plan { chat: chat.into(), roots: vec![root], read, edits: super::Edits::default() }, generation));
+        return Ok(Next::Turn(
+            Plan {
+                chat: chat.into(),
+                roots: vec![root],
+                read,
+                edits: super::Edits::default(),
+            },
+            generation,
+        ));
     }
     let turns = read.root.is_none().then(|| super::turn::listing(state, chat, actor));
     Ok(Next::Tree(prepare(state, chat, read)?, turns))
@@ -300,11 +316,7 @@ pub(crate) fn http(
             path: fields
                 .get("path")
                 .filter(|s| !s.is_empty())
-                .map(|s| {
-                    s.split('.')
-                        .map(|v| v.parse::<usize>())
-                        .collect::<Result<Vec<_>, _>>()
-                })
+                .map(|s| s.split('.').map(|v| v.parse::<usize>()).collect::<Result<Vec<_>, _>>())
                 .transpose()
                 .map_err(|_| io::Error::other("Invalid tree path"))?
                 .unwrap_or_default(),
@@ -313,9 +325,7 @@ pub(crate) fn http(
             limit_bytes: parse("limit_bytes", 4096)?,
             query: None,
         };
-        let state = state
-            .lock()
-            .map_err(|_| io::Error::other("State unavailable"))?;
+        let state = state.lock().map_err(|_| io::Error::other("State unavailable"))?;
         let actor = state
             .chats
             .iter()
@@ -373,10 +383,15 @@ fn page(chat: &str, value: &Value) -> String {
             ));
         }
         if value["children"].as_array().is_some_and(Vec::is_empty) && value["source"] != true {
-            links.push_str(&format!("<li><a href='{base}?root={root}&amp;path={path}&amp;source=true'>Original source</a></li>"));
+            links.push_str(&format!(
+                "<li><a href='{base}?root={root}&amp;path={path}&amp;source=true'>Original source</a></li>"
+            ));
         }
         if let Some(offset) = value["next_offset"].as_u64() {
-            links.push_str(&format!("<li><a href='{base}?root={root}&amp;path={path}&amp;source={}&amp;offset={offset}'>Next page</a></li>",value["source"]));
+            links.push_str(&format!(
+                "<li><a href='{base}?root={root}&amp;path={path}&amp;source={}&amp;offset={offset}'>Next page</a></li>",
+                value["source"]
+            ));
         }
     }
     let metadata = crate::escape(&serde_json::to_string_pretty(value).unwrap());

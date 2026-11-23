@@ -6,10 +6,10 @@
 //! publication rules included), and decides when the turn ends. The endpoint only
 //! generates. Provider state never outlives the attempt; recovery starts fresh.
 use control_ai::{
-    model::{decode_step, think, tool_request, Limits, Thinking},
     Tokens,
+    model::{Limits, Thinking, decode_step, think, tool_request},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
     io,
@@ -77,7 +77,15 @@ pub(crate) struct Policy {
 }
 impl Default for Policy {
     fn default() -> Self {
-        Self { max_steps: 64, max_repairs: 3, verbatim_steps: 4, shrink_batch: 4, shrink_percent: SHRINK_PERCENT, thinking: Thinking::default(), resumed: false }
+        Self {
+            max_steps: 64,
+            max_repairs: 3,
+            verbatim_steps: 4,
+            shrink_batch: 4,
+            shrink_percent: SHRINK_PERCENT,
+            thinking: Thinking::default(),
+            resumed: false,
+        }
     }
 }
 /// The in-turn compactor's limits: its input budget in bytes (system prompt
@@ -133,7 +141,13 @@ pub(crate) trait Host {
     /// `text` is its summary (a leaf step's shrunk rendering), and a node has
     /// either two retained `children` or one original source per step.
     /// Returns the node's key; `None` when it was not kept.
-    fn retain(&mut self, _block: control_comonad::Block, _text: &str, _children: Option<[String; 2]>, _sources: Vec<String>) -> Option<String> {
+    fn retain(
+        &mut self,
+        _block: control_comonad::Block,
+        _text: &str,
+        _children: Option<[String; 2]>,
+        _sources: Vec<String>,
+    ) -> Option<String> {
         None
     }
 }
@@ -161,7 +175,11 @@ impl Meter {
     /// Reported once the turn is over if every call reported; while it runs,
     /// or when some call did not report, the sum is a lower bound.
     pub fn usage(&self, over: bool, model: Option<String>) -> control_ai::Usage {
-        control_ai::Usage { tokens: self.tokens, complete: over && self.reported == self.calls, model }
+        control_ai::Usage {
+            tokens: self.tokens,
+            complete: over && self.reported == self.calls,
+            model,
+        }
     }
 }
 
@@ -211,9 +229,14 @@ fn load(result: &Value, tools: &mut Vec<Value>, names: &mut BTreeSet<String>) {
     if result["isError"] == true {
         return;
     }
-    let found = result["structuredContent"]["data"]["tools"].as_array().cloned().unwrap_or_default();
+    let found = result["structuredContent"]["data"]["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     for tool in functions(&found) {
-        if let Some(name) = tool["function"]["name"].as_str() && names.insert(name.to_owned()) {
+        if let Some(name) = tool["function"]["name"].as_str()
+            && names.insert(name.to_owned())
+        {
             tools.push(tool);
         }
     }
@@ -221,16 +244,23 @@ fn load(result: &Value, tools: &mut Vec<Value>, names: &mut BTreeSet<String>) {
 /// A search result as the model reads it: every found schema is now one of
 /// the request's function tools, so each is named with its first sentence.
 fn searched(mut result: Value) -> Value {
-    let Some(data) = result.get_mut("structuredContent").and_then(|s| s.get_mut("data")) else { return result };
-    let Some(found) = data.get("tools").and_then(Value::as_array).filter(|t| !t.is_empty()) else { return result };
-    let lines = found.iter().map(|tool| {
-        let text = tool["description"].as_str().unwrap_or("");
-        let mut end = text.find(". ").map_or(text.len(), |at| at + 1).min(160);
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        json!({"name":tool["name"],"description":&text[..end]})
-    }).collect::<Vec<_>>();
+    let Some(data) = result.get_mut("structuredContent").and_then(|s| s.get_mut("data")) else {
+        return result;
+    };
+    let Some(found) = data.get("tools").and_then(Value::as_array).filter(|t| !t.is_empty()) else {
+        return result;
+    };
+    let lines = found
+        .iter()
+        .map(|tool| {
+            let text = tool["description"].as_str().unwrap_or("");
+            let mut end = text.find(". ").map_or(text.len(), |at| at + 1).min(160);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            json!({"name":tool["name"],"description":&text[..end]})
+        })
+        .collect::<Vec<_>>();
     data["tools"] = json!(lines);
     let text = data.to_string();
     // The first item is the data; host notes follow it unchanged.
@@ -285,7 +315,9 @@ pub(crate) fn run(
 ) -> Result<Outcome, Failure> {
     let started = Instant::now();
     let failed = |m: String| ("failed", m);
-    let definitions = host.tools().map_err(|e| failed(format!("Could not list worker tools: {e}")))?;
+    let definitions = host
+        .tools()
+        .map_err(|e| failed(format!("Could not list worker tools: {e}")))?;
     let mut tools = functions(&definitions);
     let mut names: BTreeSet<String> = tools
         .iter()
@@ -293,16 +325,26 @@ pub(crate) fn run(
         .collect();
     let mut tool_tokens = tokens(size(&tools));
     let budget = limits.context_tokens.saturating_sub(limits.output_tokens);
-    let system = if policy.thinking == Thinking::Off { SYSTEM.to_owned() } else { format!("{SYSTEM}{}", thinking::NOTE) };
+    let system = if policy.thinking == Thinking::Off {
+        SYSTEM.to_owned()
+    } else {
+        format!("{SYSTEM}{}", thinking::NOTE)
+    };
     let mut messages = vec![
         json!({"role":"system","content":system}),
         json!({"role":"user","content":prompt}),
     ];
     // Admission: the mandatory input must fit before any model call.
     if tool_tokens.saturating_add(tokens(size(&messages))) > budget {
-        return Err(("blocked", format!(
-            "Turn input does not fit the local model: about {} tokens of instructions and history plus {tool_tokens} of tool schemas exceed {budget} available ({} context − {} output). Increase the declared context or reduce history; nothing was sent.",
-            tokens(size(&messages)), limits.context_tokens, limits.output_tokens)));
+        return Err((
+            "blocked",
+            format!(
+                "Turn input does not fit the local model: about {} tokens of instructions and history plus {tool_tokens} of tool schemas exceed {budget} available ({} context − {} output). Increase the declared context or reduce history; nothing was sent.",
+                tokens(size(&messages)),
+                limits.context_tokens,
+                limits.output_tokens
+            ),
+        ));
     }
     let mut meter = Meter::default();
     let (mut steps, mut repairs, mut compactions) = (0usize, 0usize, 0usize);
@@ -317,31 +359,46 @@ pub(crate) fn run(
         match host.poll() {
             Poll::Continue => {}
             Poll::Finish(summary) => {
-                return Ok(Outcome { text: summary, tokens: meter.tokens, steps, compactions, elapsed: started.elapsed() });
+                return Ok(Outcome {
+                    text: summary,
+                    tokens: meter.tokens,
+                    steps,
+                    compactions,
+                    elapsed: started.elapsed(),
+                });
             }
             Poll::Stop(failure) => return Err(failure),
         }
         if steps >= policy.max_steps {
             host.step_limit();
-            return Err(failed(format!("Local agent reached its {steps}-step limit without a final report or handoff. The published checkpoint is unchanged; Control recorded this turn's last tool calls and workspace as a host checkpoint for the next turn to resume from (local_agent_steps in execution.json sets the limit).")));
+            return Err(failed(format!(
+                "Local agent reached its {steps}-step limit without a final report or handoff. The published checkpoint is unchanged; Control recorded this turn's last tool calls and workspace as a host checkpoint for the next turn to resume from (local_agent_steps in execution.json sets the limit)."
+            )));
         }
         // The declared observation, refreshed for this step. It ends the
         // request only: never stored in the steps, so it is never part of the
         // stable prefix, never shrunk and never folded.
-        let observation = host.observation(steps == 0).map(|text| json!({"role":"user","content":text}));
+        let observation = host
+            .observation(steps == 0)
+            .map(|text| json!({"role":"user","content":text}));
         // New conversation callbacks join the newest, unsent step once, so the
         // sent prefix is unchanged and later requests keep them in history.
         if let Some(block) = host.inbox() {
             host.record("note", &format!("local-inbox-{steps}"), &block, "", "completed");
             append_note(&mut messages, &block);
         }
-        let fixed = tool_tokens.saturating_add(observation.as_ref().map_or(0, |o| tokens(size(std::slice::from_ref(o)))));
+        let fixed = tool_tokens.saturating_add(
+            observation
+                .as_ref()
+                .map_or(0, |o| tokens(size(std::slice::from_ref(o)))),
+        );
         // Context fit, re-checked every step: the request is the lens view of
         // the turn's original steps. Past the threshold, the oldest blocks are
         // folded on the local compactor (never dropped silently) before the
         // context is full; folds persist, so later prefixes stay stable.
         let used = |view: &[Value]| fixed.saturating_add(tokens(size(view)));
-        let percent = |view: &[Value]| u32::try_from(u64::from(used(view)) * 100 / u64::from(budget.max(1))).unwrap_or(u32::MAX);
+        let percent =
+            |view: &[Value]| u32::try_from(u64::from(used(view)) * 100 / u64::from(budget.max(1))).unwrap_or(u32::MAX);
         // Below `shrink_percent` the request is append-only. Reaching it, every
         // step but the newest `verbatim_steps` shrinks at once (at least
         // `shrink_batch` of them), and the shrunk prefix then stays fixed while
@@ -371,7 +428,13 @@ pub(crate) fn run(
                             folded = true;
                             for how in done {
                                 compactions += 1;
-                                host.record("compaction", &format!("local-compaction-{compactions}"), &how, "", "completed");
+                                host.record(
+                                    "compaction",
+                                    &format!("local-compaction-{compactions}"),
+                                    &how,
+                                    "",
+                                    "completed",
+                                );
                             }
                         }
                         Err(error) => {
@@ -389,19 +452,33 @@ pub(crate) fn run(
             if used(&view) > budget {
                 shrink_all = true;
                 view = lens.view(&messages, verbatim, true);
-                host.record("compaction", &format!("local-compaction-{}", compactions + 1), "Shortened every bulky tool result of this turn to fit the context", "", "completed");
+                host.record(
+                    "compaction",
+                    &format!("local-compaction-{}", compactions + 1),
+                    "Shortened every bulky tool result of this turn to fit the context",
+                    "",
+                    "completed",
+                );
             }
             if used(&view) > budget {
                 let reason = problem.map_or_else(|| "nothing older remains".to_owned(), |e| e.to_string());
                 return Err(failed(format!(
-                    "Local model context is exhausted ({budget} tokens) and this turn could not be compacted further: {reason}. Hand off sooner or raise the declared context.")));
+                    "Local model context is exhausted ({budget} tokens) and this turn could not be compacted further: {reason}. Hand off sooner or raise the declared context."
+                )));
             }
         }
         // Once per turn: the turn has filled most of its context (or lost
         // detail to a fold); ask for a checkpoint before it runs out.
-        let next = crate::worker_tools::nudges::Next::of(names.contains("control_turn_handoff"), host.continues(), names.contains("control_bot_request"));
+        let next = crate::worker_tools::nudges::Next::of(
+            names.contains("control_turn_handoff"),
+            host.continues(),
+            names.contains("control_bot_request"),
+        );
         let note = crate::worker_tools::nudges::context_text(reached, next);
-        if !noted && (reached >= NOTE_PERCENT || folded) && used(&view).saturating_add(tokens(note.len() + 16)) <= budget {
+        if !noted
+            && (reached >= NOTE_PERCENT || folded)
+            && used(&view).saturating_add(tokens(note.len() + 16)) <= budget
+        {
             noted = true;
             host.record("note", "local-context-note", &note, "", "completed");
             append_note(&mut messages, &note);
@@ -434,13 +511,16 @@ pub(crate) fn run(
                 if let Poll::Stop(failure) = host.poll() {
                     return Err(failure);
                 }
-                return Err(failed(format!("Local model call failed: {error}. No hosted fallback was used; the published checkpoint is unchanged.")));
+                return Err(failed(format!(
+                    "Local model call failed: {error}. No hosted fallback was used; the published checkpoint is unchanged."
+                )));
             }
         };
         meter.add(control_ai::model::usage(&value));
         let decoded = decode_step(&value, limits);
         let reasoning = decoded.as_ref().ok().and_then(|s| s.reasoning.as_deref());
-        meter.reasoning += control_ai::model::reasoning_tokens(&value).unwrap_or_else(|| reasoning.map_or(0, |r| u64::from(tokens(r.len()))));
+        meter.reasoning += control_ai::model::reasoning_tokens(&value)
+            .unwrap_or_else(|| reasoning.map_or(0, |r| u64::from(tokens(r.len()))));
         host.metered(&meter);
         if let Some(reasoning) = reasoning {
             host.reasoned(reasoning);
@@ -454,7 +534,13 @@ pub(crate) fn run(
         let repair = |repairs: &mut usize, messages: &mut Vec<Value>, note: String| -> Result<(), Failure> {
             *repairs += 1;
             if *repairs > policy.max_repairs {
-                return Err(("failed", format!("Local model produced {} malformed steps in a row; last problem: {note} The published checkpoint is unchanged.", *repairs)));
+                return Err((
+                    "failed",
+                    format!(
+                        "Local model produced {} malformed steps in a row; last problem: {note} The published checkpoint is unchanged.",
+                        *repairs
+                    ),
+                ));
             }
             messages.push(json!({"role":"user","content":format!("Control could not use your last reply: {note}")}));
             Ok(())
@@ -462,7 +548,14 @@ pub(crate) fn run(
         if step.truncated {
             // The answer gets the room next time.
             adaptive.after(thinking::Cue::Cut);
-            repair(&mut repairs, &mut messages, format!("it reached the {}-token output limit and was discarded. Reply more briefly, or make one tool call.", limits.output_tokens))?;
+            repair(
+                &mut repairs,
+                &mut messages,
+                format!(
+                    "it reached the {}-token output limit and was discarded. Reply more briefly, or make one tool call.",
+                    limits.output_tokens
+                ),
+            )?;
             continue;
         }
         if asked_more {
@@ -480,11 +573,21 @@ pub(crate) fn run(
             match step.text {
                 Some(text) => {
                     host.record("message", &format!("local-step-{steps}"), &text, "", "completed");
-                    return Ok(Outcome { text, tokens: meter.tokens, steps, compactions, elapsed: started.elapsed() });
+                    return Ok(Outcome {
+                        text,
+                        tokens: meter.tokens,
+                        steps,
+                        compactions,
+                        elapsed: started.elapsed(),
+                    });
                 }
                 None => {
                     adaptive.after(thinking::Cue::Trouble);
-                    repair(&mut repairs, &mut messages, "it contained neither text nor a tool call. Call a tool or give your final report.".into())?;
+                    repair(
+                        &mut repairs,
+                        &mut messages,
+                        "it contained neither text nor a tool call. Call a tool or give your final report.".into(),
+                    )?;
                     continue;
                 }
             }
@@ -494,10 +597,15 @@ pub(crate) fn run(
         }
         // Only the reply and its calls enter the transcript, never the reasoning.
         let mut trouble = false;
-        let calls: Vec<_> = step.calls.into_iter().enumerate().map(|(i, c)| {
-            let id = c.id.clone().unwrap_or_else(|| format!("call-{steps}-{i}"));
-            (id, c)
-        }).collect();
+        let calls: Vec<_> = step
+            .calls
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let id = c.id.clone().unwrap_or_else(|| format!("call-{steps}-{i}"));
+                (id, c)
+            })
+            .collect();
         messages.push(json!({"role":"assistant","content":step.text,
             "tool_calls":calls.iter().map(|(id,c)|json!({"id":id,"type":"function","function":{"name":c.name,
                 "arguments":c.arguments.as_ref().map_or_else(|_|"{}".to_owned(),|a|a.to_string())}})).collect::<Vec<_>>()}));
@@ -509,7 +617,8 @@ pub(crate) fn run(
         for (index, (id, call)) in calls.iter().enumerate() {
             // A deferred tool called by name loads its schema first, through
             // the same search the model could call; nothing else is admitted.
-            if index < CALLS_PER_STEP && !names.contains(&call.name) && call.arguments.is_ok() && names.contains(SEARCH) {
+            if index < CALLS_PER_STEP && !names.contains(&call.name) && call.arguments.is_ok() && names.contains(SEARCH)
+            {
                 let found = host.call(SEARCH, &json!({"names":[call.name]}), &format!("{steps}-{index}-1"));
                 load(&found, &mut tools, &mut names);
             }
@@ -518,7 +627,10 @@ pub(crate) fn run(
                 format!("ERROR: not executed; at most {CALLS_PER_STEP} tool calls run per step.")
             } else if !names.contains(&call.name) {
                 malformed = Some(format!("unknown tool {:?}.", call.name));
-                format!("ERROR: unknown tool {:?}; nothing ran. Use one of the offered tools.", call.name)
+                format!(
+                    "ERROR: unknown tool {:?}; nothing ran. Use one of the offered tools.",
+                    call.name
+                )
             } else {
                 match &call.arguments {
                     Err(problem) => {
@@ -528,14 +640,26 @@ pub(crate) fn run(
                     Ok(arguments) => {
                         // Digits and dashes: room posts key idempotency on the run and this nonce.
                         let nonce = format!("{steps}-{index}");
-                        host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, "", "in_progress");
+                        host.record(
+                            "mcp_tool_call",
+                            &format!("local-{nonce}"),
+                            &call.name,
+                            "",
+                            "in_progress",
+                        );
                         let mut result = host.call(&call.name, arguments, &nonce);
                         if call.name == SEARCH && result["isError"] != true {
                             load(&result, &mut tools, &mut names);
                             result = searched(result);
                         }
                         let (text, error) = result_text(&result);
-                        host.record("mcp_tool_call", &format!("local-{nonce}"), &call.name, &text, if error { "failed" } else { "completed" });
+                        host.record(
+                            "mcp_tool_call",
+                            &format!("local-{nonce}"),
+                            &call.name,
+                            &text,
+                            if error { "failed" } else { "completed" },
+                        );
                         adaptive.acted();
                         trouble |= error;
                         context::without_repeats(text, arguments)
@@ -549,7 +673,11 @@ pub(crate) fn run(
         // A failed call (a refused handoff included) or a malformed one earns
         // more thinking next step; a routine success less. A soft switch in
         // the reply overrides that for the next step.
-        adaptive.after(if trouble || malformed.is_some() { thinking::Cue::Trouble } else { thinking::Cue::Routine });
+        adaptive.after(if trouble || malformed.is_some() {
+            thinking::Cue::Trouble
+        } else {
+            thinking::Cue::Routine
+        });
         if let Some(text) = &step.text {
             adaptive.switch(text);
         }
@@ -593,27 +721,48 @@ impl Live<'_> {
         Some((self.shared, self.run))
     }
     fn rpc(&self, request: Value, nonce: &str) -> Value {
-        crate::worker_tools::local_rpc(self.shared, self.run, &json!({"nonce":nonce,"request":request}), self.workspace, self.managed)
+        crate::worker_tools::local_rpc(
+            self.shared,
+            self.run,
+            &json!({"nonce":nonce,"request":request}),
+            self.workspace,
+            self.managed,
+        )
     }
     /// What the server says it is: its `model`, else its runtime fingerprint.
     fn reported_model(&self) -> Option<String> {
-        self.served.as_ref().and_then(|s| s.model.clone().or_else(|| s.fingerprint.clone()))
+        self.served
+            .as_ref()
+            .and_then(|s| s.model.clone().or_else(|| s.fingerprint.clone()))
     }
 }
 impl Host for Live<'_> {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
-        let response = self.rpc(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), &format!("{}-0", self.stamp));
+        let response = self.rpc(
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            &format!("{}-0", self.stamp),
+        );
         response["result"]["tools"].as_array().cloned().ok_or_else(|| {
-            io::Error::other(response["error"]["message"].as_str().unwrap_or("tool listing refused").to_owned())
+            io::Error::other(
+                response["error"]["message"]
+                    .as_str()
+                    .unwrap_or("tool listing refused")
+                    .to_owned(),
+            )
         })
     }
     fn call(&mut self, name: &str, arguments: &Value, nonce: &str) -> Value {
         // Unique across every attempt of the run: a numeric attempt stamp prefix.
         let nonce = format!("{}-{nonce}", self.stamp);
-        let response = self.rpc(json!({"jsonrpc":"2.0","id":nonce,"method":"tools/call","params":{"name":name,"arguments":arguments}}), &nonce);
+        let response = self.rpc(
+            json!({"jsonrpc":"2.0","id":nonce,"method":"tools/call","params":{"name":name,"arguments":arguments}}),
+            &nonce,
+        );
         match response.get("result") {
             Some(result) => result.clone(),
-            None => json!({"content":[{"type":"text","text":response["error"]["message"].as_str().unwrap_or("Tool call refused")}],"isError":true}),
+            None => {
+                json!({"content":[{"type":"text","text":response["error"]["message"].as_str().unwrap_or("Tool call refused")}],"isError":true})
+            }
         }
     }
     fn poll(&mut self) -> Poll {
@@ -621,7 +770,10 @@ impl Host for Live<'_> {
             return Poll::Stop(("waiting", "Waiting for a design decision.".into()));
         }
         if crate::lifecycle::cancelled(self.bridge()) {
-            return Poll::Stop(("cancelled", "Cancelled. The previous published workspace is unchanged.".into()));
+            return Poll::Stop((
+                "cancelled",
+                "Cancelled. The previous published workspace is unchanged.".into(),
+            ));
         }
         let elapsed = self.started.elapsed() + Duration::from_secs(self.admitted);
         match crate::attempt_control::poll(self.bridge(), self.attempt, elapsed) {
@@ -636,7 +788,8 @@ impl Host for Live<'_> {
     }
     fn model(&mut self, body: &Value) -> io::Result<Value> {
         let (shared, run) = (self.shared, self.run);
-        let cancel = || crate::lifecycle::cancelled(Some((shared, run))) || crate::design::requested(Some((shared, run)));
+        let cancel =
+            || crate::lifecycle::cancelled(Some((shared, run))) || crate::design::requested(Some((shared, run)));
         let (value, served) = crate::model_calls::post_json(&self.endpoint, body, &cancel)?;
         self.served.get_or_insert(served);
         Ok(value)
@@ -646,13 +799,18 @@ impl Host for Live<'_> {
     }
     fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) {
         if let Ok(mut state) = self.shared.lock() {
-            crate::worker::record_activity_for(&mut state, self.run, &self.generation, crate::usage::Activity {
-                id: id.chars().take(100).collect(),
-                kind: kind.into(),
-                text: text.chars().take(4000).collect(),
-                output: output.chars().take(4000).collect(),
-                status: status.into(),
-            });
+            crate::worker::record_activity_for(
+                &mut state,
+                self.run,
+                &self.generation,
+                crate::usage::Activity {
+                    id: id.chars().take(100).collect(),
+                    kind: kind.into(),
+                    text: text.chars().take(4000).collect(),
+                    output: output.chars().take(4000).collect(),
+                    status: status.into(),
+                },
+            );
         }
     }
     fn step_limit(&mut self) {
@@ -663,7 +821,12 @@ impl Host for Live<'_> {
     }
     fn continues(&mut self) -> bool {
         let Ok(state) = self.shared.lock() else { return true };
-        let chat = state.runtime.runs.iter().find(|run| run.id == self.run).and_then(|run| run.chat_id.as_deref());
+        let chat = state
+            .runtime
+            .runs
+            .iter()
+            .find(|run| run.id == self.run)
+            .and_then(|run| run.chat_id.as_deref());
         chat.is_some_and(|chat| crate::bots::continuation_enabled(&state, chat))
     }
     fn inbox(&mut self) -> Option<String> {
@@ -673,13 +836,38 @@ impl Host for Live<'_> {
     fn reasoned(&mut self, reasoning: &str) {
         self.reasoning = Some(crate::turn_context::carried_reasoning(reasoning));
     }
-    fn retain(&mut self, block: control_comonad::Block, text: &str, children: Option<[String; 2]>, sources: Vec<String>) -> Option<String> {
+    fn retain(
+        &mut self,
+        block: control_comonad::Block,
+        text: &str,
+        children: Option<[String; 2]>,
+        sources: Vec<String>,
+    ) -> Option<String> {
         // Recall is best effort: a failed write leaves the step unsearchable,
         // never the turn failed; the record says so.
-        match crate::compaction::turn::retain(self.shared, self.run, &self.generation, &self.compactor, block, text, children, sources) {
+        match crate::compaction::turn::retain(
+            self.shared,
+            self.run,
+            &self.generation,
+            &self.compactor,
+            block,
+            text,
+            children,
+            sources,
+        ) {
             Ok(key) => Some(key),
             Err(error) => {
-                self.record("compaction", "local-recall", &format!("Could not keep steps {}–{} for recall: {error}", block.start + 1, block.end()), "", "failed");
+                self.record(
+                    "compaction",
+                    "local-recall",
+                    &format!(
+                        "Could not keep steps {}–{} for recall: {error}",
+                        block.start + 1,
+                        block.end()
+                    ),
+                    "",
+                    "failed",
+                );
                 None
             }
         }
@@ -704,37 +892,73 @@ pub(crate) fn execute(
 ) -> Result<String, Failure> {
     let (shared, run) = bridge.ok_or(("blocked", "Local agent turns need a live Control node.".to_owned()))?;
     let (endpoint, compactor, managed, resumed) = {
-        let state = shared.lock().map_err(|_| ("failed", "Control state unavailable".to_owned()))?;
+        let state = shared
+            .lock()
+            .map_err(|_| ("failed", "Control state unavailable".to_owned()))?;
         let model = crate::providers::Model::captured(crate::backend::Backend::Local, attempt.model.clone());
         if !crate::providers::agent_capable(&state.runtime, &model) {
             return Err(("blocked", crate::backend::LOCAL_TEXT_ONLY.into()));
         }
-        let endpoint = crate::providers::endpoint(&state.runtime, &attempt.model).cloned()
-            .ok_or(("blocked", "The selected local endpoint is no longer configured; no fallback was used.".to_owned()))?;
+        let endpoint = crate::providers::endpoint(&state.runtime, &attempt.model)
+            .cloned()
+            .ok_or((
+                "blocked",
+                "The selected local endpoint is no longer configured; no fallback was used.".to_owned(),
+            ))?;
         let current = state.runtime.runs.iter().find(|r| r.id == run);
-        let session = current.and_then(|r| r.chat_id.as_ref()).and_then(|chat| state.chats.iter().find(|c| &c.id == chat));
+        let session = current
+            .and_then(|r| r.chat_id.as_ref())
+            .and_then(|chat| state.chats.iter().find(|c| &c.id == chat));
         // Resuming a cut-off turn: the chat holds a host checkpoint, or this
         // run already had an attempt (the live one is its last).
-        let resumed = session.and_then(|s| s.continuity.as_ref()).is_some_and(|c| c.interrupted.is_some())
+        let resumed = session
+            .and_then(|s| s.continuity.as_ref())
+            .is_some_and(|c| c.interrupted.is_some())
             || current.is_some_and(|r| r.attempts.len() > 1);
         // A local chat compacts on its own endpoint unless the operator chose otherwise.
-        let compactor = session.and_then(|s| crate::compaction::compactor_for(&state, s)).cloned().unwrap_or_else(|| endpoint.clone());
+        let compactor = session
+            .and_then(|s| crate::compaction::compactor_for(&state, s))
+            .cloned()
+            .unwrap_or_else(|| endpoint.clone());
         // Same transport choice as the CLI mailboxes: managed turns get nudges.
         let managed = attempt.context_trace.is_some();
         (endpoint, compactor, managed, resumed)
     };
-    let generation = attempt.workspace_id.clone().ok_or(("failed", "Missing attempt identity".to_owned()))?;
-    let admitted = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default().as_secs().saturating_sub(attempt.started_unix);
+    let generation = attempt
+        .workspace_id
+        .clone()
+        .ok_or(("failed", "Missing attempt identity".to_owned()))?;
+    let admitted = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(attempt.started_unix);
     let limits = endpoint.limits.clone();
     let budget = Compactor {
-        input_bytes: compactor.limits.input_budget().saturating_sub(crate::compaction::SYSTEM.len() + crate::compaction::TARGET_BYTES),
+        input_bytes: compactor
+            .limits
+            .input_budget()
+            .saturating_sub(crate::compaction::SYSTEM.len() + crate::compaction::TARGET_BYTES),
         output_tokens: compactor.limits.output_tokens,
     };
     let mut live = Live {
-        shared, run, generation, workspace, managed, attempt, endpoint, compactor,
-        started: Instant::now(), admitted, served: None, timed_out: false, meter: Meter::default(),
-        stamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(),
+        shared,
+        run,
+        generation,
+        workspace,
+        managed,
+        attempt,
+        endpoint,
+        compactor,
+        started: Instant::now(),
+        admitted,
+        served: None,
+        timed_out: false,
+        meter: Meter::default(),
+        stamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
         reasoning: None,
     };
     let (model, thinking) = (live.endpoint.model.clone(), live.endpoint.thinking);
@@ -760,14 +984,42 @@ pub(crate) fn execute(
     if let Ok(outcome) = &result {
         {
             let seconds = outcome.elapsed.as_secs_f64().max(0.001);
-            let summary = format!("{} · {} model steps · {} compactions · {:.1} s{}", provenance, outcome.steps, outcome.compactions, seconds,
-                outcome.tokens.map(|t| format!(" · {} in ({} cached) / {} out tokens{} · {:.1} output tokens/s end-to-end", t.input_tokens, t.cached_input_tokens, t.output_tokens,
-                    if meter.reasoning > 0 { format!(" ({} reasoning)", meter.reasoning) } else { String::new() }, t.output_tokens as f64 / seconds)).unwrap_or_else(|| " · usage not reported".into()));
+            let summary = format!(
+                "{} · {} model steps · {} compactions · {:.1} s{}",
+                provenance,
+                outcome.steps,
+                outcome.compactions,
+                seconds,
+                outcome
+                    .tokens
+                    .map(|t| format!(
+                        " · {} in ({} cached) / {} out tokens{} · {:.1} output tokens/s end-to-end",
+                        t.input_tokens,
+                        t.cached_input_tokens,
+                        t.output_tokens,
+                        if meter.reasoning > 0 {
+                            format!(" ({} reasoning)", meter.reasoning)
+                        } else {
+                            String::new()
+                        },
+                        t.output_tokens as f64 / seconds
+                    ))
+                    .unwrap_or_else(|| " · usage not reported".into())
+            );
             if let Ok(mut state) = shared.lock() {
                 let generation = attempt.workspace_id.clone().unwrap_or_default();
-                crate::worker::record_activity_for(&mut state, run, &generation, crate::usage::Activity {
-                    id: "local-model".into(), kind: "local_model".into(), text: summary, output: String::new(), status: "completed".into(),
-                });
+                crate::worker::record_activity_for(
+                    &mut state,
+                    run,
+                    &generation,
+                    crate::usage::Activity {
+                        id: "local-model".into(),
+                        kind: "local_model".into(),
+                        text: summary,
+                        output: String::new(),
+                        status: "completed".into(),
+                    },
+                );
             }
         }
     }
@@ -776,9 +1028,31 @@ pub(crate) fn execute(
     crate::attempt_control::stop(Some((shared, run)), attempt).map_err(|m| ("interrupted", m.to_owned()))?;
     result.map(|outcome| outcome.text)
 }
-fn run_loop(live: &mut Live<'_>, model: &str, limits: &Limits, budget: Compactor, prompt: &str, thinking: Thinking, resumed: bool) -> Result<Outcome, Failure> {
-    let max_steps = live.shared.lock().map_or(Policy::default().max_steps, |state| state.runtime.execution.local_agent_steps);
-    run(live, model, limits, budget, prompt, &Policy { max_steps, thinking, resumed, ..Policy::default() })
+fn run_loop(
+    live: &mut Live<'_>,
+    model: &str,
+    limits: &Limits,
+    budget: Compactor,
+    prompt: &str,
+    thinking: Thinking,
+    resumed: bool,
+) -> Result<Outcome, Failure> {
+    let max_steps = live.shared.lock().map_or(Policy::default().max_steps, |state| {
+        state.runtime.execution.local_agent_steps
+    });
+    run(
+        live,
+        model,
+        limits,
+        budget,
+        prompt,
+        &Policy {
+            max_steps,
+            thinking,
+            resumed,
+            ..Policy::default()
+        },
+    )
 }
 
 /// An operator-configured private endpoint. Control runs the tool loop itself;
@@ -813,10 +1087,19 @@ impl crate::backend::Agent for Local {
     fn probe(&self, _: &dyn control_isolation::Isolation, _image: &str) -> Result<(), String> {
         Err(NO_IMAGE.to_owned())
     }
-    fn text_run(&self, _: &dyn control_isolation::Isolation, _call: &crate::backend::TextCall<'_>) -> std::io::Result<control_isolation::RunSpec> {
+    fn text_run(
+        &self,
+        _: &dyn control_isolation::Isolation,
+        _call: &crate::backend::TextCall<'_>,
+    ) -> std::io::Result<control_isolation::RunSpec> {
         Err(std::io::Error::other(NOT_A_CLI))
     }
-    fn text(&self, _reader: &mut dyn std::io::Read, _max: usize, _emit: &mut dyn FnMut(control_ai::Event)) -> std::io::Result<control_ai::Output> {
+    fn text(
+        &self,
+        _reader: &mut dyn std::io::Read,
+        _max: usize,
+        _emit: &mut dyn FnMut(control_ai::Event),
+    ) -> std::io::Result<control_ai::Output> {
         Err(std::io::Error::other(NOT_A_CLI))
     }
     fn host_shell(&self) -> bool {

@@ -121,12 +121,22 @@ fn port(policy: &AutoApproval, facts: &PortFacts<'_>) -> Verdict {
         return Verdict::Human("task port quota");
     }
     if facts.ingress {
-        return if facts.service_port > 1024 { Verdict::Approve("ingress-high-port") } else { Verdict::Ask("privileged ingress port") };
+        return if facts.service_port > 1024 {
+            Verdict::Approve("ingress-high-port")
+        } else {
+            Verdict::Ask("privileged ingress port")
+        };
     }
     if let Some(in_task) = facts.peer_in_task {
-        return if in_task { Verdict::Approve("peer-route-in-task") } else { Verdict::Ask("peer outside the task") };
+        return if in_task {
+            Verdict::Approve("peer-route-in-task")
+        } else {
+            Verdict::Ask("peer outside the task")
+        };
     }
-    let Some((host, port)) = facts.target else { return Verdict::Human("no target") };
+    let Some((host, port)) = facts.target else {
+        return Verdict::Human("no target");
+    };
     if policy.standing(host, port) {
         return Verdict::Approve("standing-target");
     }
@@ -145,7 +155,16 @@ fn port(policy: &AutoApproval, facts: &PortFacts<'_>) -> Verdict {
 fn public_name(host: &str) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     host.contains('.')
-        && ![".localhost", ".local", ".internal", ".lan", ".home.arpa", ".localdomain"].iter().any(|suffix| host.ends_with(suffix))
+        && ![
+            ".localhost",
+            ".local",
+            ".internal",
+            ".lan",
+            ".home.arpa",
+            ".localdomain",
+        ]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
 }
 
 fn bot(policy: &AutoApproval, facts: &BotFacts<'_>) -> Verdict {
@@ -211,10 +230,28 @@ pub(crate) struct Record {
 
 /// Records an automatic approval and queues its FYI notice when enabled.
 /// Part of the caller's checkpoint: it only edits `state`.
-pub(crate) fn record(state: &mut State, policy: &AutoApproval, kind: &str, id: &str, chat: &str, what: String, rule: &str) {
+pub(crate) fn record(
+    state: &mut State,
+    policy: &AutoApproval,
+    kind: &str,
+    id: &str,
+    chat: &str,
+    what: String,
+    rule: &str,
+) {
     let at = crate::bots::now_ms() / 1000;
-    let text = format!("Auto-approved {kind}: {what} (rule {rule}). No action needed; revoke it in Control if it should not run.");
-    state.auto_decisions.push(Record { unix: at, kind: kind.into(), id: id.into(), chat: chat.into(), what, rule: rule.into(), decider: "policy".into() });
+    let text = format!(
+        "Auto-approved {kind}: {what} (rule {rule}). No action needed; revoke it in Control if it should not run."
+    );
+    state.auto_decisions.push(Record {
+        unix: at,
+        kind: kind.into(),
+        id: id.into(),
+        chat: chat.into(),
+        what,
+        rule: rule.into(),
+        decider: "policy".into(),
+    });
     let excess = state.auto_decisions.len().saturating_sub(RECORDS);
     state.auto_decisions.drain(..excess);
     if policy.notices {
@@ -223,31 +260,92 @@ pub(crate) fn record(state: &mut State, policy: &AutoApproval, kind: &str, id: &
 }
 /// The rule that approved request `id`, if the policy did.
 pub(crate) fn rule(state: &State, id: &str) -> Option<String> {
-    state.auto_decisions.iter().rev().find(|record| record.id == id).map(|record| record.rule.clone())
+    state
+        .auto_decisions
+        .iter()
+        .rev()
+        .find(|record| record.id == id)
+        .map(|record| record.rule.clone())
 }
 
 fn when(unix: u64) -> String {
-    format!("{} {:02}:{:02} UTC", crate::intel::date(unix), unix % 86_400 / 3600, unix % 3600 / 60)
+    format!(
+        "{} {:02}:{:02} UTC",
+        crate::intel::date(unix),
+        unix % 86_400 / 3600,
+        unix % 3600 / 60
+    )
 }
 /// "Running now" and "Auto-approved recently" for the Permissions page:
 /// live services, open ports with their targets, persistent bots and the
 /// latest automatic decisions, as compact lines.
 pub(crate) fn overview(state: &State) -> String {
-    let link = |chat: &str| format!("<a href='/dm/{}'>{}</a>", crate::escape(chat), crate::escape(&crate::callsigns::name_or_id(&state.chats, chat)));
-    let services = state.services.iter().filter(|service| service.live())
-        .map(|service| format!("<p>{} · {} · {} · {}</p>", crate::escape(service.resource.id.as_str()), service.phase_name(), crate::escape(&service.label()), link(service.resource.owner.chat.as_str())))
+    let link = |chat: &str| {
+        format!(
+            "<a href='/dm/{}'>{}</a>",
+            crate::escape(chat),
+            crate::escape(&crate::callsigns::name_or_id(&state.chats, chat))
+        )
+    };
+    let services = state
+        .services
+        .iter()
+        .filter(|service| service.live())
+        .map(|service| {
+            format!(
+                "<p>{} · {} · {} · {}</p>",
+                crate::escape(service.resource.id.as_str()),
+                service.phase_name(),
+                crate::escape(&service.label()),
+                link(service.resource.owner.chat.as_str())
+            )
+        })
         .collect::<Vec<_>>();
     let ports = crate::ports::overview(state);
-    let bots = crate::bots::active(state).into_iter().map(|chat| format!("<p>{}</p>", link(chat))).collect::<Vec<_>>();
-    let lines = |items: &[String], empty: &str| if items.is_empty() { format!("<p class='muted'>{empty}</p>") } else { items.concat() };
-    let decisions = state.auto_decisions.iter().rev().take(SHOWN).map(|record| format!("<p><span class='tag'>{}</span> {} · rule {} · {} · {}</p>",
-        crate::escape(&record.kind), crate::escape(&record.what), crate::escape(&record.rule), link(&record.chat), when(record.unix))).collect::<Vec<_>>();
-    format!("<h3 class='form-title'>Running now</h3><div class='metrics'><div><b>{}</b><span>SERVICES</span></div><div><b>{}</b><span>OPEN PORTS</span></div><div><b>{}</b><span>BOTS</span></div></div>\
+    let bots = crate::bots::active(state)
+        .into_iter()
+        .map(|chat| format!("<p>{}</p>", link(chat)))
+        .collect::<Vec<_>>();
+    let lines = |items: &[String], empty: &str| {
+        if items.is_empty() {
+            format!("<p class='muted'>{empty}</p>")
+        } else {
+            items.concat()
+        }
+    };
+    let decisions = state
+        .auto_decisions
+        .iter()
+        .rev()
+        .take(SHOWN)
+        .map(|record| {
+            format!(
+                "<p><span class='tag'>{}</span> {} · rule {} · {} · {}</p>",
+                crate::escape(&record.kind),
+                crate::escape(&record.what),
+                crate::escape(&record.rule),
+                link(&record.chat),
+                when(record.unix)
+            )
+        })
+        .collect::<Vec<_>>();
+    format!(
+        "<h3 class='form-title'>Running now</h3><div class='metrics'><div><b>{}</b><span>SERVICES</span></div><div><b>{}</b><span>OPEN PORTS</span></div><div><b>{}</b><span>BOTS</span></div></div>\
         <article class='record'><h3>Services</h3>{}</article><article class='record'><h3>Ports</h3>{}<p class='muted'><a href='/tools/ports'>Revoke on the TCP ports page ↗</a></p></article>\
         <article class='record'><h3>Bots</h3>{}<p class='muted'>Stop a bot with /bot off in its DM.</p></article>\
         <h3 class='form-title'>Auto-approved recently</h3>{}",
-        services.len(), ports.len(), bots.len(), lines(&services, "No live services."), lines(&ports, "No open ports."), lines(&bots, "No persistent bots."),
-        if decisions.is_empty() { "<div class='empty'>No automatic decisions yet.</div>".to_owned() } else { format!("<article class='record'>{}</article>", decisions.concat()) })
+        services.len(),
+        ports.len(),
+        bots.len(),
+        lines(&services, "No live services."),
+        lines(&ports, "No open ports."),
+        lines(&bots, "No persistent bots."),
+        if decisions.is_empty() {
+            "<div class='empty'>No automatic decisions yet.</div>".to_owned()
+        } else {
+            format!("<article class='record'>{}</article>", decisions.concat())
+        }
+    )
 }
 
 #[cfg(test)]

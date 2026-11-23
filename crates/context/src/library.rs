@@ -119,8 +119,8 @@ pub struct Library {
 }
 impl Default for Library {
     fn default() -> Self {
-        let definitions: Vec<Definition> = serde_json::from_str(include_str!("builtin-lenses.json"))
-            .expect("Built-in lens definitions must be valid");
+        let definitions: Vec<Definition> =
+            serde_json::from_str(include_str!("builtin-lenses.json")).expect("Built-in lens definitions must be valid");
         let builtin = definitions.iter().map(|d| (d.id.clone(), d.revision)).collect();
         Self { definitions, builtin }
     }
@@ -156,17 +156,25 @@ pub struct Resolved {
 impl Resolved {
     /// Captured texts `role` receives inline, in resolution order.
     pub fn inline(&self, role: Audience) -> impl Iterator<Item = &str> {
-        self.instructions.iter().map(String::as_str)
-            .chain(self.guidance.iter().filter(move |g| g.inline_for(role)).map(|g| g.text.as_str()))
+        self.instructions.iter().map(String::as_str).chain(
+            self.guidance
+                .iter()
+                .filter(move |g| g.inline_for(role))
+                .map(|g| g.text.as_str()),
+        )
     }
     /// Lenses `role` sees as an index line and can read on demand.
     pub fn on_demand(&self, role: Audience) -> impl Iterator<Item = &Guidance> {
-        self.guidance.iter().filter(move |g| g.visible(role) && !g.inline_for(role))
+        self.guidance
+            .iter()
+            .filter(move |g| g.visible(role) && !g.inline_for(role))
     }
     /// The captured lens `topic` (an ID or name, any case) visible to `role`.
     pub fn guidance_for(&self, topic: &str, role: Audience) -> Option<&Guidance> {
         let topic = topic.trim();
-        self.guidance.iter().filter(|g| g.visible(role))
+        self.guidance
+            .iter()
+            .filter(|g| g.visible(role))
             .find(|g| g.id.eq_ignore_ascii_case(topic) || g.name.eq_ignore_ascii_case(topic))
     }
 }
@@ -191,16 +199,20 @@ impl Library {
         for definition in Self::default().definitions {
             let current = self.get(&definition.id).cloned();
             let mut installed = self.builtin.get(&definition.id).copied();
-            if let Some(current) = current.as_ref().filter(|c| installed.is_none() && (**c == definition || shipped.contains(c))) {
+            if let Some(current) = current
+                .as_ref()
+                .filter(|c| installed.is_none() && (**c == definition || shipped.contains(c)))
+            {
                 self.builtin.insert(definition.id.clone(), current.revision);
                 installed = Some(current.revision);
                 changed = true;
             }
             match current {
                 None if self.definitions.len() < MAX_DEFINITIONS && lenses < MAX_LENSES => lenses += 1,
-                Some(current) if installed == Some(current.revision)
-                    && definition.revision > current.revision
-                    && self.definitions.len() < MAX_DEFINITIONS => {}
+                Some(current)
+                    if installed == Some(current.revision)
+                        && definition.revision > current.revision
+                        && self.definitions.len() < MAX_DEFINITIONS => {}
                 _ => continue,
             }
             self.builtin.insert(definition.id.clone(), definition.revision);
@@ -221,11 +233,7 @@ impl Library {
         ids.into_iter().filter_map(|id| self.get(id)).collect()
     }
     /// Resolve without admitted packages; a lens that names one fails here.
-    pub fn resolve(
-        &self,
-        roots: &[String],
-        documents: &[DocumentInput],
-    ) -> Result<Resolved, String> {
+    pub fn resolve(&self, roots: &[String], documents: &[DocumentInput]) -> Result<Resolved, String> {
         self.resolve_with(roots, documents, &[])
     }
     /// Resolve against explicit document and admitted package snapshots.
@@ -235,15 +243,16 @@ impl Library {
         documents: &[DocumentInput],
         packages: &[PackageInput],
     ) -> Result<Resolved, String> {
-        self.resolve_inputs(roots, Inputs { documents, packages: Some(packages) })
+        self.resolve_inputs(
+            roots,
+            Inputs {
+                documents,
+                packages: Some(packages),
+            },
+        )
     }
     fn resolve_inputs(&self, roots: &[String], inputs: Inputs<'_>) -> Result<Resolved, String> {
-        let roots: Vec<_> = roots
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let roots: Vec<_> = roots.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect();
         if roots.len() > MAX_SELECTED {
             return Err(format!("Select at most {MAX_SELECTED} lenses."));
         }
@@ -263,11 +272,7 @@ impl Library {
             .collect();
         resolved.documents.sort_by(|a, b| a.id.cmp(&b.id));
         resolved.packages.sort_by(|a, b| a.name.cmp(&b.name));
-        if resolved
-            .documents
-            .iter()
-            .map(|d| d.body.chars().count())
-            .sum::<usize>()
+        if resolved.documents.iter().map(|d| d.body.chars().count()).sum::<usize>()
             + resolved
                 .instructions
                 .iter()
@@ -276,10 +281,7 @@ impl Library {
                 .sum::<usize>()
             > 48000
         {
-            return Err(
-                "Selected context exceeds 48,000 characters. Select fewer documents or lenses."
-                    .into(),
-            );
+            return Err("Selected context exceeds 48,000 characters. Select fewer documents or lenses.".into());
         }
         Ok(resolved)
     }
@@ -320,8 +322,8 @@ impl Library {
             }
         }
         for reference in &d.packages {
-            let (name, pinned) = package_reference(reference)
-                .ok_or_else(|| format!("Invalid tool package reference: {reference}."))?;
+            let (name, pinned) =
+                package_reference(reference).ok_or_else(|| format!("Invalid tool package reference: {reference}."))?;
             // Library validation checks references only; admission is a resolution input.
             let Some(admitted) = inputs.packages else { continue };
             let input = admitted
@@ -331,7 +333,9 @@ impl Library {
                 .ok_or_else(|| format!("Tool package not admitted: {reference}."))?;
             match out.packages.iter().find(|p| p.name == name) {
                 Some(existing) if existing.version != input.version => {
-                    return Err(format!("Selected lenses name different versions of tool package {name}."));
+                    return Err(format!(
+                        "Selected lenses name different versions of tool package {name}."
+                    ));
                 }
                 Some(_) => {}
                 None => out.packages.push(input.clone()),
@@ -386,7 +390,13 @@ impl Library {
         // Revoking a package must not block edits to unrelated lenses, so
         // package admission is checked when a context is captured.
         for d in self.current() {
-            self.resolve_inputs(std::slice::from_ref(&d.id), Inputs { documents, packages: None })?;
+            self.resolve_inputs(
+                std::slice::from_ref(&d.id),
+                Inputs {
+                    documents,
+                    packages: None,
+                },
+            )?;
         }
         Ok(())
     }

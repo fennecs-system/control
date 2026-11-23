@@ -48,9 +48,7 @@ impl Records {
             match crate::config::read_regular(&directory.join(&filename), PAGE_BYTES, true) {
                 Ok(existing) if existing == bytes => {}
                 Ok(_) => return Err(io::Error::other("Source cache checksum mismatch")),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    crate::config::write_in(directory, &filename, &bytes)?
-                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => crate::config::write_in(directory, &filename, &bytes)?,
                 Err(e) => return Err(e),
             }
             let end = start + entries.len();
@@ -63,12 +61,7 @@ impl Records {
             count,
         })
     }
-    fn visit(
-        &self,
-        start: usize,
-        end: usize,
-        mut f: impl FnMut(&str) -> io::Result<()>,
-    ) -> io::Result<()> {
+    fn visit(&self, start: usize, end: usize, mut f: impl FnMut(&str) -> io::Result<()>) -> io::Result<()> {
         if start > end || end > self.len() {
             return Err(io::Error::other("Source range unavailable"));
         }
@@ -81,9 +74,7 @@ impl Records {
                 }
                 Ok(())
             }
-            Self::Pages {
-                directory, pages, ..
-            } => {
+            Self::Pages { directory, pages, .. } => {
                 let first = pages.partition_point(|p| p.end <= start);
                 for page in pages[first..].iter().take_while(|p| p.start < end) {
                     let bytes = crate::config::read_regular(
@@ -94,14 +85,11 @@ impl Records {
                     if super::hash(&bytes) != page.key {
                         return Err(io::Error::other("Source page checksum mismatch"));
                     }
-                    let entries: Vec<String> =
-                        serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+                    let entries: Vec<String> = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
                     if entries.len() != page.end - page.start {
                         return Err(io::Error::other("Source page range mismatch"));
                     }
-                    for entry in
-                        &entries[start.saturating_sub(page.start)..end.min(page.end) - page.start]
-                    {
+                    for entry in &entries[start.saturating_sub(page.start)..end.min(page.end) - page.start] {
                         f(entry)?;
                     }
                 }

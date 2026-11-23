@@ -8,7 +8,7 @@ pub mod model;
 mod types;
 use serde_json::Value;
 use std::io::{self, Read};
-pub use types::{attempt_status, status_text, Accounting, Activity, StatusPart, Tokens, Usage};
+pub use types::{Accounting, Activity, StatusPart, Tokens, Usage, attempt_status, status_text};
 
 /// Provider-reported results. Missing usage is unknown, never an estimate of zero.
 #[derive(Debug, Default)]
@@ -48,7 +48,11 @@ pub fn json_lines(reader: impl Read, decoder: impl Decoder, emit: impl FnMut(Eve
     json_lines_usage(reader, decoder, emit).0
 }
 /// [`json_lines`] plus the usage the provider reported, also on failure.
-pub fn json_lines_usage(reader: impl Read, decoder: impl Decoder, emit: impl FnMut(Event)) -> (io::Result<Output>, Usage) {
+pub fn json_lines_usage(
+    reader: impl Read,
+    decoder: impl Decoder,
+    emit: impl FnMut(Event),
+) -> (io::Result<Output>, Usage) {
     json_lines_live(reader, decoder, emit, |_| {})
 }
 /// [`json_lines_usage`] that also reports the usage so far whenever a record

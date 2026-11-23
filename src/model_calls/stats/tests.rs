@@ -21,10 +21,17 @@ fn serve(replies: [(&'static str, &'static str, &'static str); 2]) -> (Endpoint,
             loop {
                 line.clear();
                 reader.read_line(&mut line).unwrap();
-                if line == "\r\n" { break; }
+                if line == "\r\n" {
+                    break;
+                }
                 assert!(!line.to_ascii_lowercase().starts_with("authorization"));
             }
-            write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
         }
     });
     let mut endpoint = crate::model_calls::tests::endpoint();
@@ -35,15 +42,18 @@ fn serve(replies: [(&'static str, &'static str, &'static str); 2]) -> (Endpoint,
 #[test]
 fn recorded_llama_metrics_parse_into_rates_cache_share_and_queue() {
     let metrics = Metrics::parse(METRICS);
-    assert_eq!(metrics, Metrics {
-        prompt_tokens: Some(59.0),
-        prompt_seconds: Some(12.4125),
-        prompt_tokens_cached: Some(51.0),
-        predicted_tokens: Some(8.0),
-        predicted_seconds: Some(2.36842),
-        requests_processing: Some(0.0),
-        requests_deferred: Some(0.0),
-    });
+    assert_eq!(
+        metrics,
+        Metrics {
+            prompt_tokens: Some(59.0),
+            prompt_seconds: Some(12.4125),
+            prompt_tokens_cached: Some(51.0),
+            predicted_tokens: Some(8.0),
+            predicted_seconds: Some(2.36842),
+            requests_processing: Some(0.0),
+            requests_deferred: Some(0.0),
+        }
+    );
     assert!((metrics.prompt_rate().unwrap() - 4.753).abs() < 0.01);
     assert!((metrics.generation_rate().unwrap() - 3.378).abs() < 0.01);
     assert!((metrics.cache_share().unwrap() - 51.0 / 110.0).abs() < 1e-9);
@@ -80,23 +90,45 @@ fn metrics_parsing_is_bounded_and_skips_malformed_lines() {
 #[test]
 fn recorded_slots_report_busy_slots_and_context_held() {
     let slots = Slots::parse(&serde_json::from_str(SLOTS).unwrap()).unwrap();
-    assert_eq!(slots, Slots { total: 1, busy: 0, context_tokens: 58, context_capacity: 1024 });
+    assert_eq!(
+        slots,
+        Slots {
+            total: 1,
+            busy: 0,
+            context_tokens: 58,
+            context_capacity: 1024
+        }
+    );
     let busy = serde_json::json!([
         {"n_ctx": 16384, "is_processing": true, "n_prompt_tokens": 9000, "next_token": [{"n_decoded": 120}]},
         {"n_ctx": 16384, "is_processing": false, "n_prompt_tokens": 99999},
         "junk",
     ]);
-    assert_eq!(Slots::parse(&busy).unwrap(), Slots { total: 3, busy: 1, context_tokens: 9120 + 16384, context_capacity: 32768 });
+    assert_eq!(
+        Slots::parse(&busy).unwrap(),
+        Slots {
+            total: 3,
+            busy: 1,
+            context_tokens: 9120 + 16384,
+            context_capacity: 32768
+        }
+    );
     assert_eq!(Slots::parse(&serde_json::json!({"error": "x"})), None);
 }
 
 #[test]
 fn reads_a_live_server_and_formats_the_cli_line() {
-    let (endpoint, server) = serve([("200 OK", "text/plain; version=0.0.4", METRICS), ("200 OK", "application/json", SLOTS)]);
+    let (endpoint, server) = serve([
+        ("200 OK", "text/plain; version=0.0.4", METRICS),
+        ("200 OK", "application/json", SLOTS),
+    ]);
     let stats = read(&endpoint).unwrap();
     server.join().unwrap();
     assert!(stats.reachable);
-    assert_eq!(line(&stats), "prompt 4.8 tok/s · generation 3.4 tok/s (avg since start) · 0 processing, 0 queued · prefix cache 46% of prompt tokens · prefilled 59 tokens, 84% of busy time · slots 0/1 busy · KV 58/1.0k tokens (6%)");
+    assert_eq!(
+        line(&stats),
+        "prompt 4.8 tok/s · generation 3.4 tok/s (avg since start) · 0 processing, 0 queued · prefix cache 46% of prompt tokens · prefilled 59 tokens, 84% of busy time · slots 0/1 busy · KV 58/1.0k tokens (6%)"
+    );
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["metrics"]["prompt_tokens_cached"], 51.0);
     assert_eq!(json["slots"]["context_capacity"], 1024);
@@ -107,11 +139,17 @@ fn reads_a_live_server_and_formats_the_cli_line() {
 fn a_server_without_metrics_still_reports_slots_and_how_to_enable_them() {
     // What the running service answers before it is restarted with --metrics.
     let refusal = r#"{"error":{"code":501,"message":"This server does not support metrics endpoint. Start it with `--metrics`","type":"not_supported_error"}}"#;
-    let (endpoint, server) = serve([("501 Not Implemented", "application/json", refusal), ("200 OK", "application/json", SLOTS)]);
+    let (endpoint, server) = serve([
+        ("501 Not Implemented", "application/json", refusal),
+        ("200 OK", "application/json", SLOTS),
+    ]);
     let stats = read(&endpoint).unwrap();
     server.join().unwrap();
     assert!(stats.reachable);
-    assert_eq!(line(&stats), "metrics off (restart the server with --metrics; nix run .#inference adds it) · slots 0/1 busy · KV 58/1.0k tokens (6%)");
+    assert_eq!(
+        line(&stats),
+        "metrics off (restart the server with --metrics; nix run .#inference adds it) · slots 0/1 busy · KV 58/1.0k tokens (6%)"
+    );
 }
 
 #[test]
@@ -126,13 +164,21 @@ fn an_endpoint_that_does_not_answer_is_reported_once() {
     assert_eq!(line(&stats), format!("not answering at http://{address}/v1"));
     // The page's fragments are escaped HTML keyed by model name.
     let fragments = live(std::slice::from_ref(&endpoint));
-    assert_eq!(fragments[&endpoint.id], format!("<span class='model-stats-line'>not answering at http://{address}/v1</span>"));
+    assert_eq!(
+        fragments[&endpoint.id],
+        format!("<span class='model-stats-line'>not answering at http://{address}/v1</span>")
+    );
 }
 
 #[test]
 fn cli_adapters_have_no_server_statistics() {
     let mut endpoint = crate::model_calls::tests::endpoint();
     (endpoint.cli, endpoint.url) = (Some(crate::backend::Backend::Codex), String::new());
-    assert!(read(&endpoint).unwrap_err().to_string().contains("no inference server statistics"));
+    assert!(
+        read(&endpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("no inference server statistics")
+    );
     assert!(live(&[endpoint]).is_empty());
 }

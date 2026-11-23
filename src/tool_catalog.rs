@@ -5,10 +5,7 @@ pub fn render(state: &State, query: &str) -> String {
     let mut words = Vec::new();
     let mut error = None;
     for token in query.split_whitespace() {
-        if let Some(lens) = token
-            .strip_prefix("lens:")
-            .or_else(|| token.strip_prefix("lense:"))
-        {
+        if let Some(lens) = token.strip_prefix("lens:").or_else(|| token.strip_prefix("lense:")) {
             roots.extend(lens.split(',').map(str::to_owned));
         } else {
             words.push(token.to_lowercase());
@@ -18,12 +15,7 @@ pub fn render(state: &State, query: &str) -> String {
         None
     } else {
         match crate::lens_library::resolve(state, &roots) {
-            Ok(resolved) => Some(
-                resolved
-                    .tools
-                    .into_iter()
-                    .collect::<std::collections::BTreeSet<_>>(),
-            ),
+            Ok(resolved) => Some(resolved.tools.into_iter().collect::<std::collections::BTreeSet<_>>()),
             Err(_) => {
                 error = Some("Unknown or unresolved lens.".to_owned());
                 None
@@ -51,20 +43,14 @@ pub fn render(state: &State, query: &str) -> String {
         )
         .to_lowercase();
         if !words.iter().all(|word| haystack.contains(word))
-            || selected
-                .as_ref()
-                .is_some_and(|ids| !ids.contains(entry.name))
+            || selected.as_ref().is_some_and(|ids| !ids.contains(entry.name))
         {
             continue;
         }
         count += 1;
         html.push_str("<article class='record'><h3>");
         if let Some(href) = entry.href {
-            html.push_str(&format!(
-                "<a href='{}'>{} ↗</a>",
-                escape(href),
-                escape(entry.title)
-            ));
+            html.push_str(&format!("<a href='{}'>{} ↗</a>", escape(href), escape(entry.title)));
         } else {
             html.push_str(&escape(entry.title));
         }

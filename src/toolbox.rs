@@ -1,8 +1,8 @@
 //! Concrete host-brokered tools. Models never supply Docker options or credentials.
 use base64::Engine;
-use scraper::{Html, Selector};
 use control_isolation::{Exec, Input, Limits, Network, RunSpec, Size, Tmpfs, User};
-use serde_json::{json, Value};
+use scraper::{Html, Selector};
+use serde_json::{Value, json};
 use std::{
     io::{self, Read},
     sync::Mutex,
@@ -22,12 +22,12 @@ pub fn definitions() -> Vec<Value> {
     ]
 }
 pub fn known(name: &str) -> bool {
-    crate::tool_registry::lookup(name).is_some_and(|tool|tool.route==crate::tool_registry::Route::Toolbox)
+    crate::tool_registry::lookup(name).is_some_and(|tool| tool.route == crate::tool_registry::Route::Toolbox)
 }
 pub fn call(name: &str, args: &Value) -> io::Result<Value> {
     match name {
-        "control.rust.bench"=>crate::rust_bench::call(args),
-        "control.solve"=>crate::solver::call(args),
+        "control.rust.bench" => crate::rust_bench::call(args),
+        "control.solve" => crate::solver::call(args),
         // Workers dispatch this themselves to also observe attempt cancellation.
         crate::model_calls::tool::NAME => crate::model_calls::tool::call(args, &crate::shutdown::requested),
         "control.search.path" => crate::graph_search::call(args),
@@ -48,8 +48,8 @@ pub fn call(name: &str, args: &Value) -> io::Result<Value> {
             struct Input {
                 code: String,
             }
-            let input: Input = serde_json::from_value(args.clone())
-                .map_err(|_| io::Error::other("Expected Rust source code"))?;
+            let input: Input =
+                serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Expected Rust source code"))?;
             playground(&input.code)
         }
         _ => Err(io::Error::other("Unknown tool")),
@@ -83,10 +83,7 @@ fn link(href: &str, bing: bool) -> Option<String> {
             .map(|(_, v)| v.into_owned())?;
         url = reqwest::Url::parse(&target).ok()?;
     } else if bing && url.domain() == Some("www.bing.com") && url.path() == "/ck/a" {
-        let target = url
-            .query_pairs()
-            .find(|(k, _)| k == "u")
-            .map(|(_, v)| v.into_owned())?;
+        let target = url.query_pairs().find(|(k, _)| k == "u").map(|(_, v)| v.into_owned())?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(target.strip_prefix("a1")?)
             .ok()?;
@@ -116,11 +113,7 @@ fn parse_search(html: &str, bing: bool, limit: usize) -> io::Result<Vec<Value>> 
         let Some(anchor) = row.select(&heading).next() else {
             continue;
         };
-        let Some(url) = anchor
-            .value()
-            .attr("href")
-            .and_then(|href| link(href, bing))
-        else {
+        let Some(url) = anchor.value().attr("href").and_then(|href| link(href, bing)) else {
             continue;
         };
         if results.iter().any(|v: &Value| v["url"] == url) {
@@ -151,9 +144,7 @@ fn parse_search(html: &str, bing: bool, limit: usize) -> io::Result<Vec<Value>> 
             break;
         }
     }
-    if results.is_empty()
-        && !(html.contains("result--no-result") || html.contains("class=\"b_no\""))
-    {
+    if results.is_empty() && !(html.contains("result--no-result") || html.contains("class=\"b_no\"")) {
         return Err(io::Error::other(
             "Search provider challenged the request or changed its result format",
         ));
@@ -200,11 +191,11 @@ fn search(query: &str, limit: usize) -> io::Result<Value> {
         })();
         if let Ok(results) = attempt {
             if fallback && results.is_empty() {
-                return Err(io::Error::other("Web search unavailable: DuckDuckGo failed and Bing returned no results. Try again later."));
+                return Err(io::Error::other(
+                    "Web search unavailable: DuckDuckGo failed and Bing returned no results. Try again later.",
+                ));
             }
-            return Ok(
-                json!({"query":query,"provider":provider,"results":results,"fallback":fallback}),
-            );
+            return Ok(json!({"query":query,"provider":provider,"results":results,"fallback":fallback}));
         }
         fallback = true;
     }
@@ -219,41 +210,53 @@ fn playground_container(name: &str, image: &str, optimized: bool) -> RunSpec {
         entrypoint: Some("/bin/control-playground".into()),
         user: Some(User { uid: 65532, gid: 65532 }),
         workdir: Some("/tmp".into()),
-        limits: Limits { pids: Some(64), memory: Some(Size::Mib(768)), cpus: Some(1), ..Limits::default() },
+        limits: Limits {
+            pids: Some(64),
+            memory: Some(Size::Mib(768)),
+            cpus: Some(1),
+            ..Limits::default()
+        },
         network: Network::None,
         input: Input::Attached,
         ..RunSpec::default()
     }
     .label("dev.control.tool", "playground")
-    .tmpfs(Tmpfs { exec: Exec::Allow, mode: Some(0o1777), ..Tmpfs::new("/tmp", Size::Mib(96)) })
+    .tmpfs(Tmpfs {
+        exec: Exec::Allow,
+        mode: Some(0o1777),
+        ..Tmpfs::new("/tmp", Size::Mib(96))
+    })
     .env("HOME", "/tmp")
     .args(optimized.then_some("--bench"))
 }
 fn playground(code: &str) -> io::Result<Value> {
-    playground_mode(code,false)
+    playground_mode(code, false)
 }
-pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
+pub(crate) fn playground_mode(code: &str, optimized: bool) -> io::Result<Value> {
     if code.trim().is_empty() || code.len() > 16384 {
         return Err(io::Error::other("Expected Rust source of at most 16 KiB"));
     }
     let _guard = PLAYGROUND
         .try_lock()
         .map_err(|_| io::Error::other("Rust playground is busy"))?;
-    let image = crate::runtime::worker_image()
-        .ok_or_else(|| io::Error::other("No pinned Nix development image configured"))?;
+    let image =
+        crate::runtime::worker_image().ok_or_else(|| io::Error::other("No pinned Nix development image configured"))?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let name = format!("control-playground-{stamp}");
-    let finished = crate::engine::ephemeral::run(crate::engine::isolation(), crate::engine::ephemeral::Spec {
-        run: playground_container(&name, &image, optimized),
-        input: code.as_bytes().to_vec(),
-        deadline: Duration::from_secs(20),
-        stdout_bytes: 65536,
-        stderr_bytes: None,
-        unavailable: "Could not start the Nix playground",
-    })?;
+    let finished = crate::engine::ephemeral::run(
+        crate::engine::isolation(),
+        crate::engine::ephemeral::Spec {
+            run: playground_container(&name, &image, optimized),
+            input: code.as_bytes().to_vec(),
+            deadline: Duration::from_secs(20),
+            stdout_bytes: 65536,
+            stderr_bytes: None,
+            unavailable: "Could not start the Nix playground",
+        },
+    )?;
     let (bytes, truncated, status) = (finished.stdout, finished.stdout_truncated, finished.status);
     if !finished.delivered || !status.is_some_and(|s| s.success()) {
         return Err(io::Error::other(
@@ -264,10 +267,7 @@ pub(crate) fn playground_mode(code: &str, optimized:bool) -> io::Result<Value> {
     let (status, output) = text
         .split_once('\n')
         .ok_or_else(|| io::Error::other("Invalid playground response"))?;
-    if !["compile ", "run "]
-        .iter()
-        .any(|prefix| status.starts_with(prefix))
-    {
+    if !["compile ", "run "].iter().any(|prefix| status.starts_with(prefix)) {
         return Err(io::Error::other("Invalid playground response"));
     }
     let output = output

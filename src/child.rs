@@ -19,7 +19,10 @@ type Task = Box<dyn FnOnce() + Send>;
 
 pub fn watch(child: Child) -> io::Result<Watched> {
     watch_with(child, observe_exit, |task| {
-        std::thread::Builder::new().name("control-child".into()).spawn(task).map(drop)
+        std::thread::Builder::new()
+            .name("control-child".into())
+            .spawn(task)
+            .map(drop)
     })
 }
 
@@ -38,7 +41,9 @@ fn watch_with(
     let task: Task = Box::new(move || {
         let Ok(mut child) = handed.recv() else { return };
         let observed = observe(pid);
-        let lost = observed.as_ref().is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD));
+        let lost = observed
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD));
         if observed.is_err() && !lost {
             // Still our unreaped child, so its PID is reserved: stop it before reaping.
             let _ = child.kill();
@@ -60,7 +65,9 @@ fn watch_with(
         let _ = child.wait();
         return Err(error);
     }
-    hand_over.send(child).map_err(|_| io::Error::other("Child waiter stopped before taking ownership"))?;
+    hand_over
+        .send(child)
+        .map_err(|_| io::Error::other("Child waiter stopped before taking ownership"))?;
     Ok(Watched { pid, exited, exit })
 }
 

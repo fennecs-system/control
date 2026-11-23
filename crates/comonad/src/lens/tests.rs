@@ -1,15 +1,10 @@
-
 use super::*;
 
 fn check(len: u64, verbatim: u64) -> Vec<Block> {
     let blocks: Vec<Block> = cut(len, verbatim).collect();
     let mut end = len;
     for b in &blocks {
-        assert_eq!(
-            b.end(),
-            end,
-            "contiguous, newest first: {len}/{verbatim} {blocks:?}"
-        );
+        assert_eq!(b.end(), end, "contiguous, newest first: {len}/{verbatim} {blocks:?}");
         assert_eq!(b.start % b.len(), 0, "aligned");
         end = b.start;
     }
@@ -69,10 +64,7 @@ fn growing_history_computes_each_summary_once() {
         "{} summaries for {n} items",
         summaries.len()
     );
-    let b = Block {
-        start: 512,
-        level: 7,
-    };
+    let b = Block { start: 512, level: 7 };
     let [l, r] = b.children().unwrap();
     assert_eq!(
         (l.parent(), r.parent(), l.end(), r.start),

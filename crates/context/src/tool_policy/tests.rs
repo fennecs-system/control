@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn metadata_is_unique_and_does_not_infer_authority_from_readonly_hints() {

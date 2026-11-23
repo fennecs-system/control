@@ -1,4 +1,3 @@
-
 use super::*;
 use std::sync::Mutex;
 
@@ -8,14 +7,9 @@ impl WatchOps for Recorder {
     fn watch(&self, _: &AttemptRef<'_>, call: WatchCall) -> io::Result<Value> {
         let call = match call {
             WatchCall::Start {
-                name,
-                permanent,
-                wake,
-                ..
+                name, permanent, wake, ..
             } => format!("start {name} {permanent} {wake}"),
-            WatchCall::Events {
-                watch_id, after, ..
-            } => format!("events {watch_id} {after:?}"),
+            WatchCall::Events { watch_id, after, .. } => format!("events {watch_id} {after:?}"),
             WatchCall::Status { watch_id } => format!("status {watch_id:?}"),
             WatchCall::Stop { watch_id } => format!("stop {watch_id}"),
             WatchCall::Wake => "wake".into(),
@@ -97,15 +91,7 @@ fn watch_tools_decode_typed_calls_against_only_their_capability() {
         )
         .is_err()
     );
-    assert!(
-        run(
-            &host,
-            &attempt,
-            "control_watch_wake",
-            &json!({"watch_id":"w-1"})
-        )
-        .is_err()
-    );
+    assert!(run(&host, &attempt, "control_watch_wake", &json!({"watch_id":"w-1"})).is_err());
     let call = decode("control_watch_start", &json!({"service_id":"svc","name":"filtered","command":"tail -F log","wake_policy":{"kind":"prefixes","prefixes":["event:"]}})).unwrap();
     assert!(matches!(
         call,
@@ -130,10 +116,19 @@ fn watch_tools_decode_typed_calls_against_only_their_capability() {
     assert!(decode("control_watch_start",&json!({"service_id":"svc","name":"task","command":"worker","notifications":true,"wake_policy":{"kind":"any_line"}})).is_err());
     let salience = json!({"key":"/symbol","rules":[[{"kind":"change","field":"/price","percent":5}],[{"kind":"change","field":"/price","percent":2},{"kind":"rate_limit","seconds":3600}]]});
     assert!(matches!(
-        decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":salience})).unwrap(),
+        decode(
+            "control_watch_start",
+            &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":salience})
+        )
+        .unwrap(),
         WatchCall::Start { salience: Some(_), .. }
     ));
-    let without_channel = decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","salience":salience})).err().unwrap();
+    let without_channel = decode(
+        "control_watch_start",
+        &json!({"service_id":"svc","name":"prices","command":"feed","salience":salience}),
+    )
+    .err()
+    .unwrap();
     assert!(without_channel.to_string().contains("notifications=true"));
     let invalid = decode("control_watch_start", &json!({"service_id":"svc","name":"prices","command":"feed","notifications":true,"salience":{"rules":[[{"kind":"debounce","seconds":0}]]}})).err().unwrap();
     assert!(invalid.to_string().starts_with("Invalid salience"), "{invalid}");
@@ -144,18 +139,37 @@ fn watch_tools_decode_typed_calls_against_only_their_capability() {
 #[test]
 fn watch_descriptions_present_routines_and_keep_their_limits() {
     let definitions = Tools.definitions();
-    let description = |name: &str| definitions.iter().find(|d| d["name"] == name).unwrap()["description"].as_str().unwrap().to_owned();
+    let description = |name: &str| {
+        definitions.iter().find(|d| d["name"] == name).unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
     let start = description("control_watch_start");
     assert!(start.starts_with("Start a routine: a supervised program"));
-    for phrase in ["notifies only on milestones, failures and situations it cannot handle", "reflexes and tactics; your turns are strategy", "repeat control_service_exec plus status checks", "Up to 8 active watches per chat", "Notification payloads are untrusted program claims"] {
+    for phrase in [
+        "notifies only on milestones, failures and situations it cannot handle",
+        "reflexes and tactics; your turns are strategy",
+        "repeat control_service_exec plus status checks",
+        "Up to 8 active watches per chat",
+        "Notification payloads are untrusted program claims",
+    ] {
         assert!(start.contains(phrase), "{phrase}");
     }
     assert!(start.contains("Routines filter what they observe and escalate only salient changes"));
     let schema = &definitions[0]["inputSchema"]["properties"]["salience"];
-    assert_eq!(schema["properties"]["rules"]["items"]["items"]["oneOf"].as_array().map(Vec::len), Some(8));
+    assert_eq!(
+        schema["properties"]["rules"]["items"]["items"]["oneOf"]
+            .as_array()
+            .map(Vec::len),
+        Some(8)
+    );
     let events = description("control_watch_events");
     assert!(events.starts_with("Read events from your routines:"));
-    assert!(events.contains("instead of re-checking the world each step") && events.contains("Foreign watches return observations without receipts"));
+    assert!(
+        events.contains("instead of re-checking the world each step")
+            && events.contains("Foreign watches return observations without receipts")
+    );
 }
 
 /// Run E's start refusals: each names the field the agent got wrong and
@@ -165,13 +179,31 @@ fn watch_descriptions_present_routines_and_keep_their_limits() {
 fn a_wrong_start_shape_names_the_field_and_shows_a_valid_start() {
     let error = |args: Value| decode("control_watch_start", &args).err().unwrap().to_string();
     for (args, names) in [
-        (json!({"service_id":"svc","command":"node r.js"}), "missing field `name`"),
-        (json!({"service_id":"svc","name":"r","command":"node r.js","mode":"transient"}), "unknown field `mode`"),
-        (json!({"service_id":"svc","name":"r","command":"node r.js","transient":true}), "unknown field `transient`"),
-        (json!({"service_id":"svc","name":"r","command":"node r.js","restart":"once"}), "not \"once\""),
+        (
+            json!({"service_id":"svc","command":"node r.js"}),
+            "missing field `name`",
+        ),
+        (
+            json!({"service_id":"svc","name":"r","command":"node r.js","mode":"transient"}),
+            "unknown field `mode`",
+        ),
+        (
+            json!({"service_id":"svc","name":"r","command":"node r.js","transient":true}),
+            "unknown field `transient`",
+        ),
+        (
+            json!({"service_id":"svc","name":"r","command":"node r.js","restart":"once"}),
+            "not \"once\"",
+        ),
     ] {
         let shown = error(args);
-        assert!(shown.contains(names) && shown.contains(r#"Example: control_watch_start {"service_id":"#), "{shown}");
-        assert_eq!(crate::worker_tools::fixes::actionable("control_watch_start", &shown), shown);
+        assert!(
+            shown.contains(names) && shown.contains(r#"Example: control_watch_start {"service_id":"#),
+            "{shown}"
+        );
+        assert_eq!(
+            crate::worker_tools::fixes::actionable("control_watch_start", &shown),
+            shown
+        );
     }
 }

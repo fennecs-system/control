@@ -2,9 +2,8 @@
 use std::{fs, io, os::unix::fs::PermissionsExt, path::Path};
 
 fn private(path: &Path, directory: bool) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|m| {
-        m.permissions().mode() & 0o077 == 0 && if directory { m.is_dir() } else { m.is_file() }
-    })
+    fs::symlink_metadata(path)
+        .is_ok_and(|m| m.permissions().mode() & 0o077 == 0 && if directory { m.is_dir() } else { m.is_file() })
 }
 
 pub fn run() -> io::Result<()> {
@@ -34,7 +33,12 @@ pub fn run() -> io::Result<()> {
     let kib = |name: &str| fs::metadata(state.join(name)).map_or(0, |m| m.len().div_ceil(1024));
     let checkpoint = crate::config::read_state::<crate::State>(isize::MAX as usize);
     check(
-        &format!("state checkpoint (state.json {} KiB, {} {} KiB)", kib("state.json"), crate::config::STATE_LOG, kib(crate::config::STATE_LOG)),
+        &format!(
+            "state checkpoint (state.json {} KiB, {} {} KiB)",
+            kib("state.json"),
+            crate::config::STATE_LOG,
+            kib(crate::config::STATE_LOG)
+        ),
         checkpoint.is_ok(),
         &format!(
             "state.json and state.log must parse ({:?}); stop Control, keep both files and inspect them with jq (docs/HISTORY.md)",
@@ -65,7 +69,8 @@ pub fn run() -> io::Result<()> {
     );
     match crate::build_environment::image() {
         Ok(Some(image)) if engine => {
-            let readiness = crate::config::source_root().and_then(|source| crate::build_environment::check(isolation, &image, &source));
+            let readiness = crate::config::source_root()
+                .and_then(|source| crate::build_environment::check(isolation, &image, &source));
             match readiness {
                 Ok(()) => check("declared build environment", true, ""),
                 Err(error) => check("declared build environment", false, &error.to_string()),
@@ -92,14 +97,14 @@ pub fn run() -> io::Result<()> {
             continue;
         }
         let name = backend.label();
-        check(
-            &format!("{name}: pinned image"),
-            image.is_some(),
-            agent.image_hint(),
-        );
+        check(&format!("{name}: pinned image"), image.is_some(), agent.image_hint());
         if let (true, Some(image)) = (engine, &image) {
             let installed = isolation.image_labels(&image.as_str().into()).is_ok();
-            check(&format!("{name}: image installed"), installed, "load the Nix-built image into the engine");
+            check(
+                &format!("{name}: image installed"),
+                installed,
+                "load the Nix-built image into the engine",
+            );
             if installed {
                 // Offline isolation probe with an empty canary credential: no account is mounted and no model is called.
                 let probe = agent.probe(isolation, image);

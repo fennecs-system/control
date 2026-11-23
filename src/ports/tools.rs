@@ -16,7 +16,10 @@ pub enum PortCall {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Selection {
     Port(ResourceId),
-    Matching { service: Option<ResourceId>, direction: Option<Direction> },
+    Matching {
+        service: Option<ResourceId>,
+        direction: Option<Direction>,
+    },
 }
 pub trait PortOps {
     fn port(&self, attempt: &AttemptRef<'_>, call: PortCall) -> io::Result<Value>;
@@ -31,7 +34,10 @@ impl AttemptTools for Tools {
         ]
     }
     fn known(&self, name: &str) -> bool {
-        matches!(name, "control_port_request" | "control_port_status" | "control_port_stop")
+        matches!(
+            name,
+            "control_port_request" | "control_port_status" | "control_port_stop"
+        )
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         run(cx.host, &cx.attempt, name, args)
@@ -52,9 +58,15 @@ fn decode(name: &str, args: &Value) -> io::Result<PortCall> {
     struct Id {
         port_id: Option<ResourceId>,
     }
-    let id = || serde_json::from_value::<Id>(args.clone()).map(|id| id.port_id).map_err(io::Error::other);
+    let id = || {
+        serde_json::from_value::<Id>(args.clone())
+            .map(|id| id.port_id)
+            .map_err(io::Error::other)
+    };
     match name {
-        "control_port_request" => serde_json::from_value(args.clone()).map(PortCall::Request).map_err(io::Error::other),
+        "control_port_request" => serde_json::from_value(args.clone())
+            .map(PortCall::Request)
+            .map_err(io::Error::other),
         "control_port_status" => id().map(PortCall::Status),
         "control_port_stop" => selection(args).map(PortCall::Stop),
         _ => Err(io::Error::other("Unknown port tool")),
@@ -73,8 +85,12 @@ fn selection(args: &Value) -> io::Result<Selection> {
     let stop: Stop = serde_json::from_value(args.clone()).map_err(io::Error::other)?;
     match (stop.port_id, stop.service_id, stop.direction, stop.all) {
         (Some(port), None, None, false) => Ok(Selection::Port(port)),
-        (None, service, direction, all) if all != (service.is_some() || direction.is_some()) => Ok(Selection::Matching { service, direction }),
-        _ => Err(io::Error::other("Pass port_id alone, service_id and/or direction, or all=true")),
+        (None, service, direction, all) if all != (service.is_some() || direction.is_some()) => {
+            Ok(Selection::Matching { service, direction })
+        }
+        _ => Err(io::Error::other(
+            "Pass port_id alone, service_id and/or direction, or all=true",
+        )),
     }
 }
 

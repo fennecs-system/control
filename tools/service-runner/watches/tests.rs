@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 #[ignore = "isolated Linux fixture with writable /workspace and private home; no model calls"]
@@ -50,14 +49,9 @@ fn notification_descriptor_does_not_wait_for_a_log_newline() {
     let started = Instant::now();
     loop {
         let frames = read();
-        if frames
-            .iter()
-            .any(|frame| matches!(frame.event, Event::Notification(_)))
-        {
+        if frames.iter().any(|frame| matches!(frame.event, Event::Notification(_))) {
             assert!(
-                !frames
-                    .iter()
-                    .any(|frame| matches!(frame.event, Event::Line(_))),
+                !frames.iter().any(|frame| matches!(frame.event, Event::Line(_))),
                 "partial stdout must not prevent the notification"
             );
             break;
@@ -70,10 +64,7 @@ fn notification_descriptor_does_not_wait_for_a_log_newline() {
     }
     fs::write(&marker, b"release test child").unwrap();
     let mut raw = 0;
-    assert_eq!(
-        unsafe { super::super::waitpid(child.0, &mut raw, 0) },
-        child.0
-    );
+    assert_eq!(unsafe { super::super::waitpid(child.0, &mut raw, 0) }, child.0);
     let status = ExitStatus::from_raw(raw);
     assert!(status.success());
     running.reader.join().unwrap();
@@ -110,10 +101,9 @@ fn collector_profile() {
     let started = Instant::now();
     for batch in 0..batches {
         let id = format!("bench-{}-{batch}", std::process::id());
-        let spec = Spec::decode(
-            "transient\nfor ((i=0; i<20000; i++)); do printf 'status unchanged %s\\n' \"$i\"; done",
-        )
-        .unwrap();
+        let spec =
+            Spec::decode("transient\nfor ((i=0; i<20000; i++)); do printf 'status unchanged %s\\n' \"$i\"; done")
+                .unwrap();
         let log = Arc::new(Mutex::new(Log::open(&id)));
         let mut watch = Watch {
             spec,
@@ -126,10 +116,7 @@ fn collector_profile() {
         start(&id, &mut watch, Instant::now());
         let running = watch.running.take().unwrap();
         let mut raw = 0;
-        assert_eq!(
-            unsafe { super::super::waitpid(running.pid, &mut raw, 0) },
-            running.pid
-        );
+        assert_eq!(unsafe { super::super::waitpid(running.pid, &mut raw, 0) }, running.pid);
         assert!(ExitStatus::from_raw(raw).success());
         running.reader.join().unwrap();
         assert_eq!(log.lock().unwrap().seq, 20000);

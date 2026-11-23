@@ -36,12 +36,23 @@ pub(crate) fn handle(
         && let Some((reply, policy)) = unlocked(shared, version, request)
     {
         let _ = match reply {
-            Ok(reply) => control_http::respond(stream, "200 OK", "application/json", reply.to_string().as_bytes(), "", policy),
-            Err(message) => control_http::respond(stream, "400 Bad Request", "text/plain", message.as_bytes(), "", policy),
+            Ok(reply) => control_http::respond(
+                stream,
+                "200 OK",
+                "application/json",
+                reply.to_string().as_bytes(),
+                "",
+                policy,
+            ),
+            Err(message) => {
+                control_http::respond(stream, "400 Bad Request", "text/plain", message.as_bytes(), "", policy)
+            }
         };
         return true;
     }
-    crate::state_response(stream, shared, |stream, state| locked(stream, state, method, version, request.as_ref()));
+    crate::state_response(stream, shared, |stream, state| {
+        locked(stream, state, method, version, request.as_ref())
+    });
     true
 }
 
@@ -60,14 +71,20 @@ fn unlocked(shared: &Arc<Mutex<State>>, version: Option<&str>, request: &Value) 
         "control_github_open_pr" => (Ok(crate::github::mcp_open_pr(shared, request)), Policy::Restricted),
         name if acknowledged && crate::packages::known(name) => {
             let result = crate::packages::operator(shared, name, call.arguments);
-            (Ok(control_mcp::reply(id, crate::toolbox::result(result))), Policy::Embedded)
+            (
+                Ok(control_mcp::reply(id, crate::toolbox::result(result))),
+                Policy::Embedded,
+            )
         }
         name if crate::toolbox::known(name) => {
             if !acknowledged || version.is_some_and(|version| !control_mcp::supported(version)) {
                 (Err("Invalid MCP request."), Policy::Embedded)
             } else {
                 let result = crate::toolbox::call(name, call.arguments);
-                (Ok(control_mcp::reply(id, crate::toolbox::result(result))), Policy::Embedded)
+                (
+                    Ok(control_mcp::reply(id, crate::toolbox::result(result))),
+                    Policy::Embedded,
+                )
             }
         }
         _ => return None,
@@ -80,7 +97,12 @@ fn locked(stream: &mut Vec<u8>, state: &mut State, method: &str, version: Option
         let _ = control_http::respond(stream, status, mime, body.as_bytes(), extra, Policy::Embedded);
     };
     if method != "POST" {
-        return respond("405 Method Not Allowed", "text/plain", "Use MCP POST requests.", "Allow: POST\r\n");
+        return respond(
+            "405 Method Not Allowed",
+            "text/plain",
+            "Use MCP POST requests.",
+            "Allow: POST\r\n",
+        );
     }
     if version.is_some_and(|version| !control_mcp::supported(version)) {
         return respond("400 Bad Request", "text/plain", "Unsupported MCP protocol version.", "");
@@ -91,13 +113,21 @@ fn locked(stream: &mut Vec<u8>, state: &mut State, method: &str, version: Option
     };
     if control_mcp::is_notification(request) {
         // A notification must never execute a mutating tool and silently lose its acknowledgement.
-        return if request["method"].as_str().is_some_and(|method| method.starts_with("notifications/")) {
+        return if request["method"]
+            .as_str()
+            .is_some_and(|method| method.starts_with("notifications/"))
+        {
             respond("202 Accepted", "application/json", "", "")
         } else {
             respond("400 Bad Request", "text/plain", "A request ID is required.", "")
         };
     }
-    respond("200 OK", "application/json", &crate::session_http::rpc(state, request).to_string(), "");
+    respond(
+        "200 OK",
+        "application/json",
+        &crate::session_http::rpc(state, request).to_string(),
+        "",
+    );
 }
 
 #[cfg(test)]

@@ -13,10 +13,14 @@ fn fail(message: &str) -> io::Error {
     io::Error::other(message.to_owned())
 }
 fn digest(parts: &[&str]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, parts.join("\u{0}").as_bytes()).as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect()
+    ring::digest::digest(&ring::digest::SHA256, parts.join("\u{0}").as_bytes()).as_ref()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 fn node() -> io::Result<control_core::resources::NodeId> {
-    control_core::resources::NodeId::try_from(crate::config::node_id().map_err(io::Error::other)?).map_err(io::Error::other)
+    control_core::resources::NodeId::try_from(crate::config::node_id().map_err(io::Error::other)?)
+        .map_err(io::Error::other)
 }
 /// Runs a runner subcommand in the service, feeding `input` on stdin.
 fn runner(service: &crate::services::Service, arguments: &[&str], input: &str) -> io::Result<Option<i32>> {
@@ -26,10 +30,21 @@ fn runner(service: &crate::services::Service, arguments: &[&str], input: &str) -
         container,
         user: Some(user),
         input: control_isolation::Input::Attached,
-        argv: ["control-service-runner"].iter().chain(arguments).map(|word| (*word).to_owned()).collect(),
+        argv: ["control-service-runner"]
+            .iter()
+            .chain(arguments)
+            .map(|word| (*word).to_owned())
+            .collect(),
         ..Default::default()
     };
-    let mut child = isolation.exec(&runner, control_isolation::Streams::new(control_isolation::Stream::Piped, control_isolation::Stream::Null, control_isolation::Stream::Null))?;
+    let mut child = isolation.exec(
+        &runner,
+        control_isolation::Streams::new(
+            control_isolation::Stream::Piped,
+            control_isolation::Stream::Null,
+            control_isolation::Stream::Null,
+        ),
+    )?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(input.as_bytes())?;
     }
@@ -49,9 +64,13 @@ fn runner(service: &crate::services::Service, arguments: &[&str], input: &str) -
 
 fn wakes(armed: bool, bot: bool) -> &'static str {
     match (armed, bot) {
-        (true, _) => "The next policy-selected line, exit or source gap wakes this chat once, after the current turn. Keep working while useful independent actions remain; yield when genuinely waiting rather than busy-polling.",
+        (true, _) => {
+            "The next policy-selected line, exit or source gap wakes this chat once, after the current turn. Keep working while useful independent actions remain; yield when genuinely waiting rather than busy-polling."
+        }
         (false, true) => "Policy-selected lines, exits and source gaps already wake this chat.",
-        (false, false) => "This chat is not a bot, so this routine will not wake it: for ongoing work request persistence with control_bot_request {} so every event wakes you; otherwise pass wake=true or call control_watch_wake to be woken once, or read events with control_watch_events.",
+        (false, false) => {
+            "This chat is not a bot, so this routine will not wake it: for ongoing work request persistence with control_bot_request {} so every event wakes you; otherwise pass wake=true or call control_watch_wake to be woken once, or read events with control_watch_events."
+        }
     }
 }
 
@@ -63,7 +82,12 @@ impl Pending {
     }
     fn restore(self, watches: &mut [Watch]) {
         for previous in self.0 {
-            if let Some(w) = watches.iter_mut().find(|w| w.id == previous.id) { w.lines = previous.lines; w.notifications = previous.notifications; w.exits = previous.exits; w.gap = previous.gap; }
+            if let Some(w) = watches.iter_mut().find(|w| w.id == previous.id) {
+                w.lines = previous.lines;
+                w.notifications = previous.notifications;
+                w.exits = previous.exits;
+                w.gap = previous.gap;
+            }
         }
     }
 }
@@ -73,10 +97,23 @@ fn retire(watches: &mut Vec<Watch>, chat: &str, protected: impl Fn(&str) -> bool
     let mut retired = Vec::new();
     let mut finished = 0;
     for watch in std::mem::take(watches).into_iter().rev() {
-        if watch.chat == chat && !watch.active() { finished += 1; }
-        if watch.chat == chat && !watch.active() && finished > 16 && watch.lines == 0 && watch.pending_notifications() == 0 && watch.held_notifications() == 0 && watch.exits.is_empty() && watch.gap.is_none() && !protected(&watch.id) {
+        if watch.chat == chat && !watch.active() {
+            finished += 1;
+        }
+        if watch.chat == chat
+            && !watch.active()
+            && finished > 16
+            && watch.lines == 0
+            && watch.pending_notifications() == 0
+            && watch.held_notifications() == 0
+            && watch.exits.is_empty()
+            && watch.gap.is_none()
+            && !protected(&watch.id)
+        {
             retired.push(watch);
-        } else { watches.push(watch); }
+        } else {
+            watches.push(watch);
+        }
     }
     watches.reverse();
     retired.reverse();
@@ -101,8 +138,15 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     let node = node()?;
     let caller = {
         let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-        let run = state.runtime.runs.iter()
-            .find(|run| run.id == attempt.run && run.status == "running" && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
+        let run = state
+            .runtime
+            .runs
+            .iter()
+            .find(|run| {
+                run.id == attempt.run
+                    && run.status == "running"
+                    && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
+            })
             .ok_or_else(|| fail("Attempt is not active"))?;
         identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
         if crate::delegation::is_judge(run) {
@@ -112,40 +156,105 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         run.clone()
     };
     let chat = caller.chat_id.clone().unwrap_or_default();
-    let reachable = |state: &State, watch: &Watch| watch.chat == chat
-        || state.services.iter().any(|service| service.resource.id.as_str() == watch.service && crate::services::accessible(state, service, &node, &caller));
+    let reachable = |state: &State, watch: &Watch| {
+        watch.chat == chat
+            || state.services.iter().any(|service| {
+                service.resource.id.as_str() == watch.service
+                    && crate::services::accessible(state, service, &node, &caller)
+            })
+    };
     match call {
-        WatchCall::Start { service_id, name, command, permanent, wake, wake_policy, notifications, salience } => {
-            let id = format!("w-{}", digest(&[attempt.run, attempt.generation, attempt.nonce, &service_id, &name]));
+        WatchCall::Start {
+            service_id,
+            name,
+            command,
+            permanent,
+            wake,
+            wake_policy,
+            notifications,
+            salience,
+        } => {
+            let id = format!(
+                "w-{}",
+                digest(&[attempt.run, attempt.generation, attempt.nonce, &service_id, &name])
+            );
             let (service, proxy) = {
                 let state = shared.lock().map_err(|_| fail("State unavailable"))?;
                 if let Some(existing) = state.watches.iter().find(|watch| watch.id == id) {
                     return Ok(existing.brief());
                 }
-                if state.watches.iter().filter(|watch| watch.chat == chat && watch.active()).count() >= MAX_WATCHES {
+                if state
+                    .watches
+                    .iter()
+                    .filter(|watch| watch.chat == chat && watch.active())
+                    .count()
+                    >= MAX_WATCHES
+                {
                     return Err(fail("This chat already runs 8 watches; stop one first"));
                 }
-                let service = state.services.iter()
-                    .find(|service| service.resource.id.as_str() == service_id && crate::services::accessible(&state, service, &node, &caller))
+                let service = state
+                    .services
+                    .iter()
+                    .find(|service| {
+                        service.resource.id.as_str() == service_id
+                            && crate::services::accessible(&state, service, &node, &caller)
+                    })
                     .ok_or_else(|| fail("Service is not owned by this chat or its team"))?
                     .binding_snapshot();
                 let proxy = crate::ports::proxy_exports(&state, &service);
                 (service, proxy)
             };
             // Approved egress brings HTTPS_PROXY, as for exec, when it fits the runner's bound.
-            let launched = if command.len() + proxy.len() <= 16_000 { format!("{proxy}{command}") } else { command.clone() };
+            let launched = if command.len() + proxy.len() <= 16_000 {
+                format!("{proxy}{command}")
+            } else {
+                command.clone()
+            };
             if !crate::services::supports_watches(crate::engine::isolation(), &service)? {
-                return Err(fail("This service's image predates watches; start a new service from rebuilt worker images"));
+                return Err(fail(
+                    "This service's image predates watches; start a new service from rebuilt worker images",
+                ));
             }
             let mut arguments = vec!["watch-put", &id, if permanent { "permanent" } else { "transient" }];
-            if notifications { arguments.push("notify-v1"); }
+            if notifications {
+                arguments.push("notify-v1");
+            }
             match runner(&service, &arguments, &launched)? {
                 Some(0) => {}
-                Some(2) if notifications => return Err(fail("This service runner does not support notifications; start a new service from rebuilt worker images")),
+                Some(2) if notifications => {
+                    return Err(fail(
+                        "This service runner does not support notifications; start a new service from rebuilt worker images",
+                    ));
+                }
                 Some(3) => return Err(fail("This service already supervises 8 watches")),
                 _ => return Err(fail("The service rejected the watch")),
             }
-            let watch = Watch { id: id.clone(), name, chat: chat.clone(), service: service_id, generation: service.resource.generation.get(), permanent, command: command.chars().take(200).collect(), stopped: false, wake_policy, notification_channel:notifications,notifications:None,salience:salience.map(|filter| Box::new(super::Salience::new(filter))), created_by: Some(super::Creator { run: attempt.run.into(), attempt: attempt.generation.into() }), seen: 0, lines: 0, line_seq: 0, wake_seq: None, gap: None, exits: Vec::new(), last_exit: None, recent: Vec::new() };
+            let watch = Watch {
+                id: id.clone(),
+                name,
+                chat: chat.clone(),
+                service: service_id,
+                generation: service.resource.generation.get(),
+                permanent,
+                command: command.chars().take(200).collect(),
+                stopped: false,
+                wake_policy,
+                notification_channel: notifications,
+                notifications: None,
+                salience: salience.map(|filter| Box::new(super::Salience::new(filter))),
+                created_by: Some(super::Creator {
+                    run: attempt.run.into(),
+                    attempt: attempt.generation.into(),
+                }),
+                seen: 0,
+                lines: 0,
+                line_seq: 0,
+                wake_seq: None,
+                gap: None,
+                exits: Vec::new(),
+                last_exit: None,
+                recent: Vec::new(),
+            };
             let summary = watch.brief();
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
             let finished = {
@@ -156,8 +265,12 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             let bots = wake.then(|| state.bots.clone());
             let notice = state.runtime.notice.clone();
             let pending = Pending::capture(&state.watches, &chat);
-            let saved = if wake { crate::bots::arm(&mut state, &chat).map_err(fail) } else { Ok(false) }
-                .and_then(|armed| crate::storage::save(&state).map(|()| armed));
+            let saved = if wake {
+                crate::bots::arm(&mut state, &chat).map_err(fail)
+            } else {
+                Ok(false)
+            }
+            .and_then(|armed| crate::storage::save(&state).map(|()| armed));
             let armed = match saved {
                 Ok(armed) => armed,
                 Err(error) => {
@@ -187,26 +300,50 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         }
         WatchCall::Status { watch_id } => {
             let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            let watches = state.watches.iter().filter(|watch| watch_id.as_ref().is_none_or(|id| &watch.id == id) && reachable(&state, watch)).map(Watch::summary).collect::<Vec<_>>();
+            let watches = state
+                .watches
+                .iter()
+                .filter(|watch| watch_id.as_ref().is_none_or(|id| &watch.id == id) && reachable(&state, watch))
+                .map(Watch::summary)
+                .collect::<Vec<_>>();
             if watch_id.is_some() && watches.is_empty() {
                 return Err(fail("Watch not found in this chat"));
             }
             Ok(json!({"watches":watches}))
         }
-        WatchCall::Events { watch_id, after, include_logs } => {
+        WatchCall::Events {
+            watch_id,
+            after,
+            include_logs,
+        } => {
             let (seen, logs, read, salience) = {
                 let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-                let watch = state.watches.iter().find(|watch| watch.id == watch_id).filter(|watch| reachable(&state, watch)).ok_or_else(|| fail("Watch not found in this chat"))?;
+                let watch = state
+                    .watches
+                    .iter()
+                    .find(|watch| watch.id == watch_id)
+                    .filter(|watch| reachable(&state, watch))
+                    .ok_or_else(|| fail("Watch not found in this chat"))?;
                 let (seen, logs) = (watch.seen, include_logs || !watch.notification_channel);
                 let read = super::delivery::prepare_view(&state, attempt, &watch_id, after, logs)?;
-                if read.after > seen { return Err(fail("Watch cursor is beyond observed evidence")); }
+                if read.after > seen {
+                    return Err(fail("Watch cursor is beyond observed evidence"));
+                }
                 (seen, logs, read, watch.salience.as_ref().map(|s| s.counts()))
             };
             let page = super::page(&watch_id, read.after, read.maximum.unwrap_or(seen), logs);
             let (events, cursor, source_gap) = (page.events, page.cursor, page.gap || read.gap);
             let receipt = {
                 let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-                super::delivery::record(&mut state, attempt, &watch_id, &read, cursor, source_gap, crate::storage::save)?
+                super::delivery::record(
+                    &mut state,
+                    attempt,
+                    &watch_id,
+                    &read,
+                    cursor,
+                    source_gap,
+                    crate::storage::save,
+                )?
             };
             let events = events.into_iter().map(|(frame, truncated)| match frame.event {
                 Event::Line(line) => json!({"seq":frame.seq,"line":String::from_utf8_lossy(&line),"truncated":truncated}),
@@ -214,13 +351,27 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                 Event::Exit { code, signal, restarts, gave_up } => json!({"seq":frame.seq,"exit":{"code":code,"signal":signal,"restarts":restarts,"gave_up":gave_up}}),
             }).collect::<Vec<_>>();
             // The tool description carries the standing evidence and receipt rules.
-            Ok(json!({"events":events,"includes_logs":logs,"cursor":cursor,"more":cursor<read.maximum.unwrap_or(seen),"source_gap":source_gap,"receipt":receipt.as_deref().map(crate::turn_context::receipt_handle),"salience":salience}))
+            Ok(
+                json!({"events":events,"includes_logs":logs,"cursor":cursor,"more":cursor<read.maximum.unwrap_or(seen),"source_gap":source_gap,"receipt":receipt.as_deref().map(crate::turn_context::receipt_handle),"salience":salience}),
+            )
         }
         WatchCall::Stop { watch_id } => {
             let service = {
                 let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-                let watch = state.watches.iter().find(|watch| watch.id == watch_id).filter(|watch| reachable(&state, watch)).ok_or_else(|| fail("Watch not found in this chat"))?;
-                state.services.iter().find(|service| service.resource.id.as_str() == watch.service && service.resource.generation.get() == watch.generation).map(|service| service.binding_snapshot())
+                let watch = state
+                    .watches
+                    .iter()
+                    .find(|watch| watch.id == watch_id)
+                    .filter(|watch| reachable(&state, watch))
+                    .ok_or_else(|| fail("Watch not found in this chat"))?;
+                state
+                    .services
+                    .iter()
+                    .find(|service| {
+                        service.resource.id.as_str() == watch.service
+                            && service.resource.generation.get() == watch.generation
+                    })
+                    .map(|service| service.binding_snapshot())
             };
             if let Some(service) = &service
                 && service.resource.phase.container().is_some()
@@ -229,7 +380,11 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                 return Err(fail("The service could not stop the watch"));
             }
             let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            let index = state.watches.iter().position(|watch| watch.id == watch_id).ok_or_else(|| fail("Watch not found in this chat"))?;
+            let index = state
+                .watches
+                .iter()
+                .position(|watch| watch.id == watch_id)
+                .ok_or_else(|| fail("Watch not found in this chat"))?;
             let previous = state.watches[index].stopped;
             state.watches[index].stopped = true;
             if let Err(error) = crate::storage::save(&state) {

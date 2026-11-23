@@ -5,16 +5,19 @@
 mod lifecycle;
 mod pathology;
 mod tools;
-pub use lifecycle::Facts;
-pub use tools::{BotCall, BotOps, Tools};
 use crate::runtime::RunKind;
 use crate::{State, identity, tool_registry::AttemptRef};
 use control::permissions::{AutoApproval, Mode};
 use control_bot::{BotId, Budget, ChatId, Definition, Event, Restart, Source, Status, Topic, TurnId};
 use control_effect::machine::{Machine, Now, Planned};
+pub use lifecycle::Facts;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{io, sync::{Arc, Mutex}};
+use std::{
+    io,
+    sync::{Arc, Mutex},
+};
+pub use tools::{BotCall, BotOps, Tools};
 
 const COOLDOWN_MS: u64 = 30_000;
 const WINDOW_MS: u64 = 3_600_000;
@@ -40,8 +43,16 @@ pub enum Message {
     /// Explicit application notifications from a watch's separate descriptor.
     Notifications(u64),
     /// The watched process exited: the latest exit, and how many since the last turn.
-    Exit { code: Option<i32>, signal: Option<i32>, exits: u32, gave_up: bool },
-    Gap { after: u64, through: u64 },
+    Exit {
+        code: Option<i32>,
+        signal: Option<i32>,
+        exits: u32,
+        gave_up: bool,
+    },
+    Gap {
+        after: u64,
+        through: u64,
+    },
     /// Host facts about the advised task tree, for its advisor only.
     Lifecycle(Box<Facts>),
     /// Pathological host facts about teams on the node, by root chat, for
@@ -55,12 +66,22 @@ pub enum Message {
     Retained,
 }
 impl control_bot::Info for Message {
-    fn urgent(&self) -> bool { matches!(self, Self::Exit{..} | Self::Gap{..}) }
-    fn direct(&self) -> bool { matches!(self, Self::Peer | Self::Note) }
-    fn deferred(&self) -> bool { matches!(self, Self::Retained) }
+    fn urgent(&self) -> bool {
+        matches!(self, Self::Exit { .. } | Self::Gap { .. })
+    }
+    fn direct(&self) -> bool {
+        matches!(self, Self::Peer | Self::Note)
+    }
+    fn deferred(&self) -> bool {
+        matches!(self, Self::Retained)
+    }
     fn merge(&mut self, newer: &Self) -> bool {
         match (self, newer) {
-            (Message::Post, Message::Post) | (Message::Peer, Message::Peer) | (Message::Note, Message::Note) | (Message::Retained, Message::Retained) | (Message::Claim, Message::Claim) => true,
+            (Message::Post, Message::Post)
+            | (Message::Peer, Message::Peer)
+            | (Message::Note, Message::Note)
+            | (Message::Retained, Message::Retained)
+            | (Message::Claim, Message::Claim) => true,
             (Message::Lifecycle(held), Message::Lifecycle(newer)) => {
                 held.merge(newer);
                 true
@@ -70,7 +91,9 @@ impl control_bot::Info for Message {
                     let room = held.len() < lifecycle::NODE_TEAMS;
                     match held.get_mut(root) {
                         Some(known) => known.merge(facts),
-                        None if room => { held.insert(root.clone(), facts.clone()); }
+                        None if room => {
+                            held.insert(root.clone(), facts.clone());
+                        }
                         None => {}
                     }
                 }
@@ -88,7 +111,20 @@ impl control_bot::Info for Message {
                 *held = held.saturating_add(*more);
                 true
             }
-            (Message::Exit { code, signal, exits, gave_up }, Message::Exit { code: c, signal: s, exits: more, gave_up: g }) => {
+            (
+                Message::Exit {
+                    code,
+                    signal,
+                    exits,
+                    gave_up,
+                },
+                Message::Exit {
+                    code: c,
+                    signal: s,
+                    exits: more,
+                    gave_up: g,
+                },
+            ) => {
                 (*code, *signal, *gave_up) = (*c, *s, *g);
                 *exits = exits.saturating_add(*more);
                 true
@@ -120,23 +156,51 @@ pub(crate) fn claim_resolved(state: &mut State, resolved: &crate::rooms::claims:
     claim_resolved_at(state, resolved, Now(now_ms()));
 }
 fn claim_resolved_at(state: &mut State, resolved: &crate::rooms::claims::Resolved, now: Now) {
-    let topic = claim(&crate::rooms::claims::topic_name(&resolved.room, &resolved.key, resolved.incarnation));
+    let topic = claim(&crate::rooms::claims::topic_name(
+        &resolved.room,
+        &resolved.key,
+        resolved.incarnation,
+    ));
     let from = resolved.by.clone().map(ChatId);
-    let effects = state.bots.supervisor.step(Event::Info { topic, cursor: resolved.revision, from, info: Message::Resolved(resolved.outcome) }, now);
+    let effects = state.bots.supervisor.step(
+        Event::Info {
+            topic,
+            cursor: resolved.revision,
+            from,
+            info: Message::Resolved(resolved.outcome),
+        },
+        now,
+    );
     record(state, effects);
 }
 /// Claim and conversation subscriptions are host-owned for exactly as long as
 /// the wait that selected them. A claim incarnation that resolved before the
 /// wait was admitted releases it at once.
-fn select_wait(state: &mut State, chat: &str, selected: &[String], now: Now, effects: &mut Vec<Planned<BotId, Effect>>) -> Vec<Topic> {
-    let Some(mut definition) = state.bots.supervisor.definitions().find(|d| d.chat.0 == chat).cloned() else { return Vec::new() };
-    let topics: Vec<Topic> = selected.iter().filter_map(|source| source.split_once(':'))
+fn select_wait(
+    state: &mut State,
+    chat: &str,
+    selected: &[String],
+    now: Now,
+    effects: &mut Vec<Planned<BotId, Effect>>,
+) -> Vec<Topic> {
+    let Some(mut definition) = state.bots.supervisor.definitions().find(|d| d.chat.0 == chat).cloned() else {
+        return Vec::new();
+    };
+    let topics: Vec<Topic> = selected
+        .iter()
+        .filter_map(|source| source.split_once(':'))
         .filter(|(kind, name)| *kind != "claim" || crate::rooms::claims::parse_topic(name).is_some())
-        .map(|(kind, name)| Topic::new(kind, name)).collect();
+        .map(|(kind, name)| Topic::new(kind, name))
+        .collect();
     let conversation = Topic::new("conversation", chat);
     let before = definition.sources.clone();
-    definition.sources.retain(|source| !matches!(source, Source::Topic(topic) if topic.kind == "claim"));
-    for topic in topics.iter().filter(|topic| topic.kind == "claim" || **topic == conversation) {
+    definition
+        .sources
+        .retain(|source| !matches!(source, Source::Topic(topic) if topic.kind == "claim"));
+    for topic in topics
+        .iter()
+        .filter(|topic| topic.kind == "claim" || **topic == conversation)
+    {
         if !definition.sources.contains(&Source::Topic(topic.clone())) {
             definition.sources.push(Source::Topic(topic.clone()));
         }
@@ -146,11 +210,28 @@ fn select_wait(state: &mut State, chat: &str, selected: &[String], now: Now, eff
         effects.extend(state.bots.supervisor.step(Event::Define(definition), now));
     }
     for topic in topics.iter().filter(|topic| topic.kind == "claim") {
-        let Some((room, key, incarnation)) = crate::rooms::claims::parse_topic(&topic.name) else { continue };
-        effects.extend(state.bots.supervisor.step(Event::StartAt { bot: bot.clone(), topic: topic.clone(), after: incarnation }, now));
+        let Some((room, key, incarnation)) = crate::rooms::claims::parse_topic(&topic.name) else {
+            continue;
+        };
+        effects.extend(state.bots.supervisor.step(
+            Event::StartAt {
+                bot: bot.clone(),
+                topic: topic.clone(),
+                after: incarnation,
+            },
+            now,
+        ));
         if let Some((outcome, cursor, owner)) = crate::rooms::claims::resolution(state, room, key, incarnation) {
             let from = (outcome != crate::rooms::claims::Outcome::Abandoned).then_some(ChatId(owner));
-            effects.extend(state.bots.supervisor.step(Event::Info { topic: topic.clone(), cursor, from, info: Message::Resolved(outcome) }, now));
+            effects.extend(state.bots.supervisor.step(
+                Event::Info {
+                    topic: topic.clone(),
+                    cursor,
+                    from,
+                    info: Message::Resolved(outcome),
+                },
+                now,
+            ));
         }
     }
     topics
@@ -162,11 +243,11 @@ pub struct Turn {
     pub bot: String,
     pub turn: u64,
     /// Typed trigger provenance; text descriptions are presentation only.
-    #[serde(default, skip_serializing_if="Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasons: Vec<Reason>,
     /// A successfully published report whose session omitted its handoff.
     /// This reference carries evidence, never additional authority.
-    #[serde(default, skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
 }
 
@@ -190,19 +271,21 @@ pub struct Bots {
     approvals: Vec<Approval>,
     /// Published working revisions already offered as runnable work. Recorded
     /// with the supervisor so a restart cannot request the successor twice.
-    #[serde(skip_serializing_if="std::collections::BTreeMap::is_empty")]
-    continuations:std::collections::BTreeMap<String,u64>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    continuations: std::collections::BTreeMap<String, u64>,
     /// What the host last observed of each advised task tree.
-    #[serde(skip_serializing_if="std::collections::BTreeMap::is_empty")]
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     teams: std::collections::BTreeMap<String, lifecycle::Team>,
     /// Cursor of the node topic antibodies hear.
-    #[serde(default, skip_serializing_if="is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     node_cursor: u64,
     /// Operator notices (`control_operator_notify`), newest last and bounded.
-    #[serde(default, skip_serializing_if="Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) notices: Vec<crate::intel::Notice>,
 }
-fn is_zero(value: &u64) -> bool { *value == 0 }
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
 impl Bots {
     pub(crate) fn retains_watch(&self, id: &str) -> bool {
         self.supervisor.retains(&watch(id))
@@ -217,34 +300,49 @@ impl Bots {
     /// judge woken by pathological facts about any team on the node. It may
     /// note any team's lead and notify the operator.
     pub(crate) fn antibody(&self, chat: &str) -> bool {
-        self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::immune(definition))
+        self.supervisor.definitions().any(|definition| {
+            definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::immune(definition)
+        })
     }
     /// The root (steering) chat whose team `chat` advises, if it is an approved
     /// advisor. That chat is the only recipient of its notes.
     pub(crate) fn advised_team(&self, chat: &str) -> Option<&str> {
-        self.supervisor.definitions()
+        self.supervisor
+            .definitions()
             .filter(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
             .find_map(lifecycle::team)
     }
     /// Whether `chat` runs as an approved acceptance check.
     pub(crate) fn accepts(&self, chat: &str) -> bool {
-        self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::accepts(definition))
+        self.supervisor.definitions().any(|definition| {
+            definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::accepts(definition)
+        })
     }
     /// What `chat`'s approved persistent bot runs as: "Advisor", "Monitor",
     /// "Acceptance check", "Antibody" or "Bot". A note names its sender by it.
     pub(crate) fn kind(&self, chat: &str) -> &'static str {
-        self.supervisor.definitions().find(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent).map_or("Bot", kind)
+        self.supervisor
+            .definitions()
+            .find(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+            .map_or("Bot", kind)
     }
     /// Whether `chat` runs as an approved monitor, woken by its team's host facts.
     pub(crate) fn monitors(&self, chat: &str) -> bool {
-        self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::monitors(definition))
+        self.supervisor.definitions().any(|definition| {
+            definition.chat.0 == chat && definition.restart == Restart::Permanent && lifecycle::monitors(definition)
+        })
     }
     /// The approved advisor of the team rooted at `root`, if one runs: the
     /// chat its members may ask (see `application::messages`). Never a
     /// monitor or an acceptance check, which hear host facts instead.
     pub(crate) fn team_advisor(&self, root: &str) -> Option<&str> {
-        self.supervisor.definitions()
-            .find(|definition| definition.restart == Restart::Permanent && lifecycle::asks(definition) && lifecycle::team(definition) == Some(root))
+        self.supervisor
+            .definitions()
+            .find(|definition| {
+                definition.restart == Restart::Permanent
+                    && lifecycle::asks(definition)
+                    && lifecycle::team(definition) == Some(root)
+            })
             .map(|definition| definition.chat.0.as_str())
     }
 }
@@ -263,7 +361,17 @@ fn bot(chat: &str) -> BotId {
 fn record(state: &mut State, effects: Vec<Planned<BotId, Effect>>) {
     for Planned { effect, .. } in effects {
         match effect {
-            Effect::RequestTurn { bot, chat, turn, reasons } => state.bots.requests.push(Request { bot, chat, turn, reasons }),
+            Effect::RequestTurn {
+                bot,
+                chat,
+                turn,
+                reasons,
+            } => state.bots.requests.push(Request {
+                bot,
+                chat,
+                turn,
+                reasons,
+            }),
             Effect::BudgetExhausted { bot, .. } => {
                 state.runtime.notice = format!("Bot in chat {} reached its turn budget; events stay pending.", bot.0);
             }
@@ -279,15 +387,24 @@ pub(crate) fn peer_pending(state: &State, chat: &str, through: u64) -> bool {
 }
 impl Bots {
     pub(crate) fn peer_pending(&self, chat: &str, through: u64) -> bool {
-        self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
-            && self.supervisor.unseen(&bot(chat), &Topic::new("conversation", chat), through)
+        self.supervisor
+            .definitions()
+            .any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+            && self
+                .supervisor
+                .unseen(&bot(chat), &Topic::new("conversation", chat), through)
     }
     /// An approved persistent bot that has not been stopped. A failed or
     /// interrupted turn ends that turn, not the bot: its supervisor owns the
     /// next wake, so retained peer evidence waits for it without restarting work.
     pub(crate) fn persists(&self, chat: &str) -> bool {
-        self.supervisor.status(&bot(chat)).is_some_and(|status| status != Status::Stopping)
-            && self.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+        self.supervisor
+            .status(&bot(chat))
+            .is_some_and(|status| status != Status::Stopping)
+            && self
+                .supervisor
+                .definitions()
+                .any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
     }
 }
 /// The latest pending peer message and observer note per chat, in cursor order,
@@ -296,22 +413,54 @@ fn peer_events(state: &State) -> Vec<(&str, u64, Message)> {
     let mut latest = std::collections::BTreeMap::new();
     for (chat, cursor, note, urgent) in crate::agent_message::peer_cursors(state) {
         // Observer notes keep waking: they are the host-facts escalation path.
-        let kind = if note { 2 } else if urgent { 1 } else { 0 };
-        latest.entry((chat, kind)).and_modify(|head: &mut u64| *head = (*head).max(cursor)).or_insert(cursor);
+        let kind = if note {
+            2
+        } else if urgent {
+            1
+        } else {
+            0
+        };
+        latest
+            .entry((chat, kind))
+            .and_modify(|head: &mut u64| *head = (*head).max(cursor))
+            .or_insert(cursor);
     }
-    if latest.is_empty() { return Vec::new(); }
-    let busy = state.runtime.runs.iter().filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
-        .filter_map(|run| run.chat_id.as_deref()).collect::<std::collections::HashSet<_>>();
+    if latest.is_empty() {
+        return Vec::new();
+    }
+    let busy = state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
+        .filter_map(|run| run.chat_id.as_deref())
+        .collect::<std::collections::HashSet<_>>();
     // Active/queued workers already consume conversation evidence. Waiting for
     // their publication prevents admission between a read and its checkpoint.
-    let mut events = latest.into_iter().map(|((chat, kind), through)| (chat, through, match kind { 2 => Message::Note, 1 => Message::Peer, _ => Message::Retained }))
-        .filter(|(chat, through, _)| !busy.contains(chat) && peer_pending(state, chat, *through)).collect::<Vec<_>>();
+    let mut events = latest
+        .into_iter()
+        .map(|((chat, kind), through)| {
+            (
+                chat,
+                through,
+                match kind {
+                    2 => Message::Note,
+                    1 => Message::Peer,
+                    _ => Message::Retained,
+                },
+            )
+        })
+        .filter(|(chat, through, _)| !busy.contains(chat) && peer_pending(state, chat, *through))
+        .collect::<Vec<_>>();
     events.sort_unstable_by_key(|(chat, through, _)| (*chat, *through));
     events
 }
 /// Agent messages a bot has not yet processed, as a count and bounded digest.
 fn unread(state: &State, chat: &str) -> Option<(usize, String)> {
-    let after = state.bots.supervisor.processed(&bot(chat), &Topic::new("conversation", chat));
+    let after = state
+        .bots
+        .supervisor
+        .processed(&bot(chat), &Topic::new("conversation", chat));
     crate::agent_message::digest::digest(state, chat, after, |_| true)
 }
 /// Test drivers reconcile after the turn cooldown without sleeping.
@@ -330,8 +479,15 @@ fn peer_message_at(state: &mut State, chat: &str, through: u64, now: Now) {
     offer_at(state, chat, through, now, Message::Peer);
 }
 fn offer_at(state: &mut State, chat: &str, through: u64, now: Now, info: Message) {
-    let Some(mut definition) = state.bots.supervisor.definitions()
-        .find(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent).cloned() else { return; };
+    let Some(mut definition) = state
+        .bots
+        .supervisor
+        .definitions()
+        .find(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+        .cloned()
+    else {
+        return;
+    };
     let topic = Topic::new("conversation", chat);
     let source = Source::Topic(topic.clone());
     if !definition.sources.contains(&source) {
@@ -339,26 +495,49 @@ fn offer_at(state: &mut State, chat: &str, through: u64, now: Now, info: Message
         let effects = state.bots.supervisor.step(Event::Define(definition), now);
         record(state, effects);
     }
-    let effects = state.bots.supervisor.step(Event::Info { topic, cursor: through, from: None, info }, now);
+    let effects = state.bots.supervisor.step(
+        Event::Info {
+            topic,
+            cursor: through,
+            from: None,
+            info,
+        },
+        now,
+    );
     record(state, effects);
 }
 pub(crate) fn may_start(state: &State, run: &crate::runtime::Run) -> bool {
-    run.bot_turn.as_ref().is_none_or(|turn| state.bots.supervisor.may_start(&BotId(turn.bot.clone()), &TurnId(turn.turn)))
+    run.bot_turn.as_ref().is_none_or(|turn| {
+        state
+            .bots
+            .supervisor
+            .may_start(&BotId(turn.bot.clone()), &TurnId(turn.turn))
+    })
 }
 pub(crate) fn continuation_enabled(state: &State, chat: &str) -> bool {
-    state.bots.supervisor.definitions().any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
+    state
+        .bots
+        .supervisor
+        .definitions()
+        .any(|definition| definition.chat.0 == chat && definition.restart == Restart::Permanent)
 }
 /// Host-owned subscriptions a handoff may narrow while idle. Working notes
 /// cannot create subscriptions, resource access or a new timer authority.
 /// A persistent bot may also select its own conversation, so direct peer
 /// messages release that wait; claim waits are validated separately.
 pub(crate) fn wait_topics(state: &State, chat: &str) -> Vec<String> {
-    let mut topics: Vec<String> = state.bots.supervisor.definitions().find(|definition| definition.chat.0 == chat)
-        .into_iter().flat_map(|definition| &definition.sources)
+    let mut topics: Vec<String> = state
+        .bots
+        .supervisor
+        .definitions()
+        .find(|definition| definition.chat.0 == chat)
+        .into_iter()
+        .flat_map(|definition| &definition.sources)
         .filter_map(|source| match source {
-            Source::Topic(topic) if topic.kind != "claim" => Some(format!("{}:{}",topic.kind,topic.name)),
+            Source::Topic(topic) if topic.kind != "claim" => Some(format!("{}:{}", topic.kind, topic.name)),
             _ => None,
-        }).collect();
+        })
+        .collect();
     let conversation = format!("conversation:{chat}");
     if continuation_enabled(state, chat) && !topics.contains(&conversation) {
         topics.push(conversation);
@@ -389,8 +568,12 @@ pub(crate) fn stop_all(state: &mut State, chats: &[String]) -> usize {
     stopped
 }
 fn cancel_queued_turns(state: &mut State, chat: &str) {
-    for run in state.runtime.runs.iter_mut().filter(|run| run.chat_id.as_deref() == Some(chat)
-        && run.bot_turn.is_some() && run.status == "queued") {
+    for run in state
+        .runtime
+        .runs
+        .iter_mut()
+        .filter(|run| run.chat_id.as_deref() == Some(chat) && run.bot_turn.is_some() && run.status == "queued")
+    {
         run.status = "cancelled".into();
         run.result = "Bot stopped before dispatch; retained conversation evidence is unchanged.".into();
     }
@@ -399,27 +582,57 @@ fn cancel_queued_turns(state: &mut State, chat: &str) {
 pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
     let id = bot(chat);
     let status = state.bots.supervisor.status(&id)?;
-    let definition = state.bots.supervisor.definitions().find(|definition| definition.bot == id)?;
-    let stuck = if state.chats.iter().find(|c| c.id == chat).and_then(|c| c.continuity.as_ref()).is_some_and(|c| c.checkpointing.reported) { " · cannot checkpoint" } else { "" };
-    let mut sources = definition.sources.iter().map(|source| match source {
-        Source::Topic(Topic { kind, name }) if kind == "room" => format!("room #{name}"),
-        Source::Topic(Topic { kind, name }) if kind == lifecycle::KIND => format!("team facts for {name}"),
-        Source::Topic(Topic { kind, name }) if kind == lifecycle::DONE_KIND => format!("team completion for {name}"),
-        Source::Topic(Topic { kind, name }) if kind == lifecycle::ASK_KIND => format!("questions from team {name}"),
-        Source::Topic(Topic { kind, .. }) if kind == lifecycle::NODE_KIND => "node pathology facts".into(),
-        Source::Topic(Topic { kind, name }) => format!("{kind} {name}"),
-        Source::Timer { every_ms } => format!("every {} min", every_ms / 60_000),
-    }).collect::<Vec<_>>().join(", ");
+    let definition = state
+        .bots
+        .supervisor
+        .definitions()
+        .find(|definition| definition.bot == id)?;
+    let stuck = if state
+        .chats
+        .iter()
+        .find(|c| c.id == chat)
+        .and_then(|c| c.continuity.as_ref())
+        .is_some_and(|c| c.checkpointing.reported)
+    {
+        " · cannot checkpoint"
+    } else {
+        ""
+    };
+    let mut sources = definition
+        .sources
+        .iter()
+        .map(|source| match source {
+            Source::Topic(Topic { kind, name }) if kind == "room" => format!("room #{name}"),
+            Source::Topic(Topic { kind, name }) if kind == lifecycle::KIND => format!("team facts for {name}"),
+            Source::Topic(Topic { kind, name }) if kind == lifecycle::DONE_KIND => {
+                format!("team completion for {name}")
+            }
+            Source::Topic(Topic { kind, name }) if kind == lifecycle::ASK_KIND => format!("questions from team {name}"),
+            Source::Topic(Topic { kind, .. }) if kind == lifecycle::NODE_KIND => "node pathology facts".into(),
+            Source::Topic(Topic { kind, name }) => format!("{kind} {name}"),
+            Source::Timer { every_ms } => format!("every {} min", every_ms / 60_000),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     if sources.is_empty() {
         sources = "no sources".into();
     }
     // An outstanding supervisor request may still be queued, or may continue
     // running after pause. Project intent and actual execution independently.
     let activity = if matches!(status, Status::WaitingTurn | Status::Paused) {
-        state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(chat)
-            && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling"))
+        state
+            .runtime
+            .runs
+            .iter()
+            .rev()
+            .find(|run| {
+                run.chat_id.as_deref() == Some(chat)
+                    && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
+            })
             .map(|run| run.status.as_str())
-    } else { None };
+    } else {
+        None
+    };
     let state = match status {
         _ if status != Status::Stopping && state.bots.supervisor.paused(&id) => match activity {
             Some("running") => "paused · current turn running",
@@ -437,14 +650,28 @@ pub(crate) fn status(state: &State, chat: &str) -> Option<String> {
         Status::Paused => "paused",
         Status::Stopping => "stopping",
     };
-    let label = if definition.restart == Restart::Temporary { "Wake once" } else { kind(definition) };
+    let label = if definition.restart == Restart::Temporary {
+        "Wake once"
+    } else {
+        kind(definition)
+    };
     Some(format!("{label} · {state} · {sources}{stuck}"))
 }
 
 /// What a persistent bot's definition runs as, by what it hears: the name its
 /// status and its notes carry.
 fn kind(definition: &Definition) -> &'static str {
-    if lifecycle::immune(definition) { "Antibody" } else if lifecycle::accepts(definition) { "Acceptance check" } else if lifecycle::monitors(definition) { "Monitor" } else if lifecycle::advises(definition) { "Advisor" } else { "Bot" }
+    if lifecycle::immune(definition) {
+        "Antibody"
+    } else if lifecycle::accepts(definition) {
+        "Acceptance check"
+    } else if lifecycle::monitors(definition) {
+        "Monitor"
+    } else if lifecycle::advises(definition) {
+        "Advisor"
+    } else {
+        "Bot"
+    }
 }
 
 pub(crate) fn background_allowed(state: &State, chat: &str) -> bool {
@@ -471,14 +698,22 @@ fn forest(tree: Option<String>, search: &str) -> String {
 /// the live task trees above and the graveyard (the page `query` selects) on
 /// the ground beneath them, then queued turns.
 pub(crate) fn page(state: &State, query: &crate::graveyard::Query) -> String {
-    let clear = if query.search.is_empty() { "" } else { "<a href='/?view=agents'>Clear</a>" };
+    let clear = if query.search.is_empty() {
+        ""
+    } else {
+        "<a href='/?view=agents'>Clear</a>"
+    };
     let search = format!(
         "<form class='bots-search' method='get' action='/' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{}' placeholder='Search live and dead bots by name or objective' aria-label='Search live and dead bots by name or objective'><button>Search</button>{clear}</form>",
         crate::escape(&query.search),
         crate::graveyard::QUERY_CHARS,
     );
     let tree = crate::process_tree::render(state, &query.search);
-    let zoom = if tree.is_some() { crate::process_tree::ZOOM_SLOT } else { "" };
+    let zoom = if tree.is_some() {
+        crate::process_tree::ZOOM_SLOT
+    } else {
+        ""
+    };
     let mut html = format!(
         "<div class='section-heading'><h2>Bots</h2></div>{}<div class='bots-scene'>{}{}</div><p class='muted tiny'>{}</p>",
         crate::navigation::bots_toolbar(false, &search, zoom),
@@ -496,7 +731,11 @@ pub(crate) fn command(state: &mut State, chat: &str, option: &str) -> Result<&'s
     command_at(state, chat, option, Now(now_ms()))
 }
 fn command_at(state: &mut State, chat: &str, option: &str, now: Now) -> Result<&'static str, &'static str> {
-    let session = state.chats.iter().find(|session| session.id == chat).ok_or("Chat not found.")?;
+    let session = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .ok_or("Chat not found.")?;
     identity::authorize(&session.actor, identity::Action::Task)?;
     let words = option.split_whitespace().collect::<Vec<_>>();
     let id = bot(chat);
@@ -524,7 +763,13 @@ fn command_at(state: &mut State, chat: &str, option: &str, now: Now) -> Result<&
         ["deny", id] => decide(state, id, false, Some(chat), now),
         [] | ["on"] | ["on", "every", _] | ["every", _] => {
             let minutes = match words.last() {
-                Some(value) if words.len() > 1 => Some(value.parse::<u64>().ok().filter(|m| (1..=MAX_INTERVAL_MINUTES).contains(m)).ok_or("Use /bot on every N, with N from 1 to 1440 minutes.")?),
+                Some(value) if words.len() > 1 => Some(
+                    value
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|m| (1..=MAX_INTERVAL_MINUTES).contains(m))
+                        .ok_or("Use /bot on every N, with N from 1 to 1440 minutes.")?,
+                ),
                 _ => None,
             };
             start(state, chat, minutes, true, now)
@@ -533,28 +778,50 @@ fn command_at(state: &mut State, chat: &str, option: &str, now: Now) -> Result<&
     }
 }
 
-fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: Now) -> Result<&'static str, &'static str> {
-    let fresh=!defined(state,chat);
+fn start(
+    state: &mut State,
+    chat: &str,
+    minutes: Option<u64>,
+    room: bool,
+    now: Now,
+) -> Result<&'static str, &'static str> {
+    let fresh = !defined(state, chat);
     if crate::rooms::listening(state, chat) {
         return Err("Room listening is on. Stop it with /listen off before starting a bot.");
     }
-    let session = state.chats.iter().find(|session| session.id == chat).ok_or("Chat not found.")?;
-    let origin = state.runtime.runs.iter().rev()
+    let session = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .ok_or("Chat not found.")?;
+    let origin = state
+        .runtime
+        .runs
+        .iter()
+        .rev()
         .find(|run| run.chat_id.as_deref() == Some(chat) && run.actor == session.actor)
         .ok_or("Give this chat a task before starting a bot.")?;
     identity::authorize(&session.actor, origin.action)?;
     if crate::delegation::is_judge(origin) {
         return advise(state, chat, minutes, now);
     }
-    let bootstrap=fresh && matches!(origin.status.as_str(),"running"|"completed")
-        && origin.attempts.last().is_some_and(|attempt|!attempt.review_only
-            && attempt.workspace_id.as_deref().is_some_and(crate::chat::valid_id));
+    let bootstrap = fresh
+        && matches!(origin.status.as_str(), "running" | "completed")
+        && origin.attempts.last().is_some_and(|attempt| {
+            !attempt.review_only && attempt.workspace_id.as_deref().is_some_and(crate::chat::valid_id)
+        });
     let mut sources = Vec::new();
-    if let Some(room) = session.room.as_deref().filter(|linked| room && crate::rooms::valid(linked)) {
+    if let Some(room) = session
+        .room
+        .as_deref()
+        .filter(|linked| room && crate::rooms::valid(linked))
+    {
         sources.push(Source::Topic(self::room(room)));
     }
     if let Some(minutes) = minutes {
-        sources.push(Source::Timer { every_ms: minutes * 60_000 });
+        sources.push(Source::Timer {
+            every_ms: minutes * 60_000,
+        });
     }
     sources.extend(watch_sources(state, chat));
     if sources.is_empty() {
@@ -571,7 +838,11 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
         bot: bot(chat),
         chat: ChatId(chat.into()),
         sources,
-        budget: Budget { cooldown_ms: COOLDOWN_MS, window_ms: WINDOW_MS, turns_per_window: TURNS_PER_WINDOW },
+        budget: Budget {
+            cooldown_ms: COOLDOWN_MS,
+            window_ms: WINDOW_MS,
+            turns_per_window: TURNS_PER_WINDOW,
+        },
         restart: Restart::Permanent,
         defer_ms: Some(digest_ms(state)),
     };
@@ -581,13 +852,26 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
     if state.bots.supervisor.status(&bot(chat)) == Some(Status::Stopping) {
         return Err("The previous bot is still finishing its turn. Try again shortly.");
     }
-    if fresh && let Some(name) = state.chats.iter().find(|c|c.id==chat).and_then(|c|c.room.as_deref()) {
-        let effects=state.bots.supervisor.step(Event::StartAt{bot:bot(chat),topic:self::room(name),after:state.collective.posts.len() as u64},now);
-        record(state,effects);
+    if fresh
+        && let Some(name) = state
+            .chats
+            .iter()
+            .find(|c| c.id == chat)
+            .and_then(|c| c.room.as_deref())
+    {
+        let effects = state.bots.supervisor.step(
+            Event::StartAt {
+                bot: bot(chat),
+                topic: self::room(name),
+                after: state.collective.posts.len() as u64,
+            },
+            now,
+        );
+        record(state, effects);
     }
     if bootstrap {
-        let effects=state.bots.supervisor.step(Event::Continue(bot(chat)),now);
-        record(state,effects);
+        let effects = state.bots.supervisor.step(Event::Continue(bot(chat)), now);
+        record(state, effects);
     }
     Ok("Bot started. It sleeps until room messages or its timer wake it.")
 }
@@ -600,7 +884,10 @@ fn start(state: &mut State, chat: &str, minutes: Option<u64>, room: bool, now: N
 /// runs as an antibody instead: it hears the node topic (pathological facts
 /// about every team) and may take a patrol timer.
 fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Result<&'static str, &'static str> {
-    let team = root(state, chat).filter(|team| *team != chat).ok_or("An advisor must belong to a spawned task tree.")?.to_owned();
+    let team = root(state, chat)
+        .filter(|team| *team != chat)
+        .ok_or("An advisor must belong to a spawned task tree.")?
+        .to_owned();
     // The mode is the captured persona's visibility (else the root's opt-in);
     // each mode keeps its own opt-in gene gate.
     let antibody = crate::personas::observes_node(state, chat);
@@ -614,17 +901,35 @@ fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Resu
     // its team's completion; a monitor persona (`team.monitor`) its host
     // facts. Any other team judge is the advisor members ask: it hears none.
     // Each needs its own gene on the root.
-    let tool = if antibody { ANTIBODY_TOOL } else { team_gate(state, chat)? };
+    let tool = if antibody {
+        ANTIBODY_TOOL
+    } else {
+        team_gate(state, chat)?
+    };
     let (acceptance, monitor) = (tool == ACCEPTANCE_TOOL, tool == MONITOR_TOOL);
-    let mut sources = if antibody { vec![lifecycle::node_source()] } else if acceptance { vec![lifecycle::done_source(&team)] } else if monitor { vec![lifecycle::source(&team)] } else { vec![lifecycle::ask_source(&team)] };
+    let mut sources = if antibody {
+        vec![lifecycle::node_source()]
+    } else if acceptance {
+        vec![lifecycle::done_source(&team)]
+    } else if monitor {
+        vec![lifecycle::source(&team)]
+    } else {
+        vec![lifecycle::ask_source(&team)]
+    };
     if let Some(minutes) = minutes {
-        sources.push(Source::Timer { every_ms: minutes * 60_000 });
+        sources.push(Source::Timer {
+            every_ms: minutes * 60_000,
+        });
     }
     let definition = Definition {
         bot: bot(chat),
         chat: ChatId(chat.into()),
         sources,
-        budget: Budget { cooldown_ms: COOLDOWN_MS, window_ms: WINDOW_MS, turns_per_window: TURNS_PER_WINDOW },
+        budget: Budget {
+            cooldown_ms: COOLDOWN_MS,
+            window_ms: WINDOW_MS,
+            turns_per_window: TURNS_PER_WINDOW,
+        },
         restart: Restart::Permanent,
         defer_ms: Some(digest_ms(state)),
     };
@@ -637,19 +942,43 @@ fn advise(state: &mut State, chat: &str, minutes: Option<u64>, now: Now) -> Resu
     if state.bots.supervisor.status(&bot(chat)) == Some(Status::Stopping) {
         return Err("The previous bot is still finishing its turn. Try again shortly.");
     }
-    Ok(if antibody { "Antibody started. It sleeps until pathological facts about any team, or its patrol timer, wake it." } else if acceptance { "Acceptance check started. It sleeps until its team goes quiet with every claim done." } else if monitor { "Monitor started. It sleeps until host facts about its team wake it." } else { "Advisor started. It sleeps until a member of its team asks it." })
+    Ok(if antibody {
+        "Antibody started. It sleeps until pathological facts about any team, or its patrol timer, wake it."
+    } else if acceptance {
+        "Acceptance check started. It sleeps until its team goes quiet with every claim done."
+    } else if monitor {
+        "Monitor started. It sleeps until host facts about its team wake it."
+    } else {
+        "Advisor started. It sleeps until a member of its team asks it."
+    })
 }
 
 /// A bot whose unlinked chat links itself to a room by posting also hears
 /// that room, with the inbox room tools read.
 pub(crate) fn link_room(state: &mut State, chat: &str, name: &str) -> Result<(), &'static str> {
-    let Some(definition) = state.bots.supervisor.definitions().find(|d| d.chat.0 == chat).cloned() else { return Ok(()) };
+    let Some(definition) = state.bots.supervisor.definitions().find(|d| d.chat.0 == chat).cloned() else {
+        return Ok(());
+    };
     crate::rooms::ensure_inbox(state, chat)?;
-    let mut sources = definition.sources.into_iter().filter(|s| !matches!(s, Source::Topic(t) if t.kind == "room")).collect::<Vec<_>>();
+    let mut sources = definition
+        .sources
+        .into_iter()
+        .filter(|s| !matches!(s, Source::Topic(t) if t.kind == "room"))
+        .collect::<Vec<_>>();
     sources.push(Source::Topic(room(name)));
-    let effects = state.bots.supervisor.step(Event::Define(Definition { sources, ..definition }), Now(now_ms()));
+    let effects = state
+        .bots
+        .supervisor
+        .step(Event::Define(Definition { sources, ..definition }), Now(now_ms()));
     record(state, effects);
-    let effects = state.bots.supervisor.step(Event::StartAt { bot: bot(chat), topic: room(name), after: state.collective.posts.len() as u64 }, Now(now_ms()));
+    let effects = state.bots.supervisor.step(
+        Event::StartAt {
+            bot: bot(chat),
+            topic: room(name),
+            after: state.collective.posts.len() as u64,
+        },
+        Now(now_ms()),
+    );
     record(state, effects);
     Ok(())
 }
@@ -661,7 +990,12 @@ pub(crate) fn arm(state: &mut State, chat: &str) -> Result<bool, &'static str> {
 }
 fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str> {
     let id = bot(chat);
-    let restart = state.bots.supervisor.definitions().find(|d| d.bot == id).map(|d| d.restart);
+    let restart = state
+        .bots
+        .supervisor
+        .definitions()
+        .find(|d| d.bot == id)
+        .map(|d| d.restart);
     if let Some(restart) = restart {
         let rearm = restart == Restart::Temporary && state.bots.supervisor.status(&id) == Some(Status::WaitingTurn);
         if rearm {
@@ -676,7 +1010,9 @@ fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str>
     }
     for w in state.watches.iter_mut().filter(|w| w.chat == chat) {
         w.lines = 0;
-        if let Some(notifications) = &mut w.notifications { notifications.pending = 0; }
+        if let Some(notifications) = &mut w.notifications {
+            notifications.pending = 0;
+        }
         w.exits.clear();
         w.gap = None;
     }
@@ -687,7 +1023,11 @@ fn arm_at(state: &mut State, chat: &str, now: Now) -> Result<bool, &'static str>
         bot: bot(chat),
         chat: ChatId(chat.into()),
         sources,
-        budget: Budget { cooldown_ms: 0, window_ms: WINDOW_MS, turns_per_window: 1 },
+        budget: Budget {
+            cooldown_ms: 0,
+            window_ms: WINDOW_MS,
+            turns_per_window: 1,
+        },
         restart: Restart::Temporary,
         defer_ms: None,
     };
@@ -702,18 +1042,47 @@ fn watch_sources(state: &State, chat: &str) -> Vec<Source> {
     watch_topics(state, chat, false)
 }
 fn watch_topics(state: &State, chat: &str, pending: bool) -> Vec<Source> {
-    state.watches.iter().filter(|w| w.chat == chat && (w.active() || (pending && (w.lines > 0 || w.pending_notifications() > 0 || w.held_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())))).map(|w| Source::Topic(watch(&w.id))).collect()
+    state
+        .watches
+        .iter()
+        .filter(|w| {
+            w.chat == chat
+                && (w.active()
+                    || (pending
+                        && (w.lines > 0
+                            || w.pending_notifications() > 0
+                            || w.held_notifications() > 0
+                            || !w.exits.is_empty()
+                            || w.gap.is_some())))
+        })
+        .map(|w| Source::Topic(watch(&w.id)))
+        .collect()
 }
 /// Redefinitions that keep each bot subscribed to exactly its chat's watches.
 fn drifted(state: &State, pending: bool) -> Vec<Definition> {
-    state.bots.supervisor.definitions().filter_map(|definition| {
-        let mut sources = definition.sources.iter().filter(|s| !matches!(s, Source::Topic(t) if t.kind == "watch")).cloned().collect::<Vec<_>>();
-        sources.extend(watch_topics(state, &definition.chat.0, pending));
-        // Permanent bots follow the node's current digest bound.
-        let defer_ms = (definition.restart == Restart::Permanent).then(|| digest_ms(state));
-        ((sources != definition.sources || defer_ms != definition.defer_ms) && !sources.is_empty())
-            .then(|| Definition { sources, defer_ms, ..definition.clone() })
-    }).collect()
+    state
+        .bots
+        .supervisor
+        .definitions()
+        .filter_map(|definition| {
+            let mut sources = definition
+                .sources
+                .iter()
+                .filter(|s| !matches!(s, Source::Topic(t) if t.kind == "watch"))
+                .cloned()
+                .collect::<Vec<_>>();
+            sources.extend(watch_topics(state, &definition.chat.0, pending));
+            // Permanent bots follow the node's current digest bound.
+            let defer_ms = (definition.restart == Restart::Permanent).then(|| digest_ms(state));
+            ((sources != definition.sources || defer_ms != definition.defer_ms) && !sources.is_empty()).then(|| {
+                Definition {
+                    sources,
+                    defer_ms,
+                    ..definition.clone()
+                }
+            })
+        })
+        .collect()
 }
 /// How long a bot's non-urgent peer messages wait for another wake.
 fn digest_ms(state: &State) -> u64 {
@@ -724,28 +1093,62 @@ fn watch_events(state: &mut State) -> Vec<(Topic, u64, Message)> {
     let mut events = Vec::new();
     for w in &mut state.watches {
         if w.lines > 0 {
-            events.push((watch(&w.id), w.wake_seq.unwrap_or(w.line_seq), Message::Lines(std::mem::take(&mut w.lines))));
+            events.push((
+                watch(&w.id),
+                w.wake_seq.unwrap_or(w.line_seq),
+                Message::Lines(std::mem::take(&mut w.lines)),
+            ));
         }
-        if let Some(notifications) = &mut w.notifications && notifications.pending > 0 {
-            events.push((watch(&w.id), notifications.through, Message::Notifications(std::mem::take(&mut notifications.pending))));
+        if let Some(notifications) = &mut w.notifications
+            && notifications.pending > 0
+        {
+            events.push((
+                watch(&w.id),
+                notifications.through,
+                Message::Notifications(std::mem::take(&mut notifications.pending)),
+            ));
         }
         if let Some(gap) = w.gap.take() {
-            events.push((watch(&w.id), gap.through, Message::Gap { after: gap.after, through: gap.through }));
+            events.push((
+                watch(&w.id),
+                gap.through,
+                Message::Gap {
+                    after: gap.after,
+                    through: gap.through,
+                },
+            ));
         }
         for exit in w.exits.drain(..) {
-            events.push((watch(&w.id), exit.seq, Message::Exit { code: exit.code, signal: exit.signal, exits: 1, gave_up: exit.gave_up }));
+            events.push((
+                watch(&w.id),
+                exit.seq,
+                Message::Exit {
+                    code: exit.code,
+                    signal: exit.signal,
+                    exits: 1,
+                    gave_up: exit.gave_up,
+                },
+            ));
         }
     }
     events.sort_by(|a, b| (&a.0.name, a.1).cmp(&(&b.0.name, b.1)));
     events
 }
 fn pending_watch_events(state: &State) -> bool {
-    state.watches.iter().any(|w| w.lines > 0 || w.pending_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())
+    state
+        .watches
+        .iter()
+        .any(|w| w.lines > 0 || w.pending_notifications() > 0 || !w.exits.is_empty() || w.gap.is_some())
 }
 
-
 fn describe(state: &State, reasons: &[Reason]) -> String {
-    let name = |id: &str| state.watches.iter().find(|w| w.id == id).map_or(id.to_owned(), |w| format!("{} ({id})", w.name));
+    let name = |id: &str| {
+        state
+            .watches
+            .iter()
+            .find(|w| w.id == id)
+            .map_or(id.to_owned(), |w| format!("{} ({id})", w.name))
+    };
     reasons.iter().map(|reason| match reason {
         Reason::Info { topic, info: Message::Post, .. } => format!("new messages in room #{}", topic.name),
         Reason::Info { info: Message::Peer, .. } => "urgent targeted peer coordination (in this conversation)".into(),
@@ -779,15 +1182,29 @@ fn describe(state: &State, reasons: &[Reason]) -> String {
 
 /// A bot wake's objective. Only a wake by room posts lists them, so only that
 /// wake says not to re-read them.
-fn objective(woke:&str, recovery:Option<&str>, posts:bool)->String {
-    let woke=woke.chars().take(400).collect::<String>();
-    let recovery=recovery.map_or(String::new(),|note|format!(" {}",note.chars().take(RECOVERY_NOTE).collect::<String>()));
-    let listed=if posts { " This wake lists the room posts that woke you; do not re-read them." } else { "" };
+fn objective(woke: &str, recovery: Option<&str>, posts: bool) -> String {
+    let woke = woke.chars().take(400).collect::<String>();
+    let recovery = recovery.map_or(String::new(), |note| {
+        format!(" {}", note.chars().take(RECOVERY_NOTE).collect::<String>())
+    });
+    let listed = if posts {
+        " This wake lists the room posts that woke you; do not re-read them."
+    } else {
+        ""
+    };
     format!("Bot wake: continue the original goal in this active session.{listed} Triggered by: {woke}.{recovery}")
 }
 /// Whether new room posts are among the wake reasons.
-fn posts(reasons:&[Reason]) -> bool {
-    reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Post, .. }))
+fn posts(reasons: &[Reason]) -> bool {
+    reasons.iter().any(|reason| {
+        matches!(
+            reason,
+            Reason::Info {
+                info: Message::Post,
+                ..
+            }
+        )
+    })
 }
 /// Characters of recovery guidance in a wake objective; the host's rejection
 /// is bounded separately when recorded.
@@ -796,10 +1213,18 @@ const RECOVERY_NOTE: usize = 1_600;
 /// the host's last rejection for that attempt, so the agent repairs its
 /// receipts instead of re-verifying a world its notes already describe.
 /// Typed host records only; the model's prose is never parsed.
-fn recovery_note(state:&State, chat:&str, failed:&crate::runtime::Run) -> String {
-    let generation=failed.attempts.last().and_then(|attempt|attempt.workspace_id.as_deref());
-    let rejected=state.chats.iter().find(|c|c.id==chat).and_then(|c|c.continuity.as_ref())
-        .and_then(|c|c.checkpointing.rejected.as_ref()).filter(|r|Some(r.generation.as_str())==generation);
+fn recovery_note(state: &State, chat: &str, failed: &crate::runtime::Run) -> String {
+    let generation = failed
+        .attempts
+        .last()
+        .and_then(|attempt| attempt.workspace_id.as_deref());
+    let rejected = state
+        .chats
+        .iter()
+        .find(|c| c.id == chat)
+        .and_then(|c| c.continuity.as_ref())
+        .and_then(|c| c.checkpointing.rejected.as_ref())
+        .filter(|r| Some(r.generation.as_str()) == generation);
     match rejected {
         Some(rejection) => format!("Checkpoint recovery: your previous turn's control_turn_handoff was rejected, so nothing it did was committed. Host error: \"{}\". Your workspace, services and watches are as that turn left them; do not re-verify them or start new watches. Fix the handoff itself: call control_turn_handoff {{\"disposition\":{{\"kind\":\"continue\"}}}} (or wait or done) and omit processed, so the host applies every receipt delivered in this session that follows the committed position.{}", if unseen_range(&rejection.error) { rejection.error.split(". ").next().unwrap_or_default() } else { &rejection.error }, if unseen_range(&rejection.error) { UNSEEN_RANGE } else { "" }),
         None => "Checkpoint recovery: your previous turn ended without calling control_turn_handoff, so nothing was committed and it is treated as waiting. Do not repeat its checks; act only on new evidence, and call control_turn_handoff (continue, wait or done) before you yield.".into(),
@@ -808,116 +1233,194 @@ fn recovery_note(state:&State, chat:&str, failed:&crate::runtime::Run) -> String
 /// Wake guidance after the chat's latest turn was cut off before its handoff
 /// (time limit, model-step cap or provider failure): its unpublished work is a
 /// recovery candidate and its claims are still its own.
-fn timeout_note(latest:&crate::runtime::Run) -> Option<String> {
+fn timeout_note(latest: &crate::runtime::Run) -> Option<String> {
     use crate::attempt_control::Termination;
-    cut_off(latest).then(|| match latest.attempts.last().and_then(|attempt| attempt.termination) {
-        Some(Termination::TimedOut) => TIMEOUT_NOTE,
-        Some(Termination::StepLimit) => STEP_LIMIT_NOTE,
-        _ => PROVIDER_NOTE,
-    }.to_owned())
+    cut_off(latest).then(|| {
+        match latest.attempts.last().and_then(|attempt| attempt.termination) {
+            Some(Termination::TimedOut) => TIMEOUT_NOTE,
+            Some(Termination::StepLimit) => STEP_LIMIT_NOTE,
+            _ => PROVIDER_NOTE,
+        }
+        .to_owned()
+    })
 }
 /// The run failed because the host stopped it at its attempt time limit.
-fn timed_out(run:&crate::runtime::Run) -> bool {
+fn timed_out(run: &crate::runtime::Run) -> bool {
     stopped_by(run, crate::attempt_control::Termination::TimedOut)
 }
-fn stopped_by(run:&crate::runtime::Run, cause:crate::attempt_control::Termination) -> bool {
-    run.status=="failed" && run.attempts.last().is_some_and(|attempt|attempt.termination==Some(cause))
+fn stopped_by(run: &crate::runtime::Run, cause: crate::attempt_control::Termination) -> bool {
+    run.status == "failed"
+        && run
+            .attempts
+            .last()
+            .is_some_and(|attempt| attempt.termination == Some(cause))
 }
 use crate::attempt_control::cut_off;
-pub(crate) const TIMEOUT_NOTE:&str="Your previous turn hit its time limit before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names; keep your claims, delegate or run long work in a routine, and hand off before the limit.";
-pub(crate) const STEP_LIMIT_NOTE:&str="Your previous turn used all its model steps before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names; do not retry a failing command in a loop, and hand off (waiting on what you depend on) before the step limit.";
-pub(crate) const PROVIDER_NOTE:&str="Your previous turn ended on a model provider failure before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names, and hand off before you yield.";
+pub(crate) const TIMEOUT_NOTE: &str = "Your previous turn hit its time limit before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names; keep your claims, delegate or run long work in a routine, and hand off before the limit.";
+pub(crate) const STEP_LIMIT_NOTE: &str = "Your previous turn used all its model steps before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names; do not retry a failing command in a loop, and hand off (waiting on what you depend on) before the step limit.";
+pub(crate) const PROVIDER_NOTE: &str = "Your previous turn ended on a model provider failure before checkpointing: resume from the host checkpoint in your working notes rather than redoing it, restoring files with the control_recovery call it names, and hand off before you yield.";
 /// The handoff named a receipt that starts after its source's committed
 /// position: an earlier receipt of that source was left out. These are the
 /// host's own mailbox errors, not model prose.
-fn unseen_range(error:&str) -> bool {
+fn unseen_range(error: &str) -> bool {
     error.starts_with("Cannot process an unseen event range") || error.starts_with("First event range requires")
 }
-pub(crate) const UNSEEN_RANGE:&str=" That error means a listed receipt starts after the last committed position of its source, because an earlier receipt from the same source was left out. Receipts from the previous turn are not valid now. Omit processed from your handoff: the host then applies only receipts that follow each source's committed position and reports the rest as left_pending.";
+pub(crate) const UNSEEN_RANGE: &str = " That error means a listed receipt starts after the last committed position of its source, because an earlier receipt from the same source was left out. Receipts from the previous turn are not valid now. Omit processed from your handoff: the host then applies only receipts that follow each source's committed position and reports the rest as left_pending.";
 /// An advisor turn is a fresh read-only review of its team, rebuilt from the
 /// journal; its captured lenses carry the procedure. Notes to its team are its
 /// only effect.
 pub(crate) fn advice(woke: &str, lead: &str) -> String {
     let woke = woke.chars().take(1000).collect::<String>();
-    format!("You are this task tree's read-only monitor, woken by host facts: {woke}. Inspect the team with control_room_read and control_room_plan and, following the Team monitor guidance, send at most one concise note with control_agent_message: to the member the fact is about, or to the lead's steering chat {lead} only for what members cannot settle themselves; send nothing when evidence is unchanged. End the turn when done.")
+    format!(
+        "You are this task tree's read-only monitor, woken by host facts: {woke}. Inspect the team with control_room_read and control_room_plan and, following the Team monitor guidance, send at most one concise note with control_agent_message: to the member the fact is about, or to the lead's steering chat {lead} only for what members cannot settle themselves; send nothing when evidence is unchanged. End the turn when done."
+    )
 }
 /// An advisor's turn: answer the members who asked. It hears no host facts.
 pub(crate) fn answer(woke: &str) -> String {
     let woke = woke.chars().take(400).collect::<String>();
-    format!("You are this task tree's read-only advisor, woken by: {woke}. Following the Team advisor guidance, answer each team member's question among your unread messages with one concise note to that member with control_agent_message: a concrete next step. Read control_room_read only as far as the question needs; send nothing unasked. End the turn when done.")
+    format!(
+        "You are this task tree's read-only advisor, woken by: {woke}. Following the Team advisor guidance, answer each team member's question among your unread messages with one concise note to that member with control_agent_message: a concrete next step. Read control_room_read only as far as the question needs; send nothing unasked. End the turn when done."
+    )
 }
 /// An acceptance check's turn: compare the finished result with the request.
 pub(crate) fn acceptance(woke: &str, lead: &str) -> String {
     let woke = woke.chars().take(400).collect::<String>();
-    format!("You are this task tree's read-only acceptance check, woken by: {woke}. Following the Acceptance check guidance, compare the result (control_room_read: posts, claims and their evidence) with the request in your original objective. If it falls short, send one concise note with control_agent_message to the member who closed that claim, or to the lead's steering chat {lead} only if no member owns it; send nothing when the result is acceptable or evidence is unchanged. End the turn when done.")
+    format!(
+        "You are this task tree's read-only acceptance check, woken by: {woke}. Following the Acceptance check guidance, compare the result (control_room_read: posts, claims and their evidence) with the request in your original objective. If it falls short, send one concise note with control_agent_message to the member who closed that claim, or to the lead's steering chat {lead} only if no member owns it; send nothing when the result is acceptable or evidence is unchanged. End the turn when done."
+    )
 }
 /// An antibody turn: a fresh read-only review of the teams named in its facts,
 /// or a patrol of the node on its timer.
 pub(crate) fn patrol(woke: &str) -> String {
     let woke = woke.chars().take(2000).collect::<String>();
-    format!("You are this node's read-only antibody, woken by: {woke}. Following the Antibodies guidance, check the named teams (or the whole node on a patrol) with control_intel_brief. For a team working against its goal, send its lead's steering chat at most one concise note with control_agent_message; escalate with control_operator_notify only when the lead is not fixing it or the operator is needed. Send nothing when evidence is unchanged. End the turn when done.")
+    format!(
+        "You are this node's read-only antibody, woken by: {woke}. Following the Antibodies guidance, check the named teams (or the whole node on a patrol) with control_intel_brief. For a team working against its goal, send its lead's steering chat at most one concise note with control_agent_message; escalate with control_operator_notify only when the lead is not fixing it or the operator is needed. Send nothing when evidence is unchanged. End the turn when done."
+    )
 }
 /// Whether any team outside `antibody`'s own tree has a queued or running turn,
 /// or started one after `since` (unix ms).
 fn active_since(state: &State, antibody: &str, since: u64) -> bool {
     let own = root(state, antibody);
-    let tree = state.chats.iter().filter(|chat| root(state, &chat.id) == own).map(|chat| chat.id.as_str()).collect::<std::collections::HashSet<_>>();
-    state.runtime.runs.iter().rev().filter(|run| run.chat_id.as_deref().is_none_or(|chat| !tree.contains(chat)))
+    let tree = state
+        .chats
+        .iter()
+        .filter(|chat| root(state, &chat.id) == own)
+        .map(|chat| chat.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    state
+        .runtime
+        .runs
+        .iter()
+        .rev()
+        .filter(|run| run.chat_id.as_deref().is_none_or(|chat| !tree.contains(chat)))
         .any(|run| matches!(run.status.as_str(), "queued" | "running") || run.created_ms().is_some_and(|at| at > since))
 }
 /// Queues one bot turn in its chat, reusing the chat's latest task context like
 /// room listening does. Errors leave the request for a later attempt.
 fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
     let chat = request.chat.0.as_str();
-    let session = state.chats.iter().find(|session| session.id == chat).ok_or("Bot chat is missing.")?;
-    let from = crate::chat::latest_task(state, chat, &session.actor)
-        .ok_or("Bot chat has no task.")?;
+    let session = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .ok_or("Bot chat is missing.")?;
+    let from = crate::chat::latest_task(state, chat, &session.actor).ok_or("Bot chat has no task.")?;
     let latest = &state.runtime.runs[from];
     let advisor = crate::delegation::is_judge(latest);
     let antibody = advisor && state.bots.antibody(chat);
     let lead = if advisor && !antibody {
-        Some(state.bots.advised_team(chat).ok_or("Read-only judges run only as advisors.")?.to_owned())
+        Some(
+            state
+                .bots
+                .advised_team(chat)
+                .ok_or("Read-only judges run only as advisors.")?
+                .to_owned(),
+        )
     } else {
         None
     };
     let mut follow_up = crate::chat::FollowUp::from(state, latest);
-    if let Some(selected)=&session.model {follow_up.backend=selected.backend;follow_up.model=Some(selected.model.clone());}
-    let recovery = (latest.kind.prompt_role()==control_context::agent_policy::PromptRole::Wake && latest.status == "completed"
-        && latest.attempts.last().is_some_and(|a|a.context_trace.is_some()
-            && a.turn_mailbox.as_ref().is_some_and(|mailbox|mailbox.accepted().is_none())))
-        .then(||latest.id.clone());
-    let note = recovery.as_ref().map(|_| recovery_note(state, chat, latest)).or_else(|| timeout_note(latest));
+    if let Some(selected) = &session.model {
+        follow_up.backend = selected.backend;
+        follow_up.model = Some(selected.model.clone());
+    }
+    let recovery = (latest.kind.prompt_role() == control_context::agent_policy::PromptRole::Wake
+        && latest.status == "completed"
+        && latest.attempts.last().is_some_and(|a| {
+            a.context_trace.is_some()
+                && a.turn_mailbox
+                    .as_ref()
+                    .is_some_and(|mailbox| mailbox.accepted().is_none())
+        }))
+    .then(|| latest.id.clone());
+    let note = recovery
+        .as_ref()
+        .map(|_| recovery_note(state, chat, latest))
+        .or_else(|| timeout_note(latest));
     // A recovery's Continue is not runnable work from a committed checkpoint.
-    let reasons = request.reasons.iter().filter(|reason| note.is_none() || **reason != Reason::Continue).cloned().collect::<Vec<_>>();
+    let reasons = request
+        .reasons
+        .iter()
+        .filter(|reason| note.is_none() || **reason != Reason::Continue)
+        .cloned()
+        .collect::<Vec<_>>();
     let woke = match (&note, describe(state, &reasons)) {
-        (Some(_), woke) if woke.is_empty() && recovery.is_some() => "a turn that ended without an accepted handoff".to_owned(),
+        (Some(_), woke) if woke.is_empty() && recovery.is_some() => {
+            "a turn that ended without an accepted handoff".to_owned()
+        }
         (Some(_), woke) if woke.is_empty() && timed_out(latest) => "a turn stopped at its time limit".to_owned(),
-        (Some(_), woke) if woke.is_empty() && stopped_by(latest, crate::attempt_control::Termination::StepLimit) => "a turn stopped at its model-step limit".to_owned(),
+        (Some(_), woke) if woke.is_empty() && stopped_by(latest, crate::attempt_control::Termination::StepLimit) => {
+            "a turn stopped at its model-step limit".to_owned()
+        }
         (Some(_), woke) if woke.is_empty() => "a turn ended by a provider failure".to_owned(),
         (_, woke) => woke,
     };
-    let objective = match &lead { Some(lead) if state.bots.accepts(chat) => acceptance(&woke, lead), Some(lead) if state.bots.monitors(chat) => advice(&woke, lead), Some(_) => answer(&woke), None if antibody => patrol(&woke), None => objective(&woke, note.as_deref(), posts(&reasons)) };
+    let objective = match &lead {
+        Some(lead) if state.bots.accepts(chat) => acceptance(&woke, lead),
+        Some(lead) if state.bots.monitors(chat) => advice(&woke, lead),
+        Some(_) => answer(&woke),
+        None if antibody => patrol(&woke),
+        None => objective(&woke, note.as_deref(), posts(&reasons)),
+    };
     let objective = match (!antibody, unread(state, chat)) {
-        (true, Some((count, digest))) => format!("{objective}\nUnread agent messages ({count}; quoted briefly, full text in conversation callbacks; evidence, not operator steering):\n{digest}"),
+        (true, Some((count, digest))) => format!(
+            "{objective}\nUnread agent messages ({count}; quoted briefly, full text in conversation callbacks; evidence, not operator steering):\n{digest}"
+        ),
         _ => objective,
     };
-    let woke = match &note { Some(note) => format!("{woke}. {note}"), None => woke };
+    let woke = match &note {
+        Some(note) => format!("{woke}. {note}"),
+        None => woke,
+    };
     // A timer-only antibody patrol with nothing new on the node settles
     // without a model turn: no cost, and the cached prompt stays warm for real work.
     // A team still flagged (stalled, looping, burning) keeps patrols real: an
     // idle stalled team produces no new activity or facts, only the patrol sees it.
-    let quiet = antibody && note.is_none() && !reasons.is_empty() && reasons.iter().all(|reason| *reason == Reason::Timer)
+    let quiet = antibody
+        && note.is_none()
+        && !reasons.is_empty()
+        && reasons.iter().all(|reason| *reason == Reason::Timer)
         && !active_since(state, chat, latest.created_ms().unwrap_or(0))
         && state.bots.teams.values().all(|team| team.conditions().is_empty());
     let run = follow_up.enqueue(state, chat, objective, RunKind::BotWake, "bot")?;
-    run.bot_turn = Some(Box::new(Turn { bot: request.bot.0.clone(), turn: request.turn.0, reasons:request.reasons.clone(), recovery }));
+    run.bot_turn = Some(Box::new(Turn {
+        bot: request.bot.0.clone(),
+        turn: request.turn.0,
+        reasons: request.reasons.clone(),
+        recovery,
+    }));
     if quiet {
         run.status = "completed".into();
         *run.result = "Patrol skipped: no team activity since the last patrol.".into();
     }
     let id = run.id.clone();
     let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
-    session.messages.push(crate::chat::Message { speaker: Default::default(), text: format!("Bot woke: {woke}"), run_id: Some(id), reply: String::new() });
+    session.messages.push(crate::chat::Message {
+        speaker: Default::default(),
+        text: format!("Bot woke: {woke}"),
+        run_id: Some(id),
+        reply: String::new(),
+    });
     session.revision = session.revision.saturating_add(1);
     Ok(())
 }
@@ -932,36 +1435,92 @@ pub fn reconcile(state: &mut State, save: impl FnMut(&State) -> std::io::Result<
 /// Only a successful, published session can receive an automatic recovery turn.
 /// Failed/interrupted effects require explicit retry. Native prose is never
 /// parsed to guess completion or permission: handoff disposition is the contract.
-fn needs_recovery(state:&State, index:usize) -> bool {
-    let run=&state.runtime.runs[index];
-    let Some(chat)=state.chats.iter().find(|chat|Some(&chat.id)==run.chat_id.as_ref() && chat.actor==run.actor) else{return false;};
-    let Some(continuity)=chat.continuity.as_ref() else{return false;};
-    let Some(attempt)=run.attempts.last() else{return false;};
-    let head=if run.action==identity::Action::Improve {&chat.improve_workspace}else{&chat.workspace};
+fn needs_recovery(state: &State, index: usize) -> bool {
+    let run = &state.runtime.runs[index];
+    let Some(chat) = state
+        .chats
+        .iter()
+        .find(|chat| Some(&chat.id) == run.chat_id.as_ref() && chat.actor == run.actor)
+    else {
+        return false;
+    };
+    let Some(continuity) = chat.continuity.as_ref() else {
+        return false;
+    };
+    let Some(attempt) = run.attempts.last() else {
+        return false;
+    };
+    let head = if run.action == identity::Action::Improve {
+        &chat.improve_workspace
+    } else {
+        &chat.workspace
+    };
     // A turn stopped at its time limit was cut off mid-work, not waiting; it
     // published nothing, so its workspace head is the previous one.
-    let stopped=cut_off(run);
-    if !(run.status=="completed" || stopped) || attempt.review_only || attempt.context_trace.as_ref().is_none_or(|trace|Some(trace.generation.as_str())!=attempt.workspace_id.as_deref())
-        || (!stopped && (attempt.artifact.is_none() || &attempt.artifact!=head))
-        || attempt.turn_mailbox.as_ref().is_none_or(|mailbox|mailbox.accepted().is_some())
-        || continuity.working.as_ref().is_some_and(|working|matches!(working.disposition,control_context::turn_mailbox::Disposition::Done)
-            && state.runtime.runs.iter().position(|previous|previous.id==working.run).is_none_or(|previous|
-                state.runtime.runs.get(previous.saturating_add(1)..=index).is_none_or(|newer|!newer.iter().any(|input|input.chat_id==run.chat_id && input.actor==run.actor
-                    && input.kind.prompt_role()==control_context::agent_policy::PromptRole::Instruction))))
-        || run.question.as_ref().is_some_and(|question|question.answer.is_none())
+    let stopped = cut_off(run);
+    if !(run.status == "completed" || stopped)
+        || attempt.review_only
+        || attempt
+            .context_trace
+            .as_ref()
+            .is_none_or(|trace| Some(trace.generation.as_str()) != attempt.workspace_id.as_deref())
+        || (!stopped && (attempt.artifact.is_none() || &attempt.artifact != head))
+        || attempt
+            .turn_mailbox
+            .as_ref()
+            .is_none_or(|mailbox| mailbox.accepted().is_some())
+        || continuity.working.as_ref().is_some_and(|working| {
+            matches!(working.disposition, control_context::turn_mailbox::Disposition::Done)
+                && state
+                    .runtime
+                    .runs
+                    .iter()
+                    .position(|previous| previous.id == working.run)
+                    .is_none_or(|previous| {
+                        state
+                            .runtime
+                            .runs
+                            .get(previous.saturating_add(1)..=index)
+                            .is_none_or(|newer| {
+                                !newer.iter().any(|input| {
+                                    input.chat_id == run.chat_id
+                                        && input.actor == run.actor
+                                        && input.kind.prompt_role()
+                                            == control_context::agent_policy::PromptRole::Instruction
+                                })
+                            })
+                    })
+        })
+        || run.question.as_ref().is_some_and(|question| question.answer.is_none())
         || crate::delegation::pausing(run)
-        || chat.project.as_ref().is_some_and(|project|project.pending || project.grant.is_none())
-        || state.bots.approvals.iter().any(|approval|approval.requester==chat.id && approval.decision==Decision::Pending)
-        || !crate::ports::pending_for_chat(state,&chat.id).is_empty()
-        || !crate::design::pending(state,&chat.id).is_empty()
-        || state.runtime.runs.iter().filter(|parent|parent.chat_id==run.chat_id && parent.actor==run.actor && parent.action==run.action)
-            .flat_map(|parent|&parent.spawns).any(|batch|batch.awaits_callback(state))
-    {return false;}
+        || chat
+            .project
+            .as_ref()
+            .is_some_and(|project| project.pending || project.grant.is_none())
+        || state
+            .bots
+            .approvals
+            .iter()
+            .any(|approval| approval.requester == chat.id && approval.decision == Decision::Pending)
+        || !crate::ports::pending_for_chat(state, &chat.id).is_empty()
+        || !crate::design::pending(state, &chat.id).is_empty()
+        || state
+            .runtime
+            .runs
+            .iter()
+            .filter(|parent| parent.chat_id == run.chat_id && parent.actor == run.actor && parent.action == run.action)
+            .flat_map(|parent| &parent.spawns)
+            .any(|batch| batch.awaits_callback(state))
+    {
+        return false;
+    }
     // A queued decision/steering/child completion already supplies the next
     // writer. Never race it with a generic recovery or supersede newer input.
-    !state.runtime.runs[index+1..].iter().any(|newer|newer.chat_id==run.chat_id
-        && (matches!(newer.status.as_str(),"queued"|"running"|"waiting")
-            || newer.kind.prompt_role()==control_context::agent_policy::PromptRole::Instruction))
+    !state.runtime.runs[index + 1..].iter().any(|newer| {
+        newer.chat_id == run.chat_id
+            && (matches!(newer.status.as_str(), "queued" | "running" | "waiting")
+                || newer.kind.prompt_role() == control_context::agent_policy::PromptRole::Instruction)
+    })
 }
 
 /// Answers a completed turn of `state.chats[index]` that ended without an
@@ -973,96 +1532,208 @@ fn needs_recovery(state:&State, index:usize) -> bool {
 /// on the bot's subscriptions with a doubling recheck. Past the allowance the
 /// team's advisor and the node notice hear once per streak that the member
 /// cannot checkpoint. Only typed host records decide; prose is never parsed.
-fn recover(state:&mut State, index:usize, generation:&str, now:u64, facts:&mut std::collections::BTreeMap<String,Facts>, effects:&mut Vec<Planned<BotId, Effect>>) {
-    let (allowance,base)=(state.runtime.execution.bot_recovery_continues,state.runtime.execution.bot_recovery_recheck_seconds);
-    let chat=state.chats[index].id.clone();
-    let mode=state.chats[index].continuity.as_mut().unwrap();
-    mode.recovered=Some(generation.to_owned());
-    let streak=&mut mode.checkpointing;
-    streak.failures=streak.failures.saturating_add(1);
-    let rejection=streak.rejected.as_ref().filter(|r|r.generation==generation).map(|r|r.error.clone());
-    let failures=streak.failures;
-    let report=failures as usize>allowance && !streak.reported;
-    streak.reported|=report;
-    if !continuation_enabled(state,&chat) { return; }
+fn recover(
+    state: &mut State,
+    index: usize,
+    generation: &str,
+    now: u64,
+    facts: &mut std::collections::BTreeMap<String, Facts>,
+    effects: &mut Vec<Planned<BotId, Effect>>,
+) {
+    let (allowance, base) = (
+        state.runtime.execution.bot_recovery_continues,
+        state.runtime.execution.bot_recovery_recheck_seconds,
+    );
+    let chat = state.chats[index].id.clone();
+    let mode = state.chats[index].continuity.as_mut().unwrap();
+    mode.recovered = Some(generation.to_owned());
+    let streak = &mut mode.checkpointing;
+    streak.failures = streak.failures.saturating_add(1);
+    let rejection = streak
+        .rejected
+        .as_ref()
+        .filter(|r| r.generation == generation)
+        .map(|r| r.error.clone());
+    let failures = streak.failures;
+    let report = failures as usize > allowance && !streak.reported;
+    streak.reported |= report;
+    if !continuation_enabled(state, &chat) {
+        return;
+    }
     // A rejected handoff or a turn cut off at its time limit has runnable work.
-    let stopped=state.runtime.runs.iter().rev().find(|run|run.chat_id.as_deref()==Some(chat.as_str()))
-        .is_some_and(|run|cut_off(run) && run.attempts.last().and_then(|attempt|attempt.workspace_id.as_deref())==Some(generation));
-    if (rejection.is_some() || stopped) && failures as usize<=allowance {
-        effects.extend(state.bots.supervisor.step(Event::Continue(bot(&chat)),Now(now)));
+    let stopped = state
+        .runtime
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.chat_id.as_deref() == Some(chat.as_str()))
+        .is_some_and(|run| {
+            cut_off(run) && run.attempts.last().and_then(|attempt| attempt.workspace_id.as_deref()) == Some(generation)
+        });
+    if (rejection.is_some() || stopped) && failures as usize <= allowance {
+        effects.extend(state.bots.supervisor.step(Event::Continue(bot(&chat)), Now(now)));
     } else {
-        park(state,&chat,recheck(base,failures,allowance),now,effects);
+        park(state, &chat, recheck(base, failures, allowance), now, effects);
     }
     if report {
-        state.runtime.notice=format!("Bot in chat {chat} cannot checkpoint: {failures} turn(s) ended without an accepted handoff; it now waits for events with a backoff recheck.");
-        lifecycle::concern(state,facts,&chat,|facts|facts.uncheckpointed(lifecycle::Uncheckpointed{chat:chat.clone(),turns:failures,rejection}));
+        state.runtime.notice = format!(
+            "Bot in chat {chat} cannot checkpoint: {failures} turn(s) ended without an accepted handoff; it now waits for events with a backoff recheck."
+        );
+        lifecycle::concern(state, facts, &chat, |facts| {
+            facts.uncheckpointed(lifecycle::Uncheckpointed {
+                chat: chat.clone(),
+                turns: failures,
+                rejection,
+            })
+        });
     }
 }
 /// Seconds until a parked bot's recheck: `base` for the first parks, then
 /// doubling with each failed turn past the allowance, up to 64 times `base`
 /// or one day.
-fn recheck(base:u64, failures:u32, allowance:usize) -> u64 {
-    let doublings=failures.saturating_sub(1).saturating_sub(u32::try_from(allowance).unwrap_or(u32::MAX)).min(6);
-    base.saturating_mul(1<<doublings).min(86_400)
+fn recheck(base: u64, failures: u32, allowance: usize) -> u64 {
+    let doublings = failures
+        .saturating_sub(1)
+        .saturating_sub(u32::try_from(allowance).unwrap_or(u32::MAX))
+        .min(6);
+    base.saturating_mul(1 << doublings).min(86_400)
 }
 /// The default wait: every current subscription (own conversation first,
 /// then rooms and other topics, watches last, as a wait selects at most 16;
 /// urgent watch exits and gaps release any wait) with a recheck deadline.
-fn park(state:&mut State, chat:&str, seconds:u64, now:u64, effects:&mut Vec<Planned<BotId, Effect>>) {
-    let mut topics=wait_topics(state,chat);
-    topics.sort_by_key(|topic| match topic.split_once(':').map_or("",|(kind,_)|kind) {
-        "conversation"=>0, "room"=>1, "watch"=>3, _=>2,
+fn park(state: &mut State, chat: &str, seconds: u64, now: u64, effects: &mut Vec<Planned<BotId, Effect>>) {
+    let mut topics = wait_topics(state, chat);
+    topics.sort_by_key(|topic| match topic.split_once(':').map_or("", |(kind, _)| kind) {
+        "conversation" => 0,
+        "room" => 1,
+        "watch" => 3,
+        _ => 2,
     });
     topics.truncate(16);
-    let topics=select_wait(state,chat,&topics,Now(now),effects);
-    effects.extend(state.bots.supervisor.step(Event::Wait{bot:bot(chat),topics,until:Some(now.saturating_add(seconds.saturating_mul(1000)))},Now(now)));
+    let topics = select_wait(state, chat, &topics, Now(now), effects);
+    effects.extend(state.bots.supervisor.step(
+        Event::Wait {
+            bot: bot(chat),
+            topics,
+            until: Some(now.saturating_add(seconds.saturating_mul(1000))),
+        },
+        Now(now),
+    ));
 }
 
-fn reconcile_at(state: &mut State, now: u64, save: impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+fn reconcile_at(
+    state: &mut State,
+    now: u64,
+    save: impl FnMut(&State) -> std::io::Result<()>,
+) -> Result<(), &'static str> {
     reconcile_with_wake_at(state, now, save, crate::worker::wake)
 }
 
-fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&State) -> std::io::Result<()>, wake: impl FnOnce()) -> Result<(), &'static str> {
+fn reconcile_with_wake_at(
+    state: &mut State,
+    now: u64,
+    mut save: impl FnMut(&State) -> std::io::Result<()>,
+    wake: impl FnOnce(),
+) -> Result<(), &'static str> {
     // Salience debounces end on this pass (at least every two seconds) even
     // when their routine has gone quiet.
-    for w in &mut state.watches { w.release(now); }
+    for w in &mut state.watches {
+        w.release(now);
+    }
     crate::agent_message::digest::settle(state, &mut save)?;
     crate::agent_message::digest::reconcile(state, now, &mut save)?;
-    let peers = peer_events(state).into_iter().map(|(chat, cursor, info)| (chat.to_owned(), cursor, info)).collect::<Vec<_>>();
+    let peers = peer_events(state)
+        .into_iter()
+        .map(|(chat, cursor, info)| (chat.to_owned(), cursor, info))
+        .collect::<Vec<_>>();
     let teams = lifecycle::observe(state);
-    let recoveries=state.chats.iter().enumerate().filter_map(|(chat_index,chat)| {
-        if !defined(state,&chat.id) { return None; }
-        let continuity=chat.continuity.as_ref()?;
-        let index=state.runtime.runs.iter().rposition(|run|run.chat_id.as_deref()==Some(&chat.id))?;
-        let generation=state.runtime.runs[index].attempts.last()?.workspace_id.as_ref()?;
-        (continuity.recovered.as_ref()!=Some(generation) && needs_recovery(state,index))
-            .then(||(chat_index,generation.clone()))
-    }).collect::<Vec<_>>();
-    let publications=state.chats.iter().filter_map(|chat| {
-        if !defined(state,&chat.id) { return None; }
-        let working=chat.continuity.as_ref()?.working.as_ref()?;
-        if state.bots.continuations.get(&chat.id)==Some(&working.revision) { return None; }
-        let run=state.runtime.runs.iter().position(|run|run.id==working.run && run.status=="completed" && run.chat_id.as_deref()==Some(&chat.id))?;
-        let head=if state.runtime.runs[run].action==identity::Action::Improve {&chat.improve_workspace}else{&chat.workspace};
-        let processed=working.processed.iter().filter_map(|range|match range {
-            control_context::turn_mailbox::Range::Conversation{chat:id,through,..} if id==&chat.id=>Some(*through as usize),_=>None,
-        }).max().unwrap_or(0);
-        let conversation=crate::conversation::Conversation::of(state,chat);
-        let later_input=state.runtime.runs[run+1..].iter().any(|r|r.chat_id.as_deref()==Some(&chat.id)
-            && r.kind.prompt_role()==control_context::agent_policy::PromptRole::Instruction
-            && (r.status!="completed" || conversation.position(&r.id).is_none_or(|position|position>=processed)));
-        (head.as_deref()==Some(&working.checkpoint)).then(||(chat.id.clone(),working.clone(),!later_input))
-    }).collect::<Vec<_>>();
-    let resumable = state.bots.approvals.iter().any(|approval| approval.decision != Decision::Pending && !approval.acknowledged);
+    let recoveries = state
+        .chats
+        .iter()
+        .enumerate()
+        .filter_map(|(chat_index, chat)| {
+            if !defined(state, &chat.id) {
+                return None;
+            }
+            let continuity = chat.continuity.as_ref()?;
+            let index = state
+                .runtime
+                .runs
+                .iter()
+                .rposition(|run| run.chat_id.as_deref() == Some(&chat.id))?;
+            let generation = state.runtime.runs[index].attempts.last()?.workspace_id.as_ref()?;
+            (continuity.recovered.as_ref() != Some(generation) && needs_recovery(state, index))
+                .then(|| (chat_index, generation.clone()))
+        })
+        .collect::<Vec<_>>();
+    let publications = state
+        .chats
+        .iter()
+        .filter_map(|chat| {
+            if !defined(state, &chat.id) {
+                return None;
+            }
+            let working = chat.continuity.as_ref()?.working.as_ref()?;
+            if state.bots.continuations.get(&chat.id) == Some(&working.revision) {
+                return None;
+            }
+            let run = state.runtime.runs.iter().position(|run| {
+                run.id == working.run && run.status == "completed" && run.chat_id.as_deref() == Some(&chat.id)
+            })?;
+            let head = if state.runtime.runs[run].action == identity::Action::Improve {
+                &chat.improve_workspace
+            } else {
+                &chat.workspace
+            };
+            let processed = working
+                .processed
+                .iter()
+                .filter_map(|range| match range {
+                    control_context::turn_mailbox::Range::Conversation { chat: id, through, .. } if id == &chat.id => {
+                        Some(*through as usize)
+                    }
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0);
+            let conversation = crate::conversation::Conversation::of(state, chat);
+            let later_input = state.runtime.runs[run + 1..].iter().any(|r| {
+                r.chat_id.as_deref() == Some(&chat.id)
+                    && r.kind.prompt_role() == control_context::agent_policy::PromptRole::Instruction
+                    && (r.status != "completed"
+                        || conversation
+                            .position(&r.id)
+                            .is_none_or(|position| position >= processed))
+            });
+            (head.as_deref() == Some(&working.checkpoint)).then(|| (chat.id.clone(), working.clone(), !later_input))
+        })
+        .collect::<Vec<_>>();
+    let resumable = state
+        .bots
+        .approvals
+        .iter()
+        .any(|approval| approval.decision != Decision::Pending && !approval.acknowledged);
     if state.bots.supervisor.definitions().next().is_none() && state.bots.requests.is_empty() && !resumable {
         state.bots.room_cursor = state.collective.posts.len();
         watch_events(state);
         return Ok(());
     }
     let outstanding = state.bots.supervisor.outstanding().next().is_some();
-    if peers.is_empty() && teams.is_empty() && recoveries.is_empty() && publications.is_empty() && !outstanding && !resumable && state.bots.requests.is_empty() && state.bots.room_cursor == state.collective.posts.len()
-        && state.bots.supervisor.next_deadline(Now(now)).is_none_or(|due| due.0 > now)
-        && !pending_watch_events(state) && drifted(state, false).is_empty()
+    if peers.is_empty()
+        && teams.is_empty()
+        && recoveries.is_empty()
+        && publications.is_empty()
+        && !outstanding
+        && !resumable
+        && state.bots.requests.is_empty()
+        && state.bots.room_cursor == state.collective.posts.len()
+        && state
+            .bots
+            .supervisor
+            .next_deadline(Now(now))
+            .is_none_or(|due| due.0 > now)
+        && !pending_watch_events(state)
+        && drifted(state, false).is_empty()
         && !crate::rooms::claims::abandonment_due(state)
     {
         return Ok(());
@@ -1071,7 +1742,20 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     let claims = (state.collective.claims.clone(), state.collective.claim_seq);
     let watches = state.watches.clone();
     let (runs, notice) = (state.runtime.runs.len(), state.runtime.notice.clone());
-    let chats = state.chats.iter().map(|session| (session.messages.len(), session.revision,session.continuity.as_ref().map(|mode|(mode.recovered.clone(),mode.checkpointing.clone())))).collect::<Vec<_>>();
+    let chats = state
+        .chats
+        .iter()
+        .map(|session| {
+            (
+                session.messages.len(),
+                session.revision,
+                session
+                    .continuity
+                    .as_ref()
+                    .map(|mode| (mode.recovered.clone(), mode.checkpointing.clone())),
+            )
+        })
+        .collect::<Vec<_>>();
     let (decided, resumed) = advance(state);
     let observed_teams = !teams.is_empty();
     let mut facts = std::collections::BTreeMap::new();
@@ -1082,16 +1766,34 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     // Turns requested earlier and now finished; decided before new events so a
     // turn requested in this pass is never mistaken for a finished one.
     let finished = if outstanding {
-        let index = state.runtime.runs.iter().enumerate().map(|(i, run)| (run.id.as_str(), i)).collect::<std::collections::HashMap<_, _>>();
-        let tagged = state.runtime.runs.iter().enumerate()
+        let index = state
+            .runtime
+            .runs
+            .iter()
+            .enumerate()
+            .map(|(i, run)| (run.id.as_str(), i))
+            .collect::<std::collections::HashMap<_, _>>();
+        let tagged = state
+            .runtime
+            .runs
+            .iter()
+            .enumerate()
             .filter_map(|(i, run)| run.bot_turn.as_ref().map(|turn| ((turn.bot.as_str(), turn.turn), i)))
             .collect::<std::collections::HashMap<_, _>>();
         // A turn that delegated or awaited a design answer continues in another run;
         // it finishes when that chain's leaf does. A broken chain releases the bot.
-        state.bots.supervisor.outstanding()
+        state
+            .bots
+            .supervisor
+            .outstanding()
             .filter(|(bot, _, turn)| match tagged.get(&(bot.0.as_str(), turn.0)) {
-                Some(&run) => crate::rooms::continuation_leaf(state, run, &index).is_none_or(|leaf| crate::application::runs::status::finished(&state.runtime.runs[leaf].status)),
-                None => !state.bots.requests.iter().any(|request| &request.bot == *bot && &request.turn == *turn),
+                Some(&run) => crate::rooms::continuation_leaf(state, run, &index)
+                    .is_none_or(|leaf| crate::application::runs::status::finished(&state.runtime.runs[leaf].status)),
+                None => !state
+                    .bots
+                    .requests
+                    .iter()
+                    .any(|request| &request.bot == *bot && &request.turn == *turn),
             })
             .map(|(bot, _, turn)| (bot.clone(), *turn))
             .collect::<Vec<_>>()
@@ -1103,47 +1805,90 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     // Publication, not a read or draft, authorises retiring pending callbacks.
     // Offer runnable continuation before completing the old turn so it folds
     // with already pending events into one budgeted successor.
-    for (chat,working,resume) in &publications {
-        let grants_applied = state.runtime.runs.iter().find(|run| run.id == working.run).is_some_and(|published| {
-            crate::chat::latest_task(state, chat, &published.actor).is_none_or(|latest|
-                state.runtime.runs[latest].resource_grants.iter().all(|grant|
-                    state.services.iter().filter(|service| grant.matches(service)).all(|service|
-                        crate::services::accessible(state, service, &service.resource.owner.node, published))))
-        });
+    for (chat, working, resume) in &publications {
+        let grants_applied = state
+            .runtime
+            .runs
+            .iter()
+            .find(|run| run.id == working.run)
+            .is_some_and(|published| {
+                crate::chat::latest_task(state, chat, &published.actor).is_none_or(|latest| {
+                    state.runtime.runs[latest].resource_grants.iter().all(|grant| {
+                        state
+                            .services
+                            .iter()
+                            .filter(|service| grant.matches(service))
+                            .all(|service| {
+                                crate::services::accessible(state, service, &service.resource.owner.node, published)
+                            })
+                    })
+                })
+            });
         for range in &working.processed {
-            let topic=match range {
-                control_context::turn_mailbox::Range::Room{room:name,..}=>Some(room(name)),
-                control_context::turn_mailbox::Range::Watch{watch:id,..}=>Some(watch(id)),
+            let topic = match range {
+                control_context::turn_mailbox::Range::Room { room: name, .. } => Some(room(name)),
+                control_context::turn_mailbox::Range::Watch { watch: id, .. } => Some(watch(id)),
                 // Reading a permission offer is not activating it in the
                 // current immutable attempt. Preserve that next-turn wake.
-                control_context::turn_mailbox::Range::Conversation{chat,..} if grants_applied=>Some(Topic::new("conversation",chat)),
-                control_context::turn_mailbox::Range::Conversation{..}=>None,
+                control_context::turn_mailbox::Range::Conversation { chat, .. } if grants_applied => {
+                    Some(Topic::new("conversation", chat))
+                }
+                control_context::turn_mailbox::Range::Conversation { .. } => None,
             };
-            if let Some(topic)=topic {effects.extend(state.bots.supervisor.step(Event::Processed{bot:bot(chat),topic,through:range.through()},Now(now)));}
+            if let Some(topic) = topic {
+                effects.extend(state.bots.supervisor.step(
+                    Event::Processed {
+                        bot: bot(chat),
+                        topic,
+                        through: range.through(),
+                    },
+                    Now(now),
+                ));
+            }
         }
-        if *resume { match &working.disposition {
-            control_context::turn_mailbox::Disposition::Continue => {
-                select_wait(state,chat,&[],Now(now),&mut effects);
-                effects.extend(state.bots.supervisor.step(Event::Continue(bot(chat)),Now(now)));
+        if *resume {
+            match &working.disposition {
+                control_context::turn_mailbox::Disposition::Continue => {
+                    select_wait(state, chat, &[], Now(now), &mut effects);
+                    effects.extend(state.bots.supervisor.step(Event::Continue(bot(chat)), Now(now)));
+                }
+                control_context::turn_mailbox::Disposition::Wait {
+                    topics,
+                    recheck_seconds,
+                } => {
+                    let topics = select_wait(state, chat, topics, Now(now), &mut effects);
+                    // A recheck is a fallback: each consecutive turn it alone
+                    // woke doubles it (up to eight times) until an event arrives.
+                    let idle = state.bots.supervisor.idle(&bot(chat));
+                    effects.extend(state.bots.supervisor.step(
+                        Event::Wait {
+                            bot: bot(chat),
+                            topics,
+                            until:
+                                recheck_seconds.map(|seconds| now.saturating_add((u64::from(seconds) * 1000) << idle)),
+                        },
+                        Now(now),
+                    ));
+                }
+                control_context::turn_mailbox::Disposition::Done => {
+                    select_wait(state, chat, &[], Now(now), &mut effects);
+                }
             }
-            control_context::turn_mailbox::Disposition::Wait{topics,recheck_seconds} => {
-                let topics = select_wait(state,chat,topics,Now(now),&mut effects);
-                // A recheck is a fallback: each consecutive turn it alone
-                // woke doubles it (up to eight times) until an event arrives.
-                let idle = state.bots.supervisor.idle(&bot(chat));
-                effects.extend(state.bots.supervisor.step(Event::Wait{bot:bot(chat),topics,until:recheck_seconds.map(|seconds| now.saturating_add((u64::from(seconds)*1000) << idle))},Now(now)));
-            }
-            control_context::turn_mailbox::Disposition::Done => { select_wait(state,chat,&[],Now(now),&mut effects); }
-        } }
-        state.bots.continuations.insert(chat.clone(),working.revision);
+        }
+        state.bots.continuations.insert(chat.clone(), working.revision);
         // An accepted, published handoff ends any failure streak. A rejection
         // stays: it names its own attempt, which may be newer than this one.
-        if let Some(mode)=state.chats.iter_mut().find(|c|c.id==*chat).and_then(|c|c.continuity.as_mut()) {
-            (mode.checkpointing.failures,mode.checkpointing.reported)=(0,false);
+        if let Some(mode) = state
+            .chats
+            .iter_mut()
+            .find(|c| c.id == *chat)
+            .and_then(|c| c.continuity.as_mut())
+        {
+            (mode.checkpointing.failures, mode.checkpointing.reported) = (0, false);
         }
     }
-    for (chat,generation) in &recoveries {
-        recover(state,*chat,generation,now,&mut facts,&mut effects);
+    for (chat, generation) in &recoveries {
+        recover(state, *chat, generation, now, &mut facts, &mut effects);
     }
     for (bot, turn) in finished {
         effects.extend(state.bots.supervisor.step(Event::TurnCompleted { bot, turn }, Now(now)));
@@ -1152,16 +1897,25 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     // conversation receipts have had a chance to retire this evidence.
     for (chat, cursor, info) in &peers {
         // Approval reconciliation above can itself enqueue a decision callback.
-        if !state.runtime.runs.iter().any(|run| run.chat_id.as_deref() == Some(chat)
-            && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")) {
+        if !state.runtime.runs.iter().any(|run| {
+            run.chat_id.as_deref() == Some(chat)
+                && matches!(run.status.as_str(), "queued" | "running" | "waiting" | "cancelling")
+        }) {
             offer_at(state, chat, *cursor, Now(now), info.clone());
         }
     }
     let start = state.bots.room_cursor.min(state.collective.posts.len());
     let end = start.saturating_add(POSTS_PER_PASS).min(state.collective.posts.len());
     for (index, post) in state.collective.posts.iter().enumerate().take(end).skip(start) {
-        if post.delivery == crate::rooms::Delivery::Record { continue; }
-        let event = Event::Info { topic: room(&post.room), cursor: index as u64 + 1, from: post.chat.clone().map(ChatId), info: Message::Post };
+        if post.delivery == crate::rooms::Delivery::Record {
+            continue;
+        }
+        let event = Event::Info {
+            topic: room(&post.room),
+            cursor: index as u64 + 1,
+            from: post.chat.clone().map(ChatId),
+            info: Message::Post,
+        };
         effects.extend(state.bots.supervisor.step(event, Now(now)));
     }
     let offered = state.bots.room_cursor != end;
@@ -1181,10 +1935,23 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
         // Only a retired restart loop tells an advisor something; a single
         // failed exit is the owning member's ordinary work.
         if let Message::Exit { gave_up: true, .. } = &info
-            && let Some(chat) = state.watches.iter().find(|w| w.id == topic.name).map(|w| w.chat.clone()) {
+            && let Some(chat) = state
+                .watches
+                .iter()
+                .find(|w| w.id == topic.name)
+                .map(|w| w.chat.clone())
+        {
             lifecycle::concern(state, &mut facts, &chat, |facts| facts.retired += 1);
         }
-        effects.extend(state.bots.supervisor.step(Event::Info { topic, cursor, from: None, info }, Now(now)));
+        effects.extend(state.bots.supervisor.step(
+            Event::Info {
+                topic,
+                cursor,
+                from: None,
+                info,
+            },
+            Now(now),
+        ));
     }
     for definition in drifted(state, false) {
         redefined = true;
@@ -1192,7 +1959,10 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
     }
     // A publication may have processed a finished watch's last event. Delete
     // such records so the next publication retires their watermarks.
-    let collected = publications.iter().flat_map(|(chat, ..)| crate::watches::delivery::drained(state, chat, |id| state.bots.retains_watch(id))).collect::<Vec<_>>();
+    let collected = publications
+        .iter()
+        .flat_map(|(chat, ..)| crate::watches::delivery::drained(state, chat, |id| state.bots.retains_watch(id)))
+        .collect::<Vec<_>>();
     if !collected.is_empty() {
         state.watches.retain(|w| !collected.contains(&w.id));
     }
@@ -1203,9 +1973,15 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
         claim_resolved_at(state, resolved, Now(now));
     }
     for resolved in &abandoned {
-        if let Some(owner) = state.collective.claims.iter()
-            .find(|claim| claim.room == resolved.room && claim.key == resolved.key && claim.incarnation == resolved.incarnation)
-            .map(|claim| claim.owner.clone()) {
+        if let Some(owner) = state
+            .collective
+            .claims
+            .iter()
+            .find(|claim| {
+                claim.room == resolved.room && claim.key == resolved.key && claim.incarnation == resolved.incarnation
+            })
+            .map(|claim| claim.owner.clone())
+        {
             lifecycle::concern(state, &mut facts, &owner, |facts| facts.abandoned += 1);
         }
     }
@@ -1225,7 +2001,19 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
             Err(_) => state.bots.requests.push(request),
         }
     }
-    if !(offered || observed_teams || completed || planned || queued || decided || redefined || watched || !abandoned.is_empty() || !peers.is_empty() || !publications.is_empty() || !recoveries.is_empty()) {
+    if !(offered
+        || observed_teams
+        || completed
+        || planned
+        || queued
+        || decided
+        || redefined
+        || watched
+        || !abandoned.is_empty()
+        || !peers.is_empty()
+        || !publications.is_empty()
+        || !recoveries.is_empty())
+    {
         return Ok(());
     }
     if save(state).is_err() {
@@ -1234,17 +2022,23 @@ fn reconcile_with_wake_at(state: &mut State, now: u64, mut save: impl FnMut(&Sta
         state.watches = watches;
         state.runtime.runs.truncate(runs);
         state.runtime.notice = notice;
-        for (session, (messages, revision,continuity)) in state.chats.iter_mut().zip(chats) {
+        for (session, (messages, revision, continuity)) in state.chats.iter_mut().zip(chats) {
             session.messages.truncate(messages);
             session.revision = revision;
-            if let (Some(mode),Some((recovered,checkpointing)))=(session.continuity.as_mut(),continuity){(mode.recovered,mode.checkpointing)=(recovered,checkpointing);}
+            if let (Some(mode), Some((recovered, checkpointing))) = (session.continuity.as_mut(), continuity) {
+                (mode.recovered, mode.checkpointing) = (recovered, checkpointing);
+            }
         }
         return Err("Could not save bot progress; events remain pending.");
     }
     // Spools go only after the deletion is durable. Unit tests never touch the
     // node's spool directory.
-    if !cfg!(test) { crate::watches::discard(&collected); }
-    if resumed { wake(); }
+    if !cfg!(test) {
+        crate::watches::discard(&collected);
+    }
+    if resumed {
+        wake();
+    }
     Ok(())
 }
 
@@ -1287,13 +2081,18 @@ pub(crate) fn conditions(state: &State, root: &str) -> Option<Vec<String>> {
 }
 fn digest(parts: &[&str]) -> String {
     let joined = parts.join("\u{0}");
-    ring::digest::digest(&ring::digest::SHA256, joined.as_bytes()).as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect()
+    ring::digest::digest(&ring::digest::SHA256, joined.as_bytes()).as_ref()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 /// The top-level chat `chat` was spawned from, directly or through children.
 fn root<'a>(state: &'a State, chat: &str) -> Option<&'a str> {
     let mut session = state.chats.iter().find(|session| session.id == chat)?;
     for _ in 0..64 {
-        let Some(parent) = session.parent_chat.as_deref() else { return Some(session.id.as_str()) };
+        let Some(parent) = session.parent_chat.as_deref() else {
+            return Some(session.id.as_str());
+        };
         session = state.chats.iter().find(|candidate| candidate.id == parent)?;
     }
     None
@@ -1310,36 +2109,58 @@ pub(crate) const MONITOR_TOOL: &str = "team.monitor";
 /// team's agents wait for events only and set no check-in timers.
 pub(crate) const TIMER_TOOL: &str = "bot.timer";
 pub(crate) const TIMERS_OFF: &str = "This team did not select the timers gene, so agents take no check-in timer: omit every_minutes. Messages, claims and a routine's notifications or exit still wake you.";
-pub(crate) const MONITOR_OFF: &str = "Monitors are opt-in: select the monitor gene on the root chat (/use monitor) first.";
-pub(crate) const ACCEPTANCE_OFF: &str = "Acceptance checks are opt-in: select the acceptance gene on the root chat (/use acceptance) first.";
-pub(crate) const ADVISOR_OFF: &str = "Advisors are opt-in: select the advisor lens on the root chat (/use advisor) first.";
+pub(crate) const MONITOR_OFF: &str =
+    "Monitors are opt-in: select the monitor gene on the root chat (/use monitor) first.";
+pub(crate) const ACCEPTANCE_OFF: &str =
+    "Acceptance checks are opt-in: select the acceptance gene on the root chat (/use acceptance) first.";
+pub(crate) const ADVISOR_OFF: &str =
+    "Advisors are opt-in: select the advisor lens on the root chat (/use advisor) first.";
 /// Antibody personas keep the antibody opt-in gate.
-pub(crate) const ANTIBODY_OFF: &str = "Antibodies are opt-in: select the antibody gene on an operator-owned root chat (/use antibody) first.";
+pub(crate) const ANTIBODY_OFF: &str =
+    "Antibodies are opt-in: select the antibody gene on an operator-owned root chat (/use antibody) first.";
 /// Whether the task tree rooted at `top` opted in to the observer `tool`
 /// names: the root chat's selected lenses (ticked in the UI or with `/use`)
 /// offer it. This is availability, not authority: without it that observer
 /// has no option and hears nothing; with it, operator bot approval still
 /// decides whether one runs.
 pub(crate) fn offered(state: &State, top: &str, tool: &str) -> bool {
-    state.chats.iter().find(|session| session.id == top && session.parent_chat.is_none())
+    state
+        .chats
+        .iter()
+        .find(|session| session.id == top && session.parent_chat.is_none())
         .is_some_and(|session| crate::lens_library::offers(state, &crate::chat::selected_lenses(session), tool))
 }
 /// Whether the tree rooted at `top` opted in to any team observer: an
 /// advisor, a monitor or an acceptance check.
 pub(crate) fn team_observer_offered(state: &State, top: &str) -> bool {
-    [ADVISOR_TOOL, MONITOR_TOOL, ACCEPTANCE_TOOL].iter().any(|tool| offered(state, top, tool))
+    [ADVISOR_TOOL, MONITOR_TOOL, ACCEPTANCE_TOOL]
+        .iter()
+        .any(|tool| offered(state, top, tool))
 }
 /// The gene a team observer with this DNA needs on its root, as its tool and
 /// the refusal that names it. A judge without observer DNA is the advisor.
 pub(crate) fn team_gene(state: &State, lenses: &[String]) -> (&'static str, &'static str) {
     let offers = |tool| crate::lens_library::offers(state, lenses, tool);
-    if offers(ACCEPTANCE_TOOL) { (ACCEPTANCE_TOOL, ACCEPTANCE_OFF) } else if offers(MONITOR_TOOL) { (MONITOR_TOOL, MONITOR_OFF) } else { (ADVISOR_TOOL, ADVISOR_OFF) }
+    if offers(ACCEPTANCE_TOOL) {
+        (ACCEPTANCE_TOOL, ACCEPTANCE_OFF)
+    } else if offers(MONITOR_TOOL) {
+        (MONITOR_TOOL, MONITOR_OFF)
+    } else {
+        (ADVISOR_TOOL, ADVISOR_OFF)
+    }
 }
 /// The tool of the team observer `chat`'s judge would run as, once its root
 /// offers that observer's own gene.
 pub(crate) fn team_gate(state: &State, chat: &str) -> Result<&'static str, &'static str> {
-    let (tool, off) = team_gene(state, crate::personas::captured(state, chat).map_or(&[][..], |bundle| &bundle.lenses));
-    if offered_for(state, chat, tool) { Ok(tool) } else { Err(off) }
+    let (tool, off) = team_gene(
+        state,
+        crate::personas::captured(state, chat).map_or(&[][..], |bundle| &bundle.lenses),
+    );
+    if offered_for(state, chat, tool) {
+        Ok(tool)
+    } else {
+        Err(off)
+    }
 }
 /// The catalogue tool the `antibody` lens offers.
 pub(crate) const ANTIBODY_TOOL: &str = "node.antibody";
@@ -1348,9 +2169,14 @@ pub(crate) const ANTIBODY_TOOL: &str = "node.antibody";
 /// selected lenses offer [`ANTIBODY_TOOL`]. Availability, not authority: the
 /// operator's bot approval still decides whether one runs.
 pub(crate) fn antibody_offered(state: &State, top: &str) -> bool {
-    state.chats.iter().find(|session| session.id == top && session.parent_chat.is_none())
-        .is_some_and(|session| session.actor == identity::Actor::LocalOperator
-            && crate::lens_library::offers(state, &crate::chat::selected_lenses(session), ANTIBODY_TOOL))
+    state
+        .chats
+        .iter()
+        .find(|session| session.id == top && session.parent_chat.is_none())
+        .is_some_and(|session| {
+            session.actor == identity::Actor::LocalOperator
+                && crate::lens_library::offers(state, &crate::chat::selected_lenses(session), ANTIBODY_TOOL)
+        })
 }
 /// [`antibody_offered`] for the task tree `chat` belongs to.
 pub(crate) fn antibody_offered_for(state: &State, chat: &str) -> bool {
@@ -1359,8 +2185,11 @@ pub(crate) fn antibody_offered_for(state: &State, chat: &str) -> bool {
 /// Whether any approved antibody runs whose tree still selects the lens.
 /// Without one the node computes no node-wide facts.
 pub(crate) fn antibodies_active(state: &State) -> bool {
-    state.bots.supervisor.definitions().any(|definition| definition.restart == Restart::Permanent && lifecycle::immune(definition)
-        && antibody_offered_for(state, &definition.chat.0))
+    state.bots.supervisor.definitions().any(|definition| {
+        definition.restart == Restart::Permanent
+            && lifecycle::immune(definition)
+            && antibody_offered_for(state, &definition.chat.0)
+    })
 }
 /// [`offered`] for the task tree `chat` belongs to.
 pub(crate) fn offered_for(state: &State, chat: &str, tool: &str) -> bool {
@@ -1373,7 +2202,11 @@ pub(crate) fn team_observer_offered_for(state: &State, chat: &str) -> bool {
 /// Whether two chats of one actor belong to the same top-level conversation:
 /// a lead, its helpers and every agent they spawned.
 fn related(state: &State, chat: &str, requester: &str, actor: &identity::Actor) -> bool {
-    state.chats.iter().any(|session| session.id == chat && &session.actor == actor) && root(state, chat).is_some_and(|top| root(state, requester) == Some(top))
+    state
+        .chats
+        .iter()
+        .any(|session| session.id == chat && &session.actor == actor)
+        && root(state, chat).is_some_and(|top| root(state, requester) == Some(top))
 }
 
 /// Worker tool entry point: agents request bots and read their state.
@@ -1384,23 +2217,45 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     handle_with(&mut state, attempt, call, crate::storage::save, &policy)
 }
 #[cfg(test)]
-fn handle(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl Fn(&State) -> io::Result<()>) -> io::Result<Value> {
+fn handle(
+    state: &mut State,
+    attempt: &AttemptRef<'_>,
+    call: BotCall,
+    save: impl Fn(&State) -> io::Result<()>,
+) -> io::Result<Value> {
     handle_with(state, attempt, call, save, &AutoApproval::default())
 }
-fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save: impl Fn(&State) -> io::Result<()>, policy: &AutoApproval) -> io::Result<Value> {
-    let run = state.runtime.runs.iter()
-        .find(|run| run.id == attempt.run && run.status == "running"
-            && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation))
+fn handle_with(
+    state: &mut State,
+    attempt: &AttemptRef<'_>,
+    call: BotCall,
+    save: impl Fn(&State) -> io::Result<()>,
+    policy: &AutoApproval,
+) -> io::Result<Value> {
+    let run = state
+        .runtime
+        .runs
+        .iter()
+        .find(|run| {
+            run.id == attempt.run
+                && run.status == "running"
+                && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
+        })
         .ok_or_else(|| io::Error::other("Attempt is not active"))?;
     identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
     if crate::delegation::is_judge(run) {
         return Err(io::Error::other("Judges cannot request bots"));
     }
-    let requester = run.chat_id.clone().ok_or_else(|| io::Error::other("A chat is required"))?;
+    let requester = run
+        .chat_id
+        .clone()
+        .ok_or_else(|| io::Error::other("A chat is required"))?;
     let (origin, actor) = (run.id.clone(), run.actor.clone());
     match call {
         BotCall::Pause => {
-            if !defined(state, &requester) { return Err(io::Error::other("This chat has no bot to pause")); }
+            if !defined(state, &requester) {
+                return Err(io::Error::other("This chat has no bot to pause"));
+            }
             let previous = state.bots.clone();
             let notice = state.runtime.notice.clone();
             let effects = state.bots.supervisor.step(Event::Pause(bot(&requester)), Now(now_ms()));
@@ -1410,32 +2265,57 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
                 state.runtime.notice = notice;
                 return Err(error);
             }
-            Ok(json!({"paused":true,"chat_id":requester,"resume":"The operator can use /bot resume in this chat. Services and pending events are retained."}))
+            Ok(
+                json!({"paused":true,"chat_id":requester,"resume":"The operator can use /bot resume in this chat. Services and pending events are retained."}),
+            )
         }
         BotCall::Status { chat_id } => {
             let chat = chat_id.unwrap_or_else(|| requester.clone());
             if !related(state, &chat, &requester, &actor) {
                 return Err(io::Error::other("Read bot state only for chats in this conversation"));
             }
-            let requests = state.bots.approvals.iter().filter(|a| a.requester == requester).map(Approval::summary).collect::<Vec<_>>();
+            let requests = state
+                .bots
+                .approvals
+                .iter()
+                .filter(|a| a.requester == requester)
+                .map(Approval::summary)
+                .collect::<Vec<_>>();
             Ok(json!({"chat_id":chat,"bot":status(state, &chat),"requests":requests}))
         }
-        BotCall::Request { chat_id, every_minutes, room } => {
+        BotCall::Request {
+            chat_id,
+            every_minutes,
+            room,
+        } => {
             // An agent's own timer is opt-in per team; a persona's schedule
             // (an antibody's patrol) is that persona's gene.
-            if every_minutes.is_some() && !offered_for(state, &chat_id, TIMER_TOOL) && !crate::personas::observes_node(state, &chat_id) {
+            if every_minutes.is_some()
+                && !offered_for(state, &chat_id, TIMER_TOOL)
+                && !crate::personas::observes_node(state, &chat_id)
+            {
                 return Err(io::Error::other(TIMERS_OFF));
             }
             // A persona's schedule behaviour is the default interval.
             let every_minutes = every_minutes.or_else(|| crate::personas::schedule(state, &chat_id));
-            if !attempt.nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') || attempt.nonce.is_empty() || attempt.nonce.len() > 128 {
+            if !attempt.nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                || attempt.nonce.is_empty()
+                || attempt.nonce.len() > 128
+            {
                 return Err(io::Error::other("Invalid request identity"));
             }
-            let id = format!("bot-{}", digest(&[attempt.run, attempt.generation, attempt.nonce, &chat_id]));
+            let id = format!(
+                "bot-{}",
+                digest(&[attempt.run, attempt.generation, attempt.nonce, &chat_id])
+            );
             if let Some(existing) = state.bots.approvals.iter().find(|a| a.id == id) {
                 return Ok(existing.summary());
             }
-            let target = state.chats.iter().find(|session| session.id == chat_id).ok_or_else(|| io::Error::other("Chat not found"))?;
+            let target = state
+                .chats
+                .iter()
+                .find(|session| session.id == chat_id)
+                .ok_or_else(|| io::Error::other("Chat not found"))?;
             if !related(state, &chat_id, &requester, &actor) {
                 return Err(io::Error::other("Request bots only for chats in this conversation"));
             }
@@ -1453,39 +2333,91 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
                 team_gate(state, &chat_id).map_err(io::Error::other)?;
             }
             if advisor && !antibody && every_minutes.is_some() {
-                return Err(io::Error::other("A team observer wakes on its team's questions, facts or completion; omit every_minutes"));
+                return Err(io::Error::other(
+                    "A team observer wakes on its team's questions, facts or completion; omit every_minutes",
+                ));
             }
             if !advisor && !(room && linked) && every_minutes.is_none() && watch_sources(state, &chat_id).is_empty() {
-                return Err(io::Error::other("The chat has no room or watch to wake it; give every_minutes or start a watch"));
+                return Err(io::Error::other(
+                    "The chat has no room or watch to wake it; give every_minutes or start a watch",
+                ));
             }
-            if !state.runtime.runs.iter().any(|run| run.chat_id.as_deref() == Some(chat_id.as_str())) {
-                return Err(io::Error::other("The chat has no task yet; give it one before it becomes a bot"));
+            if !state
+                .runtime
+                .runs
+                .iter()
+                .any(|run| run.chat_id.as_deref() == Some(chat_id.as_str()))
+            {
+                return Err(io::Error::other(
+                    "The chat has no task yet; give it one before it becomes a bot",
+                ));
             }
             if crate::rooms::listening(state, &chat_id) {
-                return Err(io::Error::other("That chat listens to its room; it must turn off /listen first"));
+                return Err(io::Error::other(
+                    "That chat listens to its room; it must turn off /listen first",
+                ));
             }
-            if defined(state, &chat_id) || state.bots.approvals.iter().any(|a| a.chat == chat_id && a.decision == Decision::Pending) {
-                return Err(io::Error::other("That chat already runs a bot or has a pending request"));
+            if defined(state, &chat_id)
+                || state
+                    .bots
+                    .approvals
+                    .iter()
+                    .any(|a| a.chat == chat_id && a.decision == Decision::Pending)
+            {
+                return Err(io::Error::other(
+                    "That chat already runs a bot or has a pending request",
+                ));
             }
-            if state.bots.approvals.iter().filter(|a| a.decision == Decision::Pending).count() >= MAX_APPROVALS {
+            if state
+                .bots
+                .approvals
+                .iter()
+                .filter(|a| a.decision == Decision::Pending)
+                .count()
+                >= MAX_APPROVALS
+            {
                 return Err(io::Error::other("Too many pending bot requests; wait for the operator"));
             }
             let previous = state.bots.clone();
             // An automatic approval starts the bot, which touches the chats and rooms too.
-            let checkpoint = (policy.mode == Mode::Auto).then(|| crate::chat::Checkpoint::capture(state, &[requester.as_str(), chat_id.as_str()].into_iter().collect()));
+            let checkpoint = (policy.mode == Mode::Auto).then(|| {
+                crate::chat::Checkpoint::capture(state, &[requester.as_str(), chat_id.as_str()].into_iter().collect())
+            });
             let decisions = state.auto_decisions.clone();
-            state.bots.approvals.retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
-            let approval = Approval { id, chat: chat_id, requester: requester.clone(), origin, every_minutes, room: room && linked && !advisor, decision: Decision::Pending, acknowledged: false };
+            state
+                .bots
+                .approvals
+                .retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
+            let approval = Approval {
+                id,
+                chat: chat_id,
+                requester: requester.clone(),
+                origin,
+                every_minutes,
+                room: room && linked && !advisor,
+                decision: Decision::Pending,
+                acknowledged: false,
+            };
             let id = approval.id.clone();
             let mut value = approval.summary();
-            value["approval"] = json!(format!("Waiting for the operator: approve in this chat or with /bot allow {} (also over Discord). End your turn; you will be resumed with the decision.", approval.id));
+            value["approval"] = json!(format!(
+                "Waiting for the operator: approve in this chat or with /bot allow {} (also over Discord). End your turn; you will be resumed with the decision.",
+                approval.id
+            ));
             state.bots.approvals.push(approval);
             bump(state, &requester);
             if let Some(rule) = auto_decide(state, &id, policy, Now(now_ms())) {
-                value = state.bots.approvals.iter().find(|a| a.id == id).map_or(value, Approval::summary);
+                value = state
+                    .bots
+                    .approvals
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map_or(value, Approval::summary);
                 value["decided_by"] = json!("policy");
                 value["rule"] = json!(rule);
-                value["approval"] = json!("Approved automatically by the node's policy: the chat now runs as a persistent bot. Continue your task.");
+                value["approval"] = json!(
+                    "Approved automatically by the node's policy: the chat now runs as a persistent bot. Continue your task."
+                );
             }
             if let Err(error) = save(state) {
                 match checkpoint {
@@ -1504,29 +2436,71 @@ fn handle_with(state: &mut State, attempt: &AttemptRef<'_>, call: BotCall, save:
 /// to approve like any other. Nothing runs until approval. `None` when the
 /// persona asks for no wake or the request cannot be filed now (the agent can
 /// still request one itself).
-pub(crate) fn persona_request(state: &mut State, requester: &str, origin: &str, chat: &str, behaviours: &[control_context::persona::Behaviour]) -> Option<String> {
+pub(crate) fn persona_request(
+    state: &mut State,
+    requester: &str,
+    origin: &str,
+    chat: &str,
+    behaviours: &[control_context::persona::Behaviour],
+) -> Option<String> {
     use control_context::persona::Behaviour;
-    let every_minutes = behaviours.iter().find_map(|b| match b { Behaviour::Schedule { every_minutes } => Some(*every_minutes), _ => None });
-    let linked = state.chats.iter().find(|session| session.id == chat).and_then(|session| session.room.as_deref()).is_some_and(crate::rooms::valid);
+    let every_minutes = behaviours.iter().find_map(|b| match b {
+        Behaviour::Schedule { every_minutes } => Some(*every_minutes),
+        _ => None,
+    });
+    let linked = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .and_then(|session| session.room.as_deref())
+        .is_some_and(crate::rooms::valid);
     let advisor = judge_chat(state, chat);
     let room = behaviours.contains(&Behaviour::Room) && linked && !advisor;
     if (every_minutes.is_none() && !room)
         || every_minutes.is_some_and(|m| !(1..=MAX_INTERVAL_MINUTES).contains(&m))
         || defined(state, chat)
-        || state.bots.approvals.iter().any(|a| a.chat == chat && a.decision == Decision::Pending)
-        || state.bots.approvals.iter().filter(|a| a.decision == Decision::Pending).count() >= MAX_APPROVALS
+        || state
+            .bots
+            .approvals
+            .iter()
+            .any(|a| a.chat == chat && a.decision == Decision::Pending)
+        || state
+            .bots
+            .approvals
+            .iter()
+            .filter(|a| a.decision == Decision::Pending)
+            .count()
+            >= MAX_APPROVALS
     {
         return None;
     }
     let id = format!("bot-{}", digest(&["persona", origin, chat]));
-    state.bots.approvals.retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
-    state.bots.approvals.push(Approval { id: id.clone(), chat: chat.into(), requester: requester.into(), origin: origin.into(), every_minutes, room, decision: Decision::Pending, acknowledged: false });
+    state
+        .bots
+        .approvals
+        .retain(|a| !(a.acknowledged && a.decision != Decision::Pending));
+    state.bots.approvals.push(Approval {
+        id: id.clone(),
+        chat: chat.into(),
+        requester: requester.into(),
+        origin: origin.into(),
+        every_minutes,
+        room,
+        decision: Decision::Pending,
+        acknowledged: false,
+    });
     bump(state, requester);
     Some(id)
 }
 /// Whether a chat's latest task is a read-only judge, so it can only advise.
 fn judge_chat(state: &State, chat: &str) -> bool {
-    state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(chat)).is_some_and(crate::delegation::is_judge)
+    state
+        .runtime
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.chat_id.as_deref() == Some(chat))
+        .is_some_and(crate::delegation::is_judge)
 }
 fn bump(state: &mut State, chat: &str) {
     if let Some(session) = state.chats.iter_mut().find(|session| session.id == chat) {
@@ -1536,24 +2510,47 @@ fn bump(state: &mut State, chat: &str) {
 
 /// The operator's decision, from the chat panel or `/bot allow|deny ID` in the
 /// requesting or target chat. Approval starts the bot; the requester resumes later.
-fn decide(state: &mut State, id: &str, allow: bool, chat: Option<&str>, now: Now) -> Result<&'static str, &'static str> {
-    let index = state.bots.approvals.iter()
+fn decide(
+    state: &mut State,
+    id: &str,
+    allow: bool,
+    chat: Option<&str>,
+    now: Now,
+) -> Result<&'static str, &'static str> {
+    let index = state
+        .bots
+        .approvals
+        .iter()
         .position(|a| a.id == id && a.decision == Decision::Pending && chat.is_none_or(|chat| visible(state, a, chat)))
         .ok_or("No pending bot request with that ID in this conversation.")?;
     let approval = state.bots.approvals[index].clone();
-    let session = state.chats.iter().find(|session| session.id == approval.requester).ok_or("Requesting chat is missing.")?;
+    let session = state
+        .chats
+        .iter()
+        .find(|session| session.id == approval.requester)
+        .ok_or("Requesting chat is missing.")?;
     identity::authorize(&session.actor, identity::Action::Task)?;
     if allow {
         start(state, &approval.chat, approval.every_minutes, approval.room, now)?;
     }
     state.bots.approvals[index].decision = if allow { Decision::Approved } else { Decision::Denied };
     bump(state, &approval.requester);
-    Ok(if allow { "Bot request approved; the chat now runs as a bot." } else { "Bot request denied." })
+    Ok(if allow {
+        "Bot request approved; the chat now runs as a bot."
+    } else {
+        "Bot request denied."
+    })
 }
 
 /// Persistent bots running now (approved and not stopping), by chat.
 pub(crate) fn active(state: &State) -> Vec<&str> {
-    state.bots.supervisor.definitions().map(|definition| definition.chat.0.as_str()).filter(|chat| state.bots.persists(chat)).collect()
+    state
+        .bots
+        .supervisor
+        .definitions()
+        .map(|definition| definition.chat.0.as_str())
+        .filter(|chat| state.bots.persists(chat))
+        .collect()
 }
 /// What the approval policy decides a bot request on.
 fn facts<'a>(state: &'a State, approval: &Approval) -> Option<crate::auto_approval::BotFacts<'a>> {
@@ -1564,7 +2561,9 @@ fn facts<'a>(state: &'a State, approval: &Approval) -> Option<crate::auto_approv
     let bots = active(state);
     Some(crate::auto_approval::BotFacts {
         actor: &session.actor,
-        operator_tree: lead.parent_chat.is_none() && lead.actor == session.actor && identity::authorize(&lead.actor, identity::Action::Task).is_ok(),
+        operator_tree: lead.parent_chat.is_none()
+            && lead.actor == session.actor
+            && identity::authorize(&lead.actor, identity::Action::Task).is_ok(),
         observer: judge_chat(state, &approval.chat),
         task_chats: tree.len(),
         spawn_limit: state.runtime.execution.max_agents_per_root,
@@ -1582,15 +2581,36 @@ fn auto_decide(state: &mut State, id: &str, policy: &AutoApproval, now: Now) -> 
     if policy.mode != Mode::Auto {
         return None;
     }
-    let approval = state.bots.approvals.iter().find(|a| a.id == id && a.decision == Decision::Pending)?.clone();
-    let Verdict::Approve(rule) = classify(policy, &Request::Bot(facts(state, &approval)?)) else { return None };
-    let checkpoint = crate::chat::Checkpoint::capture(state, &[approval.requester.as_str(), approval.chat.as_str()].into_iter().collect());
+    let approval = state
+        .bots
+        .approvals
+        .iter()
+        .find(|a| a.id == id && a.decision == Decision::Pending)?
+        .clone();
+    let Verdict::Approve(rule) = classify(policy, &Request::Bot(facts(state, &approval)?)) else {
+        return None;
+    };
+    let checkpoint = crate::chat::Checkpoint::capture(
+        state,
+        &[approval.requester.as_str(), approval.chat.as_str()]
+            .into_iter()
+            .collect(),
+    );
     if decide(state, id, true, None, now).is_err() {
         checkpoint.restore(state);
         return None;
     }
-    state.bots.approvals.iter_mut().filter(|a| a.id == id).for_each(|a| a.acknowledged = true);
-    let what = format!("persistent bot {} ({})", crate::callsigns::name_or_id(&state.chats, &approval.chat), approval.chat);
+    state
+        .bots
+        .approvals
+        .iter_mut()
+        .filter(|a| a.id == id)
+        .for_each(|a| a.acknowledged = true);
+    let what = format!(
+        "persistent bot {} ({})",
+        crate::callsigns::name_or_id(&state.chats, &approval.chat),
+        approval.chat
+    );
     crate::auto_approval::record(state, policy, "bot", id, &approval.requester, what, rule);
     Some(rule)
 }
@@ -1601,31 +2621,81 @@ fn auto_decide(state: &mut State, id: &str, policy: &AutoApproval, now: Now) -> 
 fn advance(state: &mut State) -> (bool, bool) {
     let mut changed = false;
     let mut resumed = false;
-    let requesters = state.bots.approvals.iter()
+    let requesters = state
+        .bots
+        .approvals
+        .iter()
         .filter(|a| a.decision != Decision::Pending && !a.acknowledged)
-        .map(|a| a.requester.clone()).collect::<std::collections::BTreeSet<_>>();
+        .map(|a| a.requester.clone())
+        .collect::<std::collections::BTreeSet<_>>();
     for requester in requesters {
         let mine = |a: &&Approval| a.requester == requester;
-        if state.bots.approvals.iter().filter(mine).any(|a| a.decision == Decision::Pending) {
+        if state
+            .bots
+            .approvals
+            .iter()
+            .filter(mine)
+            .any(|a| a.decision == Decision::Pending)
+        {
             continue;
         }
-        let decided = state.bots.approvals.iter().filter(mine).filter(|a| !a.acknowledged).cloned().collect::<Vec<_>>();
-        let lines = decided.iter().map(|a| {
-            let title = crate::callsigns::name_or_id(&state.chats, &a.chat);
-            format!("{title} ({}): {}", a.chat, if a.decision == Decision::Approved { "approved, now a persistent bot" } else { "denied" })
-        }).collect::<Vec<_>>().join("\n");
+        let decided = state
+            .bots
+            .approvals
+            .iter()
+            .filter(mine)
+            .filter(|a| !a.acknowledged)
+            .cloned()
+            .collect::<Vec<_>>();
+        let lines = decided
+            .iter()
+            .map(|a| {
+                let title = crate::callsigns::name_or_id(&state.chats, &a.chat);
+                format!(
+                    "{title} ({}): {}",
+                    a.chat,
+                    if a.decision == Decision::Approved {
+                        "approved, now a persistent bot"
+                    } else {
+                        "denied"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let origins = decided.iter().map(|a| a.origin.as_str()).collect::<Vec<_>>();
-        let task = state.runtime.runs.iter().rev().find(|run| run.chat_id.as_deref() == Some(requester.as_str())).map(|run| run.objective.clone()).unwrap_or_default();
-        let outcome = crate::approvals::resume(state, crate::approvals::Decisions {
-            chat: &requester, origins: &origins, heading: crate::application::approval_resume::BOT_DECISIONS, lines: &lines,
-            instruction: "Continue the original task. Approved chats now sleep until room messages or their timers wake them.",
-            task: &task, kind: RunKind::BotDecision, source: "bot", grants: Vec::new(),
-        });
+        let task = state
+            .runtime
+            .runs
+            .iter()
+            .rev()
+            .find(|run| run.chat_id.as_deref() == Some(requester.as_str()))
+            .map(|run| run.objective.clone())
+            .unwrap_or_default();
+        let outcome = crate::approvals::resume(
+            state,
+            crate::approvals::Decisions {
+                chat: &requester,
+                origins: &origins,
+                heading: crate::application::approval_resume::BOT_DECISIONS,
+                lines: &lines,
+                instruction: "Continue the original task. Approved chats now sleep until room messages or their timers wake them.",
+                task: &task,
+                kind: RunKind::BotDecision,
+                source: "bot",
+                grants: Vec::new(),
+            },
+        );
         if outcome == crate::approvals::Outcome::Wait {
             continue;
         }
         resumed |= matches!(outcome, crate::approvals::Outcome::Resumed(_));
-        for approval in state.bots.approvals.iter_mut().filter(|a| a.requester == requester && a.decision != Decision::Pending) {
+        for approval in state
+            .bots
+            .approvals
+            .iter_mut()
+            .filter(|a| a.requester == requester && a.decision != Decision::Pending)
+        {
             approval.acknowledged = true;
         }
         changed = true;
@@ -1634,22 +2704,40 @@ fn advance(state: &mut State) -> (bool, bool) {
 }
 
 fn visible(state: &State, approval: &Approval, chat: &str) -> bool {
-    let Some(viewer) = state.chats.iter().find(|session| session.id == chat) else { return false; };
-    state.chats.iter().any(|requester| requester.id == approval.requester && requester.actor == viewer.actor)
+    let Some(viewer) = state.chats.iter().find(|session| session.id == chat) else {
+        return false;
+    };
+    state
+        .chats
+        .iter()
+        .any(|requester| requester.id == approval.requester && requester.actor == viewer.actor)
         && (approval.chat == chat || crate::chat::within(state, &approval.requester, chat))
 }
 fn pending<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a Approval> {
-    state.bots.approvals.iter().filter(move |a| a.decision == Decision::Pending && visible(state, a, chat))
+    state
+        .bots
+        .approvals
+        .iter()
+        .filter(move |a| a.decision == Decision::Pending && visible(state, a, chat))
 }
-pub(crate) fn pending_count(state: &State, chat: &str) -> usize { pending(state,chat).count() }
+pub(crate) fn pending_count(state: &State, chat: &str) -> usize {
+    pending(state, chat).count()
+}
 /// Requesting chats of every pending request, for the node-wide view.
 pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
-    state.bots.approvals.iter().filter(|a| a.decision == Decision::Pending).map(|a| a.requester.as_str())
+    state
+        .bots
+        .approvals
+        .iter()
+        .filter(|a| a.decision == Decision::Pending)
+        .map(|a| a.requester.as_str())
 }
 pub(crate) fn decision_revision(state: &State) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for approval in &state.bots.approvals { (&approval.id, &approval.requester, &approval.chat, approval.decision).hash(&mut hash); }
+    for approval in &state.bots.approvals {
+        (&approval.id, &approval.requester, &approval.chat, approval.decision).hash(&mut hash);
+    }
     hash.finish()
 }
 /// Pending requests from this chat and its same-actor descendants.
@@ -1665,20 +2753,38 @@ pub(crate) fn pending_panel(state: &State, chat: &str) -> String {
     }).collect()
 }
 pub(crate) fn pending_json(state: &State, chat: &str) -> Value {
-    Value::from(pending(state, chat).map(|a| { let mut summary = a.summary(); summary["name"] = json!(crate::callsigns::name_or_id(&state.chats, &a.chat)); summary }).collect::<Vec<_>>())
+    Value::from(
+        pending(state, chat)
+            .map(|a| {
+                let mut summary = a.summary();
+                summary["name"] = json!(crate::callsigns::name_or_id(&state.chats, &a.chat));
+                summary
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// `POST /tools/bots` from the chat panel: allow or deny, then return to the chat.
 pub fn http(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
     http_with_save(stream, shared, method, path, body, crate::storage::save)
 }
-fn http_with_save(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8], save: impl Fn(&State) -> io::Result<()>) -> bool {
+fn http_with_save(
+    stream: &mut impl io::Write,
+    shared: &Arc<Mutex<State>>,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    save: impl Fn(&State) -> io::Result<()>,
+) -> bool {
     if path != "/tools/bots" {
         return false;
     }
     let fields = crate::fields(&String::from_utf8_lossy(body));
     let asynchronous = fields.get("response").is_some_and(|value| value == "json");
-    let chat = fields.get("return_chat").filter(|id| crate::chat::valid_id(id)).cloned();
+    let chat = fields
+        .get("return_chat")
+        .filter(|id| crate::chat::valid_id(id))
+        .cloned();
     let result = (|| -> Result<(), &'static str> {
         if method != "POST" {
             return Err("Use POST");
@@ -1687,7 +2793,13 @@ fn http_with_save(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, metho
         let chat = chat.as_deref().ok_or("Missing chat")?;
         let mut state = shared.lock().map_err(|_| "State unavailable")?;
         let checkpoint = {
-            let targets = state.bots.approvals.iter().filter(|a| &a.id == id).flat_map(|a| [a.chat.as_str(), a.requester.as_str()]).collect();
+            let targets = state
+                .bots
+                .approvals
+                .iter()
+                .filter(|a| &a.id == id)
+                .flat_map(|a| [a.chat.as_str(), a.requester.as_str()])
+                .collect();
             crate::chat::Checkpoint::capture(&state, &targets)
         };
         let result = decide(&mut state, id, fields.contains_key("allow"), Some(chat), Now(now_ms()));
@@ -1699,12 +2811,43 @@ fn http_with_save(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, metho
     })();
     let _ = match (result, chat) {
         (result, _) if asynchronous => {
-            let (status, value) = match result { Ok(()) => ("200 OK", json!({"ok":true})), Err(error) => ("400 Bad Request", json!({"error":error})) };
-            control_http::respond(stream, status, "application/json", value.to_string().as_bytes(), "", control_http::Policy::Page)
+            let (status, value) = match result {
+                Ok(()) => ("200 OK", json!({"ok":true})),
+                Err(error) => ("400 Bad Request", json!({"error":error})),
+            };
+            control_http::respond(
+                stream,
+                status,
+                "application/json",
+                value.to_string().as_bytes(),
+                "",
+                control_http::Policy::Page,
+            )
         }
-        (Ok(()), Some(chat)) => control_http::respond(stream, "303 See Other", "text/plain", b"", &format!("Location: /dm/{chat}\r\n"), control_http::Policy::Page),
-        (Ok(()), None) => control_http::respond(stream, "204 No Content", "text/plain", b"", "", control_http::Policy::Page),
-        (Err(error), back) => control_http::respond(stream, "400 Bad Request", "text/html; charset=utf-8", crate::error_page(error, &back.map_or("/".to_owned(), |chat| format!("/dm/{chat}"))).as_bytes(), "", control_http::Policy::Page),
+        (Ok(()), Some(chat)) => control_http::respond(
+            stream,
+            "303 See Other",
+            "text/plain",
+            b"",
+            &format!("Location: /dm/{chat}\r\n"),
+            control_http::Policy::Page,
+        ),
+        (Ok(()), None) => control_http::respond(
+            stream,
+            "204 No Content",
+            "text/plain",
+            b"",
+            "",
+            control_http::Policy::Page,
+        ),
+        (Err(error), back) => control_http::respond(
+            stream,
+            "400 Bad Request",
+            "text/html; charset=utf-8",
+            crate::error_page(error, &back.map_or("/".to_owned(), |chat| format!("/dm/{chat}"))).as_bytes(),
+            "",
+            control_http::Policy::Page,
+        ),
     };
     true
 }

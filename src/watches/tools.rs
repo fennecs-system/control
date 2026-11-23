@@ -1,17 +1,34 @@
 //! Watch tool schemas and input decoding. Ownership, container checks and
 //! persistence stay behind `WatchOps`.
+use super::{WakePolicy, salience::Filter};
 use crate::tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io;
-use super::{WakePolicy, salience::Filter};
 
 pub enum WatchCall {
-    Start { service_id: String, name: String, command: String, permanent: bool, wake: bool, wake_policy: WakePolicy, notifications: bool, salience: Option<Filter> },
+    Start {
+        service_id: String,
+        name: String,
+        command: String,
+        permanent: bool,
+        wake: bool,
+        wake_policy: WakePolicy,
+        notifications: bool,
+        salience: Option<Filter>,
+    },
     Wake,
-    Events { watch_id: String, after: Option<u64>, include_logs: bool },
-    Status { watch_id: Option<String> },
-    Stop { watch_id: String },
+    Events {
+        watch_id: String,
+        after: Option<u64>,
+        include_logs: bool,
+    },
+    Status {
+        watch_id: Option<String>,
+    },
+    Stop {
+        watch_id: String,
+    },
 }
 pub trait WatchOps {
     fn watch(&self, attempt: &AttemptRef<'_>, call: WatchCall) -> io::Result<Value>;
@@ -36,17 +53,48 @@ impl AttemptTools for Tools {
         let seconds = json!({"type":"number","exclusiveMinimum":0,"maximum":604800});
         let stage = |kind: &str, properties: Value, required: &[&str]| {
             let mut schema = json!({"type":"object","properties":{"kind":{"const":kind}},"required":["kind"],"additionalProperties":false});
-            for (name, value) in properties.as_object().into_iter().flatten() { schema["properties"][name] = value.clone(); }
-            for name in required { schema["required"].as_array_mut().into_iter().for_each(|r| r.push(json!(name))); }
+            for (name, value) in properties.as_object().into_iter().flatten() {
+                schema["properties"][name] = value.clone();
+            }
+            for name in required {
+                schema["required"]
+                    .as_array_mut()
+                    .into_iter()
+                    .for_each(|r| r.push(json!(name)));
+            }
             schema
         };
         let stages = json!([
-            stage("threshold", json!({"field":field,"at_least":number,"at_most":number}), &["field"]),
-            stage("one_of", json!({"field":field,"values":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64}}}), &["field","values"]),
-            stage("change", json!({"field":field,"percent":number,"absolute":number}), &["field"]),
-            stage("rate", json!({"field":field,"seconds":seconds,"at_least":number}), &["field","seconds","at_least"]),
-            stage("zscore", json!({"field":field,"samples":{"type":"integer","minimum":5,"maximum":64},"at_least":number}), &["field","samples","at_least"]),
-            stage("hysteresis", json!({"field":field,"trigger":number,"clear":number,"clear_seconds":{"type":"number","minimum":0,"maximum":604800}}), &["field","trigger","clear"]),
+            stage(
+                "threshold",
+                json!({"field":field,"at_least":number,"at_most":number}),
+                &["field"]
+            ),
+            stage(
+                "one_of",
+                json!({"field":field,"values":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64}}}),
+                &["field", "values"]
+            ),
+            stage(
+                "change",
+                json!({"field":field,"percent":number,"absolute":number}),
+                &["field"]
+            ),
+            stage(
+                "rate",
+                json!({"field":field,"seconds":seconds,"at_least":number}),
+                &["field", "seconds", "at_least"]
+            ),
+            stage(
+                "zscore",
+                json!({"field":field,"samples":{"type":"integer","minimum":5,"maximum":64},"at_least":number}),
+                &["field", "samples", "at_least"]
+            ),
+            stage(
+                "hysteresis",
+                json!({"field":field,"trigger":number,"clear":number,"clear_seconds":{"type":"number","minimum":0,"maximum":604800}}),
+                &["field", "trigger", "clear"]
+            ),
             stage("debounce", json!({"seconds":seconds}), &["seconds"]),
             stage("rate_limit", json!({"seconds":seconds}), &["seconds"]),
         ]);
@@ -59,7 +107,14 @@ impl AttemptTools for Tools {
         definitions
     }
     fn known(&self, name: &str) -> bool {
-        matches!(name, "control_watch_start" | "control_watch_events" | "control_watch_status" | "control_watch_stop" | "control_watch_wake")
+        matches!(
+            name,
+            "control_watch_start"
+                | "control_watch_events"
+                | "control_watch_status"
+                | "control_watch_stop"
+                | "control_watch_wake"
+        )
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         run(cx.host, &cx.attempt, name, args)
@@ -73,7 +128,9 @@ impl WatchOps for LocalHost<'_> {
 fn run(ops: &dyn WatchOps, attempt: &AttemptRef<'_>, name: &str, args: &Value) -> io::Result<Value> {
     ops.watch(attempt, decode(name, args)?)
 }
-fn default_wake_policy() -> WakePolicy { WakePolicy::ExitOnly {} }
+fn default_wake_policy() -> WakePolicy {
+    WakePolicy::ExitOnly {}
+}
 /// One minimal valid start: finite work, reporting through notifications.
 const START_EXAMPLE: &str = r#"{"service_id":"svc-<id>","name":"<routine>","command":"<shell command>","restart":"transient","notifications":true}"#;
 fn decode(name: &str, args: &Value) -> io::Result<WatchCall> {
@@ -117,29 +174,71 @@ fn decode(name: &str, args: &Value) -> io::Result<WatchCall> {
     let invalid = |message: &str| io::Error::other(message.to_owned());
     match name {
         "control_watch_start" => {
-            let shape = |error: &dyn std::fmt::Display| invalid(&crate::worker_tools::fixes::shape("control_watch_start", error, START_EXAMPLE));
+            let shape = |error: &dyn std::fmt::Display| {
+                invalid(&crate::worker_tools::fixes::shape(
+                    "control_watch_start",
+                    error,
+                    START_EXAMPLE,
+                ))
+            };
             let start = serde_json::from_value::<Start>(args.clone()).map_err(|error| shape(&error))?;
             let permanent = match start.restart.as_deref() {
                 None | Some("permanent") => true,
                 Some("transient") => false,
-                Some(other) => return Err(shape(&format!("restart is \"permanent\" (default) or \"transient\", not {:?}", other.chars().take(32).collect::<String>()))),
+                Some(other) => {
+                    return Err(shape(&format!(
+                        "restart is \"permanent\" (default) or \"transient\", not {:?}",
+                        other.chars().take(32).collect::<String>()
+                    )));
+                }
             };
-            if start.name.trim().is_empty() || start.name.chars().count() > 48 || start.command.trim().is_empty() || start.command.len() > 16000 {
+            if start.name.trim().is_empty()
+                || start.name.chars().count() > 48
+                || start.command.trim().is_empty()
+                || start.command.len() > 16000
+            {
                 return Err(invalid("A watch needs a name (1–48 characters) and a command"));
             }
             if start.notifications && start.wake_policy != (WakePolicy::ExitOnly {}) {
-                return Err(invalid("Notification watches keep stdout/stderr diagnostic-only; omit wake_policy or use exit_only"));
+                return Err(invalid(
+                    "Notification watches keep stdout/stderr diagnostic-only; omit wake_policy or use exit_only",
+                ));
             }
             if let Some(filter) = &start.salience {
-                if !start.notifications { return Err(invalid("salience filters notifications; pass notifications=true")); }
-                filter.validate().map_err(|message| invalid(&format!("Invalid salience: {message}")))?;
+                if !start.notifications {
+                    return Err(invalid("salience filters notifications; pass notifications=true"));
+                }
+                filter
+                    .validate()
+                    .map_err(|message| invalid(&format!("Invalid salience: {message}")))?;
             }
-            Ok(WatchCall::Start { service_id: start.service_id, name: start.name, command: start.command, permanent, wake: start.wake.unwrap_or(true), wake_policy: start.wake_policy, notifications:start.notifications, salience: start.salience })
+            Ok(WatchCall::Start {
+                service_id: start.service_id,
+                name: start.name,
+                command: start.command,
+                permanent,
+                wake: start.wake.unwrap_or(true),
+                wake_policy: start.wake_policy,
+                notifications: start.notifications,
+                salience: start.salience,
+            })
         }
-        "control_watch_events" => serde_json::from_value::<Events>(args.clone()).map(|e| WatchCall::Events { watch_id: e.watch_id, after: e.after, include_logs:e.include_logs }).map_err(|_| invalid("Expected watch_id, optional after and include_logs")),
-        "control_watch_status" => serde_json::from_value::<Status>(args.clone()).map(|s| WatchCall::Status { watch_id: s.watch_id }).map_err(|_| invalid("Expected an optional watch_id")),
-        "control_watch_wake" => serde_json::from_value::<Wake>(args.clone()).map(|_| WatchCall::Wake).map_err(|_| invalid("control_watch_wake takes no arguments")),
-        "control_watch_stop" => serde_json::from_value::<Stop>(args.clone()).map(|s| WatchCall::Stop { watch_id: s.watch_id }).map_err(|_| invalid("Expected watch_id")),
+        "control_watch_events" => serde_json::from_value::<Events>(args.clone())
+            .map(|e| WatchCall::Events {
+                watch_id: e.watch_id,
+                after: e.after,
+                include_logs: e.include_logs,
+            })
+            .map_err(|_| invalid("Expected watch_id, optional after and include_logs")),
+        "control_watch_status" => serde_json::from_value::<Status>(args.clone())
+            .map(|s| WatchCall::Status { watch_id: s.watch_id })
+            .map_err(|_| invalid("Expected an optional watch_id")),
+        "control_watch_wake" => serde_json::from_value::<Wake>(args.clone())
+            .map(|_| WatchCall::Wake)
+            .map_err(|_| invalid("control_watch_wake takes no arguments")),
+        "control_watch_stop" => serde_json::from_value::<Stop>(args.clone())
+            .map(|s| WatchCall::Stop { watch_id: s.watch_id })
+            .map_err(|_| invalid("Expected watch_id")),
         _ => Err(invalid("Unknown watch tool")),
     }
 }

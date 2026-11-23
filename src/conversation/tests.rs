@@ -1,4 +1,3 @@
-
 use super::*;
 use control_comonad::Store;
 
@@ -6,13 +5,7 @@ fn chat(turns: usize, text: usize) -> (State, String) {
     let mut state = State::default();
     let id = crate::chat::create(&mut state);
     for turn in 0..turns {
-        crate::chat::send(
-            &mut state,
-            &id,
-            &format!("turn {turn} {}", "x".repeat(text)),
-            "test",
-        )
-        .unwrap();
+        crate::chat::send(&mut state, &id, &format!("turn {turn} {}", "x".repeat(text)), "test").unwrap();
         let run = state.runtime.runs.last_mut().unwrap();
         run.status = "completed".into();
         *run.result = format!("reply {turn}");
@@ -86,12 +79,7 @@ fn recent_keeps_the_newest_entries_within_its_budget() {
     assert_eq!(kept.last(), Some(&38), "ends just before the current entry");
     assert_eq!(window.omitted + kept.len(), 39);
     assert!(window.render(&conversation).concat().chars().count() <= 20_000);
-    let one_more = conversation
-        .entry(kept[0] - 1)
-        .unwrap()
-        .render()
-        .chars()
-        .count();
+    let one_more = conversation.entry(kept[0] - 1).unwrap().render().chars().count();
     assert!(
         window.render(&conversation).concat().chars().count() + one_more > 20_000,
         "as many as fit"
@@ -132,10 +120,7 @@ fn carry_preserves_omitted_assignment_and_archived_observations_for_both_provide
     crate::history::archive_run(previous).unwrap();
     let run = state.runtime.runs[39].id.clone();
     state.runtime.runs[39].kind = crate::runtime::RunKind::BotWake;
-    for backend in [
-        crate::backend::Backend::Codex,
-        crate::backend::Backend::Claude,
-    ] {
+    for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         state.runtime.runs[39].backend = backend;
         let prompt = crate::chat::prompt(&state, &run).unwrap();
         assert!(prompt.contains("Earlier task and user inputs") && prompt.contains("turn 0 "));
@@ -243,11 +228,7 @@ fn passthrough_and_lens_compose_over_the_same_entries() {
         rendered[0].starts_with("Summary of entries 1–"),
         "oldest history first, summarised"
     );
-    assert!(
-        rendered.len() < 30,
-        "O(log n) items for 99 entries: {}",
-        rendered.len()
-    );
+    assert!(rendered.len() < 30, "O(log n) items for 99 entries: {}", rendered.len());
     let bare = Lens {
         verbatim: 8,
         summaries: &NoSummaries,

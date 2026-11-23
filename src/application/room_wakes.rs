@@ -31,20 +31,13 @@ pub(crate) struct WakeRef<'a> {
 pub(crate) fn normal_task(run: &Run) -> bool {
     run.persona.is_none()
         && run.continuation.is_none()
-        && matches!(
-            run.kind,
-            RunKind::Chat | RunKind::SelfImprovement | RunKind::Steering
-        )
+        && matches!(run.kind, RunKind::Chat | RunKind::SelfImprovement | RunKind::Steering)
         && run.source != "room-notification"
 }
 
 /// Follow only durable continuation receipts, never shared-root guesses or
 /// independent spawned children. Every edge retains the parent's scope.
-pub(crate) fn continuation_leaf(
-    history: &[Run],
-    origin: usize,
-    runs: &HashMap<&str, usize>,
-) -> Option<usize> {
+pub(crate) fn continuation_leaf(history: &[Run], origin: usize, runs: &HashMap<&str, usize>) -> Option<usize> {
     if history[origin].status != "continued" {
         return Some(origin);
     }
@@ -120,12 +113,7 @@ pub(crate) fn plan<'a>(
     let busy: HashSet<_> = view
         .runs
         .iter()
-        .filter(|run| {
-            matches!(
-                run.status.as_str(),
-                "queued" | "running" | "cancelling" | "waiting"
-            )
-        })
+        .filter(|run| matches!(run.status.as_str(), "queued" | "running" | "cancelling" | "waiting"))
         .filter_map(|run| run.chat_id.as_deref())
         .collect();
     let mut latest = HashMap::<&str, u64>::new();
@@ -149,18 +137,10 @@ pub(crate) fn plan<'a>(
                     || origin.actor != *watch.actor
                     || origin.chat_id.as_deref() != Some(watch.chat)
                     || !view.chats.iter().any(|chat| {
-                        chat.id == watch.chat
-                            && chat.actor == *watch.actor
-                            && chat.room.as_deref() == Some(watch.room)
+                        chat.id == watch.chat && chat.actor == *watch.actor && chat.room.as_deref() == Some(watch.room)
                     })
-                    || origin
-                        .attempts
-                        .last()
-                        .and_then(|a| a.workspace_id.as_deref())
-                        != Some(watch.generation)
-                    || latest
-                        .get(watch.chat)
-                        .is_some_and(|order| *order > origin.queue_order)
+                    || origin.attempts.last().and_then(|a| a.workspace_id.as_deref()) != Some(watch.generation)
+                    || latest.get(watch.chat).is_some_and(|order| *order > origin.queue_order)
                     || !matches!(
                         origin.status.as_str(),
                         "queued" | "running" | "waiting" | "completed" | "continued"
@@ -173,10 +153,7 @@ pub(crate) fn plan<'a>(
                     return Decision::Disarm;
                 };
                 let leaf = &view.runs[leaf_index];
-                if !matches!(
-                    leaf.status.as_str(),
-                    "queued" | "running" | "waiting" | "completed"
-                ) {
+                if !matches!(leaf.status.as_str(), "queued" | "running" | "waiting" | "completed") {
                     return Decision::Disarm;
                 }
                 if leaf.status != "completed" || busy.contains(watch.chat) {

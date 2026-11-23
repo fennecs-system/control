@@ -52,7 +52,9 @@ fn check(entry: &[u8]) -> io::Result<()> {
     if entry.is_empty() || entry.contains(&b'\n') {
         return Err(invalid("A journal entry is one non-empty line"));
     }
-    serde_json::from_slice::<serde::de::IgnoredAny>(entry).map(|_| ()).map_err(|_| invalid("A journal entry is a JSON value"))
+    serde_json::from_slice::<serde::de::IgnoredAny>(entry)
+        .map(|_| ())
+        .map_err(|_| invalid("A journal entry is a JSON value"))
 }
 
 /// Entries held in memory; for tests and transient histories.
@@ -95,7 +97,12 @@ impl FileJournal {
     }
     /// [`open`](Self::open), waiting at most `wait` for the exclusive lock.
     pub fn open_within(path: &Path, wait: Duration) -> io::Result<Self> {
-        let mut file = OpenOptions::new().read(true).append(true).create(true).mode(0o600).open(path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(path)?;
         let started = Instant::now();
         let mut pause = Duration::from_millis(1);
         loop {
@@ -113,7 +120,12 @@ impl FileJournal {
         }
         // The directory entry must be durable before any append is acknowledged,
         // including after a crash between creating the file and syncing it.
-        File::open(path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
+        File::open(
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )?
+        .sync_all()?;
         let mut starts = Vec::new();
         let (mut offset, mut line) = (0u64, 0u64);
         let mut buffer = vec![0; 1 << 16];
@@ -136,7 +148,12 @@ impl FileJournal {
             file.set_len(line)?;
             file.sync_data()?;
         }
-        Ok(Self { file, starts, end: line, poisoned: false })
+        Ok(Self {
+            file,
+            starts,
+            end: line,
+            poisoned: false,
+        })
     }
     /// Whether a failed append may have left a partial line that could not be
     /// removed: its outcome is unknown until the journal is reopened.
@@ -159,7 +176,11 @@ impl Journal for FileJournal {
         if let Err(error) = self.file.write_all(&line).and_then(|()| self.file.sync_data()) {
             // Keep the file a whole number of lines for the next append; if
             // that fails, refuse appends until reopening repairs the tail.
-            self.poisoned = self.file.set_len(self.end).and_then(|()| self.file.sync_data()).is_err();
+            self.poisoned = self
+                .file
+                .set_len(self.end)
+                .and_then(|()| self.file.sync_data())
+                .is_err();
             return Err(error);
         }
         self.starts.push(self.end);
@@ -167,15 +188,22 @@ impl Journal for FileJournal {
         Ok(self.starts.len() as u64 - 1)
     }
     fn read(&self, pos: u64) -> io::Result<Option<Vec<u8>>> {
-        let Some(&start) = usize::try_from(pos).ok().and_then(|pos| self.starts.get(pos)) else { return Ok(None) };
+        let Some(&start) = usize::try_from(pos).ok().and_then(|pos| self.starts.get(pos)) else {
+            return Ok(None);
+        };
         let end = self.starts.get(pos as usize + 1).copied().unwrap_or(self.end) - 1;
         let mut entry = vec![0; (end - start) as usize];
         self.file.read_exact_at(&mut entry, start)?;
         Ok(Some(entry))
     }
     fn truncate(&mut self, len: u64) -> io::Result<()> {
-        let Some(&end) = usize::try_from(len).ok().and_then(|len| self.starts.get(len)) else { return Ok(()) };
-        self.file.set_len(end).and_then(|()| self.file.sync_data()).inspect_err(|_| self.poisoned = true)?;
+        let Some(&end) = usize::try_from(len).ok().and_then(|len| self.starts.get(len)) else {
+            return Ok(());
+        };
+        self.file
+            .set_len(end)
+            .and_then(|()| self.file.sync_data())
+            .inspect_err(|_| self.poisoned = true)?;
         self.starts.truncate(len as usize);
         self.end = end;
         self.poisoned = false;
@@ -213,7 +241,10 @@ pub struct Typed<J, T> {
 }
 impl<J: Journal, T: Serialize + DeserializeOwned> Typed<J, T> {
     pub fn new(journal: J) -> Self {
-        Self { journal, item: PhantomData }
+        Self {
+            journal,
+            item: PhantomData,
+        }
     }
     pub fn len(&self) -> u64 {
         self.journal.len()
@@ -222,10 +253,14 @@ impl<J: Journal, T: Serialize + DeserializeOwned> Typed<J, T> {
         self.journal.is_empty()
     }
     pub fn append(&mut self, item: &T) -> io::Result<u64> {
-        self.journal.append(&serde_json::to_vec(item).map_err(io::Error::other)?)
+        self.journal
+            .append(&serde_json::to_vec(item).map_err(io::Error::other)?)
     }
     pub fn get(&self, pos: u64) -> io::Result<Option<T>> {
-        self.journal.read(pos)?.map(|entry| serde_json::from_slice(&entry).map_err(io::Error::other)).transpose()
+        self.journal
+            .read(pos)?
+            .map(|entry| serde_json::from_slice(&entry).map_err(io::Error::other))
+            .transpose()
     }
     pub fn into_inner(self) -> J {
         self.journal

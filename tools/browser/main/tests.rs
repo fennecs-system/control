@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn invalid_authority_and_viewports_fail_before_docker() {
@@ -35,9 +34,6 @@ fn input_reader_rejects_symlinks_and_nonregular_files() {
     symlink(dir.join("page.html"), dir.join("link.html")).unwrap();
     assert!(read_input(&dir.join("link.html")).is_err());
     assert!(read_input(&dir).is_err());
-    assert_eq!(
-        read_input(&dir.join("page.html")).unwrap(),
-        b"<p>Preview</p>"
-    );
+    assert_eq!(read_input(&dir.join("page.html")).unwrap(), b"<p>Preview</p>");
     let _ = fs::remove_dir_all(dir);
 }

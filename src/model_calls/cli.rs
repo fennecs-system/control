@@ -23,9 +23,9 @@ pub(super) fn call(
         limits: &endpoint.limits,
     }
     .chat_completions()?;
-    let image = backend.image().ok_or_else(|| {
-        io::Error::other("Selected CLI image is unavailable; no fallback was used")
-    })?;
+    let image = backend
+        .image()
+        .ok_or_else(|| io::Error::other("Selected CLI image is unavailable; no fallback was used"))?;
     let node = crate::config::node_id().map_err(io::Error::other)?;
     let mut nonce = [0u8; 16];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce)
@@ -53,7 +53,16 @@ pub(super) fn call(
         &serde_json::to_vec(&lease).map_err(io::Error::other)?,
     )?;
     let isolation = crate::engine::isolation();
-    let spec = backend.agent().text_run(isolation, &crate::backend::TextCall { image: &image, name: &name, workspace: &workspace, node: &node, model: &endpoint.model })?;
+    let spec = backend.agent().text_run(
+        isolation,
+        &crate::backend::TextCall {
+            image: &image,
+            name: &name,
+            workspace: &workspace,
+            node: &node,
+            model: &endpoint.model,
+        },
+    )?;
     let child = isolation.spawn(&spec, Streams::new(Stream::Piped, Stream::Piped, Stream::Piped))?;
     let result = run(child, backend, endpoint, system, input, || {
         crate::lifecycle::stop_resource(isolation, &name, &node, &image, &workspace).map_err(io::Error::other)
@@ -90,24 +99,27 @@ pub(super) fn recover() -> io::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
         };
-        let lease: Lease = serde_json::from_slice(&bytes)
-            .map_err(|_| io::Error::other("Invalid text-call ownership record"))?;
-        let pid =
-            i32::try_from(lease.pid).map_err(|_| io::Error::other("Invalid text-call owner"))?;
+        let lease: Lease =
+            serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Invalid text-call ownership record"))?;
+        let pid = i32::try_from(lease.pid).map_err(|_| io::Error::other("Invalid text-call owner"))?;
         if pid <= 0 {
             return Err(io::Error::other("Invalid text-call owner"));
         }
         // Only ESRCH establishes that a host process is gone. EPERM is not death.
-        if unsafe { libc::kill(pid, 0) } == 0
-            || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-        {
+        if unsafe { libc::kill(pid, 0) } == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
             continue;
         }
         if lease.workspace != path.join("workspace").canonicalize()? {
             return Err(io::Error::other("Text-call workspace identity changed"));
         }
-        crate::lifecycle::stop_resource(crate::engine::isolation(), &lease.name, &lease.node, &lease.image, &lease.workspace)
-            .map_err(io::Error::other)?;
+        crate::lifecycle::stop_resource(
+            crate::engine::isolation(),
+            &lease.name,
+            &lease.node,
+            &lease.image,
+            &lease.workspace,
+        )
+        .map_err(io::Error::other)?;
         std::fs::remove_file(path.join("owner.json"))?;
     }
     Ok(())
@@ -163,31 +175,21 @@ fn run(
     };
     // Stop by verified ownership even when killing the engine client did not stop its container.
     let stopped = stop();
-    let written = writer
-        .join()
-        .map_err(|_| io::Error::other("Text writer stopped"))?;
-    let result = reader
-        .join()
-        .map_err(|_| io::Error::other("Text reader stopped"))?;
+    let written = writer.join().map_err(|_| io::Error::other("Text writer stopped"))?;
+    let result = reader.join().map_err(|_| io::Error::other("Text reader stopped"))?;
     let diagnostics = diagnostics.join().unwrap_or_default();
     stopped?;
     written?;
     if !status?.success() {
-        let detail = result
-            .as_ref()
-            .err()
-            .map(ToString::to_string)
-            .unwrap_or_default();
+        let detail = result.as_ref().err().map(ToString::to_string).unwrap_or_default();
         let mut evidence = diagnostics;
         evidence.extend_from_slice(detail.as_bytes());
         let message = crate::worker::worker_failure(&evidence);
-        return Err(io::Error::other(
-            if message == crate::worker::UNKNOWN_FAILURE {
-                "CLI summary failed; check login/model availability".into()
-            } else {
-                message.replace("Codex", backend.agent().name())
-            },
-        ));
+        return Err(io::Error::other(if message == crate::worker::UNKNOWN_FAILURE {
+            "CLI summary failed; check login/model availability".into()
+        } else {
+            message.replace("Codex", backend.agent().name())
+        }));
     }
     let result = result?;
     if rejected.load(Ordering::Acquire)
@@ -207,13 +209,16 @@ fn decode(
 ) -> io::Result<Response> {
     let mut emit = |event| {
         if matches!(event, control_ai::Event::RejectedTools)
-            || matches!(event, control_ai::Event::Activity(ref activity) if activity.kind=="mcp_tool_call") {
+            || matches!(event, control_ai::Event::Activity(ref activity) if activity.kind=="mcp_tool_call")
+        {
             rejected.store(true, Ordering::Release);
         }
     };
     let mut reader = reader;
     let output = backend.agent().text(&mut reader, max, &mut emit)?;
-    if rejected.load(Ordering::Acquire) {return Err(io::Error::other("CLI summary attempted tools"));}
+    if rejected.load(Ordering::Acquire) {
+        return Err(io::Error::other("CLI summary attempted tools"));
+    }
     let text = output
         .text
         .filter(|text| text.len() <= max && text.chars().count() < 16000)

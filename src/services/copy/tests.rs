@@ -43,10 +43,35 @@ fn transfer(from: &str, to: &str) -> Transfer {
 
 #[test]
 fn paths_stay_relative_plain_and_publishable() {
-    assert_eq!(transfer("/workspace/mc-client/", "tools/mc"), Transfer { from: "mc-client".into(), to: "tools/mc".into() });
+    assert_eq!(
+        transfer("/workspace/mc-client/", "tools/mc"),
+        Transfer {
+            from: "mc-client".into(),
+            to: "tools/mc".into()
+        }
+    );
     // Generated names may be destinations; only the source policy excludes them.
-    assert_eq!(transfer("src/main.rs", "/workspace/app/node_modules/x").to, "app/node_modules/x");
-    for from in ["", "/", "/workspace/", "/etc/passwd", "../outside", "a/../b", "a/./b", "a//b", ".", "..", ".git/config", "src/.env", "a/target/x", ".control-mailbox", "bad\nname"] {
+    assert_eq!(
+        transfer("src/main.rs", "/workspace/app/node_modules/x").to,
+        "app/node_modules/x"
+    );
+    for from in [
+        "",
+        "/",
+        "/workspace/",
+        "/etc/passwd",
+        "../outside",
+        "a/../b",
+        "a/./b",
+        "a//b",
+        ".",
+        "..",
+        ".git/config",
+        "src/.env",
+        "a/target/x",
+        ".control-mailbox",
+        "bad\nname",
+    ] {
         assert!(Transfer::new(from, "x").is_err(), "{from:?}");
     }
     for to in ["", "/", "/etc", "../x", "a/../b", "a/./b", "a//b", "tab\there"] {
@@ -79,30 +104,71 @@ fn trees_stream_regular_files_and_never_follow_links_or_special_files() {
 
     let scanned = scan(&root.0, "tool", Bounds::DEFAULT).unwrap();
     let mut archive = Vec::new();
-    let streamed = stream(&root.0, &transfer("tool", "tools/mc"), Bounds::DEFAULT, (1000, 1000), &mut archive).unwrap();
+    let streamed = stream(
+        &root.0,
+        &transfer("tool", "tools/mc"),
+        Bounds::DEFAULT,
+        (1000, 1000),
+        &mut archive,
+    )
+    .unwrap();
     assert_eq!(scanned, streamed);
     // tool, bin, the two long directories; README, run, data.bin.
-    assert_eq!((streamed.files, streamed.directories, streamed.bytes), (3, 4, 5 + 19 + 4));
+    assert_eq!(
+        (streamed.files, streamed.directories, streamed.bytes),
+        (3, 4, 5 + 19 + 4)
+    );
     assert_eq!(streamed.skipped, 7);
-    for reason in [".env (excluded name)", ".git (excluded name)", "target (excluded name)", "link (symlink or special file)", "linked-dir (symlink or special file)", "dangling (symlink or special file)", "fifo (symlink or special file)"] {
-        assert!(streamed.examples.iter().any(|example| example == reason), "{reason}: {:?}", streamed.examples);
+    for reason in [
+        ".env (excluded name)",
+        ".git (excluded name)",
+        "target (excluded name)",
+        "link (symlink or special file)",
+        "linked-dir (symlink or special file)",
+        "dangling (symlink or special file)",
+        "fifo (symlink or special file)",
+    ] {
+        assert!(
+            streamed.examples.iter().any(|example| example == reason),
+            "{reason}: {:?}",
+            streamed.examples
+        );
     }
     assert_eq!(archive.len() % 512, 0);
     let extracted = extract(&archive);
     let base = extracted.0.join("tools/mc");
     assert_eq!(fs::read(base.join("README")).unwrap(), b"hello");
-    assert_eq!(fs::read(base.join(long.strip_prefix("tool/").unwrap())).unwrap(), [0, 1, 2, 255]);
-    assert_ne!(fs::metadata(base.join("bin/run")).unwrap().permissions().mode() & 0o111, 0);
-    assert_eq!(fs::metadata(base.join("README")).unwrap().permissions().mode() & 0o111, 0);
+    assert_eq!(
+        fs::read(base.join(long.strip_prefix("tool/").unwrap())).unwrap(),
+        [0, 1, 2, 255]
+    );
+    assert_ne!(
+        fs::metadata(base.join("bin/run")).unwrap().permissions().mode() & 0o111,
+        0
+    );
+    assert_eq!(
+        fs::metadata(base.join("README")).unwrap().permissions().mode() & 0o111,
+        0
+    );
     for absent in [".env", "target", ".git", "link", "linked-dir", "dangling", "fifo"] {
         assert!(fs::symlink_metadata(base.join(absent)).is_err(), "{absent}");
     }
 
     // A single file lands exactly at the destination path.
     let mut archive = Vec::new();
-    let single = stream(&root.0, &transfer("tool/README", "notes/readme.txt"), Bounds::DEFAULT, (1000, 1000), &mut archive).unwrap();
+    let single = stream(
+        &root.0,
+        &transfer("tool/README", "notes/readme.txt"),
+        Bounds::DEFAULT,
+        (1000, 1000),
+        &mut archive,
+    )
+    .unwrap();
     assert_eq!((single.files, single.directories), (1, 0));
-    assert_eq!(fs::read(extract(&archive).0.join("notes/readme.txt")).unwrap(), b"hello");
+    assert_eq!(
+        fs::read(extract(&archive).0.join("notes/readme.txt")).unwrap(),
+        b"hello"
+    );
 
     // The source and its parents are never resolved through links.
     for (from, message) in [
@@ -119,7 +185,12 @@ fn trees_stream_regular_files_and_never_follow_links_or_special_files() {
     // Nor is the workspace root itself.
     let linked_root = outside.0.join("workspace-link");
     symlink(&root.0, &linked_root).unwrap();
-    assert!(scan(&linked_root, "tool", Bounds::DEFAULT).unwrap_err().to_string().contains("unavailable"));
+    assert!(
+        scan(&linked_root, "tool", Bounds::DEFAULT)
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable")
+    );
 }
 
 #[test]
@@ -131,13 +202,26 @@ fn byte_and_entry_bounds_are_enforced_before_and_during_streaming() {
     // Exactly at the bounds: tree, a, b, sub, c and 30 bytes.
     let exact = Bounds { bytes: 30, entries: 5 };
     assert_eq!(scan(&root.0, "tree", exact).unwrap().bytes, 30);
-    let error = scan(&root.0, "tree", Bounds { bytes: 29, ..exact }).unwrap_err().to_string();
+    let error = scan(&root.0, "tree", Bounds { bytes: 29, ..exact })
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("sub/c") && error.contains("29-byte limit"), "{error}");
-    let error = scan(&root.0, "tree", Bounds { entries: 4, ..exact }).unwrap_err().to_string();
+    let error = scan(&root.0, "tree", Bounds { entries: 4, ..exact })
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("4-entry limit"), "{error}");
     // A failed stream never writes the end-of-archive marker.
     let mut archive = Vec::new();
-    assert!(stream(&root.0, &transfer("tree", "x"), Bounds { bytes: 25, ..exact }, (1, 1), &mut archive).is_err());
+    assert!(
+        stream(
+            &root.0,
+            &transfer("tree", "x"),
+            Bounds { bytes: 25, ..exact },
+            (1, 1),
+            &mut archive
+        )
+        .is_err()
+    );
     assert!(!archive.ends_with(&[0; 1024]));
     // A single file larger than the bound is refused too.
     assert!(scan(&root.0, "tree/a", Bounds { bytes: 9, entries: 1 }).is_err());
@@ -145,27 +229,65 @@ fn byte_and_entry_bounds_are_enforced_before_and_during_streaming() {
     for n in 0..8 {
         symlink("x", root.0.join(format!("tree/link-{n}"))).unwrap();
     }
-    assert!(scan(&root.0, "tree", exact).unwrap_err().to_string().contains("entry limit"));
+    assert!(
+        scan(&root.0, "tree", exact)
+            .unwrap_err()
+            .to_string()
+            .contains("entry limit")
+    );
 }
 
 #[test]
 fn bounds_come_from_node_settings_and_workspace_capacity() {
-    let settings = |values: &'static [(&'static str, &'static str)]| move |name: &str| values.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value).to_owned());
+    let settings = |values: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        }
+    };
     assert_eq!(Bounds::from_settings(|_| None), Bounds::DEFAULT);
     assert_eq!(
-        Bounds::from_settings(settings(&[("service-copy-max-mib", "64\n"), ("service-copy-max-entries", "500")])),
-        Bounds { bytes: 64 * MIB, entries: 500 }
+        Bounds::from_settings(settings(&[
+            ("service-copy-max-mib", "64\n"),
+            ("service-copy-max-entries", "500")
+        ])),
+        Bounds {
+            bytes: 64 * MIB,
+            entries: 500
+        }
     );
-    assert_eq!(Bounds::from_settings(settings(&[("service-copy-max-mib", "0"), ("service-copy-max-entries", "lots")])), Bounds::DEFAULT);
-    assert_eq!(Bounds::from_settings(settings(&[("service-copy-max-mib", "8192")])), Bounds::DEFAULT);
+    assert_eq!(
+        Bounds::from_settings(settings(&[
+            ("service-copy-max-mib", "0"),
+            ("service-copy-max-entries", "lots")
+        ])),
+        Bounds::DEFAULT
+    );
+    assert_eq!(
+        Bounds::from_settings(settings(&[("service-copy-max-mib", "8192")])),
+        Bounds::DEFAULT
+    );
     let (state, ..) = fixture();
     let mut service = state.lock().unwrap().services[0].clone();
-    service.storage = Storage::Workspace { limit_mb: std::num::NonZeroU32::new(1) };
-    assert_eq!(Bounds::DEFAULT.for_service(&service), Bounds::DEFAULT, "the volume is not under the layer quota");
-    service.storage = Storage::Disk { limit_mb: std::num::NonZeroU32::new(16) };
+    service.storage = Storage::Workspace {
+        limit_mb: std::num::NonZeroU32::new(1),
+    };
+    assert_eq!(
+        Bounds::DEFAULT.for_service(&service),
+        Bounds::DEFAULT,
+        "the volume is not under the layer quota"
+    );
+    service.storage = Storage::Disk {
+        limit_mb: std::num::NonZeroU32::new(16),
+    };
     assert_eq!(Bounds::DEFAULT.for_service(&service).bytes, 16 * MIB);
     service.storage = Storage::Memory;
-    assert_eq!(Bounds::DEFAULT.for_service(&service).bytes, service.profile.service_workspace_mb() * MIB);
+    assert_eq!(
+        Bounds::DEFAULT.for_service(&service).bytes,
+        service.profile.service_workspace_mb() * MIB
+    );
 }
 
 #[test]
@@ -186,13 +308,24 @@ fn fixture() -> (Arc<Mutex<State>>, String, NodeId, String) {
     super::super::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
     state.services[0].resource.phase = Phase::Running("b".repeat(64).try_into().unwrap());
     let id = state.services[0].resource.id.as_str().to_owned();
-    (Arc::new(Mutex::new(state)), run, "node-a".to_owned().try_into().unwrap(), id)
+    (
+        Arc::new(Mutex::new(state)),
+        run,
+        "node-a".to_owned().try_into().unwrap(),
+        id,
+    )
 }
 fn at<'a>(run: &'a str, generation: &'a str, nonce: &'a str) -> AttemptRef<'a> {
     AttemptRef { run, generation, nonce }
 }
 fn input(service: &str, from: &str, to: &str) -> Input {
-    Input { service_id: service.into(), from: from.into(), to: to.into(), timeout_seconds: 60, wait_seconds: 0 }
+    Input {
+        service_id: service.into(),
+        from: from.into(),
+        to: to.into(),
+        timeout_seconds: 60,
+        wait_seconds: 0,
+    }
 }
 
 #[test]
@@ -205,14 +338,42 @@ fn admission_is_scoped_bounded_durable_and_idempotent() {
         Ok(root.0.clone())
     };
     // A failed checkpoint admits nothing.
-    assert!(request_with(&shared, &at(&run, "attempt-a", "copy-a"), &node, input(&id, "tool", "tool"), workspace, |_| Err(fail("disk full"))).is_err());
+    assert!(
+        request_with(
+            &shared,
+            &at(&run, "attempt-a", "copy-a"),
+            &node,
+            input(&id, "tool", "tool"),
+            workspace,
+            |_| Err(fail("disk full"))
+        )
+        .is_err()
+    );
     assert!(shared.lock().unwrap().services[0].executions.is_empty());
-    let admitted = request_with(&shared, &at(&run, "attempt-a", "copy-a"), &node, input(&id, "/workspace/tool", "tool"), workspace, |_| Ok(())).unwrap();
+    let admitted = request_with(
+        &shared,
+        &at(&run, "attempt-a", "copy-a"),
+        &node,
+        input(&id, "/workspace/tool", "tool"),
+        workspace,
+        |_| Ok(()),
+    )
+    .unwrap();
     assert_eq!(admitted["status"], "requested");
-    assert_eq!((admitted["copy"]["files"].as_u64(), admitted["copy"]["directories"].as_u64(), admitted["copy"]["bytes"].as_u64()), (Some(1), Some(1), Some(12)));
+    assert_eq!(
+        (
+            admitted["copy"]["files"].as_u64(),
+            admitted["copy"]["directories"].as_u64(),
+            admitted["copy"]["bytes"].as_u64()
+        ),
+        (Some(1), Some(1), Some(12))
+    );
     assert_eq!(admitted["copy"]["limits"]["bytes"], Bounds::DEFAULT.bytes);
     let text = serde_json::to_string(&admitted).unwrap();
-    assert!(!text.contains(root.0.to_str().unwrap()), "results never expose host paths");
+    assert!(
+        !text.contains(root.0.to_str().unwrap()),
+        "results never expose host paths"
+    );
     {
         let state = shared.lock().unwrap();
         let execution = &state.services[0].executions[0];
@@ -221,23 +382,62 @@ fn admission_is_scoped_bounded_durable_and_idempotent() {
         assert_eq!(copy, Some(&transfer("tool", "tool")));
         assert_eq!(display, "copy /workspace/tool -> service /workspace/tool");
         let stored = serde_json::to_string(&*state).unwrap();
-        assert!(!stored.contains(root.0.to_str().unwrap()), "durable state never stores host paths");
+        assert!(
+            !stored.contains(root.0.to_str().unwrap()),
+            "durable state never stores host paths"
+        );
     }
     // A retry returns the recorded request without reading or saving again,
     // even after the source changed.
     fs::remove_dir_all(root.0.join("tool")).unwrap();
-    let retried = request_with(&shared, &at(&run, "attempt-a", "copy-a"), &node, input(&id, "tool", "tool"), |_| panic!("Retries never rescan"), |_| panic!("Retries never save")).unwrap();
+    let retried = request_with(
+        &shared,
+        &at(&run, "attempt-a", "copy-a"),
+        &node,
+        input(&id, "tool", "tool"),
+        |_| panic!("Retries never rescan"),
+        |_| panic!("Retries never save"),
+    )
+    .unwrap();
     assert_eq!(retried["execution_id"], admitted["execution_id"]);
-    let error = request_with(&shared, &at(&run, "attempt-a", "copy-a"), &node, input(&id, "tool", "elsewhere"), |_| panic!("no scan"), |_| panic!("no save")).unwrap_err();
+    let error = request_with(
+        &shared,
+        &at(&run, "attempt-a", "copy-a"),
+        &node,
+        input(&id, "tool", "elsewhere"),
+        |_| panic!("no scan"),
+        |_| panic!("no save"),
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("reused with different arguments"));
     // The same identity cannot turn into a shell command either.
     let mut state = shared.lock().unwrap();
-    let command = commands::Work { service_id: id.clone(), digest: commands::hash(b"other"), command: "true".into(), display: "true".into(), timeout_seconds: 60, copy: None };
-    assert!(commands::admit_work(&mut state, &run, "attempt-a", "copy-a", &node, command, |_| panic!("no save")).is_err());
+    let command = commands::Work {
+        service_id: id.clone(),
+        digest: commands::hash(b"other"),
+        command: "true".into(),
+        display: "true".into(),
+        timeout_seconds: 60,
+        copy: None,
+    };
+    assert!(
+        commands::admit_work(&mut state, &run, "attempt-a", "copy-a", &node, command, |_| panic!(
+            "no save"
+        ))
+        .is_err()
+    );
     // A copy holds the service exclusively: another copy is refused.
     drop(state);
     root.write("tool/main.rs", b"fn main() {}");
-    let busy = request_with(&shared, &at(&run, "attempt-a", "copy-b"), &node, input(&id, "tool", "tool"), workspace, |_| panic!("no save")).unwrap_err();
+    let busy = request_with(
+        &shared,
+        &at(&run, "attempt-a", "copy-b"),
+        &node,
+        input(&id, "tool", "tool"),
+        workspace,
+        |_| panic!("no save"),
+    )
+    .unwrap_err();
     assert!(busy.to_string().contains("reserved for copy"), "{busy}");
 }
 
@@ -247,7 +447,16 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
         panic!("Unauthorized requests never read the workspace")
     }
     let refuse = |shared: &Arc<Mutex<State>>, run: &str, generation: &str, node: &NodeId, id: &str| {
-        request_with(shared, &at(run, generation, "copy-x"), node, input(id, "tool", "tool"), never, |_| panic!("no save")).unwrap_err().to_string()
+        request_with(
+            shared,
+            &at(run, generation, "copy-x"),
+            node,
+            input(id, "tool", "tool"),
+            never,
+            |_| panic!("no save"),
+        )
+        .unwrap_err()
+        .to_string()
     };
     // Another chat's service.
     let (shared, run, node, id) = fixture();
@@ -256,10 +465,25 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     assert!(refuse(&shared, &run, "attempt-a", &node, &id).contains("not owned by this chat"));
     // Another node's identity.
     let (shared, run, _, id) = fixture();
-    assert!(refuse(&shared, &run, "attempt-a", &"node-b".to_owned().try_into().unwrap(), &id).contains("not owned"));
+    assert!(
+        refuse(
+            &shared,
+            &run,
+            "attempt-a",
+            &"node-b".to_owned().try_into().unwrap(),
+            &id
+        )
+        .contains("not owned")
+    );
     // A judge, even of the owning chat.
     let (shared, run, node, id) = fixture();
-    shared.lock().unwrap().runtime.runs[0].persona = Some(crate::delegation::Persona { role: crate::delegation::Role::Judge, root: "root".into(), depth: 1, parent: None, bundle: None });
+    shared.lock().unwrap().runtime.runs[0].persona = Some(crate::delegation::Persona {
+        role: crate::delegation::Role::Judge,
+        root: "root".into(),
+        depth: 1,
+        parent: None,
+        bundle: None,
+    });
     assert!(refuse(&shared, &run, "attempt-a", &node, &id).contains("read-only attempt"));
     // An earlier attempt of the same run.
     let (shared, run, node, id) = fixture();
@@ -268,19 +492,41 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     let (shared, run, node, id) = fixture();
     shared.lock().unwrap().services[0].storage = Storage::Memory;
     let root = Scratch::new("oversized");
-    let file = fs::OpenOptions::new().write(true).open(root.write("tool/huge", b"")).unwrap();
-    file.set_len(shared.lock().unwrap().services[0].profile.service_workspace_mb() * MIB + 1).unwrap();
-    let error = request_with(&shared, &at(&run, "attempt-a", "copy-y"), &node, input(&id, "tool", "tool"), |_| Ok(root.0.clone()), |_| panic!("no save")).unwrap_err();
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(root.write("tool/huge", b""))
+        .unwrap();
+    file.set_len(shared.lock().unwrap().services[0].profile.service_workspace_mb() * MIB + 1)
+        .unwrap();
+    let error = request_with(
+        &shared,
+        &at(&run, "attempt-a", "copy-y"),
+        &node,
+        input(&id, "tool", "tool"),
+        |_| Ok(root.0.clone()),
+        |_| panic!("no save"),
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("limit"), "{error}");
     assert!(shared.lock().unwrap().services[0].executions.is_empty());
     // A copy whose attempt ended before dispatch launches nothing.
     let (shared, run, node, id) = fixture();
     let root = Scratch::new("ended");
     root.write("tool/x", b"x");
-    request_with(&shared, &at(&run, "attempt-a", "copy-z"), &node, input(&id, "tool", "tool"), |_| Ok(root.0.clone()), |_| Ok(())).unwrap();
+    request_with(
+        &shared,
+        &at(&run, "attempt-a", "copy-z"),
+        &node,
+        input(&id, "tool", "tool"),
+        |_| Ok(root.0.clone()),
+        |_| Ok(()),
+    )
+    .unwrap();
     shared.lock().unwrap().runtime.runs[0].status = "completed".into();
     let service = shared.lock().unwrap().services[0].binding_snapshot();
-    let error = Job::prepare(&shared, &service, &run, "attempt-a", &transfer("tool", "tool")).err().unwrap();
+    let error = Job::prepare(&shared, &service, &run, "attempt-a", &transfer("tool", "tool"))
+        .err()
+        .unwrap();
     assert!(error.to_string().contains("attempt ended"));
 }
 
@@ -293,17 +539,34 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     let image = std::env::var("CONTROL_QA_SERVICE_IMAGE").unwrap();
     let state_dir = PathBuf::from(std::env::var("CONTROL_STATE_DIR").expect("set an isolated CONTROL_STATE_DIR"));
     assert!(
-        state_dir.starts_with("/private/tmp") || state_dir.starts_with("/tmp") || state_dir.starts_with(std::env::temp_dir()),
+        state_dir.starts_with("/private/tmp")
+            || state_dir.starts_with("/tmp")
+            || state_dir.starts_with(std::env::temp_dir()),
         "CONTROL_STATE_DIR must be an isolated temporary directory"
     );
     fs::create_dir_all(&state_dir).unwrap();
     let profile = crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image).unwrap();
     let (mut state, run, _, time) = super::super::tests::fixture();
-    let node: NodeId = format!("copy-qa-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()).try_into().unwrap();
+    let node: NodeId = format!(
+        "copy-qa-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    )
+    .try_into()
+    .unwrap();
     super::super::admit_profile(
         &mut state,
-        super::super::Request { run: &run, generation: "attempt-a", nonce: "copy-probe" },
-        super::super::Input { command: "sleep 300".to_owned().try_into().unwrap(), lease_seconds: 240, storage_limit_mb: None, shape: None },
+        super::super::Request {
+            run: &run,
+            generation: "attempt-a",
+            nonce: "copy-probe",
+        },
+        super::super::Input {
+            command: "sleep 300".to_owned().try_into().unwrap(),
+            lease_seconds: 240,
+            storage_limit_mb: None,
+            shape: None,
+        },
         node.clone(),
         time,
         profile,
@@ -326,12 +589,20 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
         }
     }
     let workspace = crate::runtime::workspace("attempt-a").unwrap();
-    let mut cleanup = Cleanup(None, super::super::workspace::Workspace::of(&service).map(|w| w.name().to_owned()), workspace.parent().unwrap().to_owned());
+    let mut cleanup = Cleanup(
+        None,
+        super::super::workspace::Workspace::of(&service).map(|w| w.name().to_owned()),
+        workspace.parent().unwrap().to_owned(),
+    );
     let id = create_container(crate::engine::isolation(), &service).unwrap();
     cleanup.0 = Some(id.clone());
     service.resource.phase = Phase::Starting(id.clone());
     let observations = inventory(crate::engine::isolation(), node.as_str()).unwrap();
-    start_container(crate::engine::isolation(), &verify(&service, &observations[id.as_str()]).unwrap()).unwrap();
+    start_container(
+        crate::engine::isolation(),
+        &verify(&service, &observations[id.as_str()]).unwrap(),
+    )
+    .unwrap();
     service.resource.phase = Phase::Running(id.clone());
     state.services.push(service.clone());
 
@@ -350,12 +621,21 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     let shared = Arc::new(Mutex::new(state));
     let mut threads = Vec::new();
     let copy = |nonce: &str, from: &str, to: &str, threads: &mut Vec<std::thread::JoinHandle<()>>| {
-        let admitted = request(&shared, &at(&run, "attempt-a", nonce), &node, input(service.resource.id.as_str(), from, to)).unwrap();
+        let admitted = request(
+            &shared,
+            &at(&run, "attempt-a", nonce),
+            &node,
+            input(service.resource.id.as_str(), from, to),
+        )
+        .unwrap();
         commands::dispatch(&shared, threads).unwrap();
         for thread in threads.drain(..) {
             thread.join().unwrap();
         }
-        let handle = serde_json::from_value(json!({"service_id":service.resource.id.as_str(),"execution_id":admitted["execution_id"]})).unwrap();
+        let handle = serde_json::from_value(
+            json!({"service_id":service.resource.id.as_str(),"execution_id":admitted["execution_id"]}),
+        )
+        .unwrap();
         commands::status(&shared, &run, "attempt-a", &node, handle).unwrap()
     };
     let check = |script: &str| crate::engine::query(&["exec", id.as_str(), "bash", "-c", script]).unwrap();
@@ -363,8 +643,19 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     let done = copy("copy-tree", "/workspace/mc-client", "tools/mc", &mut threads);
     println!("{done}");
     assert_eq!(done["status"], "completed", "{done}");
-    assert!(done["output"].as_str().unwrap().starts_with("Copied 3 files and 4 directories"), "{done}");
-    assert!(done["output"].as_str().unwrap().contains("passwd-link (symlink or special file)"));
+    assert!(
+        done["output"]
+            .as_str()
+            .unwrap()
+            .starts_with("Copied 3 files and 4 directories"),
+        "{done}"
+    );
+    assert!(
+        done["output"]
+            .as_str()
+            .unwrap()
+            .contains("passwd-link (symlink or special file)")
+    );
     let user = format!("{}:{}", service.uid, service.gid);
     let observed = check(&format!(
         "set -eu; cd /workspace/tools/mc; test \"$(stat -c %u:%g README.md bin/run {long} .)\" = \"$(printf '{user}\\n%.0s' 1 2 3 4)\"; test \"$(./bin/run)\" = client-ok; test \"$(stat -c %s {long})\" = 3145728; test ! -e .env; test ! -e passwd-link; printf tree-ok",
@@ -376,27 +667,62 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     fs::write(workspace.join("mc-client/README.md"), b"v2\n").unwrap();
     let done = copy("copy-file", "mc-client/README.md", "tools/mc/README.md", &mut threads);
     assert_eq!(done["status"], "completed", "{done}");
-    assert_eq!(check("cat /workspace/tools/mc/README.md; test -x /workspace/tools/mc/bin/run && echo kept").trim(), "v2\nkept");
+    assert_eq!(
+        check("cat /workspace/tools/mc/README.md; test -x /workspace/tools/mc/bin/run && echo kept").trim(),
+        "v2\nkept"
+    );
 
     // An extraction failure is reported without stopping the service.
     let done = copy("copy-conflict", "mc-client/README.md", "tools/mc/bin", &mut threads);
     assert_eq!(done["status"], "failed", "{done}");
-    assert!(done["diagnostic"].as_str().unwrap().contains("Extraction in the service failed"), "{done}");
-    assert!(matches!(shared.lock().unwrap().services[0].resource.phase, Phase::Running(_)));
-    assert_eq!(check("test -x /workspace/tools/mc/bin/run && echo intact").trim(), "intact");
+    assert!(
+        done["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("Extraction in the service failed"),
+        "{done}"
+    );
+    assert!(matches!(
+        shared.lock().unwrap().services[0].resource.phase,
+        Phase::Running(_)
+    ));
+    assert_eq!(
+        check("test -x /workspace/tools/mc/bin/run && echo intact").trim(),
+        "intact"
+    );
 
     // Commands from different agents run at once: the first finishes only
     // after observing a file the second writes while the first still runs.
     let exec = |nonce: &str, command: &str| {
-        let work = commands::Work { service_id: service.resource.id.as_str().into(), digest: commands::hash(command.as_bytes()), command: command.into(), display: command.into(), timeout_seconds: 20, copy: None };
-        let admitted = commands::admit_work(&mut shared.lock().unwrap(), &run, "attempt-a", nonce, &node, work, crate::storage::save).unwrap();
+        let work = commands::Work {
+            service_id: service.resource.id.as_str().into(),
+            digest: commands::hash(command.as_bytes()),
+            command: command.into(),
+            display: command.into(),
+            timeout_seconds: 20,
+            copy: None,
+        };
+        let admitted = commands::admit_work(
+            &mut shared.lock().unwrap(),
+            &run,
+            "attempt-a",
+            nonce,
+            &node,
+            work,
+            crate::storage::save,
+        )
+        .unwrap();
         admitted["execution_id"].as_str().unwrap().to_owned()
     };
     let status = |id: &str| {
-        let handle = serde_json::from_value(json!({"service_id":service.resource.id.as_str(),"execution_id":id})).unwrap();
+        let handle =
+            serde_json::from_value(json!({"service_id":service.resource.id.as_str(),"execution_id":id})).unwrap();
         commands::status(&shared, &run, "attempt-a", &node, handle).unwrap()
     };
-    let waiter = exec("wait-for-peer", "for _ in $(seq 100); do test -f /workspace/peer && { echo saw-peer; exit 0; }; sleep 0.1; done; exit 9");
+    let waiter = exec(
+        "wait-for-peer",
+        "for _ in $(seq 100); do test -f /workspace/peer && { echo saw-peer; exit 0; }; sleep 0.1; done; exit 9",
+    );
     let peer = exec("peer", "sleep 1; touch /workspace/peer; echo peer-done");
     commands::dispatch(&shared, &mut threads).unwrap();
     assert_eq!(threads.len(), 2, "both commands launch in one pass");
@@ -404,14 +730,31 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
         thread.join().unwrap();
     }
     let (waited, peered) = (status(&waiter), status(&peer));
-    assert_eq!((waited["status"].as_str(), waited["output"].as_str()), (Some("completed"), Some("saw-peer\n")), "{waited}");
-    assert_eq!((peered["status"].as_str(), peered["output"].as_str()), (Some("completed"), Some("peer-done\n")), "{peered}");
+    assert_eq!(
+        (waited["status"].as_str(), waited["output"].as_str()),
+        (Some("completed"), Some("saw-peer\n")),
+        "{waited}"
+    );
+    assert_eq!(
+        (peered["status"].as_str(), peered["output"].as_str()),
+        (Some("completed"), Some("peer-done\n")),
+        "{peered}"
+    );
 
     // A copy waits for a running command and launches alone after it.
     let slow = exec("slow", "sleep 2; echo slow-done");
     commands::dispatch(&shared, &mut threads).unwrap();
-    let queued = request(&shared, &at(&run, "attempt-a", "copy-after"), &node, input(service.resource.id.as_str(), "mc-client/README.md", "after.md")).unwrap();
-    assert!(queued["diagnostic"].as_str().unwrap().contains("Waiting for 1 running"), "{queued}");
+    let queued = request(
+        &shared,
+        &at(&run, "attempt-a", "copy-after"),
+        &node,
+        input(service.resource.id.as_str(), "mc-client/README.md", "after.md"),
+    )
+    .unwrap();
+    assert!(
+        queued["diagnostic"].as_str().unwrap().contains("Waiting for 1 running"),
+        "{queued}"
+    );
     commands::dispatch(&shared, &mut threads).unwrap();
     assert_eq!(threads.len(), 1, "the copy does not launch beside a running command");
     threads.drain(..).for_each(|thread| thread.join().unwrap());
@@ -426,12 +769,33 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
 #[test]
 fn tool_packages_are_the_only_control_internal_source_and_never_a_destination() {
     // Admitted packages (#216) live at /workspace/.control-tools/<name>.
-    assert_eq!(transfer("/workspace/.control-tools/mc-client", "tools/mc").from, ".control-tools/mc-client");
-    assert_eq!(transfer(".control-tools/mc-client/bin/run", "run").from, ".control-tools/mc-client/bin/run");
-    for from in [".control-tools", ".control-tools/", ".control-tools/../x", ".control-tools/pkg/.control-mailbox", ".control-tools/pkg/.env", ".control-tools/.git", ".control-room-mcp.log", ".control-mailbox/request", "pkg/.control-tools/x"] {
+    assert_eq!(
+        transfer("/workspace/.control-tools/mc-client", "tools/mc").from,
+        ".control-tools/mc-client"
+    );
+    assert_eq!(
+        transfer(".control-tools/mc-client/bin/run", "run").from,
+        ".control-tools/mc-client/bin/run"
+    );
+    for from in [
+        ".control-tools",
+        ".control-tools/",
+        ".control-tools/../x",
+        ".control-tools/pkg/.control-mailbox",
+        ".control-tools/pkg/.env",
+        ".control-tools/.git",
+        ".control-room-mcp.log",
+        ".control-mailbox/request",
+        "pkg/.control-tools/x",
+    ] {
         assert!(Transfer::new(from, "x").is_err(), "{from:?}");
     }
-    for to in [".control-tools/pkg", "tools/.control-tools/pkg", ".control-mailbox", "a/.control-result"] {
+    for to in [
+        ".control-tools/pkg",
+        "tools/.control-tools/pkg",
+        ".control-mailbox",
+        "a/.control-result",
+    ] {
         assert!(Transfer::new("x", to).is_err(), "{to:?}");
     }
 
@@ -447,14 +811,44 @@ fn tool_packages_are_the_only_control_internal_source_and_never_a_destination() 
     symlink(outside.0.clone(), root.0.join(".control-tools/linked")).unwrap();
 
     let mut archive = Vec::new();
-    let streamed = stream(&root.0, &transfer(".control-tools/mc-client", "tools/mc"), Bounds::DEFAULT, (1000, 1000), &mut archive).unwrap();
-    assert_eq!((streamed.files, streamed.directories, streamed.bytes, streamed.skipped), (2, 2, 7 + 32, 3));
+    let streamed = stream(
+        &root.0,
+        &transfer(".control-tools/mc-client", "tools/mc"),
+        Bounds::DEFAULT,
+        (1000, 1000),
+        &mut archive,
+    )
+    .unwrap();
+    assert_eq!(
+        (streamed.files, streamed.directories, streamed.bytes, streamed.skipped),
+        (2, 2, 7 + 32, 3)
+    );
     let extracted = extract(&archive);
     assert_eq!(fs::read(extracted.0.join("tools/mc/README")).unwrap(), b"package");
     for absent in [".control-state", "link", "fifo"] {
-        assert!(fs::symlink_metadata(extracted.0.join("tools/mc").join(absent)).is_err(), "{absent}");
+        assert!(
+            fs::symlink_metadata(extracted.0.join("tools/mc").join(absent)).is_err(),
+            "{absent}"
+        );
     }
     // A linked package is never followed, and bounds still apply.
-    assert!(scan(&root.0, ".control-tools/linked", Bounds::DEFAULT).unwrap_err().to_string().contains("symlinks are not followed"));
-    assert!(scan(&root.0, ".control-tools/mc-client", Bounds { bytes: 38, entries: 100 }).unwrap_err().to_string().contains("byte limit"));
+    assert!(
+        scan(&root.0, ".control-tools/linked", Bounds::DEFAULT)
+            .unwrap_err()
+            .to_string()
+            .contains("symlinks are not followed")
+    );
+    assert!(
+        scan(
+            &root.0,
+            ".control-tools/mc-client",
+            Bounds {
+                bytes: 38,
+                entries: 100
+            }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("byte limit")
+    );
 }

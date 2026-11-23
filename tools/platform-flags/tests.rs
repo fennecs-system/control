@@ -1,4 +1,3 @@
-
 #[test]
 fn native_flags_reject_a_symlink_and_accept_its_regular_target() {
     use std::{
@@ -6,14 +5,8 @@ fn native_flags_reject_a_symlink_and_accept_its_regular_target() {
         os::unix::fs::{OpenOptionsExt, symlink},
         time::{SystemTime, UNIX_EPOCH},
     };
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "control-platform-flags-{}-{nonce}",
-        std::process::id()
-    ));
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("control-platform-flags-{}-{nonce}", std::process::id()));
     fs::create_dir(&root).unwrap();
     let file = root.join("regular");
     fs::write(&file, b"safe").unwrap();

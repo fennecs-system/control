@@ -99,19 +99,13 @@ impl Payload {
                 "Working state requires a current subgoal: set payload.subgoal, or retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} without payload to keep the committed notes",
             );
         }
-        if self.findings.len() > 16
-            || self.tried.len() > 16
-            || self.pending.len() > 16
-            || self.next.len() > 8
-        {
+        if self.findings.len() > 16 || self.tried.len() > 16 || self.pending.len() > 16 || self.next.len() > 8 {
             return Err(
                 "Working state permits 16 findings, 16 tried approaches, 16 pending actions and 8 next actions: merge or drop older entries, or retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} without payload to keep the committed notes",
             );
         }
         if serde_json::to_vec(self)
-            .map_err(|_| {
-                "Working state could not be encoded: ask the operator via control_design_ask"
-            })?
+            .map_err(|_| "Working state could not be encoded: ask the operator via control_design_ask")?
             .len()
             > MAX_PAYLOAD_BYTES
         {

@@ -37,7 +37,16 @@ impl Block {
     #[inline]
     pub fn children(&self) -> Option<[Block; 2]> {
         let level = self.level.checked_sub(1)?;
-        Some([Block { start: self.start, level }, Block { start: self.start + (1 << level), level }])
+        Some([
+            Block {
+                start: self.start,
+                level,
+            },
+            Block {
+                start: self.start + (1 << level),
+                level,
+            },
+        ])
     }
     /// The block this one is a half of.
     #[inline]
@@ -51,7 +60,11 @@ impl Block {
 /// The cut of `0..len`, newest block first: `verbatim` single items, then
 /// aligned blocks growing toward the start of history.
 pub fn cut(len: u64, verbatim: u64) -> Cut {
-    Cut { end: len, verbatim, level: 0 }
+    Cut {
+        end: len,
+        verbatim,
+        level: 0,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -75,7 +88,13 @@ impl Iterator for Cut {
             // taking a block of the current level always aligns the next one.
             let up = self.level + 1;
             let fits = |level: u32| level < 64 && self.end.trailing_zeros() >= level && (1u64 << level) <= self.end;
-            if fits(up) { up } else if fits(self.level) { self.level } else { self.end.trailing_zeros().min(63 - self.end.leading_zeros()) }
+            if fits(up) {
+                up
+            } else if fits(self.level) {
+                self.level
+            } else {
+                self.end.trailing_zeros().min(63 - self.end.leading_zeros())
+            }
         };
         self.level = level;
         self.end -= 1 << level;

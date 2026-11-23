@@ -22,9 +22,9 @@
 //! * `["s", path, value]` sets the value at `path` (adding an object member);
 //! * `["r", path]` removes an object member;
 //! * `["a", path, at, delete, [values…]]` splices the array at `path`.
+use crate::lens::Schema;
 use serde::Serialize;
 use serde_json::{Value, ser::Formatter};
-use crate::lens::Schema;
 use std::{cell::Cell, io, path::Path, rc::Rc};
 
 /// Containers smaller than this are rewritten whole when they change; larger
@@ -103,7 +103,12 @@ struct Ranges {
 impl Ranges {
     fn open(&mut self, key: (usize, usize)) {
         self.open.push(self.nodes.len());
-        self.nodes.push(Node { start: self.at.get() as u32, end: 0, key: (key.0 as u32, key.1 as u32), subtree_end: 0 });
+        self.nodes.push(Node {
+            start: self.at.get() as u32,
+            end: 0,
+            key: (key.0 as u32, key.1 as u32),
+            subtree_end: 0,
+        });
     }
     fn close(&mut self) {
         let index = self.open.pop().expect("balanced JSON");
@@ -155,7 +160,12 @@ impl Formatter for Lent<'_> {
 /// writes, with the ranges [`diff`] needs.
 pub fn encode<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
     let at = Rc::new(Cell::new(0));
-    let mut ranges = Ranges { at: at.clone(), nodes: Vec::new(), open: Vec::new(), key: (0, 0) };
+    let mut ranges = Ranges {
+        at: at.clone(),
+        nodes: Vec::new(),
+        open: Vec::new(),
+        key: (0, 0),
+    };
     ranges.open((0, 0));
     let mut writer = Tracked { out: Vec::new(), at };
     let mut serializer = serde_json::Serializer::with_formatter(&mut writer, Lent(&mut ranges));
@@ -164,7 +174,10 @@ pub fn encode<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
     if u32::try_from(writer.out.len()).is_err() {
         return Err(serde::ser::Error::custom("documents are limited to 4 GiB"));
     }
-    Ok(Encoded { bytes: writer.out, nodes: ranges.nodes })
+    Ok(Encoded {
+        bytes: writer.out,
+        nodes: ranges.nodes,
+    })
 }
 
 /// The ranges of a compact JSON document already in hand, such as a snapshot
@@ -175,7 +188,12 @@ pub fn index(bytes: Vec<u8>) -> io::Result<Encoded> {
     if u32::try_from(bytes.len()).is_err() {
         return Err(invalid("documents are limited to 4 GiB"));
     }
-    let mut ranges = Ranges { at: Rc::new(Cell::new(0)), nodes: Vec::new(), open: Vec::new(), key: (0, 0) };
+    let mut ranges = Ranges {
+        at: Rc::new(Cell::new(0)),
+        nodes: Vec::new(),
+        open: Vec::new(),
+        key: (0, 0),
+    };
     ranges.open((0, 0));
     let end = scan(&bytes, 0, &mut ranges, 0)?;
     if end != bytes.len() {
@@ -183,7 +201,10 @@ pub fn index(bytes: Vec<u8>) -> io::Result<Encoded> {
     }
     ranges.at.set(end);
     ranges.close();
-    Ok(Encoded { bytes, nodes: ranges.nodes })
+    Ok(Encoded {
+        bytes,
+        nodes: ranges.nodes,
+    })
 }
 /// Scans the value at `i`, recording members and elements like the encoder,
 /// and returns where it ends.
@@ -238,7 +259,10 @@ fn scan(bytes: &[u8], mut i: usize, ranges: &mut Ranges, depth: usize) -> io::Re
         b'"' => string(i),
         _ => {
             // A number or literal: up to the next separator or the end.
-            Ok(bytes[i..].iter().position(|b| matches!(b, b',' | b']' | b'}')).map_or(bytes.len(), |n| i + n))
+            Ok(bytes[i..]
+                .iter()
+                .position(|b| matches!(b, b',' | b']' | b'}'))
+                .map_or(bytes.len(), |n| i + n))
         }
     }
 }
@@ -289,11 +313,27 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
     // bytes to diff inside it rather than rewrite it whole.
     let opening = |e: &Encoded, i: usize| e.range(i).first().copied().filter(|b| matches!(b, b'{' | b'['));
     if opening(old, o).is_some() && opening(old, o) == opening(new, n) {
-        let inside = |e: &Encoded, i: usize| index(e.range(i).to_vec()).ok().filter(|local| local.container(0).is_some());
+        let inside = |e: &Encoded, i: usize| {
+            index(e.range(i).to_vec())
+                .ok()
+                .filter(|local| local.container(0).is_some())
+        };
         match (old.container(o), new.container(n)) {
-            (None, Some(_)) => if let Some(local) = inside(old, o) { return node(&local, 0, new, n, at, out) },
-            (Some(_), None) => if let Some(local) = inside(new, n) { return node(old, o, &local, 0, at, out) },
-            (None, None) => if let (Some(before), Some(after)) = (inside(old, o), inside(new, n)) { return node(&before, 0, &after, 0, at, out) },
+            (None, Some(_)) => {
+                if let Some(local) = inside(old, o) {
+                    return node(&local, 0, new, n, at, out);
+                }
+            }
+            (Some(_), None) => {
+                if let Some(local) = inside(new, n) {
+                    return node(old, o, &local, 0, at, out);
+                }
+            }
+            (None, None) => {
+                if let (Some(before), Some(after)) = (inside(old, o), inside(new, n)) {
+                    return node(&before, 0, &after, 0, at, out);
+                }
+            }
             _ => {}
         }
     }
@@ -305,7 +345,9 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
             for child in new.children(n) {
                 let key = new.key(child);
                 // Members usually keep their order; scan from the last match.
-                let found = (cursor..previous.len()).chain(0..cursor).find(|&i| old.key(previous[i]) == key);
+                let found = (cursor..previous.len())
+                    .chain(0..cursor)
+                    .find(|&i| old.key(previous[i]) == key);
                 at.push(Seg::Key(key.to_vec()));
                 match found {
                     Some(i) => {
@@ -326,9 +368,19 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
         }
         (Some(b'['), Some(b'[')) => {
             let (a, b) = (old.children(o), new.children(n));
-            let prefix = a.iter().zip(&b).take_while(|&(&x, &y)| old.range(x) == new.range(y)).count();
+            let prefix = a
+                .iter()
+                .zip(&b)
+                .take_while(|&(&x, &y)| old.range(x) == new.range(y))
+                .count();
             let limit = a.len().min(b.len()) - prefix;
-            let suffix = a.iter().rev().zip(b.iter().rev()).take(limit).take_while(|&(&x, &y)| old.range(x) == new.range(y)).count();
+            let suffix = a
+                .iter()
+                .rev()
+                .zip(b.iter().rev())
+                .take(limit)
+                .take_while(|&(&x, &y)| old.range(x) == new.range(y))
+                .count();
             // Anchor the middles on elements that are byte-identical on both
             // sides, in order; between anchors, pair what remains positionally
             // (the same element changed) and delete or insert the rest. Runs
@@ -343,7 +395,10 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
             let mut anchors = Vec::new();
             let mut next = prefix;
             for (j, &child) in b.iter().enumerate().take(b_end).skip(prefix) {
-                if let Some(&i) = olds.get(new.range(child)).and_then(|list| list.iter().find(|&&i| i >= next)) {
+                if let Some(&i) = olds
+                    .get(new.range(child))
+                    .and_then(|list| list.iter().find(|&&i| i >= next))
+                {
                     anchors.push((i, j));
                     next = i + 1;
                 }
@@ -358,7 +413,14 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
                     at.pop();
                 }
                 if anchor_a - i != anchor_b - j {
-                    splice(out, at, j + paired, anchor_a - i - paired, new, &b[j + paired..anchor_b]);
+                    splice(
+                        out,
+                        at,
+                        j + paired,
+                        anchor_a - i - paired,
+                        new,
+                        &b[j + paired..anchor_b],
+                    );
                 }
                 (i, j) = (anchor_a + 1, anchor_b + 1);
             }
@@ -394,7 +456,11 @@ pub struct Edit {
 pub enum Change {
     Set(Value),
     Remove,
-    Splice { at: usize, delete: usize, insert: Vec<Value> },
+    Splice {
+        at: usize,
+        delete: usize,
+        insert: Vec<Value>,
+    },
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -415,31 +481,52 @@ pub fn transaction(line: &[u8]) -> io::Result<Vec<Edit>> {
     let torn = || invalid("Not a committed transaction");
     let (head, rest) = (line.get(..PREFIX).ok_or_else(torn)?, &line[PREFIX..]);
     let ops = rest.strip_suffix(b"}").ok_or_else(torn)?;
-    let sum = head.strip_prefix(br#"{"sum":""#).and_then(|h| h.strip_suffix(br#"","ops":"#)).ok_or_else(torn)?;
+    let sum = head
+        .strip_prefix(br#"{"sum":""#)
+        .and_then(|h| h.strip_suffix(br#"","ops":"#))
+        .ok_or_else(torn)?;
     if sum != format!("{:016x}", checksum(ops)).as_bytes() {
         return Err(torn());
     }
     edits(ops)
 }
 fn checksum(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3))
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 /// Parses one patch (the array [`diff`] returns) into edits.
 pub fn edits(line: &[u8]) -> io::Result<Vec<Edit>> {
     let ops: Vec<Value> = serde_json::from_slice(line).map_err(|_| invalid("Patch is not a JSON array"))?;
     ops.into_iter()
         .map(|op| {
-            let Value::Array(mut parts) = op else { return Err(invalid("Patch edit is not an array")) };
+            let Value::Array(mut parts) = op else {
+                return Err(invalid("Patch edit is not an array"));
+            };
             let kind = parts.first().and_then(Value::as_str).map(str::to_owned);
-            let Some(Value::Array(path)) = parts.get(1).cloned() else { return Err(invalid("Patch edit has no path")) };
+            let Some(Value::Array(path)) = parts.get(1).cloned() else {
+                return Err(invalid("Patch edit has no path"));
+            };
             let change = match (kind.as_deref(), parts.len()) {
                 (Some("s"), 3) => Change::Set(parts.pop().expect("three parts")),
                 (Some("r"), 2) => Change::Remove,
                 (Some("a"), 5) => {
-                    let Some(Value::Array(insert)) = parts.pop() else { return Err(invalid("Splice inserts an array")) };
-                    let delete = parts.pop().and_then(|v| v.as_u64()).ok_or_else(|| invalid("Splice delete count"))?;
-                    let at = parts.pop().and_then(|v| v.as_u64()).ok_or_else(|| invalid("Splice position"))?;
-                    Change::Splice { at: at as usize, delete: delete as usize, insert }
+                    let Some(Value::Array(insert)) = parts.pop() else {
+                        return Err(invalid("Splice inserts an array"));
+                    };
+                    let delete = parts
+                        .pop()
+                        .and_then(|v| v.as_u64())
+                        .ok_or_else(|| invalid("Splice delete count"))?;
+                    let at = parts
+                        .pop()
+                        .and_then(|v| v.as_u64())
+                        .ok_or_else(|| invalid("Splice position"))?;
+                    Change::Splice {
+                        at: at as usize,
+                        delete: delete as usize,
+                        insert,
+                    }
                 }
                 _ => return Err(invalid("Unknown patch edit")),
             };
@@ -461,7 +548,9 @@ pub fn apply(document: &mut Value, edits: Vec<Edit>) -> io::Result<()> {
     for Edit { path, change } in edits {
         if let Change::Splice { at, delete, insert } = change {
             let target = path.iter().try_fold(&mut *document, |value, seg| child(value, seg))?;
-            let Value::Array(items) = target else { return Err(invalid("Splice target is not an array")) };
+            let Value::Array(items) = target else {
+                return Err(invalid("Splice target is not an array"));
+            };
             if at.checked_add(delete).is_none_or(|end| end > items.len()) {
                 return Err(invalid("Splice outside the array"));
             }
@@ -469,7 +558,9 @@ pub fn apply(document: &mut Value, edits: Vec<Edit>) -> io::Result<()> {
             continue;
         }
         let Some((last, parent)) = path.split_last() else {
-            let Change::Set(value) = change else { return Err(invalid("Cannot remove the document")) };
+            let Change::Set(value) = change else {
+                return Err(invalid("Cannot remove the document"));
+            };
             *document = value;
             continue;
         };
@@ -479,10 +570,13 @@ pub fn apply(document: &mut Value, edits: Vec<Edit>) -> io::Result<()> {
                 map.insert(key.clone(), value);
             }
             (Change::Remove, Value::String(key), Value::Object(map)) => {
-                map.remove(key).ok_or_else(|| invalid("Removed member does not exist"))?;
+                map.remove(key)
+                    .ok_or_else(|| invalid("Removed member does not exist"))?;
             }
             (Change::Set(value), Value::Number(n), Value::Array(items)) => {
-                *n.as_u64().and_then(|i| items.get_mut(i as usize)).ok_or_else(|| invalid("Patch index outside the array"))? = value;
+                *n.as_u64()
+                    .and_then(|i| items.get_mut(i as usize))
+                    .ok_or_else(|| invalid("Patch index outside the array"))? = value;
             }
             _ => return Err(invalid("Patch path does not fit the document")),
         }
@@ -526,7 +620,9 @@ pub fn base(snapshot_bytes: &[u8], nonce: &str, schema: &Value) -> Option<Encode
 }
 /// Splits the nonce and schema members off a parsed snapshot.
 pub fn identify(document: &mut Value) -> (Option<String>, Option<Value>) {
-    let Value::Object(map) = document else { return (None, None) };
+    let Value::Object(map) = document else {
+        return (None, None);
+    };
     let nonce = map.remove("_snapshot").and_then(|v| v.as_str().map(str::to_owned));
     (nonce, map.remove("_schema"))
 }
@@ -556,17 +652,28 @@ pub fn patches(lines: impl IntoIterator<Item = Vec<u8>>, nonce: &str) -> Option<
 /// snapshot plus its log's valid lines, translated to `reader`'s schema. It
 /// takes no lock and changes no file; `read` supplies the caller's checked
 /// file reader. `None` when there is no snapshot.
-pub fn read(snapshot: &Path, log: &Path, reader: &Schema, read: impl Fn(&Path) -> io::Result<Vec<u8>>) -> io::Result<Option<Value>> {
+pub fn read(
+    snapshot: &Path,
+    log: &Path,
+    reader: &Schema,
+    read: impl Fn(&Path) -> io::Result<Vec<u8>>,
+) -> io::Result<Option<Value>> {
     let optional = |path: &Path| match read(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         result => result.map(Some),
     };
     let mut previous = None;
     loop {
-        let Some(bytes) = optional(snapshot)? else { return Ok(None) };
+        let Some(bytes) = optional(snapshot)? else {
+            return Ok(None);
+        };
         let mut document: Value = serde_json::from_slice(&bytes).map_err(|_| invalid("Snapshot is not JSON"))?;
         let (nonce, schema) = identify(&mut document);
-        let schema: Schema = schema.map(serde_json::from_value).transpose().map_err(|_| invalid("Invalid snapshot schema"))?.unwrap_or_default();
+        let schema: Schema = schema
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| invalid("Invalid snapshot schema"))?
+            .unwrap_or_default();
         let log = optional(log)?.unwrap_or_default();
         let lines = complete_lines(&log);
         let found = nonce.as_deref().and_then(|nonce| patches(lines, nonce));
@@ -580,7 +687,13 @@ pub fn read(snapshot: &Path, log: &Path, reader: &Schema, read: impl Fn(&Path) -
         if let Some((schema, patches)) = found {
             let route = crate::lens::route(&schema, reader)?;
             for patch in patches {
-                apply(&mut document, patch.into_iter().filter_map(|edit| crate::lens::edit(&route, edit)).collect())?;
+                apply(
+                    &mut document,
+                    patch
+                        .into_iter()
+                        .filter_map(|edit| crate::lens::edit(&route, edit))
+                        .collect(),
+                )?;
             }
         }
         return Ok(Some(document));
@@ -589,15 +702,26 @@ pub fn read(snapshot: &Path, log: &Path, reader: &Schema, read: impl Fn(&Path) -
 /// Whole lines only: a final line without its newline is still being written.
 pub fn complete_lines(bytes: &[u8]) -> Vec<Vec<u8>> {
     let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-    bytes[..end].split(|&b| b == b'\n').filter(|line| !line.is_empty()).map(<[u8]>::to_vec).collect()
+    bytes[..end]
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
 }
 
 /// A unique snapshot name: time, process and a per-process counter.
 pub fn nonce() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-    format!("{time:x}-{:x}-{:x}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "{time:x}-{:x}-{:x}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 #[cfg(test)]

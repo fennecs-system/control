@@ -41,12 +41,7 @@ pub(super) fn definitions(mutable: bool) -> Vec<Value> {
 
 use crate::application::room_wakes::{self, Decision, normal_task};
 
-pub(super) fn call(
-    state: &mut State,
-    run_id: &str,
-    name: &str,
-    args: &Value,
-) -> Result<Value, &'static str> {
+pub(super) fn call(state: &mut State, run_id: &str, name: &str, args: &Value) -> Result<Value, &'static str> {
     let index = state
         .runtime
         .runs
@@ -74,15 +69,12 @@ pub(super) fn call(
         .iter()
         .position(|watch| watch.chat == chat.id);
     if existing.is_some_and(|i| {
-        state.collective.room_watches[i].actor != run.actor
-            || state.collective.room_watches[i].room != room
+        state.collective.room_watches[i].actor != run.actor || state.collective.room_watches[i].room != room
     }) {
         return Err("Room subscription owner or scope changed. Start a new chat.");
     }
     if name == "control_room_watch" {
-        let enabled = args["enabled"]
-            .as_bool()
-            .ok_or("Expected enabled=true or false.")?;
+        let enabled = args["enabled"].as_bool().ok_or("Expected enabled=true or false.")?;
         let wake = match args.get("wake") {
             None => false,
             Some(value) => value.as_bool().ok_or("Expected wake=true or false.")?,
@@ -95,17 +87,10 @@ pub(super) fn call(
         }
         // Retried arming is idempotent; disabling never restores its budget.
         let already = existing.is_some_and(|i| {
-            state.collective.room_watches[i]
-                .wake
-                .as_ref()
-                .is_some_and(|wake| {
-                    wake.origin == run.id
-                        && run
-                            .attempts
-                            .last()
-                            .and_then(|attempt| attempt.workspace_id.as_deref())
-                            == Some(&wake.generation)
-                })
+            state.collective.room_watches[i].wake.as_ref().is_some_and(|wake| {
+                wake.origin == run.id
+                    && run.attempts.last().and_then(|attempt| attempt.workspace_id.as_deref()) == Some(&wake.generation)
+            })
         });
         if wake && (!normal_task(run) || (!already && run.room_wake_used)) {
             return Err(
@@ -224,25 +209,47 @@ pub(crate) fn continuation_leaf(state: &State, origin: usize, runs: &HashMap<&st
 /// Gives an agent's chat a durable room inbox from the current position. Idempotent;
 /// chats without a room need none.
 pub(crate) fn ensure_inbox(state: &mut State, chat: &str) -> Result<(), &'static str> {
-    let session = state.chats.iter().find(|session| session.id == chat).ok_or("Chat not found.")?;
-    let Some(room) = session.room.clone().filter(|room| super::valid(room)) else { return Ok(()) };
+    let session = state
+        .chats
+        .iter()
+        .find(|session| session.id == chat)
+        .ok_or("Chat not found.")?;
+    let Some(room) = session.room.clone().filter(|room| super::valid(room)) else {
+        return Ok(());
+    };
     let actor = session.actor.clone();
     if let Some(watch) = state.collective.room_watches.iter().find(|watch| watch.chat == chat) {
-        return if watch.actor == actor && watch.room == room { Ok(()) } else { Err("Room subscription owner or scope changed. Start a new chat.") };
+        return if watch.actor == actor && watch.room == room {
+            Ok(())
+        } else {
+            Err("Room subscription owner or scope changed. Start a new chat.")
+        };
     }
     if state.collective.room_watches.len() >= MAX_WATCHES {
         return Err("Room subscription limit reached (256 chats).");
     }
     let cursor = state.collective.posts.len();
-    state.collective.room_watches.push(Watch { chat: chat.into(), actor, room, cursor, wake: None, delivered: None, listener: None });
+    state.collective.room_watches.push(Watch {
+        chat: chat.into(),
+        actor,
+        room,
+        cursor,
+        wake: None,
+        delivered: None,
+        listener: None,
+    });
     Ok(())
 }
 /// Subscription origin for a new continuity protocol, not an acknowledgement
 /// of messages delivered by that protocol.
-pub(crate) fn inbox_cursor(state:&State, chat:&str)->Option<usize> {
-    let session=state.chats.iter().find(|session|session.id==chat)?;
-    state.collective.room_watches.iter().find(|watch|watch.chat==chat
-        && watch.actor==session.actor && Some(&watch.room)==session.room.as_ref()).map(|watch|watch.cursor)
+pub(crate) fn inbox_cursor(state: &State, chat: &str) -> Option<usize> {
+    let session = state.chats.iter().find(|session| session.id == chat)?;
+    state
+        .collective
+        .room_watches
+        .iter()
+        .find(|watch| watch.chat == chat && watch.actor == session.actor && Some(&watch.room) == session.room.as_ref())
+        .map(|watch| watch.cursor)
 }
 
 /// An explicit fresh subscription starts at the append-only room tail. It is
@@ -252,9 +259,17 @@ pub(crate) fn start_at_edge(state: &mut State, chat: &str) -> Result<(), &'stati
     let through = state.collective.posts.len();
     let session = state.chats.iter_mut().find(|c| c.id == chat).ok_or("Chat not found.")?;
     let continuity = session.continuity.get_or_insert_with(Default::default);
-    let Some(room) = session.room.as_ref().filter(|r| super::valid(r)) else { return Ok(()) };
-    let range = control_context::turn_mailbox::Range::Room { room: room.clone(), after: 0, through: through as u64 };
-    continuity.baseline.retain(|r| !matches!(r, control_context::turn_mailbox::Range::Room { room: id, .. } if id == room));
+    let Some(room) = session.room.as_ref().filter(|r| super::valid(r)) else {
+        return Ok(());
+    };
+    let range = control_context::turn_mailbox::Range::Room {
+        room: room.clone(),
+        after: 0,
+        through: through as u64,
+    };
+    continuity
+        .baseline
+        .retain(|r| !matches!(r, control_context::turn_mailbox::Range::Room { room: id, .. } if id == room));
     continuity.baseline.push(range.clone());
     session.revision = session.revision.saturating_add(1);
     for watch in &mut state.collective.room_watches {
@@ -268,9 +283,13 @@ pub(crate) fn start_at_edge(state: &mut State, chat: &str) -> Result<(), &'stati
     // admission mailbox and durable session origin consistent, without
     // replacing its provider session or its already delivered receipts.
     for run in &mut state.runtime.runs {
-        if run.chat_id.as_deref() == Some(chat) && run.status == "running"
-            && let Some(mailbox) = run.attempts.last_mut().and_then(|a| a.turn_mailbox.as_mut()) {
-            mailbox.baseline.retain(|r| !matches!(r, control_context::turn_mailbox::Range::Room { room: id, .. } if id == room));
+        if run.chat_id.as_deref() == Some(chat)
+            && run.status == "running"
+            && let Some(mailbox) = run.attempts.last_mut().and_then(|a| a.turn_mailbox.as_mut())
+        {
+            mailbox
+                .baseline
+                .retain(|r| !matches!(r, control_context::turn_mailbox::Range::Room { room: id, .. } if id == room));
             mailbox.baseline.push(range.clone());
         }
     }
@@ -280,47 +299,77 @@ pub(crate) fn start_at_edge(state: &mut State, chat: &str) -> Result<(), &'stati
 /// Publish only host-validated contiguous room receipts, in the same save as
 /// their workspace. The caller restores the inbox on a failed transaction.
 pub(crate) fn processed(state: &mut State, chat: &str, ranges: &[control_context::turn_mailbox::Range]) {
-    let Some(session) = state.chats.iter().find(|c| c.id == chat) else { return };
+    let Some(session) = state.chats.iter().find(|c| c.id == chat) else {
+        return;
+    };
     for range in ranges {
         if let control_context::turn_mailbox::Range::Room { room, through, .. } = range
             && let Ok(through) = usize::try_from(*through)
             && through <= state.collective.posts.len()
             && Some(room) == session.room.as_ref()
-            && let Some(watch) = state.collective.room_watches.iter_mut()
-                .find(|w| w.chat == chat && w.actor == session.actor && w.room == *room) {
+            && let Some(watch) = state
+                .collective
+                .room_watches
+                .iter_mut()
+                .find(|w| w.chat == chat && w.actor == session.actor && w.room == *room)
+        {
             watch.cursor = watch.cursor.max(through);
         }
     }
 }
 pub(crate) fn listening(state: &State, chat: &str) -> bool {
-    state.collective.room_watches.iter().any(|watch| watch.chat == chat && watch.listener.as_ref().is_some_and(|listener| !listener.paused()))
+    state
+        .collective
+        .room_watches
+        .iter()
+        .any(|watch| watch.chat == chat && watch.listener.as_ref().is_some_and(|listener| !listener.paused()))
 }
 
 /// Runs in the existing supervisor. Planning borrows history once; only armed
 /// watches are considered. No additional scheduler, thread, timer or model loop.
-pub fn reconcile(
-    state: &mut State,
-    mut save: impl FnMut(&State) -> std::io::Result<()>,
-) -> Result<(), &'static str> {
-    if state.collective.room_watches.iter().any(|watch|watch.listener.as_ref().is_some_and(|listener|!listener.paused())) {
-        let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"System clock precedes Unix epoch.")?.as_secs();
-        listeners::reconcile(state, now, &mut save)?;
-    }
-    if !state
+pub fn reconcile(state: &mut State, mut save: impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+    if state
         .collective
         .room_watches
         .iter()
-        .any(|watch| watch.wake.is_some())
+        .any(|watch| watch.listener.as_ref().is_some_and(|listener| !listener.paused()))
     {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "System clock precedes Unix epoch.")?
+            .as_secs();
+        listeners::reconcile(state, now, &mut save)?;
+    }
+    if !state.collective.room_watches.iter().any(|watch| watch.wake.is_some()) {
         return Ok(());
     }
     let mut authorize = identity::authorizer();
     let plans = room_wakes::plan(
-        room_wakes::View { runs: &state.runtime.runs, chats: &state.chats, posts: &state.collective.posts },
-        state.collective.room_watches.iter().enumerate().filter_map(|(index, watch)| {
-            let wake = watch.wake.as_ref()?;
-            Some((index, room_wakes::WakeRef { chat: &watch.chat, actor: &watch.actor, room: &watch.room, cursor: watch.cursor, origin: &wake.origin, generation: &wake.generation, scanned: wake.scanned }))
-        }),
+        room_wakes::View {
+            runs: &state.runtime.runs,
+            chats: &state.chats,
+            posts: &state.collective.posts,
+        },
+        state
+            .collective
+            .room_watches
+            .iter()
+            .enumerate()
+            .filter_map(|(index, watch)| {
+                let wake = watch.wake.as_ref()?;
+                Some((
+                    index,
+                    room_wakes::WakeRef {
+                        chat: &watch.chat,
+                        actor: &watch.actor,
+                        room: &watch.room,
+                        cursor: watch.cursor,
+                        origin: &wake.origin,
+                        generation: &wake.generation,
+                        scanned: wake.scanned,
+                    },
+                ))
+            }),
         |actor, action| authorize(actor, action).is_ok(),
     );
     for (index, plan) in plans {
@@ -329,7 +378,9 @@ pub fn reconcile(
             Decision::Advance(cursor) => operation::Change::Advance(cursor),
             Decision::Disarm => operation::Change::Disarm,
             Decision::Queue(origin_index) => {
-                if crate::scheduler::admit(&state.runtime).is_err() { continue; }
+                if crate::scheduler::admit(&state.runtime).is_err() {
+                    continue;
+                }
                 let origin = &state.runtime.runs[origin_index];
                 identity::authorize(&origin.actor, origin.action)?;
                 let watch = &state.collective.room_watches[index];
@@ -337,9 +388,19 @@ pub fn reconcile(
                 let from = crate::chat::latest_task(state, &watch.chat, &watch.actor).unwrap_or(origin_index);
                 let grants = crate::services::grants(state, &state.runtime.runs[from]);
                 let target = state.chats.iter().position(|chat| chat.id == watch.chat).unwrap();
-                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-                operation::queue(&state.runtime.runs, origin, target, &watch.chat, &watch.room,
-                    format!("{stamp:x}-{}", state.runtime.runs.len()), grants)?
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                operation::queue(
+                    &state.runtime.runs,
+                    origin,
+                    target,
+                    &watch.chat,
+                    &watch.room,
+                    format!("{stamp:x}-{}", state.runtime.runs.len()),
+                    grants,
+                )?
             }
         };
         driver::publish(state, index, change, &mut save, crate::worker::wake)?;

@@ -13,12 +13,8 @@ fn request(objective: &str) -> Submission {
 #[test]
 fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
     for model in [None, Some("captured-model".to_owned())] {
-        let mut origin = request("original").into_run(
-            "origin".into(),
-            4,
-            crate::backend::Backend::Claude,
-            model.clone(),
-        );
+        let mut origin =
+            request("original").into_run("origin".into(), 4, crate::backend::Backend::Claude, model.clone());
         origin.status = "completed".into();
         origin.result = "old result".to_owned().into();
         origin.attempts.push(Default::default());
@@ -33,7 +29,8 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
             role: crate::delegation::Role::Worker,
             root: "root".into(),
             depth: 1,
-            parent: Some("parent".into()), bundle: None
+            parent: Some("parent".into()),
+            bundle: None,
         });
         let stale: crate::services::Grant = serde_json::from_value(serde_json::json!({
             "id":"service", "owner":{"node":"node", "chat":"chat"}, "generation":1,
@@ -44,13 +41,7 @@ fn continuations_keep_captured_settings_but_start_with_fresh_execution_state() {
         }))
         .unwrap();
         origin.resource_grants = vec![stale];
-        let run = request("continue").into_continuation(
-            &origin,
-            "chat",
-            "next".into(),
-            9,
-            vec![current.clone()],
-        );
+        let run = request("continue").into_continuation(&origin, "chat", "next".into(), 9, vec![current.clone()]);
         assert_eq!(run.model, model);
         assert_eq!(run.backend, origin.backend);
         assert_eq!(*run.context, *origin.context);

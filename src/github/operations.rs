@@ -64,15 +64,11 @@ impl Api for WriteApi<'_> {
     }
 }
 
-pub(super) fn execute(
-    shared: &Arc<Mutex<State>>,
-    caller: Caller<'_>,
-    operation: Operation,
-) -> io::Result<Value> {
+pub(super) fn execute(shared: &Arc<Mutex<State>>, caller: Caller<'_>, operation: Operation) -> io::Result<Value> {
     operation.validate().map_err(io::Error::other)?;
-    let _guard = MUTATION.try_lock().map_err(|_| {
-        io::Error::other("A GitHub mutation is already running; inspect remote state before retrying")
-    })?;
+    let _guard = MUTATION
+        .try_lock()
+        .map_err(|_| io::Error::other("A GitHub mutation is already running; inspect remote state before retrying"))?;
     authorize_write(
         &*shared.lock().map_err(|_| io::Error::other("State unavailable"))?,
         caller,
@@ -91,22 +87,10 @@ pub(super) fn execute(
     });
     // A successful remote write remains successful even if authority changes afterward.
     // Every request is checked immediately before dispatch; uncertain responses are not retried.
-    mutate(
-        &api,
-        &config.repository,
-        &config.base,
-        config.allow_merge,
-        &operation,
-    )
+    mutate(&api, &config.repository, &config.base, config.allow_merge, &operation)
 }
 
-fn mutate(
-    api: &impl Api,
-    repo: &str,
-    base: &str,
-    allow_merge: bool,
-    operation: &Operation,
-) -> io::Result<Value> {
+fn mutate(api: &impl Api, repo: &str, base: &str, allow_merge: bool, operation: &Operation) -> io::Result<Value> {
     operation.validate().map_err(io::Error::other)?;
     if !repository(repo) {
         return Err(io::Error::other("Invalid repository binding"));

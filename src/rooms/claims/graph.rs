@@ -50,7 +50,10 @@ pub(crate) struct Reach<'a> {
 impl<'a> Waits<'a> {
     pub(crate) fn of(claims: impl IntoIterator<Item = &'a Claim>) -> Self {
         let mut waits = Self::default();
-        for claim in claims.into_iter().filter(|claim| claim.status == Status::Blocked && !claim.abandoned) {
+        for claim in claims
+            .into_iter()
+            .filter(|claim| claim.status == Status::Blocked && !claim.abandoned)
+        {
             if let Some(on) = claim.blocked_on.as_deref() {
                 waits.0.entry((claim.room.as_str(), on)).or_default().push(claim);
             }
@@ -84,12 +87,22 @@ impl<'a> Waits<'a> {
                     dependents.push(claim);
                 }
             }
-            at = dependents.get(next).map(|claim| (claim.room.as_str(), claim.key.as_str()));
+            at = dependents
+                .get(next)
+                .map(|claim| (claim.room.as_str(), claim.key.as_str()));
             next += 1;
         }
-        let mut members = dependents.iter().map(|claim| claim.owner.as_str()).filter(|member| Some(*member) != owner).collect::<Vec<_>>();
+        let mut members = dependents
+            .iter()
+            .map(|claim| claim.owner.as_str())
+            .filter(|member| Some(*member) != owner)
+            .collect::<Vec<_>>();
         members.sort_unstable();
         members.dedup();
-        Reach { dependents, members, cycle }
+        Reach {
+            dependents,
+            members,
+            cycle,
+        }
     }
 }

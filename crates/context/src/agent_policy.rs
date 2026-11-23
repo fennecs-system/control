@@ -44,9 +44,21 @@ impl RunKind {
     /// Managed task projection uses typed provenance, never status prose.
     pub fn prompt_role(self) -> PromptRole {
         match self {
-            Self::Chat|Self::Task|Self::Job|Self::SelfImprovement|Self::Steering|Self::DesignAnswer|Self::Delegated|Self::Spawned=>PromptRole::Instruction,
-            Self::BotWake|Self::RoomNotification=>PromptRole::Wake,
-            Self::DelegationResult|Self::AgentCompletion|Self::PortDecision|Self::AgentMessage|Self::BotDecision|Self::FolderDecision=>PromptRole::Evidence,
+            Self::Chat
+            | Self::Task
+            | Self::Job
+            | Self::SelfImprovement
+            | Self::Steering
+            | Self::DesignAnswer
+            | Self::Delegated
+            | Self::Spawned => PromptRole::Instruction,
+            Self::BotWake | Self::RoomNotification => PromptRole::Wake,
+            Self::DelegationResult
+            | Self::AgentCompletion
+            | Self::PortDecision
+            | Self::AgentMessage
+            | Self::BotDecision
+            | Self::FolderDecision => PromptRole::Evidence,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -74,14 +86,32 @@ impl RunKind {
     }
     pub fn speaker(self) -> MessageSpeaker {
         match self {
-            Self::Chat | Self::Task | Self::Job | Self::SelfImprovement | Self::Steering | Self::DesignAnswer | Self::Delegated | Self::Spawned => MessageSpeaker::User,
-            Self::DelegationResult | Self::AgentCompletion | Self::RoomNotification | Self::PortDecision | Self::AgentMessage | Self::BotDecision | Self::BotWake | Self::FolderDecision => MessageSpeaker::Control,
+            Self::Chat
+            | Self::Task
+            | Self::Job
+            | Self::SelfImprovement
+            | Self::Steering
+            | Self::DesignAnswer
+            | Self::Delegated
+            | Self::Spawned => MessageSpeaker::User,
+            Self::DelegationResult
+            | Self::AgentCompletion
+            | Self::RoomNotification
+            | Self::PortDecision
+            | Self::AgentMessage
+            | Self::BotDecision
+            | Self::BotWake
+            | Self::FolderDecision => MessageSpeaker::Control,
         }
     }
 }
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum PromptRole {Instruction,Wake,Evidence}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptRole {
+    Instruction,
+    Wake,
+    Evidence,
+}
 impl std::fmt::Display for RunKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())

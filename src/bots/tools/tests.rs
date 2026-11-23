@@ -1,4 +1,3 @@
-
 use super::*;
 use std::sync::Mutex;
 
@@ -41,15 +40,7 @@ fn bot_tools_decode_typed_calls_against_a_host_offering_only_bot_operations() {
     .unwrap();
     run(&host, &attempt, "control_bot_status", &json!({})).unwrap();
     run(&host, &attempt, "control_bot_pause", &json!({})).unwrap();
-    assert!(
-        run(
-            &host,
-            &attempt,
-            "control_bot_pause",
-            &json!({"chat_id":"c-other"})
-        )
-        .is_err()
-    );
+    assert!(run(&host, &attempt, "control_bot_pause", &json!({"chat_id":"c-other"})).is_err());
     assert!(
         run(
             &host,
@@ -62,10 +53,6 @@ fn bot_tools_decode_typed_calls_against_a_host_offering_only_bot_operations() {
     assert!(run(&host, &attempt, "control_bot_spawn", &json!({})).is_err());
     assert_eq!(
         *host.0.lock().unwrap(),
-        [
-            "run/n1 request c-1 Some(5) true",
-            "run/n1 status None",
-            "run/n1 pause"
-        ]
+        ["run/n1 request c-1 Some(5) true", "run/n1 status None", "run/n1 pause"]
     );
 }

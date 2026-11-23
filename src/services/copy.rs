@@ -64,7 +64,9 @@ fn relative(path: &str) -> Option<&str> {
     (!path.is_empty()
         && path.len() <= 1024
         && path.split('/').count() <= MAX_DEPTH
-        && path.split('/').all(|segment| !matches!(segment, "" | "." | "..") && !segment.chars().any(char::is_control)))
+        && path
+            .split('/')
+            .all(|segment| !matches!(segment, "" | "." | "..") && !segment.chars().any(char::is_control)))
     .then_some(path)
 }
 /// Admitted tool packages are materialized read-only at
@@ -84,7 +86,10 @@ impl Transfer {
         let to = relative(to)
             .filter(|path| !path.split('/').any(|segment| segment.starts_with(".control-")))
             .ok_or_else(|| fail("to must be a path under the service's /workspace without '..' or .control-* names"))?;
-        Ok(Self { from: from.into(), to: to.into() })
+        Ok(Self {
+            from: from.into(),
+            to: to.into(),
+        })
     }
     fn display(&self) -> String {
         format!("copy /workspace/{} -> service /workspace/{}", self.from, self.to)
@@ -99,10 +104,15 @@ pub(super) struct Bounds {
     pub entries: u64,
 }
 impl Bounds {
-    pub(super) const DEFAULT: Self = Self { bytes: 256 * MIB, entries: 20_000 };
+    pub(super) const DEFAULT: Self = Self {
+        bytes: 256 * MIB,
+        entries: 20_000,
+    };
     pub(super) fn from_settings(setting: impl Fn(&str) -> Option<String>) -> Self {
         let read = |name: &str, range: std::ops::RangeInclusive<u64>| {
-            setting(name).and_then(|value| value.trim().parse::<u64>().ok()).filter(|value| range.contains(value))
+            setting(name)
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|value| range.contains(value))
         };
         Self {
             // Below 8 GiB, so every size fits a ustar header field.
@@ -118,7 +128,10 @@ impl Bounds {
             Storage::Disk { limit_mb: Some(limit) } => Some(u64::from(limit.get())),
             Storage::Disk { limit_mb: None } | Storage::Workspace { .. } => None,
         };
-        Self { bytes: cap.map_or(self.bytes, |mb| self.bytes.min(mb * MIB)), ..self }
+        Self {
+            bytes: cap.map_or(self.bytes, |mb| self.bytes.min(mb * MIB)),
+            ..self
+        }
     }
 }
 #[cfg(not(test))]
@@ -150,13 +163,25 @@ impl Tally {
     }
     fn admit(&mut self, bounds: Bounds, path: &str, bytes: u64, directory: bool) -> io::Result<()> {
         if self.files + self.directories >= bounds.entries {
-            return Err(fail(format!("{}: copy exceeds the {}-entry limit", shown(path), bounds.entries)));
+            return Err(fail(format!(
+                "{}: copy exceeds the {}-entry limit",
+                shown(path),
+                bounds.entries
+            )));
         }
         if self.bytes.saturating_add(bytes) > bounds.bytes {
-            return Err(fail(format!("{}: copy exceeds the {}-byte limit", shown(path), bounds.bytes)));
+            return Err(fail(format!(
+                "{}: copy exceeds the {}-byte limit",
+                shown(path),
+                bounds.bytes
+            )));
         }
         self.bytes += bytes;
-        if directory { self.directories += 1 } else { self.files += 1 }
+        if directory {
+            self.directories += 1
+        } else {
+            self.files += 1
+        }
         Ok(())
     }
     pub(super) fn summary(&self, bounds: Bounds) -> Value {
@@ -189,7 +214,15 @@ fn name(part: &OsStr) -> io::Result<CString> {
 fn kind_at(directory: &fs::File, part: &OsStr) -> io::Result<Kind> {
     let part = name(part)?;
     let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if unsafe { libc::fstatat(directory.as_raw_fd(), part.as_ptr(), stat.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+    if unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            part.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
         return Err(io::Error::last_os_error());
     }
     Ok(match unsafe { stat.assume_init() }.st_mode & libc::S_IFMT {
@@ -201,7 +234,13 @@ fn kind_at(directory: &fs::File, part: &OsStr) -> io::Result<Kind> {
 /// One component under a pinned parent; a symlink fails instead of resolving.
 fn open_directory(directory: &fs::File, part: &OsStr) -> io::Result<fs::File> {
     let part = name(part)?;
-    let fd = unsafe { libc::openat(directory.as_raw_fd(), part.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            part.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -224,49 +263,95 @@ fn open_root(root: &Path) -> io::Result<fs::File> {
 }
 
 pub(super) enum Node<'a> {
-    Directory { mtime: u64 },
-    File { file: &'a mut fs::File, len: u64, executable: bool, mtime: u64 },
+    Directory {
+        mtime: u64,
+    },
+    File {
+        file: &'a mut fs::File,
+        len: u64,
+        executable: bool,
+        mtime: u64,
+    },
 }
 fn mtime(metadata: &fs::Metadata) -> u64 {
     u64::try_from(metadata.mtime()).unwrap_or(0)
 }
 /// Visits the source in sorted order with paths relative to it ("" is the
 /// source itself), enforcing `bounds` before each visit.
-fn traverse(root: &Path, from: &str, bounds: Bounds, visit: &mut dyn FnMut(&str, Node<'_>) -> io::Result<()>) -> io::Result<Tally> {
+fn traverse(
+    root: &Path,
+    from: &str,
+    bounds: Bounds,
+    visit: &mut dyn FnMut(&str, Node<'_>) -> io::Result<()>,
+) -> io::Result<Tally> {
     let mut tally = Tally::default();
     let mut directory = open_root(root).map_err(|_| fail("Task workspace is unavailable"))?;
     let parts: Vec<&str> = from.split('/').collect();
     let (last, parents) = parts.split_last().ok_or_else(|| fail("Missing copy source"))?;
     for part in parents {
-        directory = open_directory(&directory, OsStr::new(part))
-            .map_err(|_| fail(format!("{from}: every parent must be a directory in the task workspace, not a link")))?;
+        directory = open_directory(&directory, OsStr::new(part)).map_err(|_| {
+            fail(format!(
+                "{from}: every parent must be a directory in the task workspace, not a link"
+            ))
+        })?;
     }
     let last = OsStr::new(last);
     match kind_at(&directory, last).map_err(|_| fail(format!("{from}: not found in the task workspace")))? {
         Kind::Directory => {
             let child = open_directory(&directory, last)?;
             tally.admit(bounds, "", 0, true)?;
-            visit("", Node::Directory { mtime: mtime(&child.metadata()?) })?;
+            visit(
+                "",
+                Node::Directory {
+                    mtime: mtime(&child.metadata()?),
+                },
+            )?;
             descend(&child, "", 1, bounds, &mut tally, visit)?;
         }
         Kind::File => {
             let (mut file, metadata) = open_file(&directory, last)?;
             tally.admit(bounds, "", metadata.len(), false)?;
-            visit("", Node::File { file: &mut file, len: metadata.len(), executable: metadata.mode() & 0o111 != 0, mtime: mtime(&metadata) })?;
+            visit(
+                "",
+                Node::File {
+                    file: &mut file,
+                    len: metadata.len(),
+                    executable: metadata.mode() & 0o111 != 0,
+                    mtime: mtime(&metadata),
+                },
+            )?;
         }
-        Kind::Other => return Err(fail(format!("{from}: must be a regular file or directory; symlinks are not followed"))),
+        Kind::Other => {
+            return Err(fail(format!(
+                "{from}: must be a regular file or directory; symlinks are not followed"
+            )));
+        }
     }
     Ok(tally)
 }
-fn descend(directory: &fs::File, prefix: &str, depth: usize, bounds: Bounds, tally: &mut Tally, visit: &mut dyn FnMut(&str, Node<'_>) -> io::Result<()>) -> io::Result<()> {
+fn descend(
+    directory: &fs::File,
+    prefix: &str,
+    depth: usize,
+    bounds: Bounds,
+    tally: &mut Tally,
+    visit: &mut dyn FnMut(&str, Node<'_>) -> io::Result<()>,
+) -> io::Result<()> {
     if depth > MAX_DEPTH {
-        return Err(fail(format!("{}: directory depth limit ({MAX_DEPTH}) exceeded", shown(prefix))));
+        return Err(fail(format!(
+            "{}: directory depth limit ({MAX_DEPTH}) exceeded",
+            shown(prefix)
+        )));
     }
     // "." and ".." plus one more than the entry bound: never an unbounded listing.
     let limit = usize::try_from(bounds.entries).unwrap_or(usize::MAX).saturating_add(3);
     let mut names = directory_names(directory, Some(limit))?;
     if names.len() > limit {
-        return Err(fail(format!("{}: copy exceeds the {}-entry limit", shown(prefix), bounds.entries)));
+        return Err(fail(format!(
+            "{}: copy exceeds the {}-entry limit",
+            shown(prefix),
+            bounds.entries
+        )));
     }
     names.sort();
     for part in names {
@@ -277,7 +362,11 @@ fn descend(directory: &fs::File, prefix: &str, depth: usize, bounds: Bounds, tal
             tally.skip(&format!("{}/{}", prefix, part.to_string_lossy()), "name is not UTF-8");
             continue;
         };
-        let path = if prefix.is_empty() { label.to_owned() } else { format!("{prefix}/{label}") };
+        let path = if prefix.is_empty() {
+            label.to_owned()
+        } else {
+            format!("{prefix}/{label}")
+        };
         if excluded(label) {
             tally.skip(&path, "excluded name");
             continue;
@@ -290,13 +379,26 @@ fn descend(directory: &fs::File, prefix: &str, depth: usize, bounds: Bounds, tal
             Kind::Directory => {
                 let child = open_directory(directory, &part)?;
                 tally.admit(bounds, &path, 0, true)?;
-                visit(&path, Node::Directory { mtime: mtime(&child.metadata()?) })?;
+                visit(
+                    &path,
+                    Node::Directory {
+                        mtime: mtime(&child.metadata()?),
+                    },
+                )?;
                 descend(&child, &path, depth + 1, bounds, tally, visit)?;
             }
             Kind::File => {
                 let (mut file, metadata) = open_file(directory, &part)?;
                 tally.admit(bounds, &path, metadata.len(), false)?;
-                visit(&path, Node::File { file: &mut file, len: metadata.len(), executable: metadata.mode() & 0o111 != 0, mtime: mtime(&metadata) })?;
+                visit(
+                    &path,
+                    Node::File {
+                        file: &mut file,
+                        len: metadata.len(),
+                        executable: metadata.mode() & 0o111 != 0,
+                        mtime: mtime(&metadata),
+                    },
+                )?;
             }
             Kind::Other => tally.skip(&path, "symlink or special file"),
         }
@@ -311,13 +413,31 @@ pub(super) fn scan(root: &Path, from: &str, bounds: Bounds) -> io::Result<Tally>
 /// from its open descriptor with the size checked when it was opened; a file
 /// that shrinks fails the copy, and growth after opening is not copied. On
 /// error the archive is left unterminated so the extractor fails too.
-pub(super) fn stream(root: &Path, transfer: &Transfer, bounds: Bounds, owner: (u32, u32), out: impl Write) -> io::Result<Tally> {
-    let mut tar = Tar { out: io::BufWriter::with_capacity(64 * 1024, out), owner };
+pub(super) fn stream(
+    root: &Path,
+    transfer: &Transfer,
+    bounds: Bounds,
+    owner: (u32, u32),
+    out: impl Write,
+) -> io::Result<Tally> {
+    let mut tar = Tar {
+        out: io::BufWriter::with_capacity(64 * 1024, out),
+        owner,
+    };
     let tally = traverse(root, &transfer.from, bounds, &mut |path, node| {
-        let member = if path.is_empty() { transfer.to.clone() } else { format!("{}/{path}", transfer.to) };
+        let member = if path.is_empty() {
+            transfer.to.clone()
+        } else {
+            format!("{}/{path}", transfer.to)
+        };
         match node {
             Node::Directory { mtime } => tar.header(&format!("{member}/"), b'5', 0o755, 0, mtime),
-            Node::File { file, len, executable, mtime } => {
+            Node::File {
+                file,
+                len,
+                executable,
+                mtime,
+            } => {
                 tar.header(&member, b'0', if executable { 0o755 } else { 0o644 }, len, mtime)?;
                 let copied = io::copy(&mut io::Read::take(file, len), &mut tar.out)?;
                 if copied != len {
@@ -395,13 +515,37 @@ fn pax_record(key: &str, value: &str) -> String {
 /// Admits a copy after checking the source against its bounds outside the
 /// state lock. A retried identity returns its recorded outcome without
 /// reading the workspace again.
-pub(super) fn request(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, node: &NodeId, input: Input) -> io::Result<Value> {
+pub(super) fn request(
+    shared: &Arc<Mutex<State>>,
+    attempt: &AttemptRef<'_>,
+    node: &NodeId,
+    input: Input,
+) -> io::Result<Value> {
     let wait = commands::wait_bound(input.wait_seconds)?;
     let service_id = input.service_id.clone();
-    let admitted = request_with(shared, attempt, node, input, |generation| crate::runtime::workspace(generation).map_err(fail), crate::storage::save)?;
+    let admitted = request_with(
+        shared,
+        attempt,
+        node,
+        input,
+        |generation| crate::runtime::workspace(generation).map_err(fail),
+        crate::storage::save,
+    )?;
     let execution_id = admitted["execution_id"].as_str().unwrap_or_default().to_owned();
-    let waiter = commands::Waiter { run: attempt.run, generation: attempt.generation, node, service_id: &service_id };
-    Ok(commands::settle(shared, waiter, &execution_id, admitted, wait, &crate::shutdown::token()))
+    let waiter = commands::Waiter {
+        run: attempt.run,
+        generation: attempt.generation,
+        node,
+        service_id: &service_id,
+    };
+    Ok(commands::settle(
+        shared,
+        waiter,
+        &execution_id,
+        admitted,
+        wait,
+        &crate::shutdown::token(),
+    ))
 }
 pub(super) fn request_with(
     shared: &Arc<Mutex<State>>,
@@ -451,17 +595,38 @@ pub(super) struct Job {
     outcome: Arc<Mutex<Option<io::Result<Tally>>>>,
 }
 impl Job {
-    pub(super) fn prepare(shared: &Arc<Mutex<State>>, service: &Service, run: &str, attempt: &str, transfer: &Transfer) -> io::Result<Self> {
-        if !shared.lock().is_ok_and(|state| commands::live_attempt(&state, run, attempt)) {
+    pub(super) fn prepare(
+        shared: &Arc<Mutex<State>>,
+        service: &Service,
+        run: &str,
+        attempt: &str,
+        transfer: &Transfer,
+    ) -> io::Result<Self> {
+        if !shared
+            .lock()
+            .is_ok_and(|state| commands::live_attempt(&state, run, attempt))
+        {
             return Err(fail("the requesting attempt ended before the copy started"));
         }
         let root = crate::runtime::workspace(attempt).map_err(fail)?;
         let bounds = bounds().for_service(service);
         scan(&root, &transfer.from, bounds)?;
-        Ok(Self { root, transfer: transfer.clone(), bounds, owner: (service.uid.get(), service.gid), outcome: Default::default() })
+        Ok(Self {
+            root,
+            transfer: transfer.clone(),
+            bounds,
+            owner: (service.uid.get(), service.gid),
+            outcome: Default::default(),
+        })
     }
     pub(super) fn feed(&self) -> commands::Feed {
-        let (root, transfer, bounds, owner, outcome) = (self.root.clone(), self.transfer.clone(), self.bounds, self.owner, self.outcome.clone());
+        let (root, transfer, bounds, owner, outcome) = (
+            self.root.clone(),
+            self.transfer.clone(),
+            self.bounds,
+            self.owner,
+            self.outcome.clone(),
+        );
         Box::new(move |stdin| {
             let result = stream(&root, &transfer, bounds, owner, stdin);
             if let Ok(mut slot) = outcome.lock() {
@@ -473,7 +638,11 @@ impl Job {
     /// `None` when nothing was streamed.
     pub(super) fn outcome(&self) -> Option<Result<String, String>> {
         let result = self.outcome.lock().ok()?.take()?;
-        Some(result.map(|tally| tally.report(&self.transfer)).map_err(|error| error.to_string()))
+        Some(
+            result
+                .map(|tally| tally.report(&self.transfer))
+                .map_err(|error| error.to_string()),
+        )
     }
 }
 

@@ -1,4 +1,3 @@
-
 use super::*;
 use std::process::Command;
 #[test]
@@ -47,16 +46,10 @@ fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering(
             assert_eq!(chat.activity_order, *order);
         }
         let detail = crate::chat::detail(&state, &parent).unwrap();
-        assert_eq!(
-            detail["agent_activity"][0]["activity"]["output"],
-            "first <progress>\n"
-        );
+        assert_eq!(detail["agent_activity"][0]["activity"]["output"], "first <progress>\n");
         let html = crate::chat::transcript(&state, &parent).unwrap();
         assert!(html.contains("first &lt;progress&gt;"));
-        assert!(
-            html.contains("printf &#39;&lt;progress&gt;&#39;")
-                || html.contains("printf '&lt;progress&gt;'")
-        );
+        assert!(html.contains("printf &#39;&lt;progress&gt;&#39;") || html.contains("printf '&lt;progress&gt;'"));
         assert!(
             !crate::chat::transcript(&state, &unrelated)
                 .unwrap()
@@ -86,7 +79,11 @@ fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering(
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&*state).unwrap()).unwrap();
     let event = activity(&restored, &run).next().unwrap();
     assert_eq!(event.text, "printf '<progress>'");
-    assert_eq!(finished(&restored).next().unwrap().command, "printf '<progress>'", "pathology compares the command text");
+    assert_eq!(
+        finished(&restored).next().unwrap().command,
+        "printf '<progress>'",
+        "pathology compares the command text"
+    );
     assert_eq!(event.status, "completed");
     assert!(event.output.contains("second\n\nExit 0"));
     assert!(activity(&restored, "other-run").next().is_none());
@@ -249,27 +246,15 @@ fn receipt_pruning_never_discards_live_attempt_identity() {
     }
     let before = serde_json::to_vec(&state).unwrap();
     assert!(
-        admit(
-            &mut state,
-            &run,
-            "attempt-a",
-            "next",
-            &node,
-            input(&id, "true"),
-            |_| Err(fail("disk full"))
-        )
+        admit(&mut state, &run, "attempt-a", "next", &node, input(&id, "true"), |_| {
+            Err(fail("disk full"))
+        })
         .is_err()
     );
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    admit(
-        &mut state,
-        &run,
-        "attempt-a",
-        "next",
-        &node,
-        input(&id, "true"),
-        |_| Ok(()),
-    )
+    admit(&mut state, &run, "attempt-a", "next", &node, input(&id, "true"), |_| {
+        Ok(())
+    })
     .unwrap();
     assert_eq!(state.services[0].command_receipts.len(), 1);
     assert_eq!(state.services[0].command_receipts[0].run, run);
@@ -382,28 +367,21 @@ fn restart_never_replays_uncertain_execution_and_save_failure_rolls_back() {
     let shared = Arc::new(Mutex::new(state));
     let before = serde_json::to_vec(&*shared.lock().unwrap()).unwrap();
     assert!(recover(&shared, |_| Err(fail("disk full"))).is_err());
-    assert_eq!(
-        serde_json::to_vec(&*shared.lock().unwrap()).unwrap(),
-        before
-    );
+    assert_eq!(serde_json::to_vec(&*shared.lock().unwrap()).unwrap(), before);
     recover(&shared, |_| Ok(())).unwrap();
-    let restored: State =
-        serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
-    assert!(matches!(
-        restored.services[0].resource.phase,
-        Phase::Stopping { .. }
-    ));
-    assert_eq!(
-        restored.services[0].executions[0].status,
-        Status::Interrupted
-    );
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
+    assert!(matches!(restored.services[0].resource.phase, Phase::Stopping { .. }));
+    assert_eq!(restored.services[0].executions[0].status, Status::Interrupted);
     assert!(restored.services[0].executions[0].command.is_empty());
     recover(&shared, |_| panic!("Recovery must not repeat")).unwrap();
 }
 #[test]
 fn capture_drains_large_output_without_unbounded_retention() {
     let mut command = Command::new("sh");
-    command.args(["-c", "printf 'early\\n'; head -c 100000 /dev/zero | tr '\\0' x; printf '\\nlate\\n'; exit 7"]);
+    command.args([
+        "-c",
+        "printf 'early\\n'; head -c 100000 /dev/zero | tr '\\0' x; printf '\\nlate\\n'; exit 7",
+    ]);
     let result = capture(started(command), Duration::from_secs(5), || false, |_| {}).unwrap();
     assert_eq!(result.exit_code, Some(7));
     assert!(result.output.truncated);
@@ -411,10 +389,16 @@ fn capture_drains_large_output_without_unbounded_retention() {
     assert_eq!((result.output.bytes.len(), result.output.tail.len()), (HEAD, TAIL));
     let text = result.output.text();
     assert!(text.len() <= OUTPUT, "{}", text.len());
-    assert!(text.starts_with("early\n") && text.ends_with("\nlate\n"), "both ends survive");
+    assert!(
+        text.starts_with("early\n") && text.ends_with("\nlate\n"),
+        "both ends survive"
+    );
     let omitted = 100_000 + "early\n\nlate\n".len() - HEAD - TAIL;
     assert_eq!(text.matches("bytes omitted").count(), 1);
-    assert!(text.contains(&format!("\n[… {omitted} bytes omitted …]\n")), "one marker counts the gap");
+    assert!(
+        text.contains(&format!("\n[… {omitted} bytes omitted …]\n")),
+        "one marker counts the gap"
+    );
     let mut command = Command::new("sh");
     command.args(["-c", "exec sleep 10"]);
     let start = Instant::now();
@@ -445,11 +429,7 @@ fn a_command_that_outlives_its_client_is_reaped_with_detached_descendants() {
                 "-c",
                 &format!(
                     "{}\nmembers | wc -l",
-                    reap_script(id)
-                        .lines()
-                        .take(2)
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    reap_script(id).lines().take(2).collect::<Vec<_>>().join("\n")
                 ),
             ])
             .output()
@@ -478,11 +458,7 @@ fn a_command_that_outlives_its_client_is_reaped_with_detached_descendants() {
             .unwrap()
             .success()
     );
-    assert_eq!(
-        count(&id),
-        0,
-        "every marked process is gone, setsid included"
-    );
+    assert_eq!(count(&id), 0, "every marked process is gone, setsid included");
     assert_eq!(count(&other), 1, "another execution is untouched");
     bystander.kill().unwrap();
     let _ = bystander.wait();
@@ -540,10 +516,7 @@ fn shutdown_interrupts_capture_without_spinning_or_waiting_for_the_deadline() {
 #[test]
 fn capture_publishes_output_before_command_exit() {
     let mut command = Command::new("sh");
-    command.args([
-        "-c",
-        "printf 'early output\\n'; sleep 1; printf 'final output\\n'",
-    ]);
+    command.args(["-c", "printf 'early output\\n'; sleep 1; printf 'final output\\n'"]);
     let samples = Mutex::new(Vec::new());
     let result = capture(
         started(command),
@@ -569,7 +542,16 @@ fn capture_publishes_output_before_command_exit() {
 fn agent_status_omits_node_capacity_and_other_chats_executions() {
     let (mut state, run, node, id) = fixture();
     for n in 0..14 {
-        admit(&mut state, &run, "attempt-a", &format!("command-{n}"), &node, input(&id, "echo test"), |_| Ok(())).unwrap();
+        admit(
+            &mut state,
+            &run,
+            "attempt-a",
+            &format!("command-{n}"),
+            &node,
+            input(&id, "echo test"),
+            |_| Ok(()),
+        )
+        .unwrap();
     }
     for execution in &mut state.services[0].executions[..4] {
         execution.run = "another-run".into();
@@ -583,25 +565,46 @@ fn agent_status_omits_node_capacity_and_other_chats_executions() {
     state.watches.push(serde_json::from_value(json!({"id":"watch-a","name":"log","chat":"c","service":id,"generation":generation,"permanent":false,"command":"tail -f log","stopped":false})).unwrap());
     let owned = |_: &&Service| true;
     // The former result: every summary field, every caller's executions, node capacity.
-    let before = json!({"compute":super::super::compute::status(&state.services),"services":[state.services[0].summary()]}).to_string();
+    let before =
+        json!({"compute":super::super::compute::status(&state.services),"services":[state.services[0].summary()]})
+            .to_string();
     let listed = super::super::listing(&state, owned, &run, false);
     let after = listed.to_string();
     let service = &listed["services"][0];
     assert!(listed.get("compute").is_none(), "{after}");
-    assert_eq!(service["executions"].as_array().unwrap().len(), super::super::OWN_EXECUTIONS);
+    assert_eq!(
+        service["executions"].as_array().unwrap().len(),
+        super::super::OWN_EXECUTIONS
+    );
     assert_eq!(service["older_executions"], 2);
     assert_eq!(service["other_chats_executions"], 4);
-    assert_eq!(service["watches"], json!([{"watch_id":"watch-a","name":"log","active":true}]));
+    assert_eq!(
+        service["watches"],
+        json!([{"watch_id":"watch-a","name":"log","active":true}])
+    );
     assert_eq!(service["workspace"], "/workspace (retained volume)");
     assert_eq!(service["phase"], "Running");
     for gone in ["scope", "storage", "diagnostic", "output", "exit_code"] {
         assert!(service.get(gone).is_none(), "{gone}: {after}");
     }
-    for kept in ["service_id", "phase", "platform", "limits", "pids_limit", "expires_unix", "workspace_executable"] {
+    for kept in [
+        "service_id",
+        "phase",
+        "platform",
+        "limits",
+        "pids_limit",
+        "expires_unix",
+        "workspace_executable",
+    ] {
         assert!(service.get(kept).is_some(), "{kept}: {after}");
     }
     eprintln!("service status bytes: before {} after {}", before.len(), after.len());
-    assert!(before.len() > 1800 && after.len() * 2 < before.len(), "before {} after {}", before.len(), after.len());
+    assert!(
+        before.len() > 1800 && after.len() * 2 < before.len(),
+        "before {} after {}",
+        before.len(),
+        after.len()
+    );
     // Operators and capacity planning still get everything on request.
     let full = super::super::listing(&state, owned, &run, true);
     assert_eq!(full["compute"], super::super::compute::status(&state.services));
@@ -612,14 +615,14 @@ fn agent_status_omits_node_capacity_and_other_chats_executions() {
     assert_eq!(other["executions"].as_array().unwrap().len(), 4);
     assert_eq!(other["other_chats_executions"], 10);
 }
-#[path = "tests/dispatch_profile.rs"]
-mod dispatch_profile;
 #[path = "tests/concurrency.rs"]
 mod concurrency;
-#[path = "tests/wait.rs"]
-mod wait;
+#[path = "tests/dispatch_profile.rs"]
+mod dispatch_profile;
 #[path = "tests/live_latency.rs"]
 mod live_latency;
+#[path = "tests/wait.rs"]
+mod wait;
 fn started(mut command: Command) -> impl FnOnce(Streams) -> io::Result<Child> {
     move |streams| streams.apply(&mut command).spawn()
 }

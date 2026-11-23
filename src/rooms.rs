@@ -1,7 +1,7 @@
 //! Shared room messages are data, never commands or authority grants.
-use crate::{escape, State};
+use crate::{State, escape};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{Read, Write},
@@ -11,13 +11,15 @@ use std::{
 pub const NAMES: [&str; 3] = ["general", "engineering", "research"];
 mod address;
 pub(crate) mod claims;
-pub(crate) mod plan;
 #[path = "../tools/mailbox-limits.rs"]
 mod mailbox_limits;
+pub(crate) mod plan;
 pub(crate) use address::{for_task, names, team_room};
 mod notifications;
 pub use notifications::{Watch, reconcile};
-pub(crate) use notifications::{continuation_leaf, ensure_inbox, inbox_cursor, start_at_edge, processed, listen, listener_status, listening};
+pub(crate) use notifications::{
+    continuation_leaf, ensure_inbox, inbox_cursor, listen, listener_status, listening, processed, start_at_edge,
+};
 pub fn valid(room: &str) -> bool {
     address::Address::parse(room).is_some()
 }
@@ -51,7 +53,12 @@ pub fn read(state: &State, room: &str) -> Value {
         "chats":state.chats.iter().zip(crate::callsigns::all(&state.chats)).rev().filter(|(c, _)| c.room.as_deref()==Some(room)).take(50).map(|(c, callsign)|json!({"id":c.id,"title":crate::callsigns::label(c, callsign)})).collect::<Vec<_>>()});
     // Members find their team's approved advisor here: it is for asking, not
     // coordination, and is not itself linked to the room.
-    if let Some(advisor) = state.chats.iter().filter(|c| c.room.as_deref() == Some(room)).find_map(|c| state.bots.team_advisor(&c.id)) {
+    if let Some(advisor) = state
+        .chats
+        .iter()
+        .filter(|c| c.room.as_deref() == Some(room))
+        .find_map(|c| state.bots.team_advisor(&c.id))
+    {
         read["advisor"] = json!({"id":advisor,"ask":"read-only; ask it about your method with control_agent_message"});
     }
     read
@@ -60,10 +67,7 @@ pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'stat
     if name == "control.rooms.list" {
         return Ok(json!(names(state)));
     }
-    let room = args["room"]
-        .as_str()
-        .filter(|r| valid(r))
-        .ok_or("Unknown room.")?;
+    let room = args["room"].as_str().filter(|r| valid(r)).ok_or("Unknown room.")?;
     match name {
         "control.room.read" => Ok(read(state, room)),
         "control.room.post" => {
@@ -88,14 +92,18 @@ pub fn render(state: &State, room: &str) -> String {
     let room = if valid(room) { room } else { "general" };
     let label = escape(&address::label(state, room));
     let channel = address::Address::parse(room).unwrap().channel;
-    let mut html = String::from("<div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'><ul class='room-channels'>");
+    let mut html = String::from(
+        "<div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'><ul class='room-channels'>",
+    );
     let rooms = names(state);
     for channel in NAMES {
         let current = if channel == room { " aria-current='page'" } else { "" };
         html.push_str(&format!("<li class='room-channel'><a href='/?view=rooms&amp;channel={channel}'{current}><span class='room-name'>#{channel}</span></a>"));
-        let threads = rooms.iter().filter_map(|name| address::Address::parse(name)
-            .filter(|address| address.channel == channel)
-            .and_then(|address| address.thread.map(|thread| (name, thread))));
+        let threads = rooms.iter().filter_map(|name| {
+            address::Address::parse(name)
+                .filter(|address| address.channel == channel)
+                .and_then(|address| address.thread.map(|thread| (name, thread)))
+        });
         let mut has_threads = false;
         for (name, thread) in threads {
             if !has_threads {
@@ -106,13 +114,17 @@ pub fn render(state: &State, room: &str) -> String {
             let current = if name == room { " aria-current='page'" } else { "" };
             html.push_str(&format!("<li><a href='/?view=rooms&amp;channel={name}'{current} title='{}'><span class='room-thread-icon' aria-hidden='true'>↳</span><span class='room-name'>{}</span></a></li>", escape(&format!("#{channel} · {title}")), escape(&title)));
         }
-        if has_threads { html.push_str("</ul>"); }
+        if has_threads {
+            html.push_str("</ul>");
+        }
         html.push_str("</li>");
     }
     html.push_str(&format!("</ul></nav></aside><section class='room-conversation' aria-label='{label}'><div class='room-heading'><h2 title='{label}'>{label}</h2><p class='muted'>Shared updates from people and agents in this room or task thread.</p></div><div class='room-feed transcript' role='region' aria-label='Room messages' tabindex='0'>"));
     let data = read(state, room);
     if data["posts"].as_array().unwrap().is_empty() {
-        html.push_str("<div class='conversation-empty'><p class='muted'>No updates yet. Start the conversation.</p></div>");
+        html.push_str(
+            "<div class='conversation-empty'><p class='muted'>No updates yet. Start the conversation.</p></div>",
+        );
     }
     for post in data["posts"].as_array().unwrap().iter().rev() {
         html.push_str(&format!(
@@ -128,13 +140,27 @@ pub fn render(state: &State, room: &str) -> String {
     html.push_str(&format!("</div><form class='conversation-composer' method='post' action='/room'><input type='hidden' name='channel' value='{room}'><textarea name='message' aria-label='Shared update' placeholder='Message {label}…' required maxlength='2000' rows='3'></textarea><div class='composer-footer'><span class='muted'>Shared update</span><button class='send-message' aria-label='Post update'>↑</button></div></form></section><aside class='room-details' aria-label='Room details'><h2>Active participants</h2><ul class='room-participants'>"));
     let mut active = std::collections::HashSet::new();
     let mut activity = std::collections::HashMap::new();
-    for run in state.runtime.runs.iter().rev().filter(|run| matches!(run.status.as_str(), "running" | "queued" | "waiting")) {
+    for run in state
+        .runtime
+        .runs
+        .iter()
+        .rev()
+        .filter(|run| matches!(run.status.as_str(), "running" | "queued" | "waiting"))
+    {
         if let Some(chat) = run.chat_id.as_deref() {
             activity.entry(chat).or_insert(run.status.as_str());
         }
     }
-    for chat in state.chats.iter().rev().filter(|chat| chat.room.as_deref() == Some(room)) {
-        let status = activity.get(chat.id.as_str()).copied().or_else(|| listening(state, &chat.id).then_some("listening"));
+    for chat in state
+        .chats
+        .iter()
+        .rev()
+        .filter(|chat| chat.room.as_deref() == Some(room))
+    {
+        let status = activity
+            .get(chat.id.as_str())
+            .copied()
+            .or_else(|| listening(state, &chat.id).then_some("listening"));
         if let Some(status) = status {
             active.insert(chat.id.as_str());
             html.push_str(&format!("<li><a href='/dm/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(&chat.id), escape(&crate::callsigns::name_or_id(&state.chats, &chat.id))));
@@ -149,7 +175,11 @@ pub fn render(state: &State, room: &str) -> String {
         let id = chat["id"].as_str().unwrap();
         if !active.contains(id) {
             linked += 1;
-            html.push_str(&format!("<a href='/dm/{}'>{} ↗</a>", escape(id), escape(chat["title"].as_str().unwrap())));
+            html.push_str(&format!(
+                "<a href='/dm/{}'>{} ↗</a>",
+                escape(id),
+                escape(chat["title"].as_str().unwrap())
+            ));
         }
     }
     if linked == 0 {
@@ -208,19 +238,33 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
         let attached = address::default_room(state, &chat.id);
         let args = &req["params"]["arguments"];
         // Prompts render rooms as #name, so a leading # names the same room.
-        let room = || -> Result<String, std::borrow::Cow<'static, str>> { match args.get("room").and_then(Value::as_str).map(|room| room.strip_prefix('#').unwrap_or(room)) {
-            Some(room) if valid(room) => Ok(address::for_worker(state, &chat.id, room)?),
-            // Name the team room instead of silently redirecting a mistaken name.
-            Some(room) => Err(match &attached {
-                Some(team) => format!("Unknown room {}. This chat's team room is {team}; omit room to use it.", room.chars().take(64).collect::<String>()).into(),
-                None => "Unknown room. Call control_room_list.".into(),
-            }),
-            None => attached.clone().ok_or_else(|| "No room attached. Call control_room_list and pass room.".into()),
-        } };
+        let room = || -> Result<String, std::borrow::Cow<'static, str>> {
+            match args
+                .get("room")
+                .and_then(Value::as_str)
+                .map(|room| room.strip_prefix('#').unwrap_or(room))
+            {
+                Some(room) if valid(room) => Ok(address::for_worker(state, &chat.id, room)?),
+                // Name the team room instead of silently redirecting a mistaken name.
+                Some(room) => Err(match &attached {
+                    Some(team) => format!(
+                        "Unknown room {}. This chat's team room is {team}; omit room to use it.",
+                        room.chars().take(64).collect::<String>()
+                    )
+                    .into(),
+                    None => "Unknown room. Call control_room_list.".into(),
+                }),
+                None => attached
+                    .clone()
+                    .ok_or_else(|| "No room attached. Call control_room_list and pass room.".into()),
+            }
+        };
         match control_mcp::method(req) {
             control_mcp::Method::Initialize => Ok(control_mcp::initialize(control_mcp::LATEST, "control-room", "0.1")),
             control_mcp::Method::Ping => Ok(json!({})),
-            control_mcp::Method::ToolsList => Ok(control_mcp::tools(worker_definitions(crate::delegation::is_judge(run)))),
+            control_mcp::Method::ToolsList => {
+                Ok(control_mcp::tools(worker_definitions(crate::delegation::is_judge(run))))
+            }
             control_mcp::Method::ToolsCall => {
                 let name = req["params"]["name"].as_str().unwrap_or("");
                 let value = match name {
@@ -232,11 +276,14 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                                 "chats":state.chats.iter().filter(|c| c.room.as_deref() == Some(resolved.as_str())).count()}))
                         }).collect::<Result<Vec<_>, &'static str>>()?;
                         json!({"attached":attached,"rooms":rooms})
-                    },
+                    }
                     "control_room_read" => {
                         let mut value = read(state, &room()?);
                         // Compaction drops an echoed room and empty lists; say so instead of `{}`.
-                        if ["posts", "claims", "chats"].iter().all(|key| value[key].as_array().is_none_or(Vec::is_empty)) {
+                        if ["posts", "claims", "chats"]
+                            .iter()
+                            .all(|key| value[key].as_array().is_none_or(Vec::is_empty))
+                        {
                             value["note"] = json!("No posts, claims or linked chats in this room yet.");
                         }
                         value
@@ -253,40 +300,54 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                     "control_room_watch" | "control_room_notifications" | "control_room_ack" => {
                         let run = run.id.clone();
                         return notifications::call(state, &run, name, &req["params"]["arguments"])
-                            .map(|value| control_mcp::text(&value.to_string())).map_err(Into::into);
-                    },
+                            .map(|value| control_mcp::text(&value.to_string()))
+                            .map_err(Into::into);
+                    }
                     "control_room_post" => {
                         let room = room()?;
-                        let delivery = args.get("delivery").map(|value| serde_json::from_value::<Delivery>(value.clone()))
-                            .transpose().map_err(|_| "Expected delivery=record or notify.")?.unwrap_or_default();
+                        let delivery = args
+                            .get("delivery")
+                            .map(|value| serde_json::from_value::<Delivery>(value.clone()))
+                            .transpose()
+                            .map_err(|_| "Expected delivery=record or notify.")?
+                            .unwrap_or_default();
                         // An advisor's one output is a note to the member a fact is about
                         // or to the lead. It never posts to rooms.
                         if crate::delegation::is_judge(run) && state.bots.advises(&chat.id) {
                             return Err("An advisor does not post to rooms; send the member or lead concerned a note with control_agent_message.".into());
                         }
-                        let text = args["message"]
-                            .as_str()
-                            .unwrap_or("")
-                            .trim();
+                        let text = args["message"].as_str().unwrap_or("").trim();
                         if text.is_empty() || text.chars().count() > 2000 {
                             return Err("Enter 1–2000 characters.".into());
                         }
                         let nonce = envelope["nonce"]
                             .as_str()
-                            .filter(|s| {
-                                s.len() <= 100 && s.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                            })
+                            .filter(|s| s.len() <= 100 && s.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
                             .ok_or("Invalid request nonce.")?;
-                        let (key, text, chat, run) = (format!("{}:{nonce}", run.id), text.to_owned(), chat.id.clone(), run.id.clone());
+                        let (key, text, chat, run) = (
+                            format!("{}:{nonce}", run.id),
+                            text.to_owned(),
+                            chat.id.clone(),
+                            run.id.clone(),
+                        );
                         if !linked {
                             state.chats[chat_index].room = Some(room.clone());
-                            if let Err(error) = start_at_edge(state, &chat).and_then(|()| crate::bots::link_room(state, &chat, &room)) {
+                            if let Err(error) =
+                                start_at_edge(state, &chat).and_then(|()| crate::bots::link_room(state, &chat, &room))
+                            {
                                 state.chats[chat_index].room = None;
                                 return Err(error.into());
                             }
                         }
                         if !state.collective.posts.iter().any(|p| p.key == key) {
-                            state.collective.posts.push(Post { room: room.clone(), text, chat: Some(chat), run: Some(run), key: key.clone(), delivery });
+                            state.collective.posts.push(Post {
+                                room: room.clone(),
+                                text,
+                                chat: Some(chat),
+                                run: Some(run),
+                                key: key.clone(),
+                                delivery,
+                            });
                         }
                         let stored = state.collective.posts.iter().find(|p| p.key == key).unwrap();
                         json!({"posted":true,"room":room,"delivery":stored.delivery})
@@ -316,29 +377,55 @@ pub fn checkpoint(
         return worker_rpc(state, run_id, envelope);
     };
     let chat = state.runtime.runs[run_index].chat_id.as_deref();
-    let previous = state.collective.room_watches.iter().position(|watch| Some(watch.chat.as_str()) == chat)
+    let previous = state
+        .collective
+        .room_watches
+        .iter()
+        .position(|watch| Some(watch.chat.as_str()) == chat)
         .map(|index| (index, state.collective.room_watches[index].clone()));
     let budget = state.runtime.runs[run_index].room_wake_used;
-    let linked = state.chats.iter().position(|c| Some(c.id.as_str()) == chat).map(|index| (index, state.chats[index].room.clone()));
+    let linked = state
+        .chats
+        .iter()
+        .position(|c| Some(c.id.as_str()) == chat)
+        .map(|index| (index, state.chats[index].room.clone()));
     let claiming = envelope["request"]["params"]["name"] == "control_room_claim";
     let claims = claiming.then(|| (state.collective.claims.clone(), state.collective.claim_seq));
     let bots = (claiming || linked.as_ref().is_some_and(|(_, room)| room.is_none())).then(|| state.bots.clone());
-    let continuity = linked.as_ref().map(|(i, _)| (state.chats[*i].continuity.clone(), state.chats[*i].revision));
-    let mailbox = state.runtime.runs[run_index].attempts.last().map(|a| a.turn_mailbox.clone());
+    let continuity = linked
+        .as_ref()
+        .map(|(i, _)| (state.chats[*i].continuity.clone(), state.chats[*i].revision));
+    let mailbox = state.runtime.runs[run_index]
+        .attempts
+        .last()
+        .map(|a| a.turn_mailbox.clone());
     let response = worker_rpc(state, run_id, envelope);
-    let current = state.collective.room_watches.iter().position(|watch| Some(watch.chat.as_str()) == state.runtime.runs[run_index].chat_id.as_deref());
-    let changed = state.collective.posts.len() != post_count || budget != state.runtime.runs[run_index].room_wake_used
+    let current = state
+        .collective
+        .room_watches
+        .iter()
+        .position(|watch| Some(watch.chat.as_str()) == state.runtime.runs[run_index].chat_id.as_deref());
+    let changed = state.collective.posts.len() != post_count
+        || budget != state.runtime.runs[run_index].room_wake_used
         || previous.as_ref().map(|(_, watch)| watch) != current.map(|index| &state.collective.room_watches[index])
-        || linked.as_ref().is_some_and(|(index, room)| &state.chats[*index].room != room)
-        || claims.as_ref().is_some_and(|(_, seq)| *seq != state.collective.claim_seq);
+        || linked
+            .as_ref()
+            .is_some_and(|(index, room)| &state.chats[*index].room != room)
+        || claims
+            .as_ref()
+            .is_some_and(|(_, seq)| *seq != state.collective.claim_seq);
     if changed && save(state).is_err() {
         state.collective.posts.truncate(post_count);
         if let Some((claims, seq)) = claims {
             (state.collective.claims, state.collective.claim_seq) = (claims, seq);
         }
         state.runtime.runs[run_index].room_wake_used = budget;
-        if let Some(index) = current { state.collective.room_watches.remove(index); }
-        if let Some((index, watch)) = previous { state.collective.room_watches.insert(index, watch); }
+        if let Some(index) = current {
+            state.collective.room_watches.remove(index);
+        }
+        if let Some((index, watch)) = previous {
+            state.collective.room_watches.insert(index, watch);
+        }
         if let Some((index, room)) = linked {
             state.chats[index].room = room;
             if let Some((continuity, revision)) = continuity {
@@ -346,8 +433,12 @@ pub fn checkpoint(
                 state.chats[index].revision = revision;
             }
         }
-        if let Some(mailbox) = mailbox { state.runtime.runs[run_index].attempts.last_mut().unwrap().turn_mailbox = mailbox; }
-        if let Some(bots) = bots { state.bots = bots; }
+        if let Some(mailbox) = mailbox {
+            state.runtime.runs[run_index].attempts.last_mut().unwrap().turn_mailbox = mailbox;
+        }
+        if let Some(bots) = bots {
+            state.bots = bots;
+        }
         return control_mcp::tool_error(&envelope["request"]["id"], "Could not save room update. Try again.");
     }
     response
@@ -357,15 +448,13 @@ pub fn checkpoint(
 pub(crate) fn read_request(path: &Path) -> std::io::Result<Value> {
     use std::os::unix::fs::OpenOptionsExt;
     let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags)
-        .open(path)?;
+    let file = fs::OpenOptions::new().read(true).custom_flags(flags).open(path)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other("Not a regular request"));
     }
     let mut bytes = Vec::new();
-    file.take(mailbox_limits::REQUEST_ENVELOPE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+    file.take(mailbox_limits::REQUEST_ENVELOPE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
     if bytes.len() > mailbox_limits::REQUEST_ENVELOPE_BYTES {
         return Err(std::io::Error::other("Request too large"));
     }
@@ -374,8 +463,13 @@ pub(crate) fn read_request(path: &Path) -> std::io::Result<Value> {
 /// Claim a delivery before running its effect. A slow tool must not delete the
 /// next request when replying after the bridge has moved on.
 pub(crate) fn take_request(workspace: &Path) -> std::io::Result<Value> {
-    let claimed = workspace.join(format!(".control-room-processing-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let claimed = workspace.join(format!(
+        ".control-room-processing-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     fs::rename(workspace.join(".control-room-request"), &claimed)?;
     let result = read_request(&claimed);
     let _ = fs::remove_file(claimed);
@@ -390,11 +484,7 @@ pub(crate) fn reply(workspace: &Path, response: &Value) {
             .unwrap()
             .as_nanos()
     ));
-    let Ok(mut file) = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-    else {
+    let Ok(mut file) = fs::OpenOptions::new().write(true).create_new(true).open(&temp) else {
         return;
     };
     if file.write_all(response.to_string().as_bytes()).is_ok() {

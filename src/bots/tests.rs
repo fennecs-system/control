@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -47,8 +46,19 @@ fn reject_handoff(state: &mut State, index: usize, error: &str) {
     let run = &state.runtime.runs[index];
     let generation = run.attempts.last().unwrap().workspace_id.clone().unwrap();
     let chat = run.chat_id.clone().unwrap();
-    state.chats.iter_mut().find(|c| c.id == chat).unwrap().continuity.as_mut().unwrap().checkpointing.rejected =
-        Some(crate::turn_context::Rejection { generation, error: error.into() });
+    state
+        .chats
+        .iter_mut()
+        .find(|c| c.id == chat)
+        .unwrap()
+        .continuity
+        .as_mut()
+        .unwrap()
+        .checkpointing
+        .rejected = Some(crate::turn_context::Rejection {
+        generation,
+        error: error.into(),
+    });
 }
 fn post(state: &mut State, chat: Option<&str>, text: &str) {
     state.collective.posts.push(crate::rooms::Post {
@@ -62,25 +72,24 @@ fn post(state: &mut State, chat: Option<&str>, text: &str) {
 }
 #[test]
 fn model_selection_does_not_wake_a_bot_but_is_captured_on_its_next_callback() {
-    let (mut state,chat)=fixture();
-    state.runtime.models.push(crate::providers::Model::captured(crate::backend::Backend::Claude,"reviewer".into()));
-    crate::chat::send(&mut state,&chat,"/model claude:reviewer","test").unwrap();
-    assert_eq!(state.runtime.runs.len(),1);
-    command_at(&mut state,&chat,"on",Now(0)).unwrap();
-    peer_message_at(&mut state,&chat,1,Now(1));
-    reconcile_at(&mut state,2,|_|Ok(())).unwrap();
-    let runs=bot_runs(&state);assert_eq!(runs.len(),1);
-    assert_eq!(runs[0].backend,crate::backend::Backend::Claude);
-    assert_eq!(runs[0].model.as_deref(),Some("reviewer"));
-    assert_eq!(state.runtime.runs[0].backend,crate::backend::Backend::Codex);
+    let (mut state, chat) = fixture();
+    state.runtime.models.push(crate::providers::Model::captured(
+        crate::backend::Backend::Claude,
+        "reviewer".into(),
+    ));
+    crate::chat::send(&mut state, &chat, "/model claude:reviewer", "test").unwrap();
+    assert_eq!(state.runtime.runs.len(), 1);
+    command_at(&mut state, &chat, "on", Now(0)).unwrap();
+    peer_message_at(&mut state, &chat, 1, Now(1));
+    reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
+    let runs = bot_runs(&state);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].backend, crate::backend::Backend::Claude);
+    assert_eq!(runs[0].model.as_deref(), Some("reviewer"));
+    assert_eq!(state.runtime.runs[0].backend, crate::backend::Backend::Codex);
 }
 fn bot_runs(state: &State) -> Vec<&crate::runtime::Run> {
-    state
-        .runtime
-        .runs
-        .iter()
-        .filter(|run| run.bot_turn.is_some())
-        .collect()
+    state.runtime.runs.iter().filter(|run| run.bot_turn.is_some()).collect()
 }
 #[test]
 fn targeted_peer_wakes_require_bot_approval_and_share_its_cooldown_and_budget() {
@@ -94,10 +103,7 @@ fn targeted_peer_wakes_require_bot_approval_and_share_its_cooldown_and_budget() 
     command_at(&mut state, &chat, "on", Now(2)).unwrap();
     let mut definition = state.bots.supervisor.definitions().next().unwrap().clone();
     definition.budget.turns_per_window = 1;
-    state
-        .bots
-        .supervisor
-        .step(Event::Define(definition), Now(3));
+    state.bots.supervisor.step(Event::Define(definition), Now(3));
     peer_message_at(&mut state, &chat, 2, Now(4));
     peer_message_at(&mut state, &chat, 3, Now(5));
     reconcile_at(&mut state, 6, |_| Ok(())).unwrap();
@@ -243,10 +249,9 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
     assert!(state.bots.requests.is_empty());
 
     let mut scoped: State = serde_json::from_slice(&previous).unwrap();
-    let grant: crate::services::Grant = serde_json::from_value(
-        json!({"id":"svc-peer","owner":{"node":"node-a","chat":"peer-owner"},"generation":1}),
-    )
-    .unwrap();
+    let grant: crate::services::Grant =
+        serde_json::from_value(json!({"id":"svc-peer","owner":{"node":"node-a","chat":"peer-owner"},"generation":1}))
+            .unwrap();
     scoped.services.push(serde_json::from_value(json!({
             "resource":{"id":"svc-peer","owner":{"node":"node-a","chat":"peer-owner"},"generation":1,
                 "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},"lease":[1,u64::MAX],"phase":"Requested"},
@@ -288,10 +293,7 @@ fn one_shot_wakes_do_not_enable_unattended_continuation() {
     assert!(continuation_enabled(&state, &chat));
     let mut definition = state.bots.supervisor.definitions().next().unwrap().clone();
     definition.restart = Restart::Temporary;
-    state
-        .bots
-        .supervisor
-        .step(Event::Define(definition), Now(1));
+    state.bots.supervisor.step(Event::Define(definition), Now(1));
     assert!(defined(&state, &chat));
     assert!(!continuation_enabled(&state, &chat));
 }
@@ -301,12 +303,7 @@ fn a_new_bot_does_not_receive_another_bots_undrained_backlog() {
     command_at(&mut state, &first, "on", Now(0)).unwrap();
     post(&mut state, None, "Only the first bot was subscribed");
     let second = crate::chat::create(&mut state);
-    state
-        .chats
-        .iter_mut()
-        .find(|c| c.id == second)
-        .unwrap()
-        .room = Some("general".into());
+    state.chats.iter_mut().find(|c| c.id == second).unwrap().room = Some("general".into());
     crate::chat::send(&mut state, &second, "Start a fresh playtest", "test").unwrap();
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     command_at(&mut state, &second, "on", Now(1)).unwrap();
@@ -379,10 +376,7 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
         decision: Decision::Pending,
         acknowledged: false,
     });
-    assert!(
-        !needs_recovery(&state, index),
-        "operator approval is a genuine wait"
-    );
+    assert!(!needs_recovery(&state, index), "operator approval is a genuine wait");
     state.bots.approvals.clear();
     state.runtime.runs[index].spawns.push(serde_json::from_value(json!({"generation":"attempt","nonce":"n","input":{"objectives":["Inspect a dependency"]},"children":[],"notify":true})).unwrap());
     assert!(
@@ -403,10 +397,7 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
         successor.bot_turn.as_ref().unwrap().recovery.as_deref(),
         Some(id.as_str())
     );
-    assert_eq!(
-        successor.bot_turn.as_ref().unwrap().reasons,
-        [Reason::Continue]
-    );
+    assert_eq!(successor.bot_turn.as_ref().unwrap().reasons, [Reason::Continue]);
     let stored = serde_json::to_vec(&state).unwrap();
     let mut recovered: State = serde_json::from_slice(&stored).unwrap();
     reconcile_at(&mut recovered, 41_000, |_| Ok(())).unwrap();
@@ -423,19 +414,18 @@ fn missing_handoff_recovery_is_durable_once_and_never_replays_failed_effects() {
         "newer user input supplies the next writer"
     );
     let mut direct: State = serde_json::from_slice(&before).unwrap();
-    direct.chats[0].continuity.as_mut().unwrap().working =
-        Some(control_context::turn_mailbox::WorkingState {
-            revision: 1,
-            run: direct.runtime.runs[0].id.clone(),
-            generation: "earlier".into(),
-            checkpoint: "published".into(),
-            payload: control_context::working_state::Payload {
-                subgoal: "Earlier goal completed".into(),
-                ..Default::default()
-            },
-            processed: vec![],
-            disposition: control_context::turn_mailbox::Disposition::Done,
-        });
+    direct.chats[0].continuity.as_mut().unwrap().working = Some(control_context::turn_mailbox::WorkingState {
+        revision: 1,
+        run: direct.runtime.runs[0].id.clone(),
+        generation: "earlier".into(),
+        checkpoint: "published".into(),
+        payload: control_context::working_state::Payload {
+            subgoal: "Earlier goal completed".into(),
+            ..Default::default()
+        },
+        processed: vec![],
+        disposition: control_context::turn_mailbox::Disposition::Done,
+    });
     assert!(
         !needs_recovery(&direct, index),
         "a room callback cannot silently reopen a completed goal"
@@ -496,11 +486,7 @@ fn committed_idle_wait_does_not_turn_telemetry_into_constant_restarts() {
     reconcile_at(&mut state, 60_999, |_| Ok(())).unwrap();
     assert!(bot_runs(&state).is_empty());
     reconcile_at(&mut state, 61_000, |_| Ok(())).unwrap();
-    assert_eq!(
-        bot_runs(&state).len(),
-        1,
-        "the bounded recheck preserves liveness"
-    );
+    assert_eq!(bot_runs(&state).len(), 1, "the bounded recheck preserves liveness");
 }
 #[test]
 fn committed_runnable_work_resumes_once_and_failed_saves_retain_the_intent() {
@@ -532,17 +518,16 @@ fn committed_runnable_work_resumes_once_and_failed_saves_retain_the_intent() {
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 1);
-    assert!(
-        bot_runs(&state)[0]
-            .objective
-            .contains("unfinished runnable work")
-    );
+    assert!(bot_runs(&state)[0].objective.contains("unfinished runnable work"));
     assert!(
         bot_runs(&state)[0]
             .objective
             .starts_with("Bot wake: continue the original goal in this active session.")
     );
-    assert!(!bot_runs(&state)[0].objective.contains("room posts"), "a wake without room posts lists none");
+    assert!(
+        !bot_runs(&state)[0].objective.contains("room posts"),
+        "a wake without room posts lists none"
+    );
     let stored = serde_json::to_vec(&state).unwrap();
     let mut recovered: State = serde_json::from_slice(&stored).unwrap();
     recovered.runtime.runs.last_mut().unwrap().status = "completed".into();
@@ -561,10 +546,7 @@ fn room_messages_wake_a_bot_once_and_its_finished_turn_releases_the_next() {
         command(&mut state, &chat, "on"),
         Ok("Bot started. It sleeps until room messages or its timer wake it.")
     );
-    assert_eq!(
-        status(&state, &chat).as_deref(),
-        Some("Bot · sleeping · room #general")
-    );
+    assert_eq!(status(&state, &chat).as_deref(), Some("Bot · sleeping · room #general"));
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
     assert!(bot_runs(&state).is_empty(), "no events yet");
     post(&mut state, Some("c-other"), "Alice found iron");
@@ -576,15 +558,13 @@ fn room_messages_wake_a_bot_once_and_its_finished_turn_releases_the_next() {
         ("bot", Some(chat.as_str()))
     );
     assert!(runs[0].objective.contains("new messages in room #general"));
-    assert!(runs[0].objective.contains("This wake lists the room posts that woke you"), "a room-post wake says its posts are listed");
     assert!(
-        state.chats[0]
-            .messages
-            .last()
-            .unwrap()
-            .text
-            .starts_with("Bot woke:")
+        runs[0]
+            .objective
+            .contains("This wake lists the room posts that woke you"),
+        "a room-post wake says its posts are listed"
     );
+    assert!(state.chats[0].messages.last().unwrap().text.starts_with("Bot woke:"));
     post(&mut state, Some("c-other"), "Cass needs wood");
     post(&mut state, Some(&chat), "own post");
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
@@ -602,10 +582,7 @@ fn room_messages_wake_a_bot_once_and_its_finished_turn_releases_the_next() {
         2,
         "pending messages wake the next turn after the cooldown"
     );
-    assert_eq!(
-        status(&state, &chat).as_deref(),
-        Some("Bot · queued · room #general")
-    );
+    assert_eq!(status(&state, &chat).as_deref(), Some("Bot · queued · room #general"));
 }
 
 #[test]
@@ -624,25 +601,12 @@ fn recorded_room_updates_do_not_wake_or_acknowledge_and_notifications_still_wake
     state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
     assert!(bot_runs(&state).is_empty());
-    post(
-        &mut state,
-        Some("peer"),
-        "Dependency ready; continue the build",
-    );
+    post(&mut state, Some("peer"), "Dependency ready; continue the build");
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 1);
-    let first = state
-        .runtime
-        .runs
-        .iter()
-        .position(|r| r.bot_turn.is_some())
-        .unwrap();
+    let first = state.runtime.runs.iter().position(|r| r.bot_turn.is_some()).unwrap();
     state.runtime.runs[first].status = "completed".into();
-    post(
-        &mut state,
-        Some("lead"),
-        "Recorded audit of the same milestone",
-    );
+    post(&mut state, Some("lead"), "Recorded audit of the same milestone");
     state.collective.posts.last_mut().unwrap().delivery = crate::rooms::Delivery::Record;
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
     assert_eq!(
@@ -659,10 +623,7 @@ fn recorded_room_updates_do_not_wake_or_acknowledge_and_notifications_still_wake
 fn timers_wake_bots_without_rooms_and_commands_validate() {
     let (mut state, chat) = fixture();
     state.chats[0].room = None;
-    assert!(
-        command(&mut state, &chat, "on").is_err(),
-        "no room and no interval"
-    );
+    assert!(command(&mut state, &chat, "on").is_err(), "no room and no interval");
     assert!(command(&mut state, &chat, "on every 0").is_err());
     assert!(command(&mut state, &chat, "on every 2000").is_err());
     assert!(command(&mut state, &chat, "pause").is_err());
@@ -686,10 +647,7 @@ fn listening_and_bots_are_exclusive_and_stop_waits_for_the_turn() {
     post(&mut state, None, "operator: can any agent scout the cave?");
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
     command(&mut state, &chat, "off").unwrap();
-    assert_eq!(
-        status(&state, &chat).as_deref(),
-        Some("Bot · stopping · room #general")
-    );
+    assert_eq!(status(&state, &chat).as_deref(), Some("Bot · stopping · room #general"));
     let turn = state
         .runtime
         .runs
@@ -714,17 +672,11 @@ fn failed_saves_roll_back_and_full_queues_keep_the_request() {
     assert_eq!(state.runtime.runs.len(), runs);
     assert_eq!(state.bots.room_cursor, 0, "the post is offered again");
     for index in 0..crate::scheduler::MAX_PENDING {
-        state
-            .runtime
-            .enqueue(format!("filler {index}"), RunKind::Chat, "test");
+        state.runtime.enqueue(format!("filler {index}"), RunKind::Chat, "test");
     }
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
     assert!(bot_runs(&state).is_empty());
-    assert_eq!(
-        state.bots.requests.len(),
-        1,
-        "the requested turn waits for queue space"
-    );
+    assert_eq!(state.bots.requests.len(), 1, "the requested turn waits for queue space");
     for run in &mut state.runtime.runs {
         if run.source == "test" {
             run.status = "completed".into();
@@ -753,22 +705,14 @@ fn command_steps_never_drop_turn_requests_for_any_bot() {
     assert_eq!(bot_runs(&state).len(), 1);
 
     let other = crate::chat::create(&mut state);
-    let index = state
-        .chats
-        .iter()
-        .position(|session| session.id == other)
-        .unwrap();
+    let index = state.chats.iter().position(|session| session.id == other).unwrap();
     state.chats[index].room = None;
     crate::chat::send(&mut state, &other, "Check the farm", "test").unwrap();
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     command_at(&mut state, &other, "on every 1", Now(10)).unwrap();
     command_at(&mut state, &chat, "pause", Now(60_010)).unwrap();
     assert!(
-        state
-            .bots
-            .requests
-            .iter()
-            .any(|request| request.chat.0 == other),
+        state.bots.requests.iter().any(|request| request.chat.0 == other),
         "another bot's due timer turn is recorded during this command"
     );
     reconcile_at(&mut state, 60_020, |_| Ok(())).unwrap();
@@ -784,9 +728,7 @@ fn requested_turns_survive_a_restart_and_are_queued_once() {
     let (mut state, chat) = fixture();
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     for index in 0..crate::scheduler::MAX_PENDING {
-        state
-            .runtime
-            .enqueue(format!("filler {index}"), RunKind::Chat, "test");
+        state.runtime.enqueue(format!("filler {index}"), RunKind::Chat, "test");
     }
     post(&mut state, Some("c-other"), "while the queue is full");
     reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
@@ -819,11 +761,7 @@ fn large_room_backlogs_are_offered_in_bounded_passes() {
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
     reconcile_at(&mut state, 3, |_| Ok(())).unwrap();
     assert_eq!(state.bots.room_cursor, 600);
-    assert_eq!(
-        bot_runs(&state).len(),
-        1,
-        "the backlog coalesces into one turn"
-    );
+    assert_eq!(bot_runs(&state).len(), 1, "the backlog coalesces into one turn");
 }
 
 #[test]
@@ -831,40 +769,28 @@ fn bot_commands_through_chat_roll_back_when_the_save_fails() {
     let (mut state, chat) = fixture();
     let send = serde_json::json!({"id": chat, "message": "/bot on every 10"});
     assert!(
-        crate::session_http::change_with_save(&mut state, "control.chat.send", &send, |_| Err(
-            std::io::Error::other("disk")
-        ))
+        crate::session_http::change_with_save(&mut state, "control.chat.send", &send, |_| Err(std::io::Error::other(
+            "disk"
+        )))
         .is_err()
     );
-    assert!(
-        !defined(&state, &chat),
-        "a failed save leaves no bot behind"
-    );
-    crate::session_http::change_with_save(&mut state, "control.chat.send", &send, |_| Ok(()))
-        .unwrap();
+    assert!(!defined(&state, &chat), "a failed save leaves no bot behind");
+    crate::session_http::change_with_save(&mut state, "control.chat.send", &send, |_| Ok(())).unwrap();
     assert_eq!(
         status(&state, &chat).as_deref(),
         Some("Bot · sleeping · room #general, every 10 min")
     );
     let listen = serde_json::json!({"id": chat, "message": "/listen"});
     assert!(
-        crate::session_http::change_with_save(&mut state, "control.chat.send", &listen, |_| Ok(()))
-            .is_err(),
+        crate::session_http::change_with_save(&mut state, "control.chat.send", &listen, |_| Ok(())).is_err(),
         "/listen refuses while a bot runs"
     );
     let off = serde_json::json!({"id": chat, "message": "/listen off"});
     assert!(
-        crate::session_http::change_with_save(&mut state, "control.chat.send", &off, |_| Ok(()))
-            .is_err(),
+        crate::session_http::change_with_save(&mut state, "control.chat.send", &off, |_| Ok(())).is_err(),
         "/listen off cannot remove a bot's inbox"
     );
-    assert!(
-        state
-            .collective
-            .room_watches
-            .iter()
-            .any(|watch| watch.chat == chat)
-    );
+    assert!(state.collective.room_watches.iter().any(|watch| watch.chat == chat));
 }
 
 #[test]
@@ -900,11 +826,7 @@ fn requester() -> (State, String, String) {
 }
 fn spawned(state: &mut State, parent: &str, title: &str) -> String {
     let child = crate::chat::create(state);
-    let session = state
-        .chats
-        .iter_mut()
-        .find(|session| session.id == child)
-        .unwrap();
+    let session = state.chats.iter_mut().find(|session| session.id == child).unwrap();
     session.parent_chat = Some(parent.into());
     session.room = Some("general".into());
     crate::chat::send(state, &child, "Farm wheat", "test").unwrap();
@@ -917,12 +839,7 @@ fn spawned(state: &mut State, parent: &str, title: &str) -> String {
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     child
 }
-fn ask(
-    state: &mut State,
-    nonce: &str,
-    chat: &str,
-    every_minutes: Option<u64>,
-) -> io::Result<Value> {
+fn ask(state: &mut State, nonce: &str, chat: &str, every_minutes: Option<u64>) -> io::Result<Value> {
     let run = state.runtime.runs[0].id.clone();
     let attempt = AttemptRef {
         run: &run,
@@ -947,7 +864,10 @@ fn an_agent_sets_a_timer_only_when_its_team_selected_the_timers_gene() {
     let (mut state, _, child) = requester();
     state.chats[0].lenses = None;
     let refused = ask(&mut state, "timer-off", &child, Some(5)).unwrap_err().to_string();
-    assert!(refused.contains("timers gene") && refused.contains("omit every_minutes"), "{refused}");
+    assert!(
+        refused.contains("timers gene") && refused.contains("omit every_minutes"),
+        "{refused}"
+    );
     state.chats[0].lenses = Some(vec!["timers".into()]);
     assert!(ask(&mut state, "timer-on", &child, Some(5)).is_ok());
 }
@@ -957,12 +877,10 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
     let grandchild = spawned(&mut state, &child, "Grandchild");
     let index = state.runtime.runs.len() - 1;
     state.runtime.runs[index].status = "running".into();
-    state.runtime.runs[index]
-        .attempts
-        .push(crate::usage::Attempt {
-            workspace_id: Some("child-attempt".into()),
-            ..Default::default()
-        });
+    state.runtime.runs[index].attempts.push(crate::usage::Attempt {
+        workspace_id: Some("child-attempt".into()),
+        ..Default::default()
+    });
     let run = state.runtime.runs[index].id.clone();
     let before = decision_revision(&state);
     let value = handle(
@@ -1011,11 +929,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
         payload.as_bytes(),
         |_| Err(io::Error::other("full")),
     );
-    assert!(
-        String::from_utf8(response)
-            .unwrap()
-            .starts_with("HTTP/1.1 400")
-    );
+    assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 400"));
     assert_eq!(pending_count(&shared.lock().unwrap(), &parent), 1);
     let mut response = Vec::new();
     http_with_save(
@@ -1026,11 +940,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
         payload.as_bytes(),
         |_| Ok(()),
     );
-    assert!(
-        String::from_utf8(response)
-            .unwrap()
-            .starts_with("HTTP/1.1 200")
-    );
+    assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 200"));
     let state = shared.lock().unwrap();
     assert!(defined(&state, &grandchild));
     assert_eq!(pending_count(&state, &parent), 0);
@@ -1082,18 +992,16 @@ fn an_agent_requests_bots_for_its_children_and_resumes_with_the_operators_decisi
         ("bot-decision", Some(parent.as_str()))
     );
     assert!(
-        resumed.objective.contains(crate::callsigns::name(&state.chats, &child).unwrap().as_ref())
+        resumed
+            .objective
+            .contains(crate::callsigns::name(&state.chats, &child).unwrap().as_ref())
             && resumed.objective.contains("approved")
             && resumed.objective.contains("denied")
     );
     assert!(pending_json(&state, &parent).as_array().unwrap().is_empty());
     let runs = state.runtime.runs.len();
     reconcile_at(&mut state, 40, |_| Ok(())).unwrap();
-    assert_eq!(
-        state.runtime.runs.len(),
-        runs,
-        "decisions resume the requester once"
-    );
+    assert_eq!(state.runtime.runs.len(), runs, "decisions resume the requester once");
 }
 
 #[test]
@@ -1107,32 +1015,14 @@ fn bots_may_request_bots_only_within_their_conversation() {
     let stranger = crate::chat::create(&mut state);
     state.chats.last_mut().unwrap().room = Some("general".into());
     crate::chat::send(&mut state, &stranger, "Unrelated", "test").unwrap();
-    assert!(
-        ask(&mut state, "n2", &stranger, None).is_err(),
-        "unrelated chats"
-    );
-    state
-        .chats
-        .iter_mut()
-        .find(|session| session.id == child)
-        .unwrap()
-        .room = None;
-    assert!(
-        ask(&mut state, "n3", &child, None).is_err(),
-        "no room and no timer"
-    );
+    assert!(ask(&mut state, "n2", &stranger, None).is_err(), "unrelated chats");
+    state.chats.iter_mut().find(|session| session.id == child).unwrap().room = None;
+    assert!(ask(&mut state, "n3", &child, None).is_err(), "no room and no timer");
     assert!(ask(&mut state, "n4", &child, Some(0)).is_err());
     assert!(ask(&mut state, "n5", &child, Some(5)).is_ok());
     assert!(ask(&mut state, "bad nonce", &parent, Some(5)).is_err());
-    state.runtime.runs[0]
-        .attempts
-        .last_mut()
-        .unwrap()
-        .workspace_id = Some("attempt-b".into());
-    assert!(
-        ask(&mut state, "n6", &parent, Some(5)).is_err(),
-        "stale attempts"
-    );
+    state.runtime.runs[0].attempts.last_mut().unwrap().workspace_id = Some("attempt-b".into());
+    assert!(ask(&mut state, "n6", &parent, Some(5)).is_err(), "stale attempts");
     let first = format!("allow {}", state.bots.approvals[0].id);
     assert!(
         command_at(&mut state, &stranger, &first, Now(1)).is_err(),
@@ -1175,10 +1065,7 @@ fn a_leads_helper_may_request_bots_for_controllers_another_helper_spawned() {
             |_| Ok(()),
         )
     };
-    assert!(
-        call(&alice, "n1").is_ok(),
-        "a cousin in the same conversation"
-    );
+    assert!(call(&alice, "n1").is_ok(), "a cousin in the same conversation");
     let other = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &other, "Another lead", "test").unwrap();
     let stranger = spawned(&mut state, &other, "Stranger");
@@ -1198,10 +1085,7 @@ fn a_leads_helper_may_request_bots_for_controllers_another_helper_spawned() {
             |_| Ok(()),
         )
     };
-    assert!(
-        call(&stranger, "n2").is_err(),
-        "another conversation's agents"
-    );
+    assert!(call(&stranger, "n2").is_err(), "another conversation's agents");
     assert!(call(&other, "n3").is_err(), "another lead");
 }
 
@@ -1219,11 +1103,7 @@ fn decisions_for_a_superseded_requester_are_recorded_without_a_new_turn() {
     let runs = state.runtime.runs.len();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
     assert_eq!(state.runtime.runs.len(), runs);
-    let session = state
-        .chats
-        .iter()
-        .find(|session| session.id == parent)
-        .unwrap();
+    let session = state.chats.iter().find(|session| session.id == parent).unwrap();
     assert!(session.messages.last().unwrap().text.contains("denied"));
     assert!(state.bots.approvals.iter().all(|a| a.acknowledged));
 }
@@ -1231,24 +1111,41 @@ fn decisions_for_a_superseded_requester_are_recorded_without_a_new_turn() {
 #[test]
 fn approval_dispatch_follows_checkpoint_and_failed_saves_leave_no_wake() {
     let (mut state, parent, child) = requester();
-    let id = ask(&mut state, "n1", &child, None).unwrap()["request_id"].as_str().unwrap().to_owned();
+    let id = ask(&mut state, "n1", &child, None).unwrap()["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     finish_requesting_turn(&mut state);
     command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
     let before = serde_json::to_vec(&state).unwrap();
     let checkpointed = std::cell::Cell::new(false);
     let wakes = std::cell::Cell::new(0);
-    assert!(reconcile_with_wake_at(&mut state, 2, |_| Err(io::Error::other("disk full")), || wakes.set(wakes.get() + 1)).is_err());
+    assert!(
+        reconcile_with_wake_at(
+            &mut state,
+            2,
+            |_| Err(io::Error::other("disk full")),
+            || wakes.set(wakes.get() + 1)
+        )
+        .is_err()
+    );
     assert_eq!(wakes.get(), 0);
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    reconcile_with_wake_at(&mut state, 2, |state| {
-        assert!(state.bots.approvals.iter().all(|a| a.acknowledged));
-        assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
-        checkpointed.set(true);
-        Ok(())
-    }, || {
-        assert!(checkpointed.get());
-        wakes.set(wakes.get() + 1);
-    }).unwrap();
+    reconcile_with_wake_at(
+        &mut state,
+        2,
+        |state| {
+            assert!(state.bots.approvals.iter().all(|a| a.acknowledged));
+            assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
+            checkpointed.set(true);
+            Ok(())
+        },
+        || {
+            assert!(checkpointed.get());
+            wakes.set(wakes.get() + 1);
+        },
+    )
+    .unwrap();
     assert_eq!(wakes.get(), 1);
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     reconcile_with_wake_at(&mut restored, 2, |_| Ok(()), || panic!("no replay wake")).unwrap();
@@ -1278,14 +1175,7 @@ fn the_chat_panel_route_decides_and_rolls_back_failed_saves() {
         "a failed save leaves no bot behind"
     );
     let mut out = Vec::new();
-    http_with_save(
-        &mut out,
-        &shared,
-        "POST",
-        "/tools/bots",
-        body.as_bytes(),
-        |_| Ok(()),
-    );
+    http_with_save(&mut out, &shared, "POST", "/tools/bots", body.as_bytes(), |_| Ok(()));
     assert!(String::from_utf8_lossy(&out).contains("\"ok\":true"));
     assert!(defined(&shared.lock().unwrap(), &child));
     let mut out = Vec::new();
@@ -1326,10 +1216,7 @@ fn earlier_continued_runs_do_not_block_resuming_the_requester() {
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
-    assert_eq!(
-        state.runtime.runs.last().unwrap().kind,
-        RunKind::BotDecision
-    );
+    assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
 }
 fn ask_last(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
     let run = state.runtime.runs.last().unwrap().id.clone();
@@ -1390,28 +1277,18 @@ fn a_one_shot_callback_can_request_the_next_stage_and_pause_is_durable() {
         nonce: "pause",
     };
     assert!(
-        handle(&mut state, &attempt, BotCall::Pause, |_| Err(
-            io::Error::other("disk full")
-        ))
+        handle(&mut state, &attempt, BotCall::Pause, |_| Err(io::Error::other(
+            "disk full"
+        )))
         .is_err()
     );
-    assert_ne!(
-        state.bots.supervisor.status(&bot(&chat)),
-        Some(Status::Paused)
-    );
+    assert_ne!(state.bots.supervisor.status(&bot(&chat)), Some(Status::Paused));
     handle(&mut state, &attempt, BotCall::Pause, |_| Ok(())).unwrap();
-    assert_eq!(
-        state.bots.supervisor.status(&bot(&chat)),
-        Some(Status::Paused)
-    );
+    assert_eq!(state.bots.supervisor.status(&bot(&chat)), Some(Status::Paused));
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     let count = state.runtime.runs.len();
     reconcile_at(&mut state, 1_000_000, |_| Ok(())).unwrap();
-    assert_eq!(
-        state.runtime.runs.len(),
-        count,
-        "a real pause stops timer wakes"
-    );
+    assert_eq!(state.runtime.runs.len(), count, "a real pause stops timer wakes");
 }
 
 #[test]
@@ -1435,10 +1312,7 @@ fn control_initiated_turns_after_a_request_do_not_drop_its_resume() {
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     command_at(&mut state, &parent, &format!("deny {id}"), Now(1)).unwrap();
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
-    assert_eq!(
-        state.runtime.runs.last().unwrap().kind,
-        RunKind::BotDecision
-    );
+    assert_eq!(state.runtime.runs.last().unwrap().kind, RunKind::BotDecision);
 }
 
 fn watching(state: &mut State, chat: &str, id: &str) {
@@ -1520,9 +1394,9 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
         let page = prepare(&state, &cx, "w-result", None).unwrap();
         let before = serde_json::to_value(&state).unwrap();
         assert!(
-            record(&mut state, &cx, "w-result", &page, 1, false, |_| Err(
-                io::Error::other("disk full")
-            ))
+            record(&mut state, &cx, "w-result", &page, 1, false, |_| Err(io::Error::other(
+                "disk full"
+            )))
             .is_err()
         );
         assert_eq!(serde_json::to_value(&state).unwrap(), before);
@@ -1544,44 +1418,23 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
         );
         assert!(prepare(&state, &cx, "w-result", Some(99)).is_err());
         {
-            let mut skipped: State =
-                serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
-            let other = AttemptRef {
-                nonce: "skip",
-                ..cx
-            };
+            let mut skipped: State = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let other = AttemptRef { nonce: "skip", ..cx };
             let page = prepare(&skipped, &other, "w-result", Some(2)).unwrap();
             assert!(page.gap);
-            let receipt = record(
-                &mut skipped,
-                &other,
-                "w-result",
-                &page,
-                4,
-                false,
-                |_| Ok(()),
-            )
-            .unwrap()
-            .unwrap();
+            let receipt = record(&mut skipped, &other, "w-result", &page, 4, false, |_| Ok(()))
+                .unwrap()
+                .unwrap();
             let replay = prepare(&skipped, &other, "w-result", Some(2)).unwrap();
             assert!(replay.gap);
             assert_eq!(
-                record(
-                    &mut skipped,
-                    &other,
-                    "w-result",
-                    &replay,
-                    4,
-                    false,
-                    |_| panic!("replay must not save")
-                )
+                record(&mut skipped, &other, "w-result", &replay, 4, false, |_| panic!(
+                    "replay must not save"
+                ))
                 .unwrap(),
                 Some(receipt.clone())
             );
-            let mailbox = skipped.runtime.runs[0].attempts[0]
-                .turn_mailbox
-                .as_mut()
-                .unwrap();
+            let mailbox = skipped.runtime.runs[0].attempts[0].turn_mailbox.as_mut().unwrap();
             assert!(
                 mailbox
                     .stage(
@@ -1604,38 +1457,18 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
             skipped.watches[0].chat = "foreign".into();
             let page = prepare(&skipped, &other, "w-result", None).unwrap();
             assert_eq!(
-                record(
-                    &mut skipped,
-                    &other,
-                    "w-result",
-                    &page,
-                    5,
-                    false,
-                    |_| panic!("foreign observation must not save")
-                )
+                record(&mut skipped, &other, "w-result", &page, 5, false, |_| panic!(
+                    "foreign observation must not save"
+                ))
                 .unwrap(),
                 None
             );
             skipped.runtime.runs[0].status = "cancelled".into();
-            assert!(
-                record(
-                    &mut skipped,
-                    &other,
-                    "w-result",
-                    &page,
-                    5,
-                    false,
-                    |_| Ok(())
-                )
-                .is_err()
-            );
+            assert!(record(&mut skipped, &other, "w-result", &page, 5, false, |_| Ok(())).is_err());
         }
         for n in 0..300 {
             let nonce = format!("empty-{n}");
-            let other = AttemptRef {
-                nonce: &nonce,
-                ..cx
-            };
+            let other = AttemptRef { nonce: &nonce, ..cx };
             let page = prepare(&state, &other, "w-result", None).unwrap();
             assert_eq!(page.after, 1);
             record(&mut state, &other, "w-result", &page, 1, false, |_| Ok(())).unwrap();
@@ -1658,10 +1491,7 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
                 .and_then(|m| m.working.as_ref())
                 .is_none()
         );
-        let mailbox = state.runtime.runs[0].attempts[0]
-            .turn_mailbox
-            .as_mut()
-            .unwrap();
+        let mailbox = state.runtime.runs[0].attempts[0].turn_mailbox.as_mut().unwrap();
         mailbox
             .stage(
                 "handoff".into(),
@@ -1692,8 +1522,7 @@ fn watch_read_receipts_retire_only_published_evidence_and_survive_restart() {
             working: Some(working),
             ..Default::default()
         }));
-        let mut state: State =
-            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let mut state: State = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
         reconcile_at(&mut state, 1000, |_| Ok(())).unwrap();
         assert!(
             bot_runs(&state).is_empty(),
@@ -1725,16 +1554,31 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
     // A persistent bot that armed a watch per task: its committed state is
     // already at the source budget, almost entirely deleted watches.
     let mut processed = (0..126)
-        .map(|n| Range::Watch { watch: format!("w-gone-{n}"), after: 0, through: 3 })
+        .map(|n| Range::Watch {
+            watch: format!("w-gone-{n}"),
+            after: 0,
+            through: 3,
+        })
         .collect::<Vec<_>>();
-    processed.push(Range::Watch { watch: "w-live".into(), after: 0, through: 1 });
-    processed.push(Range::Conversation { chat: chat.clone(), after: 0, through: 1 });
+    processed.push(Range::Watch {
+        watch: "w-live".into(),
+        after: 0,
+        through: 1,
+    });
+    processed.push(Range::Conversation {
+        chat: chat.clone(),
+        after: 0,
+        through: 1,
+    });
     let previous = WorkingState {
         revision: 7,
         run: "earlier".into(),
         generation: "earlier".into(),
         checkpoint: "earlier".into(),
-        payload: Payload { subgoal: "Sleep each night".into(), ..Default::default() },
+        payload: Payload {
+            subgoal: "Sleep each night".into(),
+            ..Default::default()
+        },
         processed,
         disposition: Disposition::Continue,
     };
@@ -1751,19 +1595,37 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
         turn_mailbox: Some(Box::new(Mailbox::default())).into(),
         ..Default::default()
     });
-    let cx = AttemptRef { run: &id, generation: "attempt", nonce: "read" };
+    let cx = AttemptRef {
+        run: &id,
+        generation: "attempt",
+        nonce: "read",
+    };
     let page = prepare(&state, &cx, "w-live", None).unwrap();
     assert_eq!(page.after, 1, "the live watch resumes from its committed watermark");
-    let receipt = record(&mut state, &cx, "w-live", &page, 2, false, |_| Ok(())).unwrap().unwrap();
+    let receipt = record(&mut state, &cx, "w-live", &page, 2, false, |_| Ok(()))
+        .unwrap()
+        .unwrap();
     // A new task watch would push the source count past the budget.
-    let mut mailbox = state.runtime.runs[0].attempts[0].turn_mailbox.as_ref().unwrap().as_ref().clone();
-    mailbox.baseline.push(Range::Watch { watch: "w-new".into(), after: 0, through: 0 });
+    let mut mailbox = state.runtime.runs[0].attempts[0]
+        .turn_mailbox
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .clone();
+    mailbox.baseline.push(Range::Watch {
+        watch: "w-new".into(),
+        after: 0,
+        through: 0,
+    });
     mailbox
         .stage(
             "handoff".into(),
             Handoff {
                 base_revision: 7,
-                payload: Payload { subgoal: "Sleep each night".into(), ..Default::default() },
+                payload: Payload {
+                    subgoal: "Sleep each night".into(),
+                    ..Default::default()
+                },
                 processed: vec![receipt],
                 resynchronised: vec![],
                 disposition: Disposition::Continue,
@@ -1773,7 +1635,9 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
         )
         .unwrap();
     assert!(
-        mailbox.publication(Some(&previous), &id, "attempt", "cp", |_| true).is_err(),
+        mailbox
+            .publication(Some(&previous), &id, "attempt", "cp", |_| true)
+            .is_err(),
         "without retirement the stuck state stays over budget"
     );
     watching(&mut state, &chat, "w-new");
@@ -1782,10 +1646,30 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
         .unwrap()
         .unwrap();
     assert_eq!(working.revision, 8);
-    assert!(!working.processed.iter().any(|r| matches!(r, Range::Watch { watch, .. } if watch.starts_with("w-gone"))));
-    assert!(working.processed.iter().any(|r| matches!(r, Range::Watch { watch, through: 2, .. } if watch == "w-live")));
-    assert!(working.processed.iter().any(|r| matches!(r, Range::Watch { watch, .. } if watch == "w-new")));
-    assert!(working.processed.iter().any(|r| matches!(r, Range::Conversation { through: 1, .. })));
+    assert!(
+        !working
+            .processed
+            .iter()
+            .any(|r| matches!(r, Range::Watch { watch, .. } if watch.starts_with("w-gone")))
+    );
+    assert!(
+        working
+            .processed
+            .iter()
+            .any(|r| matches!(r, Range::Watch { watch, through: 2, .. } if watch == "w-live"))
+    );
+    assert!(
+        working
+            .processed
+            .iter()
+            .any(|r| matches!(r, Range::Watch { watch, .. } if watch == "w-new"))
+    );
+    assert!(
+        working
+            .processed
+            .iter()
+            .any(|r| matches!(r, Range::Conversation { through: 1, .. }))
+    );
     assert_eq!(working.processed.len(), 3);
     // Commit, then read again from a later attempt: the live watch does not
     // redeliver processed events, and a retired watch can issue no receipt.
@@ -1795,10 +1679,20 @@ fn deleted_watch_sources_retire_at_publication_without_redelivery() {
         turn_mailbox: Some(Box::new(Mailbox::default())).into(),
         ..Default::default()
     });
-    let later = AttemptRef { run: &id, generation: "later", nonce: "read" };
+    let later = AttemptRef {
+        run: &id,
+        generation: "later",
+        nonce: "read",
+    };
     assert_eq!(prepare(&state, &later, "w-live", None).unwrap().after, 2);
     let gone = prepare(&state, &later, "w-gone-0", None).unwrap();
-    assert_eq!(record(&mut state, &later, "w-gone-0", &gone, 3, false, |_| panic!("no receipt")).unwrap(), None);
+    assert_eq!(
+        record(&mut state, &later, "w-gone-0", &gone, 3, false, |_| panic!(
+            "no receipt"
+        ))
+        .unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -1821,9 +1715,7 @@ fn explicit_notifications_release_waits_without_log_matching_or_extra_turns() {
     for seq in 1..=500 {
         state.watches[0].observe(&Frame {
             seq,
-            event: WatchEvent::Line(
-                b"task complete, ERROR or unchanged status is still only a log".to_vec(),
-            ),
+            event: WatchEvent::Line(b"task complete, ERROR or unchanged status is still only a log".to_vec()),
         });
     }
     reconcile_at(&mut state, 86_400_000, |_| Ok(())).unwrap();
@@ -1833,12 +1725,7 @@ fn explicit_notifications_release_waits_without_log_matching_or_extra_turns() {
         event: WatchEvent::Notification(br#"{"task":"task-54","status":"completed"}"#.to_vec()),
     });
     let before = serde_json::to_value(&state).unwrap();
-    assert!(
-        reconcile_at(&mut state, 86_400_001, |_| Err(io::Error::other(
-            "disk full"
-        )))
-        .is_err()
-    );
+    assert!(reconcile_at(&mut state, 86_400_001, |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
     let mut state: State = serde_json::from_value(before).unwrap();
     reconcile_at(&mut state, 86_400_002, |_| Ok(())).unwrap();
@@ -1876,12 +1763,21 @@ fn salience_filtered_notifications_wake_once_including_a_debounce_released_while
     watching(&mut state, &chat, "w-scrape");
     state.watches[0].notification_channel = true;
     state.watches[0].wake_policy = crate::watches::WakePolicy::ExitOnly {};
-    let filter = serde_json::from_value(serde_json::json!({"rules":[[{"kind":"change","field":"/hash"},{"kind":"debounce","seconds":30}]]})).unwrap();
+    let filter = serde_json::from_value(
+        serde_json::json!({"rules":[[{"kind":"change","field":"/hash"},{"kind":"debounce","seconds":30}]]}),
+    )
+    .unwrap();
     state.watches[0].salience = Some(Box::new(crate::watches::Salience::new(filter)));
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     for seq in 1..=200 {
         let hash = if seq < 150 { "a" } else { "b" };
-        state.watches[0].observe_at(&Frame { seq, event: WatchEvent::Notification(format!(r#"{{"hash":"{hash}"}}"#).into_bytes()) }, seq * 100);
+        state.watches[0].observe_at(
+            &Frame {
+                seq,
+                event: WatchEvent::Notification(format!(r#"{{"hash":"{hash}"}}"#).into_bytes()),
+            },
+            seq * 100,
+        );
     }
     reconcile_at(&mut state, 20_000, |_| Ok(())).unwrap();
     assert!(bot_runs(&state).is_empty(), "held during the quiet period");
@@ -1890,11 +1786,21 @@ fn salience_filtered_notifications_wake_once_including_a_debounce_released_while
     assert_eq!(bot_runs(&state).len(), 1);
     assert!(matches!(
         &bot_runs(&state)[0].bot_turn.as_ref().unwrap().reasons[..],
-        [Reason::Info { through: 200, info: Message::Notifications(1), .. }]
+        [Reason::Info {
+            through: 200,
+            info: Message::Notifications(1),
+            ..
+        }]
     ));
     assert!(bot_runs(&state)[0].objective.contains(r#"{"hash":"b"}"#));
     let summary = state.watches[0].summary();
-    assert_eq!((summary["salience"]["woke"].as_u64(), summary["salience"]["retained"].as_u64()), (Some(1), Some(200)));
+    assert_eq!(
+        (
+            summary["salience"]["woke"].as_u64(),
+            summary["salience"]["retained"].as_u64()
+        ),
+        (Some(1), Some(200))
+    );
 }
 #[test]
 fn selected_watch_wakes_keep_exact_cursors_across_save_failure_and_restart() {
@@ -1913,10 +1819,7 @@ fn selected_watch_wakes_keep_exact_cursors_across_save_failure_and_restart() {
         });
         reconcile_at(&mut state, seq, |_| Ok(())).unwrap();
     }
-    assert!(
-        bot_runs(&state).is_empty(),
-        "telemetry alone admits no model turns"
-    );
+    assert!(bot_runs(&state).is_empty(), "telemetry alone admits no model turns");
     state.watches[0].observe(&Frame {
         seq: 101,
         event: WatchEvent::Line(b"event: completed".to_vec()),
@@ -1944,11 +1847,7 @@ fn selected_watch_wakes_keep_exact_cursors_across_save_failure_and_restart() {
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     state.watches[0].observe_for_test(103, Some(1));
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
-    assert_eq!(
-        bot_runs(&state).len(),
-        2,
-        "the owner's own process exit still wakes it"
-    );
+    assert_eq!(bot_runs(&state).len(), 2, "the owner's own process exit still wakes it");
     assert!(bot_runs(&state)[1].objective.contains("exited with code 1"));
     reconcile_at(&mut state, 40_001, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 2, "no duplicate successor");
@@ -1974,11 +1873,7 @@ fn exit_only_watches_still_deliver_source_gaps_and_human_steering() {
     state.runtime.runs.last_mut().unwrap().status = "completed".into();
     post(&mut state, None, "Change direction");
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
-    assert_eq!(
-        bot_runs(&state).len(),
-        2,
-        "watch policy cannot hide human room input"
-    );
+    assert_eq!(bot_runs(&state).len(), 2, "watch policy cannot hide human room input");
 }
 
 #[test]
@@ -2007,9 +1902,7 @@ fn a_bot_follows_its_chats_watches_and_wakes_on_lines_and_exits() {
     let runs = bot_runs(&state);
     assert_eq!(runs.len(), 1);
     assert!(
-        runs[0]
-            .objective
-            .contains("3 new lines from watch game (w-game)")
+        runs[0].objective.contains("3 new lines from watch game (w-game)")
             && !runs[0].objective.contains("control_watch_events"),
         "{}",
         runs[0].objective
@@ -2037,18 +1930,9 @@ fn a_bot_follows_its_chats_watches_and_wakes_on_lines_and_exits() {
         ["w-game", "w-logs"],
         "new watches subscribe the running bot"
     );
-    state
-        .watches
-        .iter_mut()
-        .find(|w| w.id == "w-logs")
-        .unwrap()
-        .stopped = true;
+    state.watches.iter_mut().find(|w| w.id == "w-logs").unwrap().stopped = true;
     reconcile_at(&mut state, 40_002, |_| Ok(())).unwrap();
-    assert_eq!(
-        subscribed(&state, &chat),
-        ["w-game"],
-        "stopped watches unsubscribe it"
-    );
+    assert_eq!(subscribed(&state, &chat), ["w-game"], "stopped watches unsubscribe it");
 }
 
 #[test]
@@ -2067,37 +1951,22 @@ fn the_bots_page_lists_sleeping_bots() {
 fn an_armed_wake_fires_once_on_watch_output_then_ends() {
     let (mut state, chat) = fixture();
     state.chats[0].room = None;
-    assert!(
-        arm_at(&mut state, &chat, Now(0)).is_err(),
-        "a wake needs a watch"
-    );
+    assert!(arm_at(&mut state, &chat, Now(0)).is_err(), "a wake needs a watch");
     watching(&mut state, &chat, "w-server");
     state.watches[0].lines = 4;
     assert_eq!(arm_at(&mut state, &chat, Now(0)), Ok(true));
-    assert_eq!(
-        arm_at(&mut state, &chat, Now(0)),
-        Ok(false),
-        "already armed"
-    );
+    assert_eq!(arm_at(&mut state, &chat, Now(0)), Ok(false), "already armed");
     assert!(status(&state, &chat).unwrap().starts_with("Wake once"));
     reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
     assert!(
         bot_runs(&state).is_empty(),
         "output from before the arm does not spend the wake"
     );
-    let w = state
-        .watches
-        .iter_mut()
-        .find(|w| w.id == "w-server")
-        .unwrap();
+    let w = state.watches.iter_mut().find(|w| w.id == "w-server").unwrap();
     (w.lines, w.line_seq) = (1, 1);
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 1);
-    let w = state
-        .watches
-        .iter_mut()
-        .find(|w| w.id == "w-server")
-        .unwrap();
+    let w = state.watches.iter_mut().find(|w| w.id == "w-server").unwrap();
     (w.lines, w.line_seq) = (5, 6);
     let turn = state
         .runtime
@@ -2109,11 +1978,7 @@ fn an_armed_wake_fires_once_on_watch_output_then_ends() {
     reconcile_at(&mut state, 3, |_| Ok(())).unwrap();
     assert!(!defined(&state, &chat), "the wake ends with its turn");
     reconcile_at(&mut state, 4, |_| Ok(())).unwrap();
-    assert_eq!(
-        bot_runs(&state).len(),
-        1,
-        "later output does not wake an unarmed chat"
-    );
+    assert_eq!(bot_runs(&state).len(), 1, "later output does not wake an unarmed chat");
     command_at(&mut state, &chat, "on", Now(5)).unwrap();
     assert_eq!(
         arm_at(&mut state, &chat, Now(5)),
@@ -2148,15 +2013,10 @@ fn a_finished_watch_still_delivers_its_last_output_and_exit() {
     let w = &mut state.watches[0];
     w.observe_for_test(1, None);
     w.observe_for_test(2, Some(0));
-    assert!(
-        !state.watches[0].active(),
-        "a transient watch ends with its exit"
-    );
+    assert!(!state.watches[0].active(), "a transient watch ends with its exit");
     reconcile_at(&mut state, 1, |_| Ok(())).unwrap();
     assert!(
-        bot_runs(&state)[0]
-            .objective
-            .contains("1 new lines from watch game"),
+        bot_runs(&state)[0].objective.contains("1 new lines from watch game"),
         "the room-and-watch bot hears the final line"
     );
     assert!(
@@ -2183,7 +2043,12 @@ fn paused_queued_bot_is_not_reported_working_but_an_active_turn_remains_visible(
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     peer_message_at(&mut state, &chat, 1, Now(1));
     reconcile_at(&mut state, 2, |_| Ok(())).unwrap();
-    let index = state.runtime.runs.iter().position(|run| run.bot_turn.is_some()).unwrap();
+    let index = state
+        .runtime
+        .runs
+        .iter()
+        .position(|run| run.bot_turn.is_some())
+        .unwrap();
     assert!(status(&state, &chat).unwrap().contains(" · queued · "));
     command_at(&mut state, &chat, "pause", Now(3)).unwrap();
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
@@ -2192,9 +2057,17 @@ fn paused_queued_bot_is_not_reported_working_but_an_active_turn_remains_visible(
     let turn = restored.runtime.runs[index].bot_turn.as_ref().unwrap().turn;
     assert!(!restored.bots.supervisor.may_start(&bot(&chat), &TurnId(turn)));
     restored.runtime.runs[index].status = "running".into();
-    assert!(status(&restored, &chat).unwrap().contains("paused · current turn running"));
+    assert!(
+        status(&restored, &chat)
+            .unwrap()
+            .contains("paused · current turn running")
+    );
     restored.runtime.runs[index].status = "cancelling".into();
-    assert!(status(&restored, &chat).unwrap().contains("paused · current turn stopping"));
+    assert!(
+        status(&restored, &chat)
+            .unwrap()
+            .contains("paused · current turn stopping")
+    );
     restored.runtime.runs[index].status = "queued".into();
     command_at(&mut restored, &chat, "resume", Now(4)).unwrap();
     assert!(status(&restored, &chat).unwrap().contains(" · queued · "));
@@ -2244,20 +2117,39 @@ fn claim_waits_ignore_progress_and_chatter_and_wake_on_resolution() {
     assert_eq!(topic, format!("claim:general/wood#{revision}"));
     waiting_on(&mut state, vec![topic]);
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
-    assert!(wait_topics(&state, &chat).contains(&format!("conversation:{chat}")),
-        "a persistent bot can select its own conversation for direct messages");
+    assert!(
+        wait_topics(&state, &chat).contains(&format!("conversation:{chat}")),
+        "a persistent bot can select its own conversation for direct messages"
+    );
 
     post(&mut state, Some(&peer), "Still chopping");
     peer_message_at(&mut state, &chat, 1, Now(2_000));
-    let revision = claim_wood(&mut state, &peer, json!({"key":"wood","action":"update","note":"12 logs","revision":revision}));
+    let revision = claim_wood(
+        &mut state,
+        &peer,
+        json!({"key":"wood","action":"update","note":"12 logs","revision":revision}),
+    );
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
-    assert!(bot_runs(&state).is_empty(), "posts, unselected messages and progress updates stay pending");
+    assert!(
+        bot_runs(&state).is_empty(),
+        "posts, unselected messages and progress updates stay pending"
+    );
 
-    claim_wood(&mut state, &peer, json!({"key":"wood","action":"update","status":"done","revision":revision}));
+    claim_wood(
+        &mut state,
+        &peer,
+        json!({"key":"wood","action":"update","status":"done","revision":revision}),
+    );
     reconcile_at(&mut state, 6_000, |_| Ok(())).unwrap();
     assert_eq!(bot_runs(&state).len(), 1, "the resolution releases the wait");
     let turn = bot_runs(&state)[0].bot_turn.as_ref().unwrap();
-    assert!(turn.reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Done), .. })));
+    assert!(turn.reasons.iter().any(|reason| matches!(
+        reason,
+        Reason::Info {
+            info: Message::Resolved(crate::rooms::claims::Outcome::Done),
+            ..
+        }
+    )));
     assert!(turn.reasons.len() >= 2, "retained chatter arrives with the release");
 }
 #[test]
@@ -2268,11 +2160,19 @@ fn a_resolution_before_the_wait_is_admitted_still_wakes() {
     let revision = claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));
     let topic = crate::rooms::claims::wait_topic(&state, &chat, "general/wood").unwrap();
     // Done between the handoff's validation and its publication.
-    claim_wood(&mut state, &peer, json!({"key":"wood","action":"update","status":"done","revision":revision}));
+    claim_wood(
+        &mut state,
+        &peer,
+        json!({"key":"wood","action":"update","status":"done","revision":revision}),
+    );
     waiting_on(&mut state, vec![topic]);
     reconcile_at(&mut state, 6_000, |_| Ok(())).unwrap();
     reconcile_at(&mut state, 7_000, |_| Ok(())).unwrap();
-    assert_eq!(bot_runs(&state).len(), 1, "admission checks the incarnation's outcome, so no wake is lost");
+    assert_eq!(
+        bot_runs(&state).len(),
+        1,
+        "admission checks the incarnation's outcome, so no wake is lost"
+    );
 }
 #[test]
 fn an_abandoned_producer_wakes_its_dependents_instead_of_leaving_them_asleep() {
@@ -2285,13 +2185,28 @@ fn an_abandoned_producer_wakes_its_dependents_instead_of_leaving_them_asleep() {
     waiting_on(&mut state, vec![topic]);
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
     assert!(bot_runs(&state).is_empty());
-    let peer_run = state.runtime.runs.iter().position(|run| run.chat_id.as_deref() == Some(peer.as_str())).unwrap();
+    let peer_run = state
+        .runtime
+        .runs
+        .iter()
+        .position(|run| run.chat_id.as_deref() == Some(peer.as_str()))
+        .unwrap();
     state.runtime.runs[peer_run].status = "cancelled".into();
     reconcile_at(&mut state, 2_000, |_| Ok(())).unwrap();
     reconcile_at(&mut state, 3_000, |_| Ok(())).unwrap();
-    assert_eq!(bot_runs(&state).len(), 1, "a cancelled owner resolves the claim as abandoned");
+    assert_eq!(
+        bot_runs(&state).len(),
+        1,
+        "a cancelled owner resolves the claim as abandoned"
+    );
     let turn = bot_runs(&state)[0].bot_turn.as_ref().unwrap();
-    assert!(turn.reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned), .. })));
+    assert!(turn.reasons.iter().any(|reason| matches!(
+        reason,
+        Reason::Info {
+            info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned),
+            ..
+        }
+    )));
 }
 #[test]
 fn stopping_a_producer_bot_wakes_its_dependents_but_an_idle_one_does_not() {
@@ -2299,19 +2214,45 @@ fn stopping_a_producer_bot_wakes_its_dependents_but_an_idle_one_does_not() {
     let peer = crate::chat::create(&mut state);
     state.chats.iter_mut().find(|c| c.id == peer).unwrap().room = Some("general".into());
     crate::chat::send(&mut state, &peer, "Gather wood", "test").unwrap();
-    state.runtime.runs.iter_mut().for_each(|run| run.status = "completed".into());
+    state
+        .runtime
+        .runs
+        .iter_mut()
+        .for_each(|run| run.status = "completed".into());
     command_at(&mut state, &chat, "on", Now(0)).unwrap();
     command_at(&mut state, &peer, "on", Now(0)).unwrap();
     claim_wood(&mut state, &peer, json!({"key":"wood","action":"acquire"}));
     let topic = crate::rooms::claims::wait_topic(&state, &chat, "general/wood").unwrap();
     waiting_on(&mut state, vec![topic]);
     reconcile_at(&mut state, 1_000, |_| Ok(())).unwrap();
-    assert!(bot_runs(&state).iter().all(|run| run.chat_id.as_deref() != Some(chat.as_str())), "a healthy producer bot keeps its dependents asleep");
+    assert!(
+        bot_runs(&state)
+            .iter()
+            .all(|run| run.chat_id.as_deref() != Some(chat.as_str())),
+        "a healthy producer bot keeps its dependents asleep"
+    );
     stop_all(&mut state, std::slice::from_ref(&peer));
     reconcile_at(&mut state, 40_000, |_| Ok(())).unwrap();
-    let woken = bot_runs(&state).into_iter().filter(|run| run.chat_id.as_deref() == Some(chat.as_str())).collect::<Vec<_>>();
+    let woken = bot_runs(&state)
+        .into_iter()
+        .filter(|run| run.chat_id.as_deref() == Some(chat.as_str()))
+        .collect::<Vec<_>>();
     assert_eq!(woken.len(), 1, "stopping the producer resolves its claim as abandoned");
-    assert!(woken[0].bot_turn.as_ref().unwrap().reasons.iter().any(|reason| matches!(reason, Reason::Info { info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned), .. })));
+    assert!(
+        woken[0]
+            .bot_turn
+            .as_ref()
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| matches!(
+                reason,
+                Reason::Info {
+                    info: Message::Resolved(crate::rooms::claims::Outcome::Abandoned),
+                    ..
+                }
+            ))
+    );
 }
 #[test]
 fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
@@ -2323,8 +2264,15 @@ fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0]["chat_id"], parent.as_str());
     let pending = control_client::operator::pending(&groups[0]);
-    assert_eq!((pending[0].kind, pending[0].id), (control_client::operator::Kind::Bot, id.as_str()));
-    let control_client::operator::Command::Send(command) = control_client::operator::reply(&pending[0], "allow").unwrap() else { panic!() };
+    assert_eq!(
+        (pending[0].kind, pending[0].id),
+        (control_client::operator::Kind::Bot, id.as_str())
+    );
+    let control_client::operator::Command::Send(command) =
+        control_client::operator::reply(&pending[0], "allow").unwrap()
+    else {
+        panic!()
+    };
     crate::chat::send(&mut state, &parent, &command, "discord:1").unwrap();
     assert!(defined(&state, &child));
     // The same reply again finds nothing pending and changes nothing.
@@ -2332,17 +2280,17 @@ fn node_wide_requests_route_a_descendant_bot_request_to_its_top_level_chat() {
     assert!(crate::chat::pending_requests(&state).as_array().unwrap().is_empty());
 }
 
-#[path = "tests/reconcile_profile.rs"]
-mod reconcile_profile;
 #[path = "tests/advisor.rs"]
 mod advisor;
 #[path = "tests/antibody.rs"]
 mod antibody;
+#[path = "tests/auto_approval.rs"]
+mod auto_approval;
+#[path = "tests/handoff_cost.rs"]
+mod handoff_cost;
+#[path = "tests/reconcile_profile.rs"]
+mod reconcile_profile;
 #[path = "tests/recovery.rs"]
 mod recovery;
 #[path = "tests/timeout.rs"]
 mod timeout;
-#[path = "tests/handoff_cost.rs"]
-mod handoff_cost;
-#[path = "tests/auto_approval.rs"]
-mod auto_approval;

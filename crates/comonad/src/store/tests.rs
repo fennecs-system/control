@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn store(data: &[i64], pos: usize) -> Store<'_, [i64]> {
@@ -20,12 +19,7 @@ fn comonad_laws_hold_for_timelines() {
         // extend f . extend g = extend (f . extend g)
         let g = w.extend(sum3);
         let left = store(&g, pos).extend(|s| s.window(1).iter().sum::<i64>());
-        let right = w.extend(|s| {
-            store(&s.extend(sum3), s.pos())
-                .window(1)
-                .iter()
-                .sum::<i64>()
-        });
+        let right = w.extend(|s| store(&s.extend(sum3), s.pos()).window(1).iter().sum::<i64>());
         assert_eq!(left, right);
     }
     assert!(Store::new(&data[..], data.len()).is_none());
@@ -40,10 +34,7 @@ fn moves_and_views_are_bounded_slices() {
         (&data[..], &data[1..], &data[..1])
     );
     assert_eq!(w.left().map(|s| *s.extract()), Some(10));
-    assert_eq!(
-        w.right().and_then(|s| s.right()).map(|s| *s.extract()),
-        Some(40)
-    );
+    assert_eq!(w.right().and_then(|s| s.right()).map(|s| *s.extract()), Some(40));
     assert!(store(&data, 0).left().is_none() && store(&data, 3).right().is_none());
     assert_eq!(w.peek(3), Some(&40));
 }

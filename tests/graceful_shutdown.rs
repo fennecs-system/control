@@ -42,12 +42,8 @@ fn healthy(addr: SocketAddr) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(100)) else {
         return false;
     };
-    stream
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .unwrap();
-    stream
-        .set_write_timeout(Some(Duration::from_millis(100)))
-        .unwrap();
+    stream.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+    stream.set_write_timeout(Some(Duration::from_millis(100))).unwrap();
     if write!(
         stream,
         "GET /health HTTP/1.1\r\nHost: localhost:{}\r\nConnection: close\r\n\r\n",
@@ -64,23 +60,11 @@ fn healthy(addr: SocketAddr) -> bool {
 #[test]
 fn printed_browser_link_is_private_single_use_and_needs_no_browser_opener() {
     use std::os::unix::fs::PermissionsExt;
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let fixture =
-        Fixture(std::env::temp_dir().join(format!("control-open-{}-{stamp}", std::process::id())));
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let fixture = Fixture(std::env::temp_dir().join(format!("control-open-{}-{stamp}", std::process::id())));
     fs::create_dir(&fixture.0).unwrap();
-    assert!(fixture
-        .command()
-        .args(["config", "init"])
-        .status()
-        .unwrap()
-        .success());
-    for args in [
-        ["open", "--help"].as_slice(),
-        ["open", "--link", "extra"].as_slice(),
-    ] {
+    assert!(fixture.command().args(["config", "init"]).status().unwrap().success());
+    for args in [["open", "--help"].as_slice(), ["open", "--link", "extra"].as_slice()] {
         let output = fixture.command().args(args).output().unwrap();
         assert_eq!(output.status.success(), args.contains(&"--help"));
         assert!(!fixture.0.join("state/operator-unlock").exists());
@@ -111,10 +95,7 @@ fn printed_browser_link_is_private_single_use_and_needs_no_browser_opener() {
     };
     let first = link();
     let unlock_path = fixture.0.join("state/operator-unlock");
-    assert_eq!(
-        fs::metadata(&unlock_path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
+    assert_eq!(fs::metadata(&unlock_path).unwrap().permissions().mode() & 0o777, 0o600);
     assert!(!fixture.0.join("state/operator-session").exists());
     let mut server = Server(
         fixture
@@ -159,44 +140,25 @@ fn printed_browser_link_is_private_single_use_and_needs_no_browser_opener() {
         .to_str()
         .unwrap();
     assert!(
-        cookie.starts_with("control_operator=")
-            && cookie.contains("HttpOnly")
-            && cookie.contains("SameSite=Strict")
+        cookie.starts_with("control_operator=") && cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict")
     );
     assert!(!unlock_path.exists());
-    assert_eq!(
-        redeem(first.clone()).status(),
-        reqwest::StatusCode::UNAUTHORIZED
-    );
+    assert_eq!(redeem(first.clone()).status(), reqwest::StatusCode::UNAUTHORIZED);
     let second = link();
-    assert!(
-        first != second,
-        "each invocation must generate a fresh link"
-    );
+    assert!(first != second, "each invocation must generate a fresh link");
     assert_eq!(redeem(second).status(), reqwest::StatusCode::SEE_OTHER);
 }
 
 #[test]
 fn project_access_requires_operator_confirmation_and_survives_restart() {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let fixture = Fixture(std::env::temp_dir().join(format!(
-        "control-project-http-{}-{stamp}",
-        std::process::id()
-    )));
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let fixture = Fixture(std::env::temp_dir().join(format!("control-project-http-{}-{stamp}", std::process::id())));
     fs::create_dir(&fixture.0).unwrap();
     let source = fixture.0.join("project");
     fs::create_dir(&source).unwrap();
     fs::write(source.join("code.rs"), "fn main() {}\n").unwrap();
     fs::write(source.join(".env"), "synthetic fixture, not a credential").unwrap();
-    assert!(fixture
-        .command()
-        .args(["config", "init"])
-        .status()
-        .unwrap()
-        .success());
+    assert!(fixture.command().args(["config", "init"]).status().unwrap().success());
     let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = reservation.local_addr().unwrap();
     drop(reservation);
@@ -257,13 +219,7 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
         .send()
         .unwrap();
     assert_eq!(created.status(), 303);
-    let chat = created
-        .headers()
-        .get("location")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
+    let chat = created.headers().get("location").unwrap().to_str().unwrap().to_owned();
     let project_url = format!("{origin}{chat}/project");
     assert_eq!(
         client
@@ -315,12 +271,20 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
     let accepted = approve(nonce);
     assert_eq!(accepted.status(), 303);
     let progress = format!("{project_url}?importing={nonce}");
-    assert_eq!(accepted.headers()["location"].to_str().unwrap(), progress.split_once("/dm/").map(|(_, path)| format!("/dm/{path}")).unwrap());
+    assert_eq!(
+        accepted.headers()["location"].to_str().unwrap(),
+        progress
+            .split_once("/dm/")
+            .map(|(_, path)| format!("/dm/{path}"))
+            .unwrap()
+    );
     // Approval answers before the import; its page returns to the chat once attached.
     let started = std::time::Instant::now();
     loop {
         let page = client.get(&progress).header("Cookie", &cookie).send().unwrap();
-        if page.status() == 303 { break; }
+        if page.status() == 303 {
+            break;
+        }
         assert_eq!(page.status(), 200);
         assert!(started.elapsed() < Duration::from_secs(60), "import did not finish");
         std::thread::sleep(Duration::from_millis(20));
@@ -341,58 +305,47 @@ fn project_access_requires_operator_confirmation_and_survives_restart() {
     assert_eq!(fs::read(seed.join("code.rs")).unwrap(), b"fn main() {}\n");
     assert!(!seed.join(".env").exists());
     assert!(!source.join(".git").exists());
-    assert_eq!(
-        unsafe { libc::kill(server.0.id() as i32, libc::SIGTERM) },
-        0
-    );
+    assert_eq!(unsafe { libc::kill(server.0.id() as i32, libc::SIGTERM) }, 0);
     assert!(server.0.wait().unwrap().success());
     server = start_server();
-    let page = client
-        .get(&project_url)
-        .header("Cookie", &cookie)
-        .send()
-        .unwrap();
+    let page = client.get(&project_url).header("Cookie", &cookie).send().unwrap();
     assert_eq!(page.status(), 200);
     assert!(page.text().unwrap().contains("Folder opened"));
-    assert_eq!(
-        unsafe { libc::kill(server.0.id() as i32, libc::SIGTERM) },
-        0
-    );
+    assert_eq!(unsafe { libc::kill(server.0.id() as i32, libc::SIGTERM) }, 0);
     assert!(server.0.wait().unwrap().success());
 }
 
 #[test]
 fn term_and_interrupt_save_state_and_release_the_single_writer_lock() {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let fixture = Fixture(
-        std::env::temp_dir().join(format!("control-signals-{}-{stamp}", std::process::id())),
-    );
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let fixture = Fixture(std::env::temp_dir().join(format!("control-signals-{}-{stamp}", std::process::id())));
     fs::create_dir(&fixture.0).unwrap();
-    assert!(fixture
-        .command()
-        .args([
-            "config",
-            "init",
-            "--provider",
-            "claude",
-            "--source-root",
-            env!("CARGO_MANIFEST_DIR")
-        ])
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        fixture
+            .command()
+            .args([
+                "config",
+                "init",
+                "--provider",
+                "claude",
+                "--source-root",
+                env!("CARGO_MANIFEST_DIR")
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
     // Setup's sole Claude selection must survive both reruns and server startup.
     let model_path = fixture.0.join("config/model.json");
     let original = fs::read(&model_path).unwrap();
-    assert!(fixture
-        .command()
-        .args(["config", "init", "--provider", "codex"])
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        fixture
+            .command()
+            .args(["config", "init", "--provider", "codex"])
+            .status()
+            .unwrap()
+            .success()
+    );
     assert_eq!(fs::read(&model_path).unwrap(), original);
     // Restart the same node after each signal: the second start must acquire its state lock.
     for signal in [libc::SIGTERM, libc::SIGINT] {
@@ -455,24 +408,15 @@ fn term_and_interrupt_save_state_and_release_the_single_writer_lock() {
             .unwrap()
             .text()
             .unwrap();
-        let rows = page
-            .split("<section class='model-row'>")
-            .collect::<Vec<_>>();
-        assert_eq!(
-            rows.len(),
-            2,
-            "the running UI should list exactly one configured model"
-        );
+        let rows = page.split("<section class='model-row'>").collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2, "the running UI should list exactly one configured model");
         let selected = rows[1].split("</section>").next().unwrap();
         assert!(
             selected.contains("aria-pressed='true'")
                 && selected.contains("value='claude'")
                 && selected.contains("value='sonnet'")
         );
-        assert_eq!(
-            unsafe { libc::kill(server.0.id() as libc::pid_t, signal) },
-            0
-        );
+        assert_eq!(unsafe { libc::kill(server.0.id() as libc::pid_t, signal) }, 0);
         let start = Instant::now();
         loop {
             if let Some(status) = server.0.try_wait().unwrap() {

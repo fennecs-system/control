@@ -35,13 +35,19 @@ pub struct Tree<T> {
 }
 impl<T> Default for Tree<T> {
     fn default() -> Self {
-        Self { items: Vec::new(), links: Vec::new() }
+        Self {
+            items: Vec::new(),
+            links: Vec::new(),
+        }
     }
 }
 
 impl<T> Tree<T> {
     pub fn with_capacity(capacity: usize) -> Self {
-        Self { items: Vec::with_capacity(capacity), links: Vec::with_capacity(capacity) }
+        Self {
+            items: Vec::with_capacity(capacity),
+            links: Vec::with_capacity(capacity),
+        }
     }
     #[inline]
     pub fn len(&self) -> usize {
@@ -54,12 +60,20 @@ impl<T> Tree<T> {
     /// Appends `item` as the last child of `parent`, or as a new root.
     /// Panics if `parent` is out of range or the arena is full.
     pub fn push(&mut self, parent: Option<NodeId>, item: T) -> NodeId {
-        let id = u32::try_from(self.items.len()).ok().filter(|id| *id != NONE).expect("tree arena is full");
+        let id = u32::try_from(self.items.len())
+            .ok()
+            .filter(|id| *id != NONE)
+            .expect("tree arena is full");
         let parent = parent.map_or(NONE, |p| {
             assert!(p.index() < self.links.len(), "parent outside this tree");
             p.0
         });
-        let (root, depth) = if parent == NONE { (id, 0) } else { let p = &self.links[parent as usize]; (p.root, p.depth + 1) };
+        let (root, depth) = if parent == NONE {
+            (id, 0)
+        } else {
+            let p = &self.links[parent as usize];
+            (p.root, p.depth + 1)
+        };
         let mut prev = NONE;
         if parent != NONE {
             let p = &mut self.links[parent as usize];
@@ -73,7 +87,15 @@ impl<T> Tree<T> {
             self.links[prev as usize].next = id;
         }
         self.items.push(item);
-        self.links.push(Links { parent, root, depth, first: NONE, last: NONE, next: NONE, prev });
+        self.links.push(Links {
+            parent,
+            root,
+            depth,
+            first: NONE,
+            last: NONE,
+            next: NONE,
+            prev,
+        });
         NodeId(id)
     }
     #[inline]
@@ -97,8 +119,10 @@ impl<T> Tree<T> {
         for i in (0..self.len()).rev() {
             let (head, done) = out.split_at_mut(i + 1);
             let links = &self.links;
-            let mut children = std::iter::successors(Some(links[i].first).filter(|c| *c != NONE), |c| Some(links[*c as usize].next).filter(|n| *n != NONE))
-                .map(|c| done[c as usize - i - 1].as_ref().expect("child folded before parent"));
+            let mut children = std::iter::successors(Some(links[i].first).filter(|c| *c != NONE), |c| {
+                Some(links[*c as usize].next).filter(|n| *n != NONE)
+            })
+            .map(|c| done[c as usize - i - 1].as_ref().expect("child folded before parent"));
             head[i] = Some(f(&self.items[i], &mut children));
         }
         out.into_iter().map(|v| v.expect("every node folded")).collect()
@@ -173,7 +197,10 @@ impl<'a, T> Focus<'a, T> {
     /// recorded when the node was appended.
     #[inline]
     pub fn root(self) -> Self {
-        Self { tree: self.tree, at: self.links().root }
+        Self {
+            tree: self.tree,
+            at: self.links().root,
+        }
     }
     /// The focus, then each ancestor up to the root.
     pub fn ancestors(self) -> impl Iterator<Item = Focus<'a, T>> {
@@ -203,9 +230,16 @@ impl<'a, T> Focus<'a, T> {
     }
     /// Whether `other` lies in this focus's subtree.
     pub fn contains(&self, other: NodeId) -> bool {
-        let Some(node) = self.tree.focus(other) else { return false };
+        let Some(node) = self.tree.focus(other) else {
+            return false;
+        };
         let (mine, theirs) = (self.links(), node.links());
-        mine.root == theirs.root && theirs.depth >= mine.depth && node.ancestors().nth((theirs.depth - mine.depth) as usize).is_some_and(|a| a.at == self.at)
+        mine.root == theirs.root
+            && theirs.depth >= mine.depth
+            && node
+                .ancestors()
+                .nth((theirs.depth - mine.depth) as usize)
+                .is_some_and(|a| a.at == self.at)
     }
     /// Edges between this focus and its root. O(1).
     #[inline]

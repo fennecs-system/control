@@ -25,7 +25,10 @@ fn assert_tidy(children: &[Vec<usize>]) {
         }
         levels[depth].push(x);
         if let (Some(&first), Some(&last)) = (children[v].first(), children[v].last()) {
-            assert!((x - (placed[first].0 + placed[last].0) / 2.0).abs() < 1e-9, "node {v} centred over its children");
+            assert!(
+                (x - (placed[first].0 + placed[last].0) / 2.0).abs() < 1e-9,
+                "node {v} centred over its children"
+            );
         }
     }
     for level in levels {
@@ -33,7 +36,10 @@ fn assert_tidy(children: &[Vec<usize>]) {
             assert!(pair[1] - pair[0] >= 1.0 - 1e-9, "separation on a level: {pair:?}");
         }
     }
-    assert!(placed.iter().any(|(x, _)| x.abs() < 1e-9), "normalised to start at zero");
+    assert!(
+        placed.iter().any(|(x, _)| x.abs() < 1e-9),
+        "normalised to start at zero"
+    );
 }
 
 #[test]
@@ -48,7 +54,10 @@ fn layout_centres_parents_and_spaces_levels() {
 fn small_middle_subtrees_are_spread_evenly_between_wide_neighbours() {
     // Walker's improvement over Reingold–Tilford: the leaf between two wide
     // subtrees is centred in the gap rather than packed to the left.
-    let children = tree(&[(0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (1, 6), (3, 7), (3, 8), (3, 9)], 10);
+    let children = tree(
+        &[(0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (1, 6), (3, 7), (3, 8), (3, 9)],
+        10,
+    );
     let placed = layout(&children);
     assert_tidy(&children);
     let (a, b, c) = (placed[1].0, placed[2].0, placed[3].0);
@@ -65,7 +74,23 @@ fn identical_subtrees_are_drawn_identically_and_deep_contours_do_not_collide() {
     let shape = |root: usize, kids: [usize; 3]| kids.map(|k| placed[k].0 - placed[root].0);
     assert_eq!(shape(1, [3, 4, 7]), shape(2, [5, 6, 8]));
 
-    let deep = tree(&[(0, 1), (0, 2), (0, 3), (1, 4), (4, 5), (5, 6), (5, 7), (5, 8), (3, 9), (9, 10), (10, 11), (10, 12)], 13);
+    let deep = tree(
+        &[
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 4),
+            (4, 5),
+            (5, 6),
+            (5, 7),
+            (5, 8),
+            (3, 9),
+            (9, 10),
+            (10, 11),
+            (10, 12),
+        ],
+        13,
+    );
     assert_tidy(&deep);
 }
 
@@ -91,7 +116,12 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     crate::chat::send(&mut state, &lead, "Run a <civilisation>", "test").unwrap();
     state.chats[0].name = Some("Run a <civilisation>".into());
     let worker = crate::chat::create(&mut state);
-    state.chats.iter_mut().find(|chat| chat.id == worker).unwrap().parent_chat = Some(lead.clone());
+    state
+        .chats
+        .iter_mut()
+        .find(|chat| chat.id == worker)
+        .unwrap()
+        .parent_chat = Some(lead.clone());
     let html = render(&state, "").unwrap();
     assert!(html.contains("<svg") && html.contains("pt-steering") && html.contains("pt-agent"));
     assert!(html.contains("Run a &lt;civilisation&gt;") && !html.contains("<civilisation>"));
@@ -101,28 +131,69 @@ fn the_tree_shows_bots_services_and_processes_of_active_task_trees() {
     assert!(html.contains("<div class='process-tree' id='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='2'><svg"));
     let svg = &html[html.find("<svg").unwrap()..];
     let svg = &svg[..svg.find('>').unwrap()];
-    assert!(svg.contains(&format!("viewBox='-2 -2 {:.0} {:.0}'", WIDTH + 4.0, 2.0 * HEIGHT + V_GAP + 4.0)), "{svg}");
-    assert!(!svg.contains("width=") && !svg.contains("height="), "the canvas, not the drawing, sets the size");
-    assert!(svg.contains("preserveAspectRatio='xMidYMax meet'"), "without the client the trees still stand on the ground");
-    assert!(!html.contains("canvas-controls") && !html.contains("data-zoom"), "the zoom buttons live in the page toolbar's slot");
-    assert!(ZOOM_SLOT.contains("data-canvas-controls='process-tree'") && ZOOM_SLOT.ends_with(" hidden></div>"), "an empty slot naming this canvas, hidden until the client fills it");
+    assert!(
+        svg.contains(&format!(
+            "viewBox='-2 -2 {:.0} {:.0}'",
+            WIDTH + 4.0,
+            2.0 * HEIGHT + V_GAP + 4.0
+        )),
+        "{svg}"
+    );
+    assert!(
+        !svg.contains("width=") && !svg.contains("height="),
+        "the canvas, not the drawing, sets the size"
+    );
+    assert!(
+        svg.contains("preserveAspectRatio='xMidYMax meet'"),
+        "without the client the trees still stand on the ground"
+    );
+    assert!(
+        !html.contains("canvas-controls") && !html.contains("data-zoom"),
+        "the zoom buttons live in the page toolbar's slot"
+    );
+    assert!(
+        ZOOM_SLOT.contains("data-canvas-controls='process-tree'") && ZOOM_SLOT.ends_with(" hidden></div>"),
+        "an empty slot naming this canvas, hidden until the client fills it"
+    );
     // Trees grow up: the lead stands at the bottom, its agent a level above,
     // and the edge runs from the lead's top to the agent's bottom.
     let low = 1.0 * (HEIGHT + V_GAP);
-    assert!(html.contains(&format!("pt-steering' transform='translate(0.0 {low:.1})'")), "{html}");
+    assert!(
+        html.contains(&format!("pt-steering' transform='translate(0.0 {low:.1})'")),
+        "{html}"
+    );
     assert!(html.contains("pt-agent' transform='translate(0.0 0.0)'"), "{html}");
     let middle = (low + HEIGHT) / 2.0;
-    assert!(html.contains(&format!("d='M{x:.1} {low:.1}C{x:.1} {middle:.1} {x:.1} {middle:.1} {x:.1} {HEIGHT:.1}'", x = WIDTH / 2.0)), "{html}");
+    assert!(
+        html.contains(&format!(
+            "d='M{x:.1} {low:.1}C{x:.1} {middle:.1} {x:.1} {middle:.1} {x:.1} {HEIGHT:.1}'",
+            x = WIDTH / 2.0
+        )),
+        "{html}"
+    );
     // A shallower tree beside it stands on the same baseline.
     let other = crate::chat::create(&mut state);
-    state.runtime.enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
+    state
+        .runtime
+        .enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
     let run = state.runtime.runs.last_mut().unwrap();
     run.chat_id = Some(other);
     run.status = "running".into();
     let both = render(&state, "").unwrap();
-    assert_eq!(both.matches(&format!(" {low:.1})'")).count(), 2, "both roots on the bottom level: {both}");
-    state.runtime.runs.iter_mut().for_each(|run| run.status = "completed".into());
-    assert!(render(&state, "").is_none(), "trees without bots, services or active turns are omitted");
+    assert_eq!(
+        both.matches(&format!(" {low:.1})'")).count(),
+        2,
+        "both roots on the bottom level: {both}"
+    );
+    state
+        .runtime
+        .runs
+        .iter_mut()
+        .for_each(|run| run.status = "completed".into());
+    assert!(
+        render(&state, "").is_none(),
+        "trees without bots, services or active turns are omitted"
+    );
 }
 #[test]
 fn nodes_show_callsigns_and_renames() {
@@ -131,7 +202,9 @@ fn nodes_show_callsigns_and_renames() {
     let worker = crate::chat::create(&mut state);
     state.chats[1].parent_chat = Some(lead.clone());
     state.chats[1].name = Some("player1".into());
-    state.runtime.enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
+    state
+        .runtime
+        .enqueue("Work".into(), crate::runtime::RunKind::Chat, "test");
     state.runtime.runs[0].chat_id = Some(worker.clone());
     state.runtime.runs[0].status = "running".into();
     let svg = render(&state, "").unwrap();

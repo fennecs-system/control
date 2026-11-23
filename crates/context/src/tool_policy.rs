@@ -2,17 +2,35 @@
 //! This classifies calls; execution and actor authorization stay in the brokers.
 /// Host policy, never a caller-supplied MCP annotation. Unknown tools fail
 /// closed. Isolated execution still starts work, so it is fenced after yield.
-pub fn after_handoff(name:&str)->bool {
-    matches!(name,
-        "control_turn_context"|"control_turn_handoff"|"control_history_read"|"control_guidance"|"control_tool_search"|
-        "control_service_status"|"control_service_exec_status"|
-        "control_port_status"|"control_bot_status"|
-        "control_workspace_status"|"control_watch_status"|"control_watch_events"|
-        "control_room_list"|"control_room_read"|"control_room_plan"|"control_room_notifications"|"control_intel_brief"|
-        "control_search_path"|
-        "control_knowledge_read"|"control_knowledge_search"|
-        "control_packages_search"|"control_package_read"|
-        "control_agent_result"|"control_agent_spawn_status"|"control_github_read")
+pub fn after_handoff(name: &str) -> bool {
+    matches!(
+        name,
+        "control_turn_context"
+            | "control_turn_handoff"
+            | "control_history_read"
+            | "control_guidance"
+            | "control_tool_search"
+            | "control_service_status"
+            | "control_service_exec_status"
+            | "control_port_status"
+            | "control_bot_status"
+            | "control_workspace_status"
+            | "control_watch_status"
+            | "control_watch_events"
+            | "control_room_list"
+            | "control_room_read"
+            | "control_room_plan"
+            | "control_room_notifications"
+            | "control_intel_brief"
+            | "control_search_path"
+            | "control_knowledge_read"
+            | "control_knowledge_search"
+            | "control_packages_search"
+            | "control_package_read"
+            | "control_agent_result"
+            | "control_agent_spawn_status"
+            | "control_github_read"
+    )
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {

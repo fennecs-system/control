@@ -74,26 +74,18 @@ impl Transport {
     }
     #[allow(dead_code)] // Listener-side API; shared with the host binary.
     pub fn heartbeat_age(&self) -> Duration {
-        self.heartbeat
-            .lock()
-            .map_or(Duration::MAX, |time| time.elapsed())
+        self.heartbeat.lock().map_or(Duration::MAX, |time| time.elapsed())
     }
     pub fn send(&self, id: u32, kind: Kind, data: &[u8]) -> io::Result<()> {
         if !self.alive() {
             return Err(fail("Multiplex relay closed"));
         }
-        let mut writer = self
-            .output
-            .lock()
-            .map_err(|_| fail("Relay writer unavailable"))?;
+        let mut writer = self.output.lock().map_err(|_| fail("Relay writer unavailable"))?;
         writer.write_all(&id.to_be_bytes())?;
         protocol::write(&mut *writer, kind, data)
     }
     fn reserve(&self, id: u32) -> io::Result<Incoming> {
-        let mut channels = self
-            .channels
-            .lock()
-            .map_err(|_| fail("Relay streams unavailable"))?;
+        let mut channels = self.channels.lock().map_err(|_| fail("Relay streams unavailable"))?;
         if id == 0 || channels.len() >= CONNECTIONS || channels.contains_key(&id) {
             return Err(fail("Relay stream limit or duplicate ID"));
         }
@@ -109,11 +101,7 @@ impl Transport {
             socket: Mutex::new(None),
         });
         channels.insert(id, channel.clone());
-        Ok(Incoming {
-            id,
-            channel,
-            input: rx,
-        })
+        Ok(Incoming { id, channel, input: rx })
     }
     #[allow(dead_code)] // Listener-side API; shared with the host binary.
     pub fn open(self: &Arc<Self>, socket: TcpStream) -> io::Result<()> {
@@ -140,10 +128,7 @@ impl Transport {
             }
             socket.set_nonblocking(false)?;
             socket.set_nodelay(true)?;
-            *channel
-                .socket
-                .lock()
-                .map_err(|_| fail("Relay socket unavailable"))? = Some(socket.try_clone()?);
+            *channel.socket.lock().map_err(|_| fail("Relay socket unavailable"))? = Some(socket.try_clone()?);
             let mut reading = socket.try_clone()?;
             channel.receiving.store(WINDOW, Ordering::Release);
             for _ in 0..WINDOW {
@@ -157,11 +142,7 @@ impl Transport {
                     loop {
                         stream.outgoing.take(&stream.alive)?;
                         let n = reading.read(&mut buffer)?;
-                        link.send(
-                            id,
-                            if n == 0 { Kind::Fin } else { Kind::Data },
-                            &buffer[..n],
-                        )?;
+                        link.send(id, if n == 0 { Kind::Fin } else { Kind::Data }, &buffer[..n])?;
                         if n == 0 {
                             stream.read_done.store(true, Ordering::Release);
                             return Ok(());
@@ -190,8 +171,7 @@ impl Transport {
                                 stream.write_done.store(true, Ordering::Release);
                                 return Ok(());
                             }
-                            Err(mpsc::RecvTimeoutError::Timeout)
-                                if stream.alive.load(Ordering::Acquire) => {}
+                            Err(mpsc::RecvTimeoutError::Timeout) if stream.alive.load(Ordering::Acquire) => {}
                             Err(_) => return Err(fail("Relay stream closed")),
                         }
                     }
@@ -217,11 +197,7 @@ impl Transport {
         }
     }
     fn close(&self, id: u32, notify: bool) {
-        let channel = self
-            .channels
-            .lock()
-            .ok()
-            .and_then(|mut channels| channels.remove(&id));
+        let channel = self.channels.lock().ok().and_then(|mut channels| channels.remove(&id));
         if let Some(channel) = channel {
             channel.alive.store(false, Ordering::Release);
             if let Ok(socket) = channel.socket.lock()
@@ -247,12 +223,7 @@ impl Transport {
             }
         }
     }
-    fn read(
-        &self,
-        mut reader: impl Read,
-        accept_remote: bool,
-        incoming: SyncSender<Incoming>,
-    ) -> io::Result<()> {
+    fn read(&self, mut reader: impl Read, accept_remote: bool, incoming: SyncSender<Incoming>) -> io::Result<()> {
         let mut buffer = [0; LIMIT];
         loop {
             let mut id = [0; 4];
@@ -263,10 +234,7 @@ impl Transport {
                 if kind != Kind::Ping {
                     return Err(fail("Invalid relay control frame"));
                 }
-                *self
-                    .heartbeat
-                    .lock()
-                    .map_err(|_| fail("Relay clock unavailable"))? = Instant::now();
+                *self.heartbeat.lock().map_err(|_| fail("Relay clock unavailable"))? = Instant::now();
                 continue;
             }
             if kind == Kind::Open {
@@ -293,9 +261,7 @@ impl Transport {
                 .cloned();
             let Some(channel) = channel else {
                 // An in-flight credit can follow a completed stream's close.
-                if id <= self.last_id.load(Ordering::Acquire)
-                    && matches!(kind, Kind::Credit | Kind::Data | Kind::Fin)
-                {
+                if id <= self.last_id.load(Ordering::Acquire) && matches!(kind, Kind::Credit | Kind::Data | Kind::Fin) {
                     continue;
                 }
                 return Err(fail("Unknown relay stream"));
@@ -304,7 +270,10 @@ impl Transport {
                 Kind::Credit => channel.outgoing.grant()?,
                 Kind::Data | Kind::Fin
                     if !channel.fin.load(Ordering::Acquire)
-                        && channel.receiving.try_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1)).is_ok() =>
+                        && channel
+                            .receiving
+                            .try_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1))
+                            .is_ok() =>
                 {
                     let data = if kind == Kind::Fin {
                         channel.fin.store(true, Ordering::Release);

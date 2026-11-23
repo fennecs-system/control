@@ -44,10 +44,7 @@ fn later_human_steering_is_relative_to_the_latest_matching_request() {
         Eligibility::Candidate(2)
     );
     runs.push(run("unrelated", "other", "running", RunKind::Task));
-    assert_eq!(
-        decide(&runs, "chat", &["steering"], None),
-        Eligibility::Candidate(2)
-    );
+    assert_eq!(decide(&runs, "chat", &["steering"], None), Eligibility::Candidate(2));
     runs.push(run("new-steering", "chat", "completed", RunKind::Task));
     assert_eq!(decide(&runs, "chat", &["steering"], None), Eligibility::Note);
 }
@@ -81,16 +78,28 @@ fn missing_requests_and_unsuccessful_latest_turns_are_not_resumed() {
         assert_eq!(decide(&runs, "chat", &["origin"], None), Eligibility::Note);
     }
     // A turn cut off before its handoff left a host checkpoint and resumes.
-    for cause in [crate::attempt_control::Termination::StepLimit, crate::attempt_control::Termination::TimedOut] {
+    for cause in [
+        crate::attempt_control::Termination::StepLimit,
+        crate::attempt_control::Termination::TimedOut,
+    ] {
         let mut cut = run("origin", "chat", "failed", RunKind::Task);
-        cut.attempts.push(crate::usage::Attempt { termination: Some(cause), ..Default::default() });
+        cut.attempts.push(crate::usage::Attempt {
+            termination: Some(cause),
+            ..Default::default()
+        });
         assert_eq!(decide(&[cut], "chat", &["origin"], None), Eligibility::Candidate(0));
     }
     // A request made before the operator cancelled the chat is only noted; one
     // made by a later turn resumes as usual.
     let mut cut = run("origin", "chat", "failed", RunKind::Task);
-    cut.attempts.push(crate::usage::Attempt { termination: Some(crate::attempt_control::Termination::StepLimit), ..Default::default() });
-    assert_eq!(decide(std::slice::from_ref(&cut), "chat", &["origin"], Some(1)), Eligibility::Note);
+    cut.attempts.push(crate::usage::Attempt {
+        termination: Some(crate::attempt_control::Termination::StepLimit),
+        ..Default::default()
+    });
+    assert_eq!(
+        decide(std::slice::from_ref(&cut), "chat", &["origin"], Some(1)),
+        Eligibility::Note
+    );
     assert_eq!(decide(&[cut], "chat", &["origin"], Some(0)), Eligibility::Candidate(0));
     let runs = [run("origin", "chat", "completed", RunKind::Task)];
     assert_eq!(decide(&runs, "chat", &["missing"], None), Eligibility::Note);
@@ -101,16 +110,45 @@ fn missing_requests_and_unsuccessful_latest_turns_are_not_resumed() {
 fn recording_uses_only_supplied_records_and_preserves_unrelated_chats() {
     let mut runs = vec![run("origin", "chat", "completed", RunKind::Task)];
     let mut notice = "unchanged".to_owned();
-    let session = |id, revision| serde_json::from_value::<Session>(serde_json::json!({"id":id,"revision":revision,"actor":{"type":"local_operator"},"title":id,"messages":[]})).unwrap();
+    let session = |id, revision| {
+        serde_json::from_value::<Session>(
+            serde_json::json!({"id":id,"revision":revision,"actor":{"type":"local_operator"},"title":id,"messages":[]}),
+        )
+        .unwrap()
+    };
     let mut chats = vec![session("chat", u64::MAX), session("other", 0)];
     let other = serde_json::to_vec(&chats[1]).unwrap();
-    assert_eq!(record(Edit { runs: &mut runs, notice: &mut notice, chats: &mut chats }, "chat", None, "denied".into()), Outcome::Noted);
+    assert_eq!(
+        record(
+            Edit {
+                runs: &mut runs,
+                notice: &mut notice,
+                chats: &mut chats
+            },
+            "chat",
+            None,
+            "denied".into()
+        ),
+        Outcome::Noted
+    );
     assert_eq!(runs.len(), 1);
     assert_eq!(notice, "unchanged");
     assert_eq!(chats[0].messages[0].run_id, None);
     assert_eq!(chats[0].revision, u64::MAX);
     let continuation = run("resumed", "chat", "queued", RunKind::PortDecision);
-    assert_eq!(record(Edit { runs: &mut runs, notice: &mut notice, chats: &mut chats }, "chat", Some(continuation), "approved".into()), Outcome::Resumed("resumed".into()));
+    assert_eq!(
+        record(
+            Edit {
+                runs: &mut runs,
+                notice: &mut notice,
+                chats: &mut chats
+            },
+            "chat",
+            Some(continuation),
+            "approved".into()
+        ),
+        Outcome::Resumed("resumed".into())
+    );
     assert_eq!(runs.last().unwrap().id, "resumed");
     assert_eq!(chats[0].messages[1].run_id.as_deref(), Some("resumed"));
     assert_eq!(notice, "Run queued.");

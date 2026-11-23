@@ -1,6 +1,9 @@
 //! Closed backend selection, captured with each run and attempt.
 use serde::{Deserialize, Serialize};
-use std::{io::{self, Read}, path::Path};
+use std::{
+    io::{self, Read},
+    path::Path,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,9 +45,18 @@ pub(crate) trait Agent: Sync {
     /// Offline isolation probe with a canary credential: no account, no model.
     fn probe(&self, isolation: &dyn control_isolation::Isolation, image: &str) -> Result<(), String>;
     /// A bounded text request without tools, or why this backend has no CLI.
-    fn text_run(&self, isolation: &dyn control_isolation::Isolation, call: &TextCall<'_>) -> io::Result<control_isolation::RunSpec>;
+    fn text_run(
+        &self,
+        isolation: &dyn control_isolation::Isolation,
+        call: &TextCall<'_>,
+    ) -> io::Result<control_isolation::RunSpec>;
     /// Decodes a text request's event stream; `max` bounds the reply in bytes.
-    fn text(&self, reader: &mut dyn Read, max: usize, emit: &mut dyn FnMut(control_ai::Event)) -> io::Result<control_ai::Output>;
+    fn text(
+        &self,
+        reader: &mut dyn Read,
+        max: usize,
+        emit: &mut dyn FnMut(control_ai::Event),
+    ) -> io::Result<control_ai::Output>;
     /// Names it keeps in a workspace that are never published or shared.
     fn private_names(&self) -> &'static [&'static str] {
         &[]
@@ -125,7 +137,9 @@ impl Backend {
 }
 /// Whether any backend keeps `name` private in a workspace.
 pub(crate) fn private_name(name: &str) -> bool {
-    Backend::ALL.iter().any(|backend| backend.agent().private_names().contains(&name))
+    Backend::ALL
+        .iter()
+        .any(|backend| backend.agent().private_names().contains(&name))
 }
 /// Refusal shared by selection and launch for endpoints without declared tool calls.
 pub const LOCAL_TEXT_ONLY: &str = "This local endpoint is declared text-only: use control_model_generate for inference, or edit the entry in Manage → Models and enable \"Serves tool calls\" for a tool-capable server (llama.cpp --jinja) to run agent turns. No run was started and no hosted model was substituted.";

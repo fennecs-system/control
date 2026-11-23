@@ -39,11 +39,19 @@ impl Metrics {
                 continue;
             }
             let mut fields = line.split_ascii_whitespace();
-            let (Some(name), Some(value)) = (fields.next(), fields.next()) else { continue };
-            if name.len() > NAME_BYTES || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':') {
+            let (Some(name), Some(value)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            if name.len() > NAME_BYTES
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':')
+            {
                 continue;
             }
-            let Some(value) = value.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0) else { continue };
+            let Some(value) = value.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0) else {
+                continue;
+            };
             let slot = match name.strip_prefix("llamacpp:").unwrap_or(name) {
                 "prompt_tokens_total" => &mut metrics.prompt_tokens,
                 "prompt_seconds_total" => &mut metrics.prompt_seconds,
@@ -136,7 +144,11 @@ pub fn read(endpoint: &Endpoint) -> io::Result<Stats> {
     let Target::Endpoint(mut url) = endpoint.validate()? else {
         return Err(io::Error::other("CLI text models have no inference server statistics"));
     };
-    let mut stats = Stats { model: endpoint.id.clone(), url: endpoint.url.clone(), ..Stats::default() };
+    let mut stats = Stats {
+        model: endpoint.id.clone(),
+        url: endpoint.url.clone(),
+        ..Stats::default()
+    };
     url.set_path("/metrics");
     match transport::get(&url, TIMEOUT) {
         Ok(body) => {
@@ -173,7 +185,11 @@ fn explain(error: &io::Error, flag: &str, answered: &mut bool) -> String {
 }
 
 fn tokens(count: u64) -> String {
-    if count >= 1000 { format!("{:.1}k", count as f64 / 1000.0) } else { count.to_string() }
+    if count >= 1000 {
+        format!("{:.1}k", count as f64 / 1000.0)
+    } else {
+        count.to_string()
+    }
 }
 /// The compact one-line summary shown on the model's card and by the CLI.
 pub fn line(stats: &Stats) -> String {
@@ -184,7 +200,11 @@ pub fn line(stats: &Stats) -> String {
     match &stats.metrics {
         Some(m) => {
             let speed = |rate: Option<f64>| rate.map_or_else(|| "–".to_owned(), |r| format!("{r:.1}"));
-            parts.push(format!("prompt {} tok/s · generation {} tok/s (avg since start)", speed(m.prompt_rate()), speed(m.generation_rate())));
+            parts.push(format!(
+                "prompt {} tok/s · generation {} tok/s (avg since start)",
+                speed(m.prompt_rate()),
+                speed(m.generation_rate())
+            ));
             if let (Some(processing), Some(deferred)) = (m.requests_processing, m.requests_deferred) {
                 parts.push(format!("{processing:.0} processing, {deferred:.0} queued"));
             }
@@ -192,20 +212,34 @@ pub fn line(stats: &Stats) -> String {
                 parts.push(format!("prefix cache {:.0}% of prompt tokens", share * 100.0));
             }
             if let (Some(prefilled), Some(share)) = (m.prompt_tokens, m.prefill_share()) {
-                parts.push(format!("prefilled {} tokens, {:.0}% of busy time", tokens(prefilled as u64), share * 100.0));
+                parts.push(format!(
+                    "prefilled {} tokens, {:.0}% of busy time",
+                    tokens(prefilled as u64),
+                    share * 100.0
+                ));
             }
         }
-        None => parts.push(format!("metrics {}", stats.metrics_error.as_deref().unwrap_or("unavailable"))),
+        None => parts.push(format!(
+            "metrics {}",
+            stats.metrics_error.as_deref().unwrap_or("unavailable")
+        )),
     }
     match &stats.slots {
         Some(s) => {
             parts.push(format!("slots {}/{} busy", s.busy, s.total));
             if s.context_capacity > 0 {
-                parts.push(format!("KV {}/{} tokens ({:.0}%)", tokens(s.context_tokens), tokens(s.context_capacity),
-                    s.context_tokens as f64 * 100.0 / s.context_capacity as f64));
+                parts.push(format!(
+                    "KV {}/{} tokens ({:.0}%)",
+                    tokens(s.context_tokens),
+                    tokens(s.context_capacity),
+                    s.context_tokens as f64 * 100.0 / s.context_capacity as f64
+                ));
             }
         }
-        None => parts.push(format!("slots {}", stats.slots_error.as_deref().unwrap_or("unavailable"))),
+        None => parts.push(format!(
+            "slots {}",
+            stats.slots_error.as_deref().unwrap_or("unavailable")
+        )),
     }
     parts.join(" · ")
 }
@@ -214,17 +248,28 @@ pub fn line(stats: &Stats) -> String {
 /// escaped HTML fragments keyed by model name (the page's `data-live` slots).
 pub fn live(endpoints: &[Endpoint]) -> serde_json::Map<String, Value> {
     std::thread::scope(|scope| {
-        let reads = endpoints.iter().filter(|e| e.cli.is_none()).map(|endpoint| {
-            (endpoint.id.clone(), scope.spawn(|| read(endpoint)))
-        }).collect::<Vec<_>>();
-        reads.into_iter().map(|(id, read)| {
-            let text = match read.join() {
-                Ok(Ok(stats)) => line(&stats),
-                Ok(Err(error)) => error.to_string(),
-                Err(_) => "statistics unavailable".into(),
-            };
-            (id, Value::String(format!("<span class='model-stats-line'>{}</span>", crate::escape(&text))))
-        }).collect()
+        let reads = endpoints
+            .iter()
+            .filter(|e| e.cli.is_none())
+            .map(|endpoint| (endpoint.id.clone(), scope.spawn(|| read(endpoint))))
+            .collect::<Vec<_>>();
+        reads
+            .into_iter()
+            .map(|(id, read)| {
+                let text = match read.join() {
+                    Ok(Ok(stats)) => line(&stats),
+                    Ok(Err(error)) => error.to_string(),
+                    Err(_) => "statistics unavailable".into(),
+                };
+                (
+                    id,
+                    Value::String(format!(
+                        "<span class='model-stats-line'>{}</span>",
+                        crate::escape(&text)
+                    )),
+                )
+            })
+            .collect()
     })
 }
 

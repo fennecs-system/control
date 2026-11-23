@@ -7,7 +7,10 @@ impl Temp {
         let path = std::env::temp_dir().join(format!(
             "control-packages-{label}-{}-{:x}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(&path).unwrap();
         Self(path.canonicalize().unwrap())
@@ -22,12 +25,24 @@ fn git(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .args(["-c", "user.name=Swarm", "-c", "user.email=swarm@localhost", "-c", "init.defaultBranch=main", "-C"])
+        .args([
+            "-c",
+            "user.name=Swarm",
+            "-c",
+            "user.email=swarm@localhost",
+            "-c",
+            "init.defaultBranch=main",
+            "-C",
+        ])
         .arg(repo)
         .args(args)
         .output()
         .unwrap();
-    assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 /// A small client repository like `~/control-tools/mc263-client`.
@@ -35,7 +50,11 @@ fn repository(temp: &Temp) -> PathBuf {
     let repo = temp.0.join("mc263-client");
     fs::create_dir_all(repo.join("client")).unwrap();
     git(&repo, &["init", "--quiet"]);
-    fs::write(repo.join("README.md"), "# Native Minecraft Java 26.3 Mineflayer client\n\nCopy to /workspace/castle.\n").unwrap();
+    fs::write(
+        repo.join("README.md"),
+        "# Native Minecraft Java 26.3 Mineflayer client\n\nCopy to /workspace/castle.\n",
+    )
+    .unwrap();
     fs::write(repo.join("client/gateway.cjs"), "module.exports = {};\n").unwrap();
     fs::write(repo.join("client/package.json"), "{\"dependencies\":{}}\n").unwrap();
     commit(&repo, "v1");
@@ -67,8 +86,14 @@ fn running(state: &mut State, packages: Vec<control_context::PackageInput>) -> S
     crate::chat::send(state, &chat, "Build the castle", "test").unwrap();
     let run = &mut **state.runtime.runs.last_mut().unwrap();
     run.status = "running".into();
-    run.attempts.push(crate::usage::Attempt { workspace_id: Some(format!("{}-attempt", run.id)), ..Default::default() });
-    *run.context = Some(control_context::Resolved { packages, ..Default::default() });
+    run.attempts.push(crate::usage::Attempt {
+        workspace_id: Some(format!("{}-attempt", run.id)),
+        ..Default::default()
+    });
+    *run.context = Some(control_context::Resolved {
+        packages,
+        ..Default::default()
+    });
     run.id.clone()
 }
 
@@ -82,7 +107,10 @@ fn operator_import_admits_an_immutable_tagged_version_with_provenance() {
     let started = std::time::Instant::now();
     let manifest = import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap();
     eprintln!("import of a 3-file package: {:?}", started.elapsed());
-    assert_eq!((manifest.name.as_str(), manifest.version, manifest.tag.as_str()), ("mc263-client", 1, "v1"));
+    assert_eq!(
+        (manifest.name.as_str(), manifest.version, manifest.tag.as_str()),
+        ("mc263-client", 1, "v1")
+    );
     assert_eq!(manifest.commit, head);
     assert_eq!(manifest.description, "Native Minecraft Java 26.3 Mineflayer client");
     assert_eq!((manifest.files, manifest.setup.len()), (3, 1));
@@ -99,12 +127,18 @@ fn operator_import_admits_an_immutable_tagged_version_with_provenance() {
     assert!(git(&repository, &["remote"]).is_empty());
 
     // The same commit is idempotent; a new commit is v2 and v1 is unchanged.
-    assert_eq!(import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap().version, 1);
+    assert_eq!(
+        import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap().version,
+        1
+    );
     fs::write(repo.join("client/gateway.cjs"), "module.exports = { light: true };\n").unwrap();
     let second = commit(&repo, "light-data fix");
     let v2 = import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap();
     assert_eq!((v2.version, v2.commit.as_str()), (2, second.as_str()));
-    assert_eq!(fs::read_to_string(version.join("tree/client/gateway.cjs")).unwrap(), "module.exports = {};\n");
+    assert_eq!(
+        fs::read_to_string(version.join("tree/client/gateway.cjs")).unwrap(),
+        "module.exports = {};\n"
+    );
     assert_eq!(shared.lock().unwrap().packages.len(), 2);
     // The source repository is only read.
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
@@ -119,38 +153,116 @@ fn import_rejects_unsafe_trees_and_rolls_back_a_failed_save() {
     let rejected = |change: &dyn Fn(&Path), expected: &str| {
         change(&repo);
         commit(&repo, "unsafe");
-        let error = import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap_err().to_string();
+        let error = import_at(&store, &shared, request(&repo), |_| Ok(()))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains(expected), "{error}");
         git(&repo, &["reset", "--quiet", "--hard", "HEAD~1"]);
         git(&repo, &["clean", "--quiet", "-fdx"]);
     };
     rejected(&|r| fs::write(r.join(".env"), "TOKEN=x").unwrap(), "excluded");
-    rejected(&|r| { fs::create_dir_all(r.join("client/node_modules/x")).unwrap(); fs::write(r.join("client/node_modules/x/i.js"), "").unwrap(); }, "node_modules");
-    rejected(&|r| std::os::unix::fs::symlink("/etc/passwd", r.join("passwd")).unwrap(), "symlink");
-    rejected(&|r| { fs::create_dir_all(r.join(".ssh")).unwrap(); fs::write(r.join(".ssh/id_ed25519"), "").unwrap(); }, "excluded");
+    rejected(
+        &|r| {
+            fs::create_dir_all(r.join("client/node_modules/x")).unwrap();
+            fs::write(r.join("client/node_modules/x/i.js"), "").unwrap();
+        },
+        "node_modules",
+    );
+    rejected(
+        &|r| std::os::unix::fs::symlink("/etc/passwd", r.join("passwd")).unwrap(),
+        "symlink",
+    );
+    rejected(
+        &|r| {
+            fs::create_dir_all(r.join(".ssh")).unwrap();
+            fs::write(r.join(".ssh/id_ed25519"), "").unwrap();
+        },
+        "excluded",
+    );
     assert!(shared.lock().unwrap().packages.is_empty());
-    assert!(fs::read_dir(store.join("mc263-client/versions")).unwrap().next().is_none());
+    assert!(
+        fs::read_dir(store.join("mc263-client/versions"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 
     for (input, expected) in [
-        (Import { name: "Bad Name".into(), ..request(&repo) }, "lowercase"),
-        (Import { rev: Some("--upload-pack=x".into()), ..request(&repo) }, "branch"),
-        (Import { rev: Some("main:refs/heads/x".into()), ..request(&repo) }, "branch"),
-        (Import { path: "relative".into(), ..request(&repo) }, "absolute"),
-        (Import { commit: Some("0000000".into()), ..request(&repo) }, "not 0000000"),
-        (Import { entry: Some("missing.md".into()), ..request(&repo) }, "not a file"),
-        (Import { description: Some("two\nlines".into()), ..request(&repo) }, "one line"),
+        (
+            Import {
+                name: "Bad Name".into(),
+                ..request(&repo)
+            },
+            "lowercase",
+        ),
+        (
+            Import {
+                rev: Some("--upload-pack=x".into()),
+                ..request(&repo)
+            },
+            "branch",
+        ),
+        (
+            Import {
+                rev: Some("main:refs/heads/x".into()),
+                ..request(&repo)
+            },
+            "branch",
+        ),
+        (
+            Import {
+                path: "relative".into(),
+                ..request(&repo)
+            },
+            "absolute",
+        ),
+        (
+            Import {
+                commit: Some("0000000".into()),
+                ..request(&repo)
+            },
+            "not 0000000",
+        ),
+        (
+            Import {
+                entry: Some("missing.md".into()),
+                ..request(&repo)
+            },
+            "not a file",
+        ),
+        (
+            Import {
+                description: Some("two\nlines".into()),
+                ..request(&repo)
+            },
+            "one line",
+        ),
     ] {
         let error = import_at(&store, &shared, input, |_| Ok(())).unwrap_err().to_string();
         assert!(error.contains(expected), "{error}");
     }
-    assert!(import_at(&store, &shared, Import { path: temp.0.display().to_string(), ..request(&repo) }, |_| Ok(())).is_err());
+    assert!(
+        import_at(
+            &store,
+            &shared,
+            Import {
+                path: temp.0.display().to_string(),
+                ..request(&repo)
+            },
+            |_| Ok(())
+        )
+        .is_err()
+    );
 
     // A failed checkpoint admits nothing and removes the version and its tag.
     assert!(import_at(&store, &shared, request(&repo), |_| Err(io::Error::other("full"))).is_err());
     assert!(shared.lock().unwrap().packages.is_empty());
     assert!(!store.join("mc263-client/versions/1").exists());
     assert!(git(&store.join("mc263-client/repository.git"), &["tag"]).is_empty());
-    assert_eq!(import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap().version, 1);
+    assert_eq!(
+        import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap().version,
+        1
+    );
 }
 
 #[test]
@@ -160,12 +272,34 @@ fn a_package_may_declare_its_manifest_fields_and_operator_values_win() {
     fs::write(repo.join("control-tool.json"), r#"{"description":"Declared","usage":"Declared usage","setup":["nix build"],"entry":"client/gateway.cjs","provenance":"ignored"}"#).unwrap();
     commit(&repo, "manifest");
     let store = temp.0.join("store");
-    let declared = import_at(&store, &shared(), Import { usage: None, setup: None, ..request(&repo) }, |_| Ok(())).unwrap();
-    assert_eq!((declared.description.as_str(), declared.usage.as_str()), ("Declared", "Declared usage"));
+    let declared = import_at(
+        &store,
+        &shared(),
+        Import {
+            usage: None,
+            setup: None,
+            ..request(&repo)
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(
+        (declared.description.as_str(), declared.usage.as_str()),
+        ("Declared", "Declared usage")
+    );
     assert_eq!(declared.setup, vec!["nix build".to_string()]);
     assert_eq!(declared.entry.as_deref(), Some("client/gateway.cjs"));
     assert_eq!(declared.provenance.evidence, "fixture-check.cjs passes");
-    let overridden = import_at(&temp.0.join("other"), &shared(), Import { description: Some("Operator".into()), ..request(&repo) }, |_| Ok(())).unwrap();
+    let overridden = import_at(
+        &temp.0.join("other"),
+        &shared(),
+        Import {
+            description: Some("Operator".into()),
+            ..request(&repo)
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
     assert_eq!(overridden.description, "Operator");
 }
 
@@ -189,7 +323,9 @@ fn revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts
     // The captured run keeps its record but a new attempt receives nothing.
     assert!(planned_in(&state, &run).is_empty());
     drop(state);
-    let error = import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap_err().to_string();
+    let error = import_at(&store, &shared, request(&repo), |_| Ok(()))
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("revoked"), "{error}");
     assert_eq!(v1.version, 1);
 }
@@ -214,27 +350,58 @@ fn workers_discover_only_captured_packages_and_read_them_as_evidence() {
     };
     let host = crate::tool_registry::LocalHost(&shared);
     let call = |run: &str, name: &str, args: Value| {
-        let cx = AttemptCall { attempt: crate::tool_registry::AttemptRef { run, generation: "g", nonce: "n" }, host: &host };
+        let cx = AttemptCall {
+            attempt: crate::tool_registry::AttemptRef {
+                run,
+                generation: "g",
+                nonce: "n",
+            },
+            host: &host,
+        };
         Tools.call(&cx, name, &args)
     };
     let found = call(&opted, "control_packages_search", json!({"query":"minecraft"})).unwrap();
     assert_eq!(found["packages"][0]["mount"], "/workspace/.control-tools/mc263-client");
     assert!(found["note"].as_str().unwrap().contains("not instructions"));
     // A run that did not opt in rebuilds from scratch: nothing is discoverable.
-    assert_eq!(call(&plain, "control_packages_search", json!({})).unwrap()["packages"], json!([]));
+    assert_eq!(
+        call(&plain, "control_packages_search", json!({})).unwrap()["packages"],
+        json!([])
+    );
     assert!(call(&plain, "control_package_read", json!({"name":"mc263-client"})).is_err());
 
     let manifest = shared.lock().unwrap().packages[0].clone();
-    let page = read_page(&store, &manifest, &read_input(&json!({"name":"mc263-client","limit":10})).unwrap(), true).unwrap();
+    let page = read_page(
+        &store,
+        &manifest,
+        &read_input(&json!({"name":"mc263-client","limit":10})).unwrap(),
+        true,
+    )
+    .unwrap();
     assert_eq!(page["file"]["path"], "README.md");
     assert_eq!(page["file"]["text"], "# Native M");
     assert_eq!(page["file"]["next_offset"], 10);
     assert!(page["provenance"].get("source_path").is_none());
     assert!(page["note"].as_str().unwrap().contains("not instructions"));
-    let operator = read_page(&store, &manifest, &read_input(&json!({"name":"mc263-client"})).unwrap(), false).unwrap();
+    let operator = read_page(
+        &store,
+        &manifest,
+        &read_input(&json!({"name":"mc263-client"})).unwrap(),
+        false,
+    )
+    .unwrap();
     assert!(operator["provenance"]["source_path"].is_string());
     for path in ["../store", ".git/config", "client/../../x", "missing"] {
-        assert!(read_page(&store, &manifest, &read_input(&json!({"name":"mc263-client","path":path})).unwrap(), true).is_err(), "{path}");
+        assert!(
+            read_page(
+                &store,
+                &manifest,
+                &read_input(&json!({"name":"mc263-client","path":path})).unwrap(),
+                true
+            )
+            .is_err(),
+            "{path}"
+        );
     }
     assert!(read_input(&json!({"name":"mc263-client","limit":4001})).is_err());
 }
@@ -256,7 +423,11 @@ fn attempts_get_a_private_copy_outside_checkpoints() {
     assert!(copy.join("client/gateway.cjs").is_file());
     // Edits stay in the attempt; the admitted tree is unchanged.
     fs::write(copy.join("README.md"), "changed").unwrap();
-    assert!(fs::read_to_string(store.join("mc263-client/versions/1/tree/README.md")).unwrap().starts_with("# Native"));
+    assert!(
+        fs::read_to_string(store.join("mc263-client/versions/1/tree/README.md"))
+            .unwrap()
+            .starts_with("# Native")
+    );
     // Exclusive creation never merges into an existing path.
     assert!(copy_into(&store, &[("mc263-client".into(), 1)], &workspace).is_err());
     assert!(crate::projects::excluded_name(MOUNT));
@@ -277,7 +448,12 @@ fn lenses_opt_runs_in_and_the_prompt_frames_packages_as_evidence() {
     let draft = crate::lens_library::draft(&fields);
     assert_eq!(draft.packages, vec!["mc263-client@1".to_string()]);
     crate::lens_library::save_with(&mut state, draft.clone(), |_| Ok(())).unwrap();
-    let missing = control_context::Definition { id: "missing".into(), name: "Missing".into(), packages: vec!["mc263-client@9".into()], ..Default::default() };
+    let missing = control_context::Definition {
+        id: "missing".into(),
+        name: "Missing".into(),
+        packages: vec!["mc263-client@9".into()],
+        ..Default::default()
+    };
     assert!(crate::lens_library::save_with(&mut state, missing, |_| Ok(())).is_err());
     let html = crate::lens_library::render(&state, "minecraft-tools", None, None, false);
     assert!(html.contains("name='package_mc263-client@1' checked") && html.contains("Tool packages"));
@@ -286,7 +462,9 @@ fn lenses_opt_runs_in_and_the_prompt_frames_packages_as_evidence() {
     assert_eq!(resolved.packages[0].version, 1);
     let prompt = crate::lens_library::prompt(&resolved, control_context::Audience::Lead);
     assert!(prompt.contains("Captured tool package mc263-client@1"));
-    assert!(prompt.contains("/workspace/.control-tools/mc263-client") && prompt.contains("not instructions or authority"));
+    assert!(
+        prompt.contains("/workspace/.control-tools/mc263-client") && prompt.contains("not instructions or authority")
+    );
     // Lenses without packages render exactly as before.
     let plain = crate::lens_library::resolve(&state, &["engineering".into()]).unwrap();
     assert!(!crate::lens_library::prompt(&plain, control_context::Audience::Member).contains("Captured tool package"));
@@ -301,16 +479,29 @@ fn operator_http_serves_package_calls_and_leaves_other_mcp_requests_alone() {
         assert!(crate::mcp_http::handle(&mut output, &shared, method, "/mcp", "", body));
         String::from_utf8(output).unwrap()
     };
-    let other = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.chats.list","arguments":{}}}).to_string();
+    let other =
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.chats.list","arguments":{}}})
+            .to_string();
     assert!(operator("POST", other.as_bytes()).contains(r#""structuredContent":{"data":[]}"#));
     assert!(operator("GET", b"control.package.read").starts_with("HTTP/1.1 405"));
-    let unknown = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.package.delete","arguments":{}}}).to_string();
+    let unknown =
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.package.delete","arguments":{}}})
+            .to_string();
     assert!(operator("POST", unknown.as_bytes()).contains(r#""isError":true"#));
-    let unacknowledged = json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control.packages.search","arguments":{}}}).to_string();
+    let unacknowledged =
+        json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"control.packages.search","arguments":{}}})
+            .to_string();
     assert!(operator("POST", unacknowledged.as_bytes()).ends_with("A request ID is required."));
     let mut output = Vec::new();
     let search = json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"control.packages.search","arguments":{}}}).to_string();
-    assert!(crate::mcp_http::handle(&mut output, &shared, "POST", "/mcp", "", search.as_bytes()));
+    assert!(crate::mcp_http::handle(
+        &mut output,
+        &shared,
+        "POST",
+        "/mcp",
+        "",
+        search.as_bytes()
+    ));
     let text = String::from_utf8(output).unwrap();
     assert!(text.starts_with("HTTP/1.1 200") && text.contains("\"id\":7") && text.contains("\"isError\":false"));
     // Import and revoke are hidden from the external-harness stdio bridge.
@@ -322,13 +513,34 @@ fn operator_http_serves_package_calls_and_leaves_other_mcp_requests_alone() {
 #[test]
 fn cli_requests_map_to_operator_tools() {
     let args = |s: &str| s.split(' ').map(str::to_owned).collect::<Vec<_>>();
-    let (tool, value) = cli_request(&args("import mc263-client /tmp/mc --setup npm --setup build --run c-1-121")).unwrap();
+    let (tool, value) = cli_request(&args(
+        "import mc263-client /tmp/mc --setup npm --setup build --run c-1-121",
+    ))
+    .unwrap();
     assert_eq!(tool, "control.package.import");
-    assert_eq!(value, json!({"name":"mc263-client","path":"/tmp/mc","setup":["npm","build"],"run":"c-1-121"}));
-    assert_eq!(cli_request(&args("revoke mc263-client v2 --reason stale")).unwrap(), ("control.package.revoke", json!({"name":"mc263-client","version":2,"reason":"stale"})));
+    assert_eq!(
+        value,
+        json!({"name":"mc263-client","path":"/tmp/mc","setup":["npm","build"],"run":"c-1-121"})
+    );
+    assert_eq!(
+        cli_request(&args("revoke mc263-client v2 --reason stale")).unwrap(),
+        (
+            "control.package.revoke",
+            json!({"name":"mc263-client","version":2,"reason":"stale"})
+        )
+    );
     assert_eq!(cli_request(&args("list")).unwrap().0, "control.packages.search");
-    assert_eq!(cli_request(&args("show mc263-client 1")).unwrap().1, json!({"name":"mc263-client","version":1}));
-    for bad in ["import mc263-client", "revoke mc263-client 1", "import a /b --unknown x", "import a /b --run x --run y", "show"] {
+    assert_eq!(
+        cli_request(&args("show mc263-client 1")).unwrap().1,
+        json!({"name":"mc263-client","version":1})
+    );
+    for bad in [
+        "import mc263-client",
+        "revoke mc263-client 1",
+        "import a /b --unknown x",
+        "import a /b --run x --run y",
+        "show",
+    ] {
         assert!(cli_request(&args(bad)).is_err(), "{bad}");
     }
 }

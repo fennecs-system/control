@@ -54,8 +54,7 @@ impl Endpoint {
             }
             return Ok(Target::Cli(backend));
         }
-        let url = reqwest::Url::parse(&self.url)
-            .map_err(|_| io::Error::other("Invalid model endpoint"))?;
+        let url = reqwest::Url::parse(&self.url).map_err(|_| io::Error::other("Invalid model endpoint"))?;
         let host = url.host_str().unwrap_or("").trim_matches(['[', ']']);
         let local = host == "localhost"
             || match host.parse::<std::net::IpAddr>() {
@@ -118,9 +117,17 @@ pub fn generate(
     let started = Instant::now();
     let mut url = match target {
         Target::Cli(backend) => {
-            let narrowed = Endpoint { limits: limits.clone(), ..endpoint.clone() };
+            let narrowed = Endpoint {
+                limits: limits.clone(),
+                ..endpoint.clone()
+            };
             let response = cli::call(&narrowed, backend, system, input)?;
-            return Ok(Generation { response, served: Served::default(), limits, elapsed: started.elapsed() });
+            return Ok(Generation {
+                response,
+                served: Served::default(),
+                limits,
+                elapsed: started.elapsed(),
+            });
         }
         Target::Endpoint(url) => url,
     };
@@ -142,7 +149,12 @@ pub fn generate(
         serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Malformed model response"))?;
     let served = control_ai::model::served(&value);
     let response = control_ai::model::decode(value, &limits)?;
-    Ok(Generation { response, served, limits, elapsed: started.elapsed() })
+    Ok(Generation {
+        response,
+        served,
+        limits,
+        elapsed: started.elapsed(),
+    })
 }
 /// One prepared chat-completions request to a private endpoint (agent tool loop).
 /// Same transport, size ceiling, timeout and cancellation as `generate`.
@@ -217,7 +229,9 @@ pub fn command(args: &[String]) -> io::Result<()> {
             let output_tokens = match rest {
                 [] => None,
                 [flag, value] if flag == "--max-output-tokens" => Some(
-                    value.parse().map_err(|_| io::Error::other("Invalid output token count"))?,
+                    value
+                        .parse()
+                        .map_err(|_| io::Error::other("Invalid output token count"))?,
                 ),
                 _ => return Err(io::Error::other(USAGE)),
             };
@@ -231,7 +245,11 @@ pub fn command(args: &[String]) -> io::Result<()> {
         ("bench", rest) => {
             let runs = match rest {
                 [] => 3,
-                [runs] => runs.parse().ok().filter(|n| (1..=20).contains(n)).ok_or_else(|| io::Error::other("RUNS must be 1-20"))?,
+                [runs] => runs
+                    .parse()
+                    .ok()
+                    .filter(|n| (1..=20).contains(n))
+                    .ok_or_else(|| io::Error::other("RUNS must be 1-20"))?,
                 _ => return Err(io::Error::other(USAGE)),
             };
             println!("{}", tool::bench(endpoint, runs, &stop)?);

@@ -1,10 +1,6 @@
-
 use super::*;
 fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-    pairs
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 #[test]
 fn knowledge_requires_evidence_and_rejects_duplicates() {
@@ -46,10 +42,7 @@ fn rooms_escape_content_and_separate_channels() {
     let mut c = Collective::default();
     c.action(
         "/room",
-        &form(&[
-            ("channel", "research"),
-            ("message", "<script>oops</script>"),
-        ]),
+        &form(&[("channel", "research"), ("message", "<script>oops</script>")]),
     );
     let state = crate::State {
         collective: c,

@@ -1,12 +1,12 @@
 //! Shared MCP schemas and transport policy. Authorization remains at each broker.
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     io,
     sync::{Arc, Mutex, OnceLock},
 };
 
-pub use control_context::tool_policy::{Bridge, Route};
 pub use crate::application::AttemptRef;
+pub use control_context::tool_policy::{Bridge, Route};
 /// Application state as seen by tool families. Each family defines its own
 /// operations trait and implements it for `LocalHost` in its module, where it
 /// meets `State`; adding a family only lists its tools below.
@@ -55,11 +55,8 @@ impl Entry {
     }
 }
 fn entry(definition: Value) -> Entry {
-    let name = definition["name"]
-        .as_str()
-        .expect("Tool schema needs a name");
-    let policy =
-        control_context::tool_policy::lookup(name).expect("Tool schema needs transport policy");
+    let name = definition["name"].as_str().expect("Tool schema needs a name");
+    let policy = control_context::tool_policy::lookup(name).expect("Tool schema needs transport policy");
     Entry {
         definition,
         route: policy.route,
@@ -96,11 +93,14 @@ fn session_definitions() -> Vec<Value> {
 pub fn entries() -> &'static [Entry] {
     static CATALOG: OnceLock<Vec<Entry>> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let mut entries: Vec<_> = session_definitions().into_iter().map(|definition| {
-            let mut registered = entry(definition);
-            registered.definition["annotations"]["readOnlyHint"] = json!(!registered.checkpoint);
-            registered
-        }).collect();
+        let mut entries: Vec<_> = session_definitions()
+            .into_iter()
+            .map(|definition| {
+                let mut registered = entry(definition);
+                registered.definition["annotations"]["readOnlyHint"] = json!(!registered.checkpoint);
+                registered
+            })
+            .collect();
         entries.push(entry(crate::projects::definition(false)));
         entries.extend(crate::knowledge_tools::definitions().into_iter().map(entry));
         entries.push(entry(crate::github::definition()));
@@ -112,9 +112,7 @@ pub fn entries() -> &'static [Entry] {
         entries.push(entry(browser_definition()));
         let mut names = std::collections::HashSet::new();
         assert!(
-            entries
-                .iter()
-                .all(|entry| names.insert(entry.name().to_owned())),
+            entries.iter().all(|entry| names.insert(entry.name().to_owned())),
             "Duplicate tool registration"
         );
         entries
@@ -155,7 +153,8 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     tools.push(crate::design::definition());
     tools.extend(crate::knowledge_tools::definitions().into_iter().map(|mut definition| {
         let name = definition["name"].as_str().unwrap();
-        definition["name"] = json!(control_context::worker_name(name).expect("Knowledge tools have catalogued worker spellings"));
+        definition["name"] =
+            json!(control_context::worker_name(name).expect("Knowledge tools have catalogued worker spellings"));
         definition
     }));
     tools.push(crate::web_access::definition());
@@ -168,8 +167,18 @@ pub fn worker_definitions(improve: bool) -> Vec<Value> {
     tools.push(crate::delegation::definition());
     tools.push(crate::spawning::definition());
     tools.extend(crate::spawning::management_definitions());
-    tools.extend(ATTEMPT_TOOLS.iter().flat_map(|tools| tools.definitions())
-        .filter(|definition| improve || !matches!(definition["name"].as_str(), Some("control_github_read" | "control_github_write"))));
+    tools.extend(
+        ATTEMPT_TOOLS
+            .iter()
+            .flat_map(|tools| tools.definitions())
+            .filter(|definition| {
+                improve
+                    || !matches!(
+                        definition["name"].as_str(),
+                        Some("control_github_read" | "control_github_write")
+                    )
+            }),
+    );
     tools.push(crate::delegated_results::definition());
     tools
 }

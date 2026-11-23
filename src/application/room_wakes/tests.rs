@@ -62,15 +62,9 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
             delivery: crate::rooms::Delivery::Record,
         },
     ];
-    assert_eq!(
-        query(true, "attempt", &posts),
-        vec![(7, Decision::Advance(2))]
-    );
+    assert_eq!(query(true, "attempt", &posts), vec![(7, Decision::Advance(2))]);
     posts[1].delivery = crate::rooms::Delivery::Notify;
-    assert_eq!(
-        query(true, "attempt", &posts),
-        vec![(7, Decision::Queue(0))]
-    );
+    assert_eq!(query(true, "attempt", &posts), vec![(7, Decision::Queue(0))]);
     assert_eq!(query(false, "attempt", &posts), vec![(7, Decision::Disarm)]);
     assert_eq!(query(true, "stale", &posts), vec![(7, Decision::Disarm)]);
 }

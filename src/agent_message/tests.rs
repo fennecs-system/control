@@ -1,4 +1,3 @@
-
 use super::*;
 
 pub(super) fn family() -> (State, String, String, String) {
@@ -39,7 +38,8 @@ fn send(state: &mut State, nonce: &str, chat: &str) -> io::Result<Value> {
         MessageCall {
             chat_id: chat.into(),
             text: "Ports are free; retry".into(),
-            services: vec![], urgent: true,
+            services: vec![],
+            urgent: true,
         },
         |_| Ok(()),
     )
@@ -51,11 +51,7 @@ fn a_parent_continues_its_descendants_once_per_request() {
     let first = send(&mut state, "n1", &child).unwrap();
     let queued = state.runtime.runs.last().unwrap();
     assert_eq!(
-        (
-            queued.kind.as_str(),
-            queued.chat_id.as_deref(),
-            queued.status.as_str()
-        ),
+        (queued.kind.as_str(), queued.chat_id.as_deref(), queued.status.as_str()),
         ("agent-message", Some(child.as_str()), "queued")
     );
     assert!(queued.objective.contains("Ports are free; retry") && queued.objective.contains(&lead));
@@ -99,31 +95,18 @@ fn messages_reach_only_same_actor_task_scope_from_active_attempts() {
     let (mut state, lead, child, _) = family();
     let stranger = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &stranger, "Unrelated", "test").unwrap();
-    assert!(
-        send(&mut state, "n1", &stranger).is_err(),
-        "not spawned by the sender"
-    );
-    assert!(
-        send(&mut state, "n2", &lead).is_err(),
-        "not the sender itself"
-    );
+    assert!(send(&mut state, "n1", &stranger).is_err(), "not spawned by the sender");
+    assert!(send(&mut state, "n2", &lead).is_err(), "not the sender itself");
     state
         .chats
         .iter_mut()
         .find(|session| session.id == child)
         .unwrap()
         .actor = crate::chat::discord_actor("d-123-456").unwrap();
-    assert!(
-        send(&mut state, "n3", &child).is_err(),
-        "another actor's chat"
-    );
+    assert!(send(&mut state, "n3", &child).is_err(), "another actor's chat");
     let other = spawned(&mut state, &lead);
     assert!(send(&mut state, "bad nonce", &other).is_err());
-    state.runtime.runs[0]
-        .attempts
-        .last_mut()
-        .unwrap()
-        .workspace_id = Some("attempt-b".into());
+    state.runtime.runs[0].attempts.last_mut().unwrap().workspace_id = Some("attempt-b".into());
     assert!(send(&mut state, "n4", &other).is_err(), "stale attempts");
 }
 
@@ -150,7 +133,8 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
     let call = || MessageCall {
         chat_id: cass.clone(),
         text: "The handoff point is clear; collect the tool".into(),
-        services: vec![], urgent: true,
+        services: vec![],
+        urgent: true,
     };
     let attempt = AttemptRef {
         run: &alice_run,
@@ -173,12 +157,7 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
     assert_eq!(first["queued"], false);
     assert_eq!(first["retained"], true);
     assert_eq!(
-        state
-            .runtime
-            .runs
-            .iter()
-            .filter(|run| run.status == "queued")
-            .count(),
+        state.runtime.runs.iter().filter(|run| run.status == "queued").count(),
         0
     );
     assert!(queued.objective.contains("not operator steering"));
@@ -197,10 +176,7 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
     let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     let count = restored.runtime.runs.len();
     assert_eq!(
-        handle(&mut restored, &attempt, call(), |_| panic!(
-            "retry must not save"
-        ))
-        .unwrap(),
+        handle(&mut restored, &attempt, call(), |_| panic!("retry must not save")).unwrap(),
         first
     );
     assert_eq!(restored.runtime.runs.len(), count);
@@ -215,7 +191,8 @@ fn siblings_exchange_targeted_callbacks_after_steering_finishes_without_a_root_b
         MessageCall {
             chat_id: alice.clone(),
             text: "Pickup verified; the tool dependency is released".into(),
-            services: vec![], urgent: true,
+            services: vec![],
+            urgent: true,
         },
         |_| Ok(()),
     )
@@ -255,7 +232,8 @@ fn peers_cannot_route_to_the_operator_or_cross_tasks_actors_and_broken_lineage()
             MessageCall {
                 chat_id: target.into(),
                 text: "Coordinate".into(),
-                services: vec![], urgent: true,
+                services: vec![],
+                urgent: true,
             },
             |_| panic!("rejected messages must not save"),
         )
@@ -274,19 +252,10 @@ fn peers_cannot_route_to_the_operator_or_cross_tasks_actors_and_broken_lineage()
         send_to(&mut state, &outsider).is_err(),
         "joining a room does not grant cross-task messaging"
     );
-    state
-        .chats
-        .iter_mut()
-        .find(|chat| chat.id == cass)
-        .unwrap()
-        .actor = crate::chat::discord_actor("d-123-456").unwrap();
+    state.chats.iter_mut().find(|chat| chat.id == cass).unwrap().actor =
+        crate::chat::discord_actor("d-123-456").unwrap();
     assert!(send_to(&mut state, &cass).is_err());
-    state
-        .chats
-        .iter_mut()
-        .find(|chat| chat.id == cass)
-        .unwrap()
-        .actor = state.chats[0].actor.clone();
+    state.chats.iter_mut().find(|chat| chat.id == cass).unwrap().actor = state.chats[0].actor.clone();
     state.chats[0].parent_chat = Some(alice.clone());
     assert!(
         send_to(&mut state, &cass).is_err(),
@@ -310,49 +279,26 @@ fn peers_preserve_stops_action_scope_judges_and_atomic_delivery() {
     let call = || MessageCall {
         chat_id: cass.clone(),
         text: "Coordinate".into(),
-        services: vec![], urgent: true,
+        services: vec![],
+        urgent: true,
     };
-    for status in [
-        "cancelled",
-        "cancelling",
-        "failed",
-        "interrupted",
-        "blocked",
-    ] {
+    for status in ["cancelled", "cancelling", "failed", "interrupted", "blocked"] {
         state.runtime.runs[cass_index].status = status.into();
         assert!(
-            handle(&mut state, &attempt, call(), |_| panic!(
-                "stopped work must not save"
-            ))
-            .is_err(),
+            handle(&mut state, &attempt, call(), |_| panic!("stopped work must not save")).is_err(),
             "{status}"
         );
     }
     state.runtime.runs[cass_index].status = "completed".into();
     state.runtime.runs[cass_index].action = identity::Action::Improve;
-    assert!(
-        handle(&mut state, &attempt, call(), |_| panic!(
-            "action changes must not save"
-        ))
-        .is_err()
-    );
+    assert!(handle(&mut state, &attempt, call(), |_| panic!("action changes must not save")).is_err());
     state.runtime.runs[cass_index].action = identity::Action::Task;
     let mut persona = crate::delegation::lineage(&state.runtime.runs[cass_index]);
     persona.role = crate::delegation::Role::Judge;
     state.runtime.runs[cass_index].persona = Some(persona);
-    assert!(
-        handle(&mut state, &attempt, call(), |_| panic!(
-            "judges must not save"
-        ))
-        .is_err()
-    );
+    assert!(handle(&mut state, &attempt, call(), |_| panic!("judges must not save")).is_err());
     state.runtime.runs[cass_index].persona = None;
-    state
-        .chats
-        .iter_mut()
-        .find(|chat| chat.id == cass)
-        .unwrap()
-        .room = Some("general".into());
+    state.chats.iter_mut().find(|chat| chat.id == cass).unwrap().room = Some("general".into());
     crate::bots::command(&mut state, &cass, "on").unwrap();
     crate::bots::command(&mut state, &cass, "pause").unwrap();
     let received = handle(&mut state, &attempt, call(), |_| Ok(())).unwrap();
@@ -403,7 +349,8 @@ fn peer_messages_share_only_explicitly_selected_accessible_service_generations()
     let call = || MessageCall {
         chat_id: cass.clone(),
         text: "Service ready".into(),
-        services: vec![service.clone()], urgent: true,
+        services: vec![service.clone()],
+        urgent: true,
     };
     assert!(
         handle(&mut state, &attempt, call(), |_| panic!(
@@ -422,20 +369,13 @@ fn peer_messages_share_only_explicitly_selected_accessible_service_generations()
         MessageCall {
             chat_id: cass.clone(),
             text: "Ready".into(),
-            services: vec![], urgent: true,
+            services: vec![],
+            urgent: true,
         },
         |_| Ok(()),
     )
     .unwrap();
-    assert!(
-        state
-            .runtime
-            .runs
-            .last()
-            .unwrap()
-            .resource_grants
-            .is_empty()
-    );
+    assert!(state.runtime.runs.last().unwrap().resource_grants.is_empty());
     let before = serde_json::to_vec(&state).unwrap();
     assert!(handle(&mut state, &attempt, call(), |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(
@@ -469,7 +409,8 @@ fn peer_archive_failure_rolls_back_message_receipt_and_grants_before_save() {
         MessageCall {
             chat_id: cass,
             text: "New dependency evidence".into(),
-            services: vec![], urgent: true,
+            services: vec![],
+            urgent: true,
         },
         |evidence| {
             assert_eq!(evidence.status, "completed");
@@ -497,7 +438,8 @@ fn failed_saves_leave_nothing_queued() {
         MessageCall {
             chat_id: child.clone(),
             text: "Retry".into(),
-            services: vec![], urgent: true,
+            services: vec![],
+            urgent: true,
         },
         |_| Err(io::Error::other("disk full")),
     );
@@ -526,10 +468,7 @@ fn receipts_of_running_attempts_are_never_evicted() {
         send(&mut state, "n1", &child).is_err(),
         "a full cache of live receipts refuses instead of evicting"
     );
-    assert_eq!(
-        send(&mut state, "n0", &child).unwrap()["run_id"],
-        first["run_id"]
-    );
+    assert_eq!(send(&mut state, "n0", &child).unwrap()["run_id"], first["run_id"]);
     for sent in state.agent_messages.iter_mut().skip(1) {
         sent.origin = "finished-run".into();
     }
@@ -544,13 +483,16 @@ fn receipts_of_running_attempts_are_never_evicted() {
 fn late_service(state: &mut State, owner: &str) -> ResourceId {
     let id = ResourceId::try_from("svc-late".to_owned()).unwrap();
     state.runtime.runs[0].attempts[0].node_id = Some("node-a".into());
-    state.services.push(serde_json::from_value(json!({
+    state.services.push(
+        serde_json::from_value(json!({
             "resource":{"id":id,"owner":{"node":"node-a","chat":owner},"generation":1,
                 "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},
                 "lease":[1,u64::MAX],"phase":"Requested"},
             "origin":{"run":state.runtime.runs[0].id,"attempt":"attempt-a"},
             "actor":{"type":"local_operator"},"command":"sleep 60","uid":502,"gid":20
-        })).unwrap());
+        }))
+        .unwrap(),
+    );
     id
 }
 
@@ -566,25 +508,18 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
         .find(|run| run.chat_id.as_deref() == Some(&child))
         .unwrap()
         .clone();
-    assert!(!crate::services::direct(
-        &state.services[0],
-        &node,
-        &before_child
-    ));
+    assert!(!crate::services::direct(&state.services[0], &node, &before_child));
     send(&mut state, "plain", &child).unwrap();
     assert!(
-        !crate::services::direct(
-            &state.services[0],
-            &node,
-            state.runtime.runs.last().unwrap()
-        ),
+        !crate::services::direct(&state.services[0], &node, state.runtime.runs.last().unwrap()),
         "ordinary messages do not grant access"
     );
     let run = state.runtime.runs[0].id.clone();
     let call = || MessageCall {
         chat_id: child.clone(),
         text: "The new service is ready".into(),
-        services: vec![service.clone()], urgent: true,
+        services: vec![service.clone()],
+        urgent: true,
     };
     let attempt = AttemptRef {
         run: &run,
@@ -602,10 +537,7 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
         "running or finished attempts are immutable"
     );
     let count = state.runtime.runs.len();
-    assert_eq!(
-        handle(&mut state, &attempt, call(), |_| Ok(())).unwrap(),
-        response
-    );
+    assert_eq!(handle(&mut state, &attempt, call(), |_| Ok(())).unwrap(), response);
     assert_eq!(state.runtime.runs.len(), count);
     let mut changed = call();
     changed.services.clear();
@@ -632,11 +564,7 @@ fn explicit_late_service_grants_reach_only_the_queued_turn_and_survive_continuat
     ));
     restored.services[0].resource.generation = serde_json::from_value(json!(2)).unwrap();
     assert!(
-        !crate::services::direct(
-            &restored.services[0],
-            &node,
-            restored.runtime.runs.last().unwrap()
-        ),
+        !crate::services::direct(&restored.services[0], &node, restored.runtime.runs.last().unwrap()),
         "a replacement generation is not granted"
     );
 }
@@ -664,19 +592,14 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
         MessageCall {
             chat_id: child.clone(),
             text: "Service ready".into(),
-            services: vec![service], urgent: true,
+            services: vec![service],
+            urgent: true,
         },
         |_| Ok(()),
     )
     .unwrap();
     let grant_index = state.runtime.runs.len() - 1;
-    crate::design::tests::ask_without_io(
-        &mut state,
-        &old_id,
-        "question",
-        crate::design::tests::input(),
-    )
-    .unwrap();
+    crate::design::tests::ask_without_io(&mut state, &old_id, "question", crate::design::tests::input()).unwrap();
     let old = &mut state.runtime.runs[child_index];
     old.status = "waiting".into();
     old.attempts[0].status = "waiting".into();
@@ -693,8 +616,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
     state.runtime.runs[grant_index].status = "completed".into();
     state.runtime.runs[0].status = "completed".into();
     for source in ["agent", "human", "bot", "listener", "fork"] {
-        let mut restored: State =
-            serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        let mut restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
         match source {
             "agent" => {
                 restored.runtime.runs[0].status = "running".into();
@@ -705,12 +627,7 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
                 crate::chat::fork(&mut restored, &child, "Use the service", "test").unwrap();
             }
             "listener" => {
-                restored
-                    .chats
-                    .iter_mut()
-                    .find(|chat| chat.id == child)
-                    .unwrap()
-                    .room = Some("general".into());
+                restored.chats.iter_mut().find(|chat| chat.id == child).unwrap().room = Some("general".into());
                 crate::rooms::listen(&mut restored, &child, true).unwrap();
                 restored.collective.posts.push(crate::rooms::Post {
                     room: "general".into(),
@@ -721,18 +638,10 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
                     delivery: Default::default(),
                 });
                 crate::rooms::reconcile(&mut restored, |_| Ok(())).unwrap();
-                assert_eq!(
-                    restored.runtime.runs.last().unwrap().kind,
-                    RunKind::RoomNotification
-                );
+                assert_eq!(restored.runtime.runs.last().unwrap().kind, RunKind::RoomNotification);
             }
             _ => {
-                restored
-                    .chats
-                    .iter_mut()
-                    .find(|chat| chat.id == child)
-                    .unwrap()
-                    .room = Some("general".into());
+                restored.chats.iter_mut().find(|chat| chat.id == child).unwrap().room = Some("general".into());
                 crate::bots::command(&mut restored, &child, "on").unwrap();
                 restored.collective.posts.push(crate::rooms::Post {
                     room: "general".into(),
@@ -765,7 +674,8 @@ fn late_grants_reject_foreign_services_and_roll_back_atomically() {
     let call = || MessageCall {
         chat_id: child.clone(),
         text: "Continue".into(),
-        services: vec![service.clone()], urgent: true,
+        services: vec![service.clone()],
+        urgent: true,
     };
     let attempt = AttemptRef {
         run: &run,
@@ -778,12 +688,7 @@ fn late_grants_reject_foreign_services_and_roll_back_atomically() {
     );
     state.services[0].resource.owner.chat = lead.try_into().unwrap();
     let before = serde_json::to_vec(&state).unwrap();
-    assert!(
-        handle(&mut state, &attempt, call(), |_| Err(io::Error::other(
-            "disk full"
-        )))
-        .is_err()
-    );
+    assert!(handle(&mut state, &attempt, call(), |_| Err(io::Error::other("disk full"))).is_err());
     assert_eq!(
         serde_json::to_vec(&state).unwrap(),
         before,
@@ -792,8 +697,7 @@ fn late_grants_reject_foreign_services_and_roll_back_atomically() {
     state.services[0].resource.owner.node = "other-node".to_owned().try_into().unwrap();
     assert!(handle(&mut state, &attempt, call(), |_| Ok(())).is_err());
     state.services[0].resource.owner.node = "node-a".to_owned().try_into().unwrap();
-    state.services[0].resource.phase =
-        Phase::Stopped(control_core::resources::StopReason::Requested);
+    state.services[0].resource.phase = Phase::Stopped(control_core::resources::StopReason::Requested);
     assert!(handle(&mut state, &attempt, call(), |_| Ok(())).is_err());
 }
 
@@ -810,16 +714,31 @@ mod urgency;
 fn a_wrong_argument_shape_names_the_field_and_shows_a_valid_call() {
     struct Unreached;
     impl MessageOps for Unreached {
-        fn message(&self, _: &AttemptRef<'_>, _: MessageCall) -> io::Result<MessageResult> { unreachable!("decoding fails first") }
+        fn message(&self, _: &AttemptRef<'_>, _: MessageCall) -> io::Result<MessageResult> {
+            unreachable!("decoding fails first")
+        }
     }
-    let attempt = AttemptRef { run: "r", generation: "g", nonce: "n" };
+    let attempt = AttemptRef {
+        run: "r",
+        generation: "g",
+        nonce: "n",
+    };
     let error = |args: Value| run(&Unreached, &attempt, &args).unwrap_err().to_string();
     let unknown = error(json!({"chat_id":"c-1","message":"hi"}));
-    assert!(unknown.contains("unknown field `message`") && unknown.contains("`text`"), "{unknown}");
+    assert!(
+        unknown.contains("unknown field `message`") && unknown.contains("`text`"),
+        "{unknown}"
+    );
     let missing = error(json!({"text":"hi"}));
     assert!(missing.contains("missing field `chat_id`"), "{missing}");
     for shown in [unknown, missing] {
-        assert!(shown.contains(r#"Example: control_agent_message {"chat_id":"#), "{shown}");
-        assert_eq!(crate::worker_tools::fixes::actionable("control_agent_message", &shown), shown);
+        assert!(
+            shown.contains(r#"Example: control_agent_message {"chat_id":"#),
+            "{shown}"
+        );
+        assert_eq!(
+            crate::worker_tools::fixes::actionable("control_agent_message", &shown),
+            shown
+        );
     }
 }

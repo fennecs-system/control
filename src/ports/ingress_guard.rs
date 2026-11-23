@@ -16,11 +16,7 @@ fn classify(bytes: &[u8], eof: bool) -> Decision {
     // A TLS ClientHello (including a fragmented record header) is never raw ingress.
     if bytes.first() == Some(&0x16) {
         if bytes.len() == 1 {
-            return if eof {
-                Decision::Reject
-            } else {
-                Decision::More
-            };
+            return if eof { Decision::Reject } else { Decision::More };
         }
         if bytes[1] == 3 {
             return Decision::Reject;
@@ -58,9 +54,9 @@ fn classify(bytes: &[u8], eof: bool) -> Decision {
         .get(2)
         .is_some_and(|w| w.len() >= 5 && w[..5].eq_ignore_ascii_case(b"HTTP/"));
     let incomplete_http = eof
-        && words.get(1).is_some_and(|w| {
-            w.starts_with(b"/") || w.starts_with(b"http:") || w.starts_with(b"https:") || *w == b"*"
-        });
+        && words
+            .get(1)
+            .is_some_and(|w| w.starts_with(b"/") || w.starts_with(b"http:") || w.starts_with(b"https:") || *w == b"*");
     if http || incomplete_http {
         Decision::Reject
     } else if words.is_empty() && !eof {
@@ -95,16 +91,14 @@ pub(super) fn first_chunk(socket: &mut TcpStream) -> io::Result<Vec<u8>> {
                 return Ok(pending);
             }
             Decision::Reject => {
-                return Err(io::Error::other(
-                    "HTTP/TLS ingress uses the guarded preview tool",
-                ));
+                return Err(io::Error::other("HTTP/TLS ingress uses the guarded preview tool"));
             }
             Decision::More => {}
         }
     }
 }
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 #[path = "ingress_guard/tests/binary_http_tests.rs"]
 mod binary_http_tests;
+#[cfg(test)]
+mod tests;

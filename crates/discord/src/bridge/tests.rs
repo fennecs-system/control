@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn bridge_checkpoint_preserves_existing_progress_on_temporary_file_conflict() {
@@ -53,10 +52,7 @@ fn design_reports_keep_answer_identity_and_all_options_within_dm_budget() {
 #[test]
 fn dm_setup_checks_type_and_recipient() {
     assert_eq!(
-        dm_channel(
-            &json!({"id":"100","type":1,"recipients":[{"id":"2"}]}),
-            id("2")
-        ),
+        dm_channel(&json!({"id":"100","type":1,"recipients":[{"id":"2"}]}), id("2")),
         Some(id("100"))
     );
     for row in [
@@ -86,17 +82,12 @@ fn oversized_and_attachment_only_dms_get_a_reason() {
         channel: id("100"),
         recipient: Some(id("2")),
     };
-    let mut row =
-        json!({"id":"10","channel_id":"100","author":{"id":"2"},"content":"x".repeat(2001)});
+    let mut row = json!({"id":"10","channel_id":"100","author":{"id":"2"},"content":"x".repeat(2001)});
     assert!(incoming(&row, &route, id("99")).is_none());
     assert!(rejected(&row, &route, id("99")).unwrap().contains("2000"));
     row["content"] = json!("");
     row["attachments"] = json!([{"id":"1"}]);
-    assert!(
-        rejected(&row, &route, id("99"))
-            .unwrap()
-            .contains("attachments")
-    );
+    assert!(rejected(&row, &route, id("99")).unwrap().contains("attachments"));
     row["author"]["id"] = json!("3");
     assert!(rejected(&row, &route, id("99")).is_none());
 }
@@ -115,7 +106,9 @@ fn state_cache_reparses_only_after_the_file_changes() {
     // A save that only appends to the patch log is seen too.
     fs::write(&path, br#"{"_snapshot":"n","discord_seen":["22"]}"#).unwrap();
     let mut text = b"{\"snapshot\":\"n\"}\n".to_vec();
-    text.extend(control_journal::snapshot::commit(br#"[["a",["discord_seen"],1,0,["33"]]]"#));
+    text.extend(control_journal::snapshot::commit(
+        br#"[["a",["discord_seen"],1,0,["33"]]]"#,
+    ));
     text.push(b'\n');
     fs::write(&log, text).unwrap();
     assert!(cache.load(&root).discord_seen.contains("33"));
@@ -163,10 +156,20 @@ fn server_messages_are_rejected_even_with_a_prefix() {
 #[test]
 fn operators_are_chosen_by_identity_not_by_the_forwarding_toggle() {
     let policy: Policy = serde_json::from_str(r#"{"channel_id":null,"principals":[{"label":"arch","user_id":"1","role":"architect"},{"label":"guest","user_id":"2","role":"user"}]}"#).unwrap();
-    let dms: DmBindings = serde_json::from_str(r#"{"recipients":[{"user_id":"1","channel_id":"101"},{"user_id":"2","channel_id":"102"}]}"#).unwrap();
-    let route = |user: &str, channel: &str| Route { channel: id(channel), recipient: Some(id(user)) };
+    let dms: DmBindings = serde_json::from_str(
+        r#"{"recipients":[{"user_id":"1","channel_id":"101"},{"user_id":"2","channel_id":"102"}]}"#,
+    )
+    .unwrap();
+    let route = |user: &str, channel: &str| Route {
+        channel: id(channel),
+        recipient: Some(id(user)),
+    };
     // `operating` takes no channel settings: forwarding off still lets the
     // architect use commands, while a user-role DM keeps the DM-only path.
-    let operating = operating(&policy, &dms, &[route("1", "101"), route("2", "102"), route("1", "102")]);
+    let operating = operating(
+        &policy,
+        &dms,
+        &[route("1", "101"), route("2", "102"), route("1", "102")],
+    );
     assert_eq!(operating, vec![recipient(id("1"), id("101"))]);
 }

@@ -38,10 +38,7 @@ fn run() -> Result<bool, String> {
     if output == source || source.starts_with(&output) || output.starts_with(&source) {
         return Err("output must be separate from the source tree".into());
     }
-    if output
-        .to_str()
-        .is_none_or(|s| s.contains([',', '\n', '\r']))
-    {
+    if output.to_str().is_none_or(|s| s.contains([',', '\n', '\r'])) {
         return Err("output path contains an unsupported mount separator".into());
     }
     let snapshot = Snapshot::new()?;
@@ -86,10 +83,7 @@ fn run() -> Result<bool, String> {
         "--tmpfs",
         &format!("/home/tool:rw,nosuid,uid={uid},gid={gid},size=64m"),
         "--mount",
-        &format!(
-            "type=bind,src={},dst=/source,readonly",
-            snapshot.0.display()
-        ),
+        &format!("type=bind,src={},dst=/source,readonly", snapshot.0.display()),
         "--mount",
         &format!("type=bind,src={},dst=/out", output.display()),
         &args[0],
@@ -192,8 +186,7 @@ impl Snapshot {
             .as_nanos();
         let path = env::temp_dir().join(format!("control-analysis-{}-{nonce}", std::process::id()));
         fs::create_dir(&path).map_err(|_| "cannot create source snapshot")?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-            .map_err(|_| "cannot protect source snapshot")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).map_err(|_| "cannot protect source snapshot")?;
         Ok(Self(path))
     }
 }

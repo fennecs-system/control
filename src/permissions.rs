@@ -91,13 +91,22 @@ pub struct AutoApproval {
 }
 impl Default for AutoApproval {
     fn default() -> Self {
-        Self { mode: Mode::Strict, port: KindMode::Auto, bot: KindMode::Auto, standing_targets: Vec::new(), strict: Vec::new(), notices: true }
+        Self {
+            mode: Mode::Strict,
+            port: KindMode::Auto,
+            bot: KindMode::Auto,
+            standing_targets: Vec::new(),
+            strict: Vec::new(),
+            notices: true,
+        }
     }
 }
 impl AutoApproval {
     /// Whether `target` (`host:port`) is one of the standing targets.
     pub fn standing(&self, host: &str, port: u16) -> bool {
-        self.standing_targets.iter().any(|entry| split_target(entry).is_some_and(|(h, p)| p == port && h.eq_ignore_ascii_case(host)))
+        self.standing_targets
+            .iter()
+            .any(|entry| split_target(entry).is_some_and(|(h, p)| p == port && h.eq_ignore_ascii_case(host)))
     }
     /// Checks the operator's entries; the page refuses to save invalid ones.
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -107,7 +116,12 @@ impl AutoApproval {
         if self.standing_targets.iter().any(|entry| split_target(entry).is_none()) {
             return Err("Standing targets are host:port, one per line (for example 127.0.0.1:25565).");
         }
-        if !self.strict.iter().all(|entry| entry == "local" || entry.strip_prefix("discord:").is_some_and(|id| !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit()))) {
+        if !self.strict.iter().all(|entry| {
+            entry == "local"
+                || entry
+                    .strip_prefix("discord:")
+                    .is_some_and(|id| !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit()))
+        }) {
             return Err("Strict principals are local or discord:USER_ID.");
         }
         Ok(())
@@ -118,8 +132,12 @@ fn split_target(entry: &str) -> Option<(&str, u16)> {
     let (host, port) = entry.rsplit_once(':')?;
     let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
     let port = port.parse::<u16>().ok().filter(|p| *p != 0)?;
-    let valid = !host.is_empty() && host.len() <= 253
-        && (host.parse::<std::net::IpAddr>().is_ok() || host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')));
+    let valid = !host.is_empty()
+        && host.len() <= 253
+        && (host.parse::<std::net::IpAddr>().is_ok()
+            || host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')));
     valid.then_some((host, port))
 }
 
@@ -141,7 +159,9 @@ pub fn read() -> Permissions {
     let read = || {
         let path = control_config::directory().ok()?.join(FILE);
         let bytes = control_config::read_regular(&path, 65536, false).ok()?;
-        serde_json::from_slice::<Permissions>(&bytes).ok().filter(|p| p.auto_approval.validate().is_ok())
+        serde_json::from_slice::<Permissions>(&bytes)
+            .ok()
+            .filter(|p| p.auto_approval.validate().is_ok())
     };
     read().unwrap_or_default()
 }
@@ -156,17 +176,45 @@ mod tests {
     use super::*;
     #[test]
     fn auto_approval_defaults_to_strict_and_older_files_still_read() {
-        let old: Permissions = serde_json::from_str(r#"{"mcp_approvals":{"port":true},"agent_chat_tools":false}"#).unwrap();
+        let old: Permissions =
+            serde_json::from_str(r#"{"mcp_approvals":{"port":true},"agent_chat_tools":false}"#).unwrap();
         assert_eq!(old.auto_approval.mode, Mode::Strict);
         assert!(old.auto_approval.notices && old.auto_approval.standing_targets.is_empty());
-        let policy = AutoApproval { standing_targets: vec!["127.0.0.1:25565".into(), "[::1]:7000".into(), "Example.com:8443".into()], ..Default::default() };
+        let policy = AutoApproval {
+            standing_targets: vec!["127.0.0.1:25565".into(), "[::1]:7000".into(), "Example.com:8443".into()],
+            ..Default::default()
+        };
         assert!(policy.validate().is_ok());
-        assert!(policy.standing("127.0.0.1", 25565) && policy.standing("::1", 7000) && policy.standing("example.COM", 8443));
+        assert!(
+            policy.standing("127.0.0.1", 25565) && policy.standing("::1", 7000) && policy.standing("example.COM", 8443)
+        );
         assert!(!policy.standing("127.0.0.1", 25566));
         for bad in ["127.0.0.1", "host:0", "a b:80", ":80"] {
-            assert!(AutoApproval { standing_targets: vec![bad.into()], ..Default::default() }.validate().is_err(), "{bad}");
+            assert!(
+                AutoApproval {
+                    standing_targets: vec![bad.into()],
+                    ..Default::default()
+                }
+                .validate()
+                .is_err(),
+                "{bad}"
+            );
         }
-        assert!(AutoApproval { strict: vec!["discord:12a".into()], ..Default::default() }.validate().is_err());
-        assert!(AutoApproval { strict: vec!["local".into(), "discord:123".into()], ..Default::default() }.validate().is_ok());
+        assert!(
+            AutoApproval {
+                strict: vec!["discord:12a".into()],
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            AutoApproval {
+                strict: vec!["local".into(), "discord:123".into()],
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
     }
 }

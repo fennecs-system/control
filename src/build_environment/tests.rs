@@ -28,18 +28,9 @@ fn absent_or_untrusted_image_metadata_cannot_select_host_paths() {
     for text in ["", "<no value>", "{}", "[]"] {
         assert!(parse(text).is_err());
     }
-    for path in [
-        "../Cargo.lock",
-        "/Cargo.lock",
-        "web/../Cargo.lock",
-        "auth.json",
-        "",
-    ] {
+    for path in ["../Cargo.lock", "/Cargo.lock", "web/../Cargo.lock", "auth.json", ""] {
         let record = BTreeMap::from([(path, locks()["Cargo.lock"].clone())]);
-        assert!(
-            parse(&serde_json::to_string(&record).unwrap()).is_err(),
-            "{path}"
-        );
+        assert!(parse(&serde_json::to_string(&record).unwrap()).is_err(), "{path}");
     }
     for hash in ["bad".to_owned(), "A".repeat(64)] {
         assert!(parse(&serde_json::json!({"Cargo.lock":hash}).to_string()).is_err());

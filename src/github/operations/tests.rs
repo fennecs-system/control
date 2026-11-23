@@ -21,9 +21,7 @@ impl Mock {
 }
 impl Api for Mock {
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> io::Result<Value> {
-        self.calls
-            .borrow_mut()
-            .push((method.into(), path.into(), body));
+        self.calls.borrow_mut().push((method.into(), path.into(), body));
         if method == "GET" {
             return Ok(self.pull.clone());
         }
@@ -57,18 +55,9 @@ fn merge_is_opt_in_binds_head_and_base_and_has_no_bypass_parameters() {
     assert_eq!(result["result"]["merged"], true);
     assert!(!result.to_string().contains("not forwarded"));
     for (field, value) in [
-        (
-            "head",
-            json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}),
-        ),
-        (
-            "base",
-            json!({"repo":{"full_name":"example/project"},"ref":"other"}),
-        ),
-        (
-            "base",
-            json!({"repo":{"full_name":"other/project"},"ref":"main"}),
-        ),
+        ("head", json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})),
+        ("base", json!({"repo":{"full_name":"example/project"},"ref":"other"})),
+        ("base", json!({"repo":{"full_name":"other/project"},"ref":"main"})),
         ("state", json!("closed")),
         ("draft", json!(true)),
         ("draft", Value::Null),
@@ -124,19 +113,11 @@ fn comment_and_update_send_only_the_requested_fields_and_do_not_retry() {
     let mut api = Mock::new(Value::Null);
     api.reject_write = true;
     assert!(mutate(&api, "example/project", "main", false, &comment).is_err());
-    assert_eq!(
-        api.calls.borrow().len(),
-        2,
-        "one lookup and one write, no retry"
-    );
+    assert_eq!(api.calls.borrow().len(), 2, "one lookup and one write, no retry");
 }
 #[test]
 fn malformed_or_rejected_write_results_are_not_success() {
-    for response in [
-        Value::Null,
-        json!({"merged":false}),
-        json!({"merged":true,"sha":"bad"}),
-    ] {
+    for response in [Value::Null, json!({"merged":false}), json!({"merged":true,"sha":"bad"})] {
         let api = Mock::new(response);
         assert!(mutate(&api, "example/project", "main", true, &merge()).is_err());
         assert_eq!(api.calls.borrow().len(), 2);
@@ -210,10 +191,7 @@ fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
         )
         .unwrap();
     state.runtime.runs[0].attempts[0].turn_mailbox = Some(Box::new(mailbox)).into();
-    assert!(
-        authorize(&state, caller).is_ok(),
-        "observations remain permitted"
-    );
+    assert!(authorize(&state, caller).is_ok(), "observations remain permitted");
     assert!(
         authorize_write(&state, caller).is_err(),
         "later writes must recheck the handoff fence"
@@ -234,9 +212,9 @@ fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
     assert!(authorize_write(&state, caller).is_err());
     state.runtime.runs[0].question.as_mut().unwrap().answer = Some("First".into());
     assert!(authorize_write(&state, caller).is_ok());
-    let binding:Configuration=serde_json::from_value(json!({"repository":"example/project","source_root":"/source","token_file":"/private/token","base":"main"})).unwrap();
-    assert!(
-        !binding.allow_merge,
-        "old bindings must not acquire merge permission"
-    );
+    let binding: Configuration = serde_json::from_value(
+        json!({"repository":"example/project","source_root":"/source","token_file":"/private/token","base":"main"}),
+    )
+    .unwrap();
+    assert!(!binding.allow_merge, "old bindings must not acquire merge permission");
 }

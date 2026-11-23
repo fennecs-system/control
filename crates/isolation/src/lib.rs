@@ -17,7 +17,7 @@ use std::{
 
 mod docker;
 mod observed;
-pub use docker::{bounded_output, Docker};
+pub use docker::{Docker, bounded_output};
 pub use observed::*;
 
 /// A pinned image reference, as the engine names it (`sha256:…`).
@@ -147,10 +147,20 @@ pub struct Tmpfs {
 }
 impl Tmpfs {
     pub fn new(target: &str, size: Size) -> Self {
-        Self { target: target.into(), size, owner: None, exec: Exec::Engine, nodev: false, mode: None }
+        Self {
+            target: target.into(),
+            size,
+            owner: None,
+            exec: Exec::Engine,
+            nodev: false,
+            mode: None,
+        }
     }
     pub fn owned(self, owner: User) -> Self {
-        Self { owner: Some(owner), ..self }
+        Self {
+            owner: Some(owner),
+            ..self
+        }
     }
 }
 /// Resource bounds; `None` leaves the engine default.
@@ -182,7 +192,10 @@ pub enum Logs {
     Engine,
     None,
     /// Kept by the engine, rotated at `max_size` across `max_files` files.
-    Local { max_size: Size, max_files: u32 },
+    Local {
+        max_size: Size,
+        max_files: u32,
+    },
 }
 /// What the program's standard input is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,11 +254,20 @@ impl RunSpec {
         self
     }
     pub fn bind(mut self, source: impl Into<PathBuf>, target: &str, access: Access) -> Self {
-        self.mounts.push(Mount { source: Source::Bind(source.into()), target: target.into(), access });
+        self.mounts.push(Mount {
+            source: Source::Bind(source.into()),
+            target: target.into(),
+            access,
+        });
         self
     }
     pub fn secret(mut self, name: &str, source: impl Into<PathBuf>, target: &str, access: Access) -> Self {
-        self.secrets.push(SecretMount { name: name.into(), source: source.into(), target: target.into(), access });
+        self.secrets.push(SecretMount {
+            name: name.into(),
+            source: source.into(),
+            target: target.into(),
+            access,
+        });
         self
     }
     pub fn tmpfs(mut self, tmpfs: Tmpfs) -> Self {
@@ -287,7 +309,10 @@ impl Streams {
     /// The terminal's own streams, for an interactive sign-in.
     pub const INHERIT: Self = Self::new(Stream::Inherit, Stream::Inherit, Stream::Inherit);
     pub fn apply(self, command: &mut std::process::Command) -> &mut std::process::Command {
-        command.stdin(self.stdin.stdio()).stdout(self.stdout.stdio()).stderr(self.stderr.stdio())
+        command
+            .stdin(self.stdin.stdio())
+            .stdout(self.stdout.stdio())
+            .stderr(self.stderr.stdio())
     }
 }
 

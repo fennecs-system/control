@@ -5,14 +5,26 @@ use control_journal::{FileJournal, Journal};
 use std::{fs, hint::black_box, io::Write, path::PathBuf, time::Instant};
 
 fn entry(n: u64) -> Vec<u8> {
-    format!(r#"{{"turn":{n},"role":"assistant","text":"{}"}}"#, "The server is ready and both bots joined. ".repeat(40)).into_bytes()
+    format!(
+        r#"{{"turn":{n},"role":"assistant","text":"{}"}}"#,
+        "The server is ready and both bots joined. ".repeat(40)
+    )
+    .into_bytes()
 }
 
 fn main() {
-    let dir = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| std::env::temp_dir().to_string_lossy().into_owned())).join("control-journal-bench");
+    let dir = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| std::env::temp_dir().to_string_lossy().into_owned()),
+    )
+    .join("control-journal-bench");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    println!("{:>8}  {:>14}  {:>16}  {:>10}  {:>10}", "history", "journal append", "whole rewrite", "read", "open scan");
+    println!(
+        "{:>8}  {:>14}  {:>16}  {:>10}  {:>10}",
+        "history", "journal append", "whole rewrite", "read", "open scan"
+    );
     let mut history = Vec::new();
     let path = dir.join("chat.jsonl");
     let mut journal = FileJournal::open(&path).unwrap();
@@ -44,7 +56,13 @@ fn main() {
         let state = dir.join("state.json");
         let start = Instant::now();
         for _ in 0..5 {
-            let data = serde_json::to_vec(&history.iter().map(|e| serde_json::from_slice::<serde_json::Value>(e).unwrap()).collect::<Vec<_>>()).unwrap();
+            let data = serde_json::to_vec(
+                &history
+                    .iter()
+                    .map(|e| serde_json::from_slice::<serde_json::Value>(e).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
             let tmp = dir.join("state.json.tmp");
             let mut file = fs::File::create(&tmp).unwrap();
             file.write_all(&data).unwrap();
@@ -65,7 +83,14 @@ fn main() {
         journal = FileJournal::open(&path).unwrap();
         let open = start.elapsed();
         assert_eq!(journal.len(), len);
-        println!("{:>8}  {:>14?}  {:>16?}  {:>10?}  {:>10?}", journal.len(), append, rewrite, read, open);
+        println!(
+            "{:>8}  {:>14?}  {:>16?}  {:>10?}  {:>10?}",
+            journal.len(),
+            append,
+            rewrite,
+            read,
+            open
+        );
     }
     let _ = fs::remove_dir_all(&dir);
 }

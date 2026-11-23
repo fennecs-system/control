@@ -9,18 +9,73 @@ fn codex_launch_vectors_are_pinned() {
     fs::write(&policy, b"{}").unwrap();
     let root = fs::canonicalize(&root).unwrap();
     let values = [("root", root.to_str().unwrap())];
-    let auth = Credentials { path: PathBuf::from("/golden/auth.json"), uid: 501, gid: 20 };
+    let auth = Credentials {
+        path: PathBuf::from("/golden/auth.json"),
+        uid: 501,
+        gid: 20,
+    };
     let workspace = root.join("workspace");
-    let text = text_container("sha256:img", "control-summary-1", &workspace, &auth, &policy, "node-1", "gpt-5").unwrap();
+    let text = text_container(
+        "sha256:img",
+        "control-summary-1",
+        &workspace,
+        &auth,
+        &policy,
+        "node-1",
+        "gpt-5",
+    )
+    .unwrap();
     pin(&run(&text), &fill(TEXT, &values));
-    let probe = probe_container("sha256:img", "control-run-1-probe", &workspace, &auth, &policy, "node-1", "probe-result-00").unwrap();
+    let probe = probe_container(
+        "sha256:img",
+        "control-run-1-probe",
+        &workspace,
+        &auth,
+        &policy,
+        "node-1",
+        "probe-result-00",
+    )
+    .unwrap();
     pin(&run(&probe), &fill(PROBE, &values));
-    let turn = turn_container("sha256:img", "control-run-1", &workspace, &auth, &policy, "node-1", None, "gpt-5", false).unwrap();
+    let turn = turn_container(
+        "sha256:img",
+        "control-run-1",
+        &workspace,
+        &auth,
+        &policy,
+        "node-1",
+        None,
+        "gpt-5",
+        false,
+    )
+    .unwrap();
     pin(&run(&turn), &fill(TURN, &values));
-    let review = turn_container("sha256:img", "control-run-1", &workspace, &auth, &policy, "node-1", Some(&root.join("review-source")), "gpt-5", false).unwrap();
+    let review = turn_container(
+        "sha256:img",
+        "control-run-1",
+        &workspace,
+        &auth,
+        &policy,
+        "node-1",
+        Some(&root.join("review-source")),
+        "gpt-5",
+        false,
+    )
+    .unwrap();
     pin_equivalent(&run(&review), &fill(TURN_REVIEW, &values));
     // The room bridge only appends Codex configuration after the turn's own.
-    let bridged = run(&turn_container("sha256:img", "control-run-1", &workspace, &auth, &policy, "node-1", None, "gpt-5", true).unwrap());
+    let bridged = run(&turn_container(
+        "sha256:img",
+        "control-run-1",
+        &workspace,
+        &auth,
+        &policy,
+        "node-1",
+        None,
+        "gpt-5",
+        true,
+    )
+    .unwrap());
     let plain = run(&turn);
     assert_eq!(bridged[..plain.len() - 1], plain[..plain.len() - 1]);
     assert_eq!(bridged.last().map(String::as_str), Some("-"));

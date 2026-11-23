@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn stale_pending_and_foreign_node_resources_are_retired_before_any_listener_effect() {
@@ -25,12 +24,7 @@ fn stale_pending_and_foreign_node_resources_are_retired_before_any_listener_effe
         Intent::Stop
     );
     assert_eq!(
-        intent(
-            &state,
-            &p,
-            &node,
-            state.services[0].resource.lease.expires()
-        ),
+        intent(&state, &p, &node, state.services[0].resource.lease.expires()),
         Intent::Stop
     );
     state.services[0].resource.phase = Phase::Stopped(control_core::resources::StopReason::Exited);

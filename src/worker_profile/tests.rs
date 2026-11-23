@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -14,7 +13,10 @@ fn legacy_and_unknown_images_fail_closed() {
 #[ignore = "requires CONTROL_QA_FULL_IMAGE pinned full worker and Linux Docker; no credentials/models"]
 fn live_private_nix_build_and_runtime_isolation() {
     let image = std::env::var("CONTROL_QA_FULL_IMAGE").unwrap();
-    assert_eq!(Profile::inspect(crate::engine::isolation(), &image).unwrap(), Profile::Full);
+    assert_eq!(
+        Profile::inspect(crate::engine::isolation(), &image).unwrap(),
+        Profile::Full
+    );
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
     assert_ne!(uid, 0);
@@ -43,11 +45,7 @@ fn live_private_nix_build_and_runtime_isolation() {
             ])
             .output()
             .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         String::from_utf8(result.stdout).unwrap()
     };
     let script = r#"set -eu
@@ -75,10 +73,7 @@ printf '%s\n' "$out"
     let output = run(script);
     let path = output.trim();
     assert!(path.starts_with("/nix/store/") && path.ends_with("-control-private-nix-check"));
-    assert!(
-        path.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/-".contains(&b))
-    );
+    assert!(path.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-".contains(&b)));
     run(&format!(
         "set -eu; test ! -e '{path}'; if nix-store --check-validity '{path}' 2>/dev/null; then exit 42; fi; printf isolated"
     ));

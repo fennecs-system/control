@@ -1,7 +1,14 @@
 use super::*;
 
 // The host preparation API is read-only. Fixtures explicitly publish its result.
-fn enqueue_continuation(state: &mut State, chat: &str, from: usize, objective: String, kind: RunKind, source: &str) -> Result<String, ContinuationError> {
+fn enqueue_continuation(
+    state: &mut State,
+    chat: &str,
+    from: usize,
+    objective: String,
+    kind: RunKind,
+    source: &str,
+) -> Result<String, ContinuationError> {
     let run = continuation(state, chat, from, objective, kind, source)?;
     let id = run.id.clone();
     state.runtime.runs.push(run);
@@ -33,42 +40,51 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
     origin.model = Some("model-a".into());
     origin.lenses = Some(vec!["lens-a".into()]);
     let origin_id = origin.id.clone();
-    let grant = |id: &str| serde_json::from_value::<crate::services::Grant>(json!({"id":id,"owner":{"node":"node-a","chat":chat},"generation":1})).unwrap();
+    let grant = |id: &str| {
+        serde_json::from_value::<crate::services::Grant>(
+            json!({"id":id,"owner":{"node":"node-a","chat":chat},"generation":1}),
+        )
+        .unwrap()
+    };
     let mut follow_up = FollowUp::from(&state, &state.runtime.runs[0]);
     assert!(follow_up.grants.is_empty(), "no service is accessible to the run");
     follow_up.grant([grant("svc-a"), grant("svc-b")]);
     follow_up.grant([grant("svc-b"), grant("svc-c")]);
-    let run = follow_up.enqueue(&mut state, &chat, "Follow up".into(), RunKind::AgentMessage, "test").unwrap();
-    assert_eq!((run.chat_id.as_deref(), run.objective.as_str(), run.status.as_str()), (Some(chat.as_str()), "Follow up", "queued"));
-    assert_eq!((run.model.as_deref(), run.lenses.clone()), (Some("model-a"), Some(vec!["lens-a".to_owned()])));
-    assert_eq!(run.persona.as_ref().map(|persona| persona.root.as_str()), Some(origin_id.as_str()), "the origin's lineage");
-    assert_eq!(run.resource_grants, vec![grant("svc-a"), grant("svc-b"), grant("svc-c")], "deduplicated in order");
+    let run = follow_up
+        .enqueue(&mut state, &chat, "Follow up".into(), RunKind::AgentMessage, "test")
+        .unwrap();
+    assert_eq!(
+        (run.chat_id.as_deref(), run.objective.as_str(), run.status.as_str()),
+        (Some(chat.as_str()), "Follow up", "queued")
+    );
+    assert_eq!(
+        (run.model.as_deref(), run.lenses.clone()),
+        (Some("model-a"), Some(vec!["lens-a".to_owned()]))
+    );
+    assert_eq!(
+        run.persona.as_ref().map(|persona| persona.root.as_str()),
+        Some(origin_id.as_str()),
+        "the origin's lineage"
+    );
+    assert_eq!(
+        run.resource_grants,
+        vec![grant("svc-a"), grant("svc-b"), grant("svc-c")],
+        "deduplicated in order"
+    );
     assert_eq!(state.runtime.runs.len(), 2);
 }
 
 #[test]
 fn invalid_continuation_input_leaves_the_queue_and_notice_unchanged() {
     let mut state = State::default();
-    state
-        .runtime
-        .enqueue("original".into(), RunKind::Task, "test");
+    state.runtime.enqueue("original".into(), RunKind::Task, "test");
     state.runtime.runs[0].status = "completed".into();
     state.runtime.notice = "unchanged".into();
     for objective in [
         String::new(),
         "x".repeat(control_context::limits::CHAT_MESSAGE_CHARS + 1),
     ] {
-        assert!(
-            enqueue_continuation(
-                &mut state,
-                "chat",
-                0,
-                objective,
-                RunKind::PortDecision,
-                "test"
-            )
-            .is_err()
-        );
+        assert!(enqueue_continuation(&mut state, "chat", 0, objective, RunKind::PortDecision, "test").is_err());
         assert_eq!(state.runtime.runs.len(), 1);
         assert_eq!(state.runtime.notice, "unchanged");
     }
@@ -85,9 +101,7 @@ fn profile_continuation_admission() {
         .clamp(1, 100_000);
     for retained in [16, 1024, 20_001] {
         let mut state = State::default();
-        state
-            .runtime
-            .enqueue("original".into(), RunKind::Task, "fixture");
+        state.runtime.enqueue("original".into(), RunKind::Task, "fixture");
         let mut origin = state.runtime.runs.pop().unwrap();
         origin.status = "completed".into();
         origin.model = Some("captured-model".into());
@@ -132,35 +146,16 @@ fn profile_continuation_admission() {
 fn long_unicode_messages_reach_runs_and_reject_overflow_without_changes() {
     let mut state = State::default();
     let id = create(&mut state);
-    let text = format!(
-        "{} END",
-        "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4)
-    );
-    tool(
-        &mut state,
-        "control.chat.send",
-        &json!({"id":id,"message":text}),
-    )
-    .unwrap();
+    let text = format!("{} END", "🦊".repeat(control_context::limits::CHAT_MESSAGE_CHARS - 4));
+    tool(&mut state, "control.chat.send", &json!({"id":id,"message":text})).unwrap();
     assert_eq!(state.chats[0].messages[0].text, text);
     assert_eq!(state.runtime.runs[0].objective.as_str(), text);
-    for backend in [
-        crate::backend::Backend::Codex,
-        crate::backend::Backend::Claude,
-    ] {
+    for backend in [crate::backend::Backend::Codex, crate::backend::Backend::Claude] {
         state.runtime.runs[0].backend = backend;
-        assert!(
-            prompt(&state, &state.runtime.runs[0].id)
-                .unwrap()
-                .contains(&text)
-        );
+        assert!(prompt(&state, &state.runtime.runs[0].id).unwrap().contains(&text));
     }
     let before = serde_json::to_vec(&state).unwrap();
-    for invalid in [
-        format!("{text}x"),
-        format!("/spawn {text}"),
-        format!("/btw {text}"),
-    ] {
+    for invalid in [format!("{text}x"), format!("/spawn {text}"), format!("/btw {text}")] {
         assert!(
             tool(
                 &mut state,
@@ -174,9 +169,7 @@ fn long_unicode_messages_reach_runs_and_reject_overflow_without_changes() {
     assert!(!render(&state, &id).unwrap().contains("maxlength='2000'"));
     assert!(!landing_mode(&state, "engineering", None, false).contains("maxlength='2000'"));
     assert_eq!(
-        crate::tool_registry::lookup("control.chat.send")
-            .unwrap()
-            .definition["inputSchema"]["properties"]["message"]["maxLength"],
+        crate::tool_registry::lookup("control.chat.send").unwrap().definition["inputSchema"]["properties"]["message"]["maxLength"],
         control_context::limits::CHAT_MESSAGE_CHARS
     );
 }
@@ -184,21 +177,11 @@ fn long_unicode_messages_reach_runs_and_reject_overflow_without_changes() {
 #[test]
 fn long_command_objectives_keep_their_complete_tail() {
     let text = format!("{} final constraint", "λ".repeat(4000));
-    for prefix in [
-        "/spawn ",
-        "/btw ",
-        "/steer ",
-        "/improve ",
-        "!control improve ",
-    ] {
+    for prefix in ["/spawn ", "/btw ", "/steer ", "/improve ", "!control improve "] {
         let mut state = State::default();
         let id = create(&mut state);
         send(&mut state, &id, &format!("{prefix}{text}"), "test").unwrap();
-        assert_eq!(
-            state.runtime.runs.last().unwrap().objective.as_str(),
-            text,
-            "{prefix}"
-        );
+        assert_eq!(state.runtime.runs.last().unwrap().objective.as_str(), text, "{prefix}");
     }
     assert!(
         discord::direct_command(&text).is_none(),
@@ -215,12 +198,14 @@ fn conversation_index_preserves_first_matches_and_missing_run_replies() {
     let mut duplicate = state.runtime.runs[0].clone();
     duplicate.result = "Later duplicate".into();
     state.runtime.runs.push(duplicate);
-    state.chats[0].messages.push(Message { speaker: Default::default(),
+    state.chats[0].messages.push(Message {
+        speaker: Default::default(),
         text: "Missing run".into(),
         run_id: Some("missing".into()),
         reply: "Retained reply".into(),
     });
-    state.chats[0].messages.push(Message { speaker: Default::default(),
+    state.chats[0].messages.push(Message {
+        speaker: Default::default(),
         text: "No run".into(),
         run_id: None,
         reply: "Local reply".into(),
@@ -236,11 +221,7 @@ fn conversation_index_preserves_first_matches_and_missing_run_replies() {
     assert_eq!(data["messages"][1]["reply"], "Retained reply");
     assert_eq!(data["messages"][2]["reply"], "Local reply");
     let html = transcript(&state, &id).unwrap();
-    assert!(
-        html.contains("First &amp; original")
-            && html.contains("Retained reply")
-            && html.contains("Local reply")
-    );
+    assert!(html.contains("First &amp; original") && html.contains("Retained reply") && html.contains("Local reply"));
     assert!(!html.contains("Later duplicate"));
 }
 #[test]
@@ -267,10 +248,7 @@ fn completed_file_diffs_are_collapsed_escaped_and_separate_from_command_logs() {
         .split('>')
         .next()
         .unwrap();
-    assert!(
-        !diff.split_ascii_whitespace()
-            .any(|attribute| attribute == "open")
-    );
+    assert!(!diff.split_ascii_whitespace().any(|attribute| attribute == "open"));
     assert!(html.contains("diff-line diff-add'>+&lt;script&gt;"));
     assert!(html.contains("diff-line diff-remove'>-old"));
     assert!(!html.contains("<script>"));
@@ -348,13 +326,7 @@ fn spawn_rejection_leaves_no_orphan_and_cannot_elevate_unknown_actor() {
     for _ in 0..crate::scheduler::MAX_PENDING {
         state
             .runtime
-            .enqueue_for(
-                "task".into(),
-                RunKind::Chat,
-                "test",
-                Actor::LocalOperator,
-                Action::Task,
-            )
+            .enqueue_for("task".into(), RunKind::Chat, "test", Actor::LocalOperator, Action::Task)
             .unwrap();
     }
     assert!(fork(&mut state, &parent, "overflow", "test").is_err());
@@ -370,13 +342,7 @@ fn slash_commands_replace_mode_form_controls_and_escape_chat_text() {
     assert!(!landing.contains("name='improve_mode'"));
     assert!(!landing.contains("mode_present"));
     assert!(!landing.contains("type='checkbox' name='improve"));
-    send(
-        &mut state,
-        &id,
-        "/improve <script>alert(1)</script>",
-        "test",
-    )
-    .unwrap();
+    send(&mut state, &id, "/improve <script>alert(1)</script>", "test").unwrap();
     let html = render(&state, &id).unwrap();
     assert!(html.contains("class='chat-command active-command'"));
     assert!(html.contains("data-command='/improve off'"));
@@ -387,10 +353,7 @@ fn slash_commands_replace_mode_form_controls_and_escape_chat_text() {
         command_text("/improve off"),
         "<span class='chat-command'>/improve off</span>"
     );
-    assert_eq!(
-        command_text("/improvements <img>"),
-        "/improvements &lt;img&gt;"
-    );
+    assert_eq!(command_text("/improvements <img>"), "/improvements &lt;img&gt;");
     state.chats[0].actor = Actor::Unknown;
     assert!(command_menu(&state.chats[0].actor).is_empty());
     let user_menu = command_menu_for(true, false);
@@ -411,21 +374,12 @@ fn side_question_captures_context_without_reusing_parent_workspace_or_authority(
     assert_eq!(state.chats.len(), 2);
     let child = &state.chats[1];
     assert_eq!(child.parent_chat.as_deref(), Some(parent.as_str()));
-    assert!(
-        child
-            .fork_context
-            .as_ref()
-            .unwrap()
-            .contains("Build a parser")
-    );
+    assert!(child.fork_context.as_ref().unwrap().contains("Build a parser"));
     assert_eq!(child.workspace.as_deref(), Some("published-parent"));
     assert!(child.improve_workspace.is_none());
     assert!(!child.improve_mode);
     assert!(state.chats[0].improve_mode);
-    assert_eq!(
-        state.chats[0].workspace.as_deref(),
-        Some("published-parent")
-    );
+    assert_eq!(state.chats[0].workspace.as_deref(), Some("published-parent"));
     assert_eq!(state.runtime.runs[0].status, "running");
     assert_eq!(state.runtime.runs[1].action, Action::Task);
     assert!(
@@ -461,19 +415,11 @@ fn steering_is_durable_ordered_and_never_mutates_an_active_request() {
             .windows(2)
             .all(|pair| pair[0].queue_order < pair[1].queue_order)
     );
-    assert!(
-        transcript(&restored, &id)
-            .unwrap()
-            .contains("Queued · next turn")
-    );
+    assert!(transcript(&restored, &id).unwrap().contains("Queued · next turn"));
     restored.runtime.runs[0].status = "completed".into();
     restored.runtime.runs[0].result = "Parser complete".into();
     let steering = restored.runtime.runs[2].id.clone();
-    assert!(
-        prompt(&restored, &steering)
-            .unwrap()
-            .contains("Parser complete")
-    );
+    assert!(prompt(&restored, &steering).unwrap().contains("Parser complete"));
     assert!(send(&mut restored, &id, "/steer", "test").is_err());
     assert_eq!(restored.runtime.runs.len(), 3);
     assert_eq!(
@@ -516,7 +462,8 @@ fn improve_mode_persists_discussion_and_can_exit_without_changing_queued_authori
 fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html() {
     let mut state = State::default();
     let id = create(&mut state);
-    state.chats[0].messages.push(Message { speaker: Default::default(),
+    state.chats[0].messages.push(Message {
+        speaker: Default::default(),
         text: "x".repeat(21000),
         run_id: None,
         reply: String::new(),
@@ -537,10 +484,9 @@ fn attempt_activity_and_context_trimming_survive_serialization_and_escape_html()
     });
     state.runtime.runs[0].status = "failed".into();
     let mut stored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    stored.runtime.action(
-        "/retry-run",
-        &std::collections::HashMap::from([("id".into(), run_id)]),
-    );
+    stored
+        .runtime
+        .action("/retry-run", &std::collections::HashMap::from([("id".into(), run_id)]));
     assert_eq!(stored.runtime.runs[0].attempts.len(), 1);
     assert_eq!(stored.runtime.runs[0].status, "queued");
     let html = transcript(&stored, &id).unwrap();
@@ -565,20 +511,11 @@ fn runs_pin_nested_definitions_and_document_contents() {
         revision: 1,
         saved_at: None,
     });
-    let mut definition = state
-        .lens_library
-        .get("architecture-notes")
-        .unwrap()
-        .clone();
+    let mut definition = state.lens_library.get("architecture-notes").unwrap().clone();
     definition.revision = 2;
     definition.documents.push("doc-1".into());
     state.lens_library.definitions.push(definition.clone());
-    let chat = tool(
-        &mut state,
-        "control.chat.create",
-        &json!({"lenses":["engineering"]}),
-    )
-    .unwrap();
+    let chat = tool(&mut state, "control.chat.create", &json!({"lenses":["engineering"]})).unwrap();
     let id = chat["id"].as_str().unwrap();
     send(&mut state, id, "Check the architecture", "test").unwrap();
     let first = state.runtime.runs[0].id.clone();
@@ -592,18 +529,12 @@ fn runs_pin_nested_definitions_and_document_contents() {
     assert!(old.contains("Original document body"));
     assert!(!old.contains("Changed document body"));
     assert!(!old.contains("New guidance"));
-    assert_eq!(
-        state.runtime.runs[0].context.as_ref().unwrap().documents[0].revision,
-        1
-    );
+    assert_eq!(state.runtime.runs[0].context.as_ref().unwrap().documents[0].revision, 1);
     let new = prompt(&state, &state.runtime.runs[1].id).unwrap();
     assert!(new.contains("Changed document body"));
     assert!(new.contains("New guidance"));
     let stored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    assert_eq!(
-        stored.runtime.runs[0].context,
-        state.runtime.runs[0].context
-    );
+    assert_eq!(stored.runtime.runs[0].context, state.runtime.runs[0].context);
 }
 #[test]
 fn preview_library_and_chat() {
@@ -623,15 +554,9 @@ fn preview_library_and_chat() {
         for (name, css) in [
             ("style.css", include_str!("../../assets/style.css")),
             ("runtime.css", include_str!("../../assets/runtime.css")),
-            (
-                "collective.css",
-                include_str!("../../assets/collective.css"),
-            ),
+            ("collective.css", include_str!("../../assets/collective.css")),
             ("workspace.css", include_str!("../../assets/workspace.css")),
-            (
-                "navigation.css",
-                include_str!("../../assets/navigation.css"),
-            ),
+            ("navigation.css", include_str!("../../assets/navigation.css")),
         ] {
             html = html
                 .replace(
@@ -649,30 +574,16 @@ fn preview_library_and_chat() {
         .replace("<body>", "<body class='session-view'>")
         .replace(
             &format!("src='/dm/{id}/transcript#latest'"),
-            &format!(
-                "srcdoc='{}'",
-                escape(&inline(transcript(&state, &id).unwrap()))
-            ),
+            &format!("srcdoc='{}'", escape(&inline(transcript(&state, &id).unwrap()))),
         );
-    let landing = crate::render(
-        &state,
-        "session-list",
-        "none",
-        &landing(&state, "none", None),
-    )
-    .replace("<body>", "<body class='session-view'>");
+    let landing = crate::render(&state, "session-list", "none", &landing(&state, "none", None))
+        .replace("<body>", "<body class='session-view'>");
     for (file, html) in [
-        (
-            "rooms.html",
-            crate::render(&state, "rooms", "none", "engineering"),
-        ),
+        ("rooms.html", crate::render(&state, "rooms", "none", "engineering")),
         ("chat.html", session),
         ("new.html", landing),
         ("transcript.html", transcript(&state, &id).unwrap()),
-        (
-            "lenses.html",
-            crate::render(&state, "lenses", "engineering", "general"),
-        ),
+        ("lenses.html", crate::render(&state, "lenses", "engineering", "general")),
     ] {
         std::fs::write(std::path::Path::new(&directory).join(file), inline(html)).unwrap();
     }
@@ -690,18 +601,9 @@ fn composing_and_changing_lenses_preserves_each_runs_selection() {
     assert_eq!(chat["lenses"], json!(["engineering", "research"]));
     send(&mut state, id, "Review this design", "test").unwrap();
     let first = state.runtime.runs[0].id.clone();
-    tool(
-        &mut state,
-        "control.chat.lenses",
-        &json!({"id":id,"lenses":[]}),
-    )
-    .unwrap();
+    tool(&mut state, "control.chat.lenses", &json!({"id":id,"lenses":[]})).unwrap();
     send(&mut state, id, "Continue without lenses", "test").unwrap();
-    assert!(
-        prompt(&state, &first)
-            .unwrap()
-            .contains("Engineering + Research")
-    );
+    assert!(prompt(&state, &first).unwrap().contains("Engineering + Research"));
     assert!(
         !prompt(&state, &state.runtime.runs[1].id)
             .unwrap()
@@ -728,14 +630,7 @@ fn composing_and_changing_lenses_preserves_each_runs_selection() {
     assert!(page.contains("design of Knowledge"));
     assert_eq!(state.chats.len(), count);
     assert_eq!(state.runtime.runs.len(), runs);
-    assert!(
-        tool(
-            &mut state,
-            "control.chat.create",
-            &json!({"design_context":"<script>"})
-        )
-        .is_err()
-    );
+    assert!(tool(&mut state, "control.chat.create", &json!({"design_context":"<script>"})).is_err());
 }
 #[test]
 fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_changes() {
@@ -778,7 +673,8 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
         .find(|chat| chat.id == id)
         .unwrap()
         .messages
-        .push(Message { speaker: Default::default(),
+        .push(Message {
+            speaker: Default::default(),
             text: "Inspect a changed observation".into(),
             run_id: Some(wake.clone()),
             reply: String::new(),
@@ -788,7 +684,10 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     // returns the captured revision's text, never the edited library.
     let guidance = |state: &State, run: &str, topic: &str| {
         let run = state.runtime.runs.iter().find(|r| r.id == run).unwrap();
-        crate::guidance::answer(run, &json!({"topic":topic})).unwrap()["text"].as_str().unwrap().to_owned()
+        crate::guidance::answer(run, &json!({"topic":topic})).unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     };
     for run in [&parent, &child, &wake] {
         let text = prompt(&restored, run).unwrap();
@@ -805,22 +704,17 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
     let last = state.runtime.runs.last().unwrap().id.clone();
     let next = prompt(&state, &last).unwrap();
     assert!(next.contains("investigation@5") && next.contains("coordination@19") && next.contains("planning@10"));
-    assert_eq!(guidance(&state, &last, "investigation"), "Future investigation guidance only");
-    assert_eq!(guidance(&state, &last, "coordination"), "Future coordination guidance only");
+    assert_eq!(
+        guidance(&state, &last, "investigation"),
+        "Future investigation guidance only"
+    );
+    assert_eq!(
+        guidance(&state, &last, "coordination"),
+        "Future coordination guidance only"
+    );
     assert_eq!(guidance(&state, &last, "planning"), "Future planning guidance only");
-    tool(
-        &mut state,
-        "control.chat.lenses",
-        &json!({"id":id,"lenses":[]}),
-    )
-    .unwrap();
-    send(
-        &mut state,
-        &id,
-        "Continue without optional guidance",
-        "test",
-    )
-    .unwrap();
+    tool(&mut state, "control.chat.lenses", &json!({"id":id,"lenses":[]})).unwrap();
+    send(&mut state, &id, "Continue without optional guidance", "test").unwrap();
     let plain = prompt(&state, &state.runtime.runs.last().unwrap().id).unwrap();
     assert!(!plain.contains("Captured lens guidance") && !plain.contains("three distinct tries"));
     assert!(!plain.contains("Future coordination guidance only"));
@@ -828,12 +722,7 @@ fn optional_guidance_survives_child_wake_and_library_edits_without_retroactive_c
 #[test]
 fn chat_context_is_captured_and_does_not_follow_browser_defaults() {
     let mut state = State::default();
-    let created = tool(
-        &mut state,
-        "control.chat.create",
-        &json!({"lens":"research"}),
-    )
-    .unwrap();
+    let created = tool(&mut state, "control.chat.create", &json!({"lens":"research"})).unwrap();
     let id = created["id"].as_str().unwrap();
     send(&mut state, id, "Find a useful source", "test").unwrap();
     let page = crate::render(&state, "session", "engineering", id);
@@ -845,19 +734,11 @@ fn chat_context_is_captured_and_does_not_follow_browser_defaults() {
             .contains("Selected context lenses: Research")
     );
     let count = state.chats.len();
-    assert!(
-        tool(
-            &mut state,
-            "control.chat.create",
-            &json!({"lens":"unknown"})
-        )
-        .is_err()
-    );
+    assert!(tool(&mut state, "control.chat.create", &json!({"lens":"unknown"})).is_err());
     assert_eq!(state.chats.len(), count);
-    let legacy: Session = serde_json::from_value(
-        json!({"id":"old","actor":{"type":"local_operator"},"title":"Old chat","messages":[]}),
-    )
-    .unwrap();
+    let legacy: Session =
+        serde_json::from_value(json!({"id":"old","actor":{"type":"local_operator"},"title":"Old chat","messages":[]}))
+            .unwrap();
     assert!(legacy.lens.is_none());
 }
 #[test]
@@ -884,11 +765,7 @@ fn improvement_action_and_session_revision_are_preserved() {
     send(&mut state, &id, "/improve refine the UI", "test").unwrap();
     assert_eq!(state.runtime.runs[0].action, Action::Improve);
     assert_eq!(detail(&state, &id).unwrap()["revision"], 1);
-    assert!(
-        !transcript(&state, &id)
-            .unwrap()
-            .contains("http-equiv='refresh'")
-    );
+    assert!(!transcript(&state, &id).unwrap().contains("http-equiv='refresh'"));
 }
 #[test]
 fn automatic_updates_are_not_presented_as_user_messages() {
@@ -907,17 +784,9 @@ fn automatic_updates_are_not_presented_as_user_messages() {
             .starts_with("Control event:")
     );
     state.runtime.runs[0].kind = RunKind::RoomNotification;
-    assert!(
-        !transcript(&state, &id)
-            .unwrap()
-            .contains("aria-label='You'")
-    );
+    assert!(!transcript(&state, &id).unwrap().contains("aria-label='You'"));
     state.runtime.runs[0].kind = RunKind::DesignAnswer;
-    assert!(
-        transcript(&state, &id)
-            .unwrap()
-            .contains("aria-label='You'")
-    );
+    assert!(transcript(&state, &id).unwrap().contains("aria-label='You'"));
     assert!(
         crate::conversation::Conversation::of(&state, &state.chats[0])
             .entry(0)
@@ -948,18 +817,8 @@ fn existing_chats_attach_to_rooms_unless_a_bot_or_listener_owns_the_inbox() {
     state.runtime.runs[0].status = "completed".into();
     assert!(send(&mut state, &id, "/room lobby", "test").is_err());
     send(&mut state, &id, "/room general", "test").unwrap();
-    assert_eq!(
-        state.chats[0].room.as_deref(),
-        Some(format!("general/{id}").as_str())
-    );
-    assert!(
-        state.chats[0]
-            .messages
-            .last()
-            .unwrap()
-            .reply
-            .contains("#general")
-    );
+    assert_eq!(state.chats[0].room.as_deref(), Some(format!("general/{id}").as_str()));
+    assert!(state.chats[0].messages.last().unwrap().reply.contains("#general"));
     send(&mut state, &id, "/listen", "test").unwrap();
     assert!(
         send(&mut state, &id, "/room research", "test").is_err(),
@@ -974,21 +833,11 @@ fn existing_chats_attach_to_rooms_unless_a_bot_or_listener_owns_the_inbox() {
     send(&mut state, &id, "/bot off", "test").unwrap();
     assert!(!crate::bots::defined(&state, &id));
     crate::rooms::ensure_inbox(&mut state, &id).unwrap();
-    assert!(
-        state
-            .collective
-            .room_watches
-            .iter()
-            .any(|watch| watch.chat == id)
-    );
+    assert!(state.collective.room_watches.iter().any(|watch| watch.chat == id));
     send(&mut state, &id, "/room off", "test").unwrap();
     assert_eq!(state.chats[0].room, None);
     assert!(
-        !state
-            .collective
-            .room_watches
-            .iter()
-            .any(|watch| watch.chat == id),
+        !state.collective.room_watches.iter().any(|watch| watch.chat == id),
         "inbox watches of the old room are dropped"
     );
 }
@@ -1000,12 +849,7 @@ fn tree() -> (State, String, String, String, String) {
     state.runtime.runs[0].status = "completed".into();
     let spawn = |state: &mut State, parent: &str, status: &str| {
         let chat = create(state);
-        state
-            .chats
-            .iter_mut()
-            .find(|s| s.id == chat)
-            .unwrap()
-            .parent_chat = Some(parent.into());
+        state.chats.iter_mut().find(|s| s.id == chat).unwrap().parent_chat = Some(parent.into());
         send(state, &chat, "Work", "test").unwrap();
         state.runtime.runs.last_mut().unwrap().status = status.into();
         chat
@@ -1040,10 +884,7 @@ fn cancel_all_reaches_descendants_from_an_idle_chat() {
     send(&mut state, &lead, "/cancel all", "test").unwrap();
     assert_eq!(status(&state, &grandchild), "cancelling");
     assert_eq!(status(&state, &unrelated), "running");
-    assert!(
-        !crate::bots::defined(&state, &child),
-        "an idle bot stops at once"
-    );
+    assert!(!crate::bots::defined(&state, &child), "an idle bot stops at once");
     let reply = &state
         .chats
         .iter()
@@ -1074,28 +915,58 @@ fn chats_show_callsigns_and_every_client_sees_the_same_rename() {
     let mut state = State::default();
     let chat = create(&mut state);
     // A long first message does not name the chat; its callsign does.
-    send(&mut state, &chat, "Own player1 in private Minecraft26.3 civilisation. Read /world first", "test").unwrap();
+    send(
+        &mut state,
+        &chat,
+        "Own player1 in private Minecraft26.3 civilisation. Read /world first",
+        "test",
+    )
+    .unwrap();
     let callsign = crate::callsigns::name(&state.chats, &chat).unwrap().into_owned();
     assert!(crate::callsigns::WORDS.contains(&callsign.as_str()));
     assert_eq!(list(&state)[0]["title"], callsign.as_str());
     assert_eq!(detail(&state, &chat).unwrap()["title"], callsign.as_str());
     // The typed client tool (TUI, Discord) and the composer command (web) rename alike.
-    let renamed = tool(&mut state, "control.chat.rename", &serde_json::json!({"id":chat,"name":" Farm  lead "})).unwrap();
+    let renamed = tool(
+        &mut state,
+        "control.chat.rename",
+        &serde_json::json!({"id":chat,"name":" Farm  lead "}),
+    )
+    .unwrap();
     assert_eq!(renamed["title"], "Farm lead");
     let runs = state.runtime.runs.len();
     send(&mut state, &chat, "/rename player1", "test").unwrap();
     assert_eq!(state.runtime.runs.len(), runs, "renaming starts no run");
-    assert_eq!(state.chats[0].messages.last().unwrap().reply, "Renamed this DM to player1.");
+    assert_eq!(
+        state.chats[0].messages.last().unwrap().reply,
+        "Renamed this DM to player1."
+    );
     let rows = list(&state);
     let rows = control_client::chats::entries(rows.as_array().unwrap());
     assert_eq!(rows[0].title, "player1");
     assert_eq!(detail(&state, &chat).unwrap()["title"], "player1");
     assert!(render(&state, &chat).unwrap().contains("<h2>player1</h2>"));
-    assert!(crate::navigation::conversations(&state, &chat).contains("<span class='conversation-title'>player1</span>"));
+    assert!(
+        crate::navigation::conversations(&state, &chat).contains("<span class='conversation-title'>player1</span>")
+    );
     // Invalid names change nothing.
     assert_eq!(send(&mut state, &chat, "/rename", "test"), Err("Usage: /rename NAME"));
-    assert!(tool(&mut state, "control.chat.rename", &serde_json::json!({"id":chat,"name":"x".repeat(40)})).is_err());
-    assert!(tool(&mut state, "control.chat.rename", &serde_json::json!({"id":chat,"name":"a\u{7}b"})).is_err());
+    assert!(
+        tool(
+            &mut state,
+            "control.chat.rename",
+            &serde_json::json!({"id":chat,"name":"x".repeat(40)})
+        )
+        .is_err()
+    );
+    assert!(
+        tool(
+            &mut state,
+            "control.chat.rename",
+            &serde_json::json!({"id":chat,"name":"a\u{7}b"})
+        )
+        .is_err()
+    );
     assert_eq!(state.chats[0].name.as_deref(), Some("player1"));
 }
 
@@ -1107,8 +978,16 @@ fn services_command_replies_in_the_chat_without_a_turn() {
     let chat = create(&mut state);
     send(&mut state, &chat, "/services", "test").unwrap();
     let message = state.chats[0].messages.last().unwrap();
-    assert!(message.run_id.is_none() && message.reply.starts_with("No running services in this DM's team"), "{}", message.reply);
+    assert!(
+        message.run_id.is_none() && message.reply.starts_with("No running services in this DM's team"),
+        "{}",
+        message.reply
+    );
     assert!(state.runtime.runs.is_empty());
     assert!(send(&mut state, &chat, "/services stop", "test").is_err());
-    assert!(send(&mut state, &chat, "/services stop svc-missing", "test").unwrap_err().contains("No running service"));
+    assert!(
+        send(&mut state, &chat, "/services stop svc-missing", "test")
+            .unwrap_err()
+            .contains("No running service")
+    );
 }

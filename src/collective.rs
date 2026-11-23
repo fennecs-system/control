@@ -57,10 +57,7 @@ impl Collective {
             "/room" => {
                 let text = value(f, "message");
                 let channel = value(f, "channel");
-                if !text.is_empty()
-                    && text.chars().count() <= 2000
-                    && crate::rooms::valid(&channel)
-                {
+                if !text.is_empty() && text.chars().count() <= 2000 && crate::rooms::valid(&channel) {
                     self.posts.push(crate::rooms::Post {
                         room: channel,
                         text,
@@ -91,12 +88,15 @@ impl Collective {
                     || validity.chars().count() > 300
                     || self.proposals.len() >= crate::knowledge_tools::MAX_PROPOSALS
                 {
-                    self.notice = "A proposal needs a claim of at most 280 characters, evidence, scope, and a recheck condition.".into();
-                } else if self.proposals.iter().any(|p| {
-                    p.status != "rejected" && p.claim.to_lowercase() == claim.to_lowercase()
-                }) {
                     self.notice =
-                        "That claim already exists. Review the existing record instead.".into();
+                        "A proposal needs a claim of at most 280 characters, evidence, scope, and a recheck condition."
+                            .into();
+                } else if self
+                    .proposals
+                    .iter()
+                    .any(|p| p.status != "rejected" && p.claim.to_lowercase() == claim.to_lowercase())
+                {
+                    self.notice = "That claim already exists. Review the existing record instead.".into();
                 } else {
                     self.proposals.push(Knowledge {
                         claim,
@@ -116,10 +116,10 @@ impl Collective {
                     .ok()
                     .and_then(|id| self.proposals.get_mut(id))
                     && p.status == "pending"
-                        && ["accepted", "rejected"].contains(&decision.as_str())
-                    {
-                        p.status = decision;
-                    }
+                    && ["accepted", "rejected"].contains(&decision.as_str())
+                {
+                    p.status = decision;
+                }
                 "/?view=knowledge"
             }
             "/request" => {
@@ -127,8 +127,7 @@ impl Collective {
                 let resource = value(f, "resource");
                 let purpose = value(f, "purpose");
                 let authority = value(f, "authority");
-                if ["network.read", "environment.package", "tool.access"]
-                    .contains(&capability.as_str())
+                if ["network.read", "environment.package", "tool.access"].contains(&capability.as_str())
                     && ["human", "judge"].contains(&authority.as_str())
                     && !resource.is_empty()
                     && !purpose.is_empty()
@@ -149,10 +148,11 @@ impl Collective {
                     .parse::<usize>()
                     .ok()
                     .and_then(|id| self.requests.get_mut(id))
-                    && r.status == "pending" && ["approved", "denied"].contains(&decision.as_str())
-                    {
-                        r.status = decision;
-                    }
+                    && r.status == "pending"
+                    && ["approved", "denied"].contains(&decision.as_str())
+                {
+                    r.status = decision;
+                }
                 "/?view=authority"
             }
             _ => "/",
@@ -172,16 +172,18 @@ impl Collective {
                 for (id, p) in self.proposals.iter().enumerate() {
                     h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Evidence</dt><dd>{}</dd><dt>Scope</dt><dd>{}</dd><dt>Recheck when</dt><dd>{}</dd></dl>", escape(&p.status), escape(&p.claim), escape(&p.evidence), escape(&p.scope), escape(&p.validity)));
                     if let Some(source) = &p.source {
-                        h.push_str(&format!("<p class='muted'>From <a href='/dm/{}'>chat</a> · run {}</p>",escape(&source.chat),escape(source.run.as_deref().unwrap_or("local operator"))));
+                        h.push_str(&format!(
+                            "<p class='muted'>From <a href='/dm/{}'>chat</a> · run {}</p>",
+                            escape(&source.chat),
+                            escape(source.run.as_deref().unwrap_or("local operator"))
+                        ));
                     }
                     if p.status == "pending" {
                         h.push_str(&format!("<form method='post' action='/review' class='actions'><input type='hidden' name='id' value='{id}'><button class='primary' name='decision' value='accepted'>Accept entry</button><button name='decision' value='rejected'>Reject</button></form>"));
                     }
                     h.push_str("</article>");
                 }
-                h.push_str(
-                    "<h3 class='form-title'>New entry</h3><form method='post' action='/propose'>",
-                );
+                h.push_str("<h3 class='form-title'>New entry</h3><form method='post' action='/propose'>");
                 h.push_str(&input("claim", "Claim · up to 280 characters", 280));
                 h.push_str(&input("evidence", "Evidence or source", 1000));
                 h.push_str(&input("scope", "Scope", 300));

@@ -30,7 +30,9 @@ pub(crate) fn path(chat: Option<&str>) -> io::Result<PathBuf> {
     let name = chat.filter(|id| crate::chat::valid_id(id)).unwrap_or(UNSCOPED);
     // Tests never touch the node's real history.
     #[cfg(test)]
-    return Ok(std::env::temp_dir().join(format!("control-history-test-{}", std::process::id())).join(format!("{name}.jsonl")));
+    return Ok(std::env::temp_dir()
+        .join(format!("control-history-test-{}", std::process::id()))
+        .join(format!("{name}.jsonl")));
     #[cfg(not(test))]
     crate::config::state(&format!("history/{name}.jsonl")).map_err(io::Error::other)
 }
@@ -40,7 +42,10 @@ fn with<T>(chat: Option<&str>, f: impl FnOnce(&mut FileJournal) -> io::Result<T>
 }
 pub(crate) fn with_path<T>(path: PathBuf, f: impl FnOnce(&mut FileJournal) -> io::Result<T>) -> io::Result<T> {
     static JOURNALS: OnceLock<Mutex<HashMap<PathBuf, FileJournal>>> = OnceLock::new();
-    let mut open = JOURNALS.get_or_init(Mutex::default).lock().map_err(|_| io::Error::other("History unavailable"))?;
+    let mut open = JOURNALS
+        .get_or_init(Mutex::default)
+        .lock()
+        .map_err(|_| io::Error::other("History unavailable"))?;
     if !open.contains_key(&path) {
         if open.len() >= OPEN {
             open.clear();
@@ -82,10 +87,7 @@ impl std::fmt::Display for ReadError {
 
 /// An attempt's activity, from state while it runs or from its journal after.
 /// An unavailable record must never masquerade as successful empty history.
-pub(crate) fn activity<'a>(
-    chat: Option<&str>,
-    attempt: &'a Attempt,
-) -> Result<Cow<'a, [Activity]>, ReadError> {
+pub(crate) fn activity<'a>(chat: Option<&str>, attempt: &'a Attempt) -> Result<Cow<'a, [Activity]>, ReadError> {
     match attempt.journal {
         None => Ok(Cow::Borrowed(&attempt.activity)),
         Some(pos) => read(chat, pos).map(Cow::Owned),
@@ -95,8 +97,7 @@ fn read(chat: Option<&str>, pos: u64) -> Result<Vec<Activity>, ReadError> {
     let error = |cause| ReadError {
         source: format!(
             "history/{}.jsonl",
-            chat.filter(|id| crate::chat::valid_id(id))
-                .unwrap_or(UNSCOPED)
+            chat.filter(|id| crate::chat::valid_id(id)).unwrap_or(UNSCOPED)
         ),
         journal: pos,
         cause,
@@ -150,7 +151,6 @@ pub(crate) fn hydrated(chat: Option<&str>, attempts: &[Attempt]) -> Vec<Hydrated
         .collect()
 }
 
-
 #[cfg(test)]
 mod tests;
 
@@ -164,7 +164,9 @@ pub(crate) struct Spilled<T> {
     at: Option<u64>,
 }
 impl<T> Spilled<Option<T>> {
-    pub(crate) fn is_unset(&self) -> bool { self.at.is_none() && self.value.is_none() }
+    pub(crate) fn is_unset(&self) -> bool {
+        self.at.is_none() && self.value.is_none()
+    }
 }
 /// A copy is a new value: positions belong to one run in one chat's journal.
 impl<T: Clone> Clone for Spilled<T> {
@@ -252,7 +254,11 @@ pub(crate) struct Cached<T> {
 impl<T> Cached<T> {
     /// A value read back from `saved`, its exact saved form.
     pub(crate) fn restored(value: T, saved: Box<serde_json::value::RawValue>, archived: bool) -> Self {
-        Self { value, saved: OnceLock::from(saved), archived: archived.into() }
+        Self {
+            value,
+            saved: OnceLock::from(saved),
+            archived: archived.into(),
+        }
     }
     /// The saved form, when the value is unchanged since it was saved.
     pub(crate) fn saved(&self) -> Option<&serde_json::value::RawValue> {
@@ -264,7 +270,10 @@ impl<T> Cached<T> {
     /// Marks an unchanged value as written to an archive block (or not, to
     /// undo that when the save recording it fails). Changed values never are.
     pub(crate) fn set_archived(&self, archived: bool) {
-        self.archived.store(archived && self.saved.get().is_some(), std::sync::atomic::Ordering::Relaxed);
+        self.archived.store(
+            archived && self.saved.get().is_some(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
     /// Mutable access for an edit that leaves the saved form unchanged, such
     /// as filling journal-backed text back in after loading (the save writes
@@ -277,12 +286,20 @@ impl<T> Cached<T> {
 }
 impl<T> From<T> for Cached<T> {
     fn from(value: T) -> Self {
-        Self { value, saved: OnceLock::new(), archived: false.into() }
+        Self {
+            value,
+            saved: OnceLock::new(),
+            archived: false.into(),
+        }
     }
 }
 impl<T: Clone> Clone for Cached<T> {
     fn clone(&self) -> Self {
-        Self { value: self.value.clone(), saved: self.saved.clone(), archived: self.archived().into() }
+        Self {
+            value: self.value.clone(),
+            saved: self.saved.clone(),
+            archived: self.archived().into(),
+        }
     }
 }
 impl<T: std::fmt::Debug> std::fmt::Debug for Cached<T> {
@@ -365,7 +382,10 @@ impl<'de, T: Deserialize<'de> + Default> Deserialize<'de> for Spilled<T> {
             Value(T),
         }
         Ok(match Stored::<T>::deserialize(deserializer)? {
-            Stored::Journal(Marker { journal }) => Self { value: T::default(), at: Some(journal) },
+            Stored::Journal(Marker { journal }) => Self {
+                value: T::default(),
+                at: Some(journal),
+            },
             Stored::Value(value) => Self { value, at: None },
         })
     }
@@ -385,20 +405,40 @@ struct Text<'a> {
 pub(crate) fn hydrate_text(state: &mut crate::State) -> io::Result<()> {
     for run in &mut state.runtime.runs {
         let run = run.unchanged_mut();
-        if let Some(at) = run.objective.at.or(run.result.at).or(run.context.at).or(run.continuation.at) {
-            let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?.ok_or_else(|| io::Error::other("History entry missing"))?;
+        if let Some(at) = run
+            .objective
+            .at
+            .or(run.result.at)
+            .or(run.context.at)
+            .or(run.continuation.at)
+        {
+            let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?
+                .ok_or_else(|| io::Error::other("History entry missing"))?;
             let text: Text<'static> = serde_json::from_slice(&line).map_err(io::Error::other)?;
-            if run.objective.at.is_some() { run.objective.value = text.objective.into_owned(); }
-            if run.result.at.is_some() { run.result.value = text.result.into_owned(); }
-            if run.context.at.is_some() { run.context.value = text.context.into_owned(); }
-            if run.continuation.at.is_some() { run.continuation.value = text.continuation.into_owned(); }
+            if run.objective.at.is_some() {
+                run.objective.value = text.objective.into_owned();
+            }
+            if run.result.at.is_some() {
+                run.result.value = text.result.into_owned();
+            }
+            if run.context.at.is_some() {
+                run.context.value = text.context.into_owned();
+            }
+            if run.continuation.at.is_some() {
+                run.continuation.value = text.continuation.into_owned();
+            }
         }
         for attempt in &mut run.attempts {
             if let Some(at) = attempt.turn_mailbox.at {
                 #[derive(Deserialize)]
-                struct Saved { turn_mailbox: Option<Box<control_context::turn_mailbox::Mailbox>> }
-                let line = with(run.chat_id.as_deref(), |journal|journal.read(at))?.ok_or_else(||io::Error::other("Handoff journal entry missing"))?;
-                attempt.turn_mailbox.value = serde_json::from_slice::<Saved>(&line).map_err(io::Error::other)?.turn_mailbox;
+                struct Saved {
+                    turn_mailbox: Option<Box<control_context::turn_mailbox::Mailbox>>,
+                }
+                let line = with(run.chat_id.as_deref(), |journal| journal.read(at))?
+                    .ok_or_else(|| io::Error::other("Handoff journal entry missing"))?;
+                attempt.turn_mailbox.value = serde_json::from_slice::<Saved>(&line)
+                    .map_err(io::Error::other)?
+                    .turn_mailbox;
             }
         }
     }
@@ -428,14 +468,28 @@ pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived>
     let index = run.attempts.len().saturating_sub(1);
     let empty = Attempt::default();
     let last = run.attempts.last().filter(|a| a.journal.is_none()).unwrap_or(&empty);
-    let line = serde_json::to_vec(&Finished { run: &run.id, attempt: index, activity: &last.activity, objective: &run.objective, result: &run.result, context: &run.context, continuation: &run.continuation, turn_mailbox: &last.turn_mailbox }).map_err(io::Error::other)?;
+    let line = serde_json::to_vec(&Finished {
+        run: &run.id,
+        attempt: index,
+        activity: &last.activity,
+        objective: &run.objective,
+        result: &run.result,
+        context: &run.context,
+        continuation: &run.continuation,
+        turn_mailbox: &last.turn_mailbox,
+    })
+    .map_err(io::Error::other)?;
     let at = with(run.chat_id.as_deref(), |journal| journal.append(&line))?;
     (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (Some(at), Some(at), Some(at), Some(at));
     let mut activity = Vec::new();
     if let Some(last) = run.attempts.last_mut().filter(|a| a.turn_mailbox.value.is_some()) {
         last.turn_mailbox.at = Some(at);
     }
-    if let Some(last) = run.attempts.last_mut().filter(|a| a.journal.is_none() && !a.activity.is_empty()) {
+    if let Some(last) = run
+        .attempts
+        .last_mut()
+        .filter(|a| a.journal.is_none() && !a.activity.is_empty())
+    {
         activity = std::mem::take(&mut last.activity);
         last.journal = Some(at);
     }
@@ -447,7 +501,11 @@ pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived>
 /// was actually saved.
 pub(crate) fn undo(run: &mut crate::runtime::Run, archived: Archived) {
     (run.objective.at, run.result.at, run.context.at, run.continuation.at) = (None, None, None, None);
-    if let Some(last) = run.attempts.last_mut().filter(|a|a.turn_mailbox.at == Some(archived.at)) {
+    if let Some(last) = run
+        .attempts
+        .last_mut()
+        .filter(|a| a.turn_mailbox.at == Some(archived.at))
+    {
         last.turn_mailbox.at = None;
     }
     if let Some(last) = run.attempts.last_mut().filter(|a| a.journal == Some(archived.at)) {
@@ -465,13 +523,29 @@ pub(crate) fn recover(state: &crate::State) -> io::Result<()> {
         referenced.entry(path(Some(&chat.id))?).or_insert((Some(&chat.id), 0));
     }
     for run in &state.runtime.runs {
-        let positions = run.attempts.iter().flat_map(|a| [a.journal, a.turn_mailbox.at].into_iter().flatten()).chain([run.objective.at, run.result.at, run.context.at, run.continuation.at].into_iter().flatten());
-        let (_, end) = referenced.entry(path(run.chat_id.as_deref())?).or_insert((run.chat_id.as_deref(), 0));
+        let positions = run
+            .attempts
+            .iter()
+            .flat_map(|a| [a.journal, a.turn_mailbox.at].into_iter().flatten())
+            .chain(
+                [run.objective.at, run.result.at, run.context.at, run.continuation.at]
+                    .into_iter()
+                    .flatten(),
+            );
+        let (_, end) = referenced
+            .entry(path(run.chat_id.as_deref())?)
+            .or_insert((run.chat_id.as_deref(), 0));
         *end = positions.fold(*end, |end, at| end.max(at + 1));
     }
     for (file, (chat, end)) in referenced {
         if file.exists() {
-            with(chat, |journal| if journal.len() > end { journal.truncate(end) } else { Ok(()) })?;
+            with(chat, |journal| {
+                if journal.len() > end {
+                    journal.truncate(end)
+                } else {
+                    Ok(())
+                }
+            })?;
         }
     }
     Ok(())
@@ -479,7 +553,9 @@ pub(crate) fn recover(state: &crate::State) -> io::Result<()> {
 
 fn outbox_path() -> io::Result<PathBuf> {
     #[cfg(test)]
-    return Ok(std::env::temp_dir().join(format!("control-history-test-{}", std::process::id())).join("_outbox.jsonl"));
+    return Ok(std::env::temp_dir()
+        .join(format!("control-history-test-{}", std::process::id()))
+        .join("_outbox.jsonl"));
     #[cfg(not(test))]
     control_delivery::path().map_err(io::Error::other)
 }
@@ -494,13 +570,33 @@ pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) ->
         if !DELIVERABLE.contains(&run.status.as_str()) || run.emitted.as_deref() == Some(run.status.as_str()) {
             continue;
         }
-        let change = run.attempts.last().map(|attempt| {
-            activity(run.chat_id.as_deref(), attempt).map(|events|events.iter().rev().find(|e| e.kind == "file_change" && !e.output.is_empty()).map(|e| Change { text: e.text.clone(), output: e.output.clone() }))
-        }).transpose();
-        let mut report = run.result.split_once("\n\nReview workspace: ").map_or(run.result.as_str(), |(reply, _)| reply).to_owned();
+        let change = run
+            .attempts
+            .last()
+            .map(|attempt| {
+                activity(run.chat_id.as_deref(), attempt).map(|events| {
+                    events
+                        .iter()
+                        .rev()
+                        .find(|e| e.kind == "file_change" && !e.output.is_empty())
+                        .map(|e| Change {
+                            text: e.text.clone(),
+                            output: e.output.clone(),
+                        })
+                })
+            })
+            .transpose();
+        let mut report = run
+            .result
+            .split_once("\n\nReview workspace: ")
+            .map_or(run.result.as_str(), |(reply, _)| reply)
+            .to_owned();
         let change = match change {
             Ok(change) => change.flatten(),
-            Err(error) => { report.push_str(&format!("\n\n{error}")); None },
+            Err(error) => {
+                report.push_str(&format!("\n\n{error}"));
+                None
+            }
         };
         let delivery = Delivery {
             run: run.id.clone(),

@@ -1,4 +1,3 @@
-
 use super::*;
 pub fn resource() -> Resource {
     Resource {
@@ -137,10 +136,7 @@ fn stale_reports_unknown_execution_and_expiry_fail_closed() {
     let lifetime = Lease::until_stopped(10).unwrap();
     assert!(!lifetime.expired(10 + 86400 * 365));
     assert!(lifetime.expired(9));
-    assert_eq!(
-        Lease::try_from(<[u64; 2]>::from(lifetime)).unwrap(),
-        lifetime
-    );
+    assert_eq!(Lease::try_from(<[u64; 2]>::from(lifetime)).unwrap(), lifetime);
     assert!(Lease::new(10, 10).unwrap().expired(9));
     assert!(ResourceId::try_from("../../host".to_owned()).is_err());
     assert!(ImageId::try_from("latest".to_owned()).is_err());
@@ -223,10 +219,7 @@ fn lifecycle_matrix_never_restarts_terminal_or_stopping_work() {
                     if matches!(phase, Phase::Stopped(_)) {
                         assert_eq!(d.phase, phase, "Terminal state cannot reserve new work");
                     }
-                    if matches!(
-                        phase,
-                        Phase::Stopping { .. } | Phase::Stopped(_) | Phase::Fenced { .. }
-                    ) {
+                    if matches!(phase, Phase::Stopping { .. } | Phase::Stopped(_) | Phase::Fenced { .. }) {
                         assert!(!matches!(d.effect, Some(Effect::Create | Effect::Start)));
                     }
                     if d.effect == Some(Effect::Start) {

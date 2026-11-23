@@ -56,20 +56,17 @@ fn main() -> ExitCode {
             .first()
             .and_then(|s| s.parse::<u64>().ok())
             .and_then(|deadline| deadline.checked_sub(now))
-            .filter(|s| (1..=3600).contains(s) || args.first().is_some_and(|s|s == &u64::MAX.to_string()))
+            .filter(|s| (1..=3600).contains(s) || args.first().is_some_and(|s| s == &u64::MAX.to_string()))
         else {
             return ExitCode::from(124);
         };
-        let Some(maximum) = args
-            .get(1)
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|s| (1..=3600).contains(s) || (*s == u64::MAX && args.first().is_some_and(|s|s == &u64::MAX.to_string())))
-        else {
+        let Some(maximum) = args.get(1).and_then(|s| s.parse::<u64>().ok()).filter(|s| {
+            (1..=3600).contains(s) || (*s == u64::MAX && args.first().is_some_and(|s| s == &u64::MAX.to_string()))
+        }) else {
             return ExitCode::from(125);
         };
         let seconds = remaining.min(maximum);
-        if args.len() != 3 || args[2].is_empty() || args[2].len() > 16000 || std::process::id() != 1
-        {
+        if args.len() != 3 || args[2].is_empty() || args[2].len() > 16000 || std::process::id() != 1 {
             return ExitCode::from(125);
         }
         // A child must not modify its supervisor through /proc or ptrace. PID 1
@@ -109,9 +106,7 @@ fn main() -> ExitCode {
                     break;
                 }
                 if reaped as u32 == child.id() {
-                    return ExitCode::from(
-                        std::process::ExitStatus::from_raw(raw).code().unwrap_or(1) as u8,
-                    );
+                    return ExitCode::from(std::process::ExitStatus::from_raw(raw).code().unwrap_or(1) as u8);
                 }
                 supervisor.reaped(reaped, std::process::ExitStatus::from_raw(raw));
             }
@@ -128,10 +123,20 @@ mod watches {
         collections::{BTreeMap, VecDeque},
         fs,
         io::{Read, Seek, Write},
-        os::{fd::{AsRawFd, RawFd}, unix::{fs::{MetadataExt, OpenOptionsExt}, net::UnixStream, process::{CommandExt, ExitStatusExt}}},
+        os::{
+            fd::{AsRawFd, RawFd},
+            unix::{
+                fs::{MetadataExt, OpenOptionsExt},
+                net::UnixStream,
+                process::{CommandExt, ExitStatusExt},
+            },
+        },
         path::{Path, PathBuf},
         process::{ChildStdout, Command, ExitCode, ExitStatus, Stdio},
-        sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
         thread::JoinHandle,
         time::{Duration, Instant, SystemTime},
     };
@@ -161,20 +166,44 @@ mod watches {
             _ => return ExitCode::from(2),
         };
         let mut command = String::new();
-        if !frame::valid_id(id) || std::io::stdin().take(frame::MAX_COMMAND as u64 + 1).read_to_string(&mut command).is_err() {
+        if !frame::valid_id(id)
+            || std::io::stdin()
+                .take(frame::MAX_COMMAND as u64 + 1)
+                .read_to_string(&mut command)
+                .is_err()
+        {
             return ExitCode::from(2);
         }
-        let Some(spec) = Spec::decode(&Spec { restart, notifications, command }.encode()) else { return ExitCode::from(2) };
+        let Some(spec) = Spec::decode(
+            &Spec {
+                restart,
+                notifications,
+                command,
+            }
+            .encode(),
+        ) else {
+            return ExitCode::from(2);
+        };
         let dir = directory();
         if fs::create_dir_all(&dir).is_err() {
             return ExitCode::from(1);
         }
-        let existing = fs::read_dir(&dir).map(|entries| entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "spec")).count()).unwrap_or(0);
+        let existing = fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "spec"))
+                    .count()
+            })
+            .unwrap_or(0);
         if !spec_path(id).exists() && existing >= frame::MAX_WATCHES {
             return ExitCode::from(3);
         }
         let temporary = dir.join(format!(".{id}.tmp"));
-        if fs::write(&temporary, spec.encode()).and_then(|()| fs::rename(&temporary, spec_path(id))).is_err() {
+        if fs::write(&temporary, spec.encode())
+            .and_then(|()| fs::rename(&temporary, spec_path(id)))
+            .is_err()
+        {
             return ExitCode::from(1);
         }
         ExitCode::SUCCESS
@@ -204,10 +233,16 @@ mod watches {
             let last = |path: PathBuf| -> Option<u64> {
                 let mut file = fs::OpenOptions::new().read(true).custom_flags(0o4000).open(path).ok()?;
                 let length = file.metadata().ok().filter(|m| m.is_file())?.len();
-                file.seek(std::io::SeekFrom::Start(length.saturating_sub(2 * frame::MAX_FRAME as u64))).ok()?;
+                file.seek(std::io::SeekFrom::Start(
+                    length.saturating_sub(2 * frame::MAX_FRAME as u64),
+                ))
+                .ok()?;
                 let mut bytes = Vec::new();
                 file.read_to_end(&mut bytes).ok()?;
-                bytes.split(|&b| b == b'\n').filter_map(|line| Frame::decode(line).map(|(frame, _)| frame.seq)).max()
+                bytes
+                    .split(|&b| b == b'\n')
+                    .filter_map(|line| Frame::decode(line).map(|(frame, _)| frame.seq))
+                    .max()
             };
             let seq = last(log_path(id)).or_else(|| last(previous_log(id))).unwrap_or(0);
             Self { id: id.into(), seq }
@@ -217,7 +252,14 @@ mod watches {
             if fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() >= frame::LOG_BYTES) {
                 let _ = fs::rename(&path, previous_log(&self.id));
             }
-            let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).custom_flags(0o4000).open(&path) else { return };
+            let Ok(mut file) = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .custom_flags(0o4000)
+                .open(&path)
+            else {
+                return;
+            };
             if !file.metadata().is_ok_and(|m| m.is_file()) {
                 return;
             }
@@ -236,7 +278,11 @@ mod watches {
             if let Ok(mut log) = self.log.lock()
                 && !self.closed.load(Ordering::Relaxed)
             {
-                log.append(if notification { Event::Notification(bytes) } else { Event::Line(bytes) });
+                log.append(if notification {
+                    Event::Notification(bytes)
+                } else {
+                    Event::Line(bytes)
+                });
             }
         }
     }
@@ -277,7 +323,11 @@ mod watches {
             for (id, watch) in &mut self.watches {
                 let mut ended = false;
                 if let Some(running) = &mut watch.running {
-                    if running.exited.is_none() && running.terminated.is_some_and(|at| now.duration_since(at) >= Duration::from_secs(5)) {
+                    if running.exited.is_none()
+                        && running
+                            .terminated
+                            .is_some_and(|at| now.duration_since(at) >= Duration::from_secs(5))
+                    {
                         unsafe { super::kill(-running.pid, 9) };
                     }
                     if let Some((status, at)) = running.exited
@@ -285,7 +335,17 @@ mod watches {
                         && let Ok(mut log) = running.writer.log.try_lock()
                     {
                         running.writer.closed.store(true, Ordering::Relaxed);
-                        exited(id, watch.spec.restart, &mut watch.restarts, &mut watch.restart_at, &mut watch.removed, &mut log, status.code(), status.signal(), now);
+                        exited(
+                            id,
+                            watch.spec.restart,
+                            &mut watch.restarts,
+                            &mut watch.restart_at,
+                            &mut watch.removed,
+                            &mut log,
+                            status.code(),
+                            status.signal(),
+                            now,
+                        );
                         ended = true;
                     }
                 }
@@ -310,7 +370,13 @@ mod watches {
             let mut present = BTreeMap::new();
             for entry in fs::read_dir(directory()).into_iter().flatten().flatten() {
                 let path = entry.path();
-                let Some(id) = path.file_stem().and_then(|s| s.to_str()).filter(|id| frame::valid_id(id)) else { continue };
+                let Some(id) = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .filter(|id| frame::valid_id(id))
+                else {
+                    continue;
+                };
                 if path.extension().is_some_and(|x| x == "spec")
                     && let Some(spec) = fs::read_to_string(&path).ok().as_deref().and_then(Spec::decode)
                 {
@@ -332,14 +398,30 @@ mod watches {
                 if self.watches.contains_key(&id) {
                     continue;
                 }
-                let log = self.logs.entry(id.clone()).or_insert_with(|| Arc::new(Mutex::new(Log::open(&id)))).clone();
-                let mut watch = Watch { spec, log, running: None, restarts: VecDeque::new(), restart_at: None, removed: false };
+                let log = self
+                    .logs
+                    .entry(id.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(Log::open(&id))))
+                    .clone();
+                let mut watch = Watch {
+                    spec,
+                    log,
+                    running: None,
+                    restarts: VecDeque::new(),
+                    restart_at: None,
+                    removed: false,
+                };
                 start(&id, &mut watch, now);
                 self.watches.insert(id, watch);
             }
         }
         pub fn reaped(&mut self, pid: i32, status: ExitStatus) {
-            if let Some(running) = self.watches.values_mut().filter_map(|watch| watch.running.as_mut()).find(|running| running.pid == pid) {
+            if let Some(running) = self
+                .watches
+                .values_mut()
+                .filter_map(|watch| watch.running.as_mut())
+                .find(|running| running.pid == pid)
+            {
                 // The watch is its process group; stragglers would hold the pipe open.
                 unsafe { super::kill(-pid, 9) };
                 running.exited = Some((status, Instant::now()));
@@ -354,24 +436,34 @@ mod watches {
 
     fn start(id: &str, watch: &mut Watch, now: Instant) {
         let (notifications, sender) = if watch.spec.notifications {
-            let Ok((reader, sender)) = UnixStream::pair() else { return failed(id, watch, now) };
+            let Ok((reader, sender)) = UnixStream::pair() else {
+                return failed(id, watch, now);
+            };
             (Some(reader), Some(sender))
-        } else { (None, None) };
+        } else {
+            (None, None)
+        };
         let mut command = Command::new("bash");
-        command.args(["-c", &format!("exec 2>&1\n{}", watch.spec.command)])
-            .current_dir("/workspace").stdin(Stdio::null()).stdout(Stdio::piped())
-            .env_remove("CONTROL_NOTIFY_FD").process_group(0);
+        command
+            .args(["-c", &format!("exec 2>&1\n{}", watch.spec.command)])
+            .current_dir("/workspace")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .env_remove("CONTROL_NOTIFY_FD")
+            .process_group(0);
         if let Some(sender) = &sender {
             let fd = sender.as_raw_fd();
             command.env("CONTROL_NOTIFY_FD", "3");
             // This child-only descriptor is an explicit notification capability.
             // The pre-exec hook performs syscalls only; no allocation or locks.
-            unsafe { command.pre_exec(move || {
-                if super::dup2(fd, 3) < 0 || super::fcntl(3, 2, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            }); }
+            unsafe {
+                command.pre_exec(move || {
+                    if super::dup2(fd, 3) < 0 || super::fcntl(3, 2, 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
         let spawned = command.spawn();
         drop(sender);
@@ -380,36 +472,62 @@ mod watches {
             Err(_) => return failed(id, watch, now),
         };
         let stdout = child.stdout.take();
-        let writer = Writer { log: watch.log.clone(), closed: Arc::new(AtomicBool::new(false)) };
+        let writer = Writer {
+            log: watch.log.clone(),
+            closed: Arc::new(AtomicBool::new(false)),
+        };
         let output = writer.clone();
         let reader = std::thread::Builder::new().spawn(move || {
             let Some(stdout) = stdout else { return };
             let count = if notifications.is_some() { 2 } else { 1 };
-            let mut streams = [Some(Input::new(Stream::Output(stdout), false)), notifications.map(|stream| Input::new(Stream::Notifications(stream), true))];
+            let mut streams = [
+                Some(Input::new(Stream::Output(stdout), false)),
+                notifications.map(|stream| Input::new(Stream::Notifications(stream), true)),
+            ];
             let mut chunk = [0u8; 4096];
             while streams.iter().any(Option::is_some) {
                 // An escaped descendant may hold the pipe open; stop once the run is closed.
                 if output.closed.load(Ordering::Relaxed) {
                     break;
                 }
-                let mut ready = streams.each_ref().map(|input| super::PollFd { fd:input.as_ref().map_or(-1, |input| input.stream.fd()), events:1, revents:0 });
+                let mut ready = streams.each_ref().map(|input| super::PollFd {
+                    fd: input.as_ref().map_or(-1, |input| input.stream.fd()),
+                    events: 1,
+                    revents: 0,
+                });
                 if unsafe { super::poll(ready.as_mut_ptr(), count, 500) } <= 0 {
                     continue;
                 }
                 for (slot, ready) in streams.iter_mut().zip(ready) {
-                    if ready.revents == 0 { continue; }
+                    if ready.revents == 0 {
+                        continue;
+                    }
                     let Some(input) = slot else { continue };
                     match input.stream.read(&mut chunk) {
-                        Ok(0) => { input.finish(&output); *slot = None; }
+                        Ok(0) => {
+                            input.finish(&output);
+                            *slot = None;
+                        }
                         Ok(n) => input.push(&chunk[..n], &output),
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
-                        Err(_) => { input.finish(&output); *slot = None; },
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => {
+                            input.finish(&output);
+                            *slot = None;
+                        }
                     }
                 }
             }
         });
         match reader {
-            Ok(reader) => watch.running = Some(Running { pid: child.id() as i32, reader, writer, exited: None, terminated: None }),
+            Ok(reader) => {
+                watch.running = Some(Running {
+                    pid: child.id() as i32,
+                    reader,
+                    writer,
+                    exited: None,
+                    terminated: None,
+                })
+            }
             Err(_) => {
                 unsafe { super::kill(-(child.id() as i32), 9) };
                 failed(id, watch, now);
@@ -417,30 +535,61 @@ mod watches {
         }
     }
 
-    enum Stream { Output(ChildStdout), Notifications(UnixStream) }
+    enum Stream {
+        Output(ChildStdout),
+        Notifications(UnixStream),
+    }
     impl Stream {
-        fn fd(&self) -> RawFd { match self { Self::Output(stream) => stream.as_raw_fd(), Self::Notifications(stream) => stream.as_raw_fd() } }
-        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> { match self { Self::Output(stream) => stream.read(bytes), Self::Notifications(stream) => stream.read(bytes) } }
+        fn fd(&self) -> RawFd {
+            match self {
+                Self::Output(stream) => stream.as_raw_fd(),
+                Self::Notifications(stream) => stream.as_raw_fd(),
+            }
+        }
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            match self {
+                Self::Output(stream) => stream.read(bytes),
+                Self::Notifications(stream) => stream.read(bytes),
+            }
+        }
     }
     /// Independent framing on each descriptor; a partial log line never holds
     /// up a notification. Both share the existing bounded spool and reader thread.
-    struct Input { stream: Stream, notification: bool, line: Vec<u8>, overflow: bool }
+    struct Input {
+        stream: Stream,
+        notification: bool,
+        line: Vec<u8>,
+        overflow: bool,
+    }
     impl Input {
-        fn new(stream: Stream, notification: bool) -> Self { Self { stream, notification, line:Vec::with_capacity(256), overflow:false } }
+        fn new(stream: Stream, notification: bool) -> Self {
+            Self {
+                stream,
+                notification,
+                line: Vec::with_capacity(256),
+                overflow: false,
+            }
+        }
         fn push(&mut self, bytes: &[u8], output: &Writer) {
             for &b in bytes {
                 if b == b'\n' {
-                    if !self.overflow && (!self.notification || !self.line.is_empty()) { output.emit(std::mem::take(&mut self.line), self.notification); }
-                    self.line.clear(); self.overflow = false;
-                } else if self.line.len() <= frame::MAX_LINE { self.line.push(b); }
-                else if !self.overflow {
+                    if !self.overflow && (!self.notification || !self.line.is_empty()) {
+                        output.emit(std::mem::take(&mut self.line), self.notification);
+                    }
+                    self.line.clear();
+                    self.overflow = false;
+                } else if self.line.len() <= frame::MAX_LINE {
+                    self.line.push(b);
+                } else if !self.overflow {
                     self.overflow = true;
                     output.emit(std::mem::take(&mut self.line), self.notification);
                 }
             }
         }
         fn finish(&mut self, output: &Writer) {
-            if !self.line.is_empty() && !self.overflow { output.emit(std::mem::take(&mut self.line), self.notification); }
+            if !self.line.is_empty() && !self.overflow {
+                output.emit(std::mem::take(&mut self.line), self.notification);
+            }
         }
     }
 
@@ -453,19 +602,47 @@ mod watches {
             watch.restarts.push_back(now);
             return;
         };
-        exited(id, watch.spec.restart, &mut watch.restarts, &mut watch.restart_at, &mut watch.removed, &mut log, Some(127), None, now);
+        exited(
+            id,
+            watch.spec.restart,
+            &mut watch.restarts,
+            &mut watch.restart_at,
+            &mut watch.removed,
+            &mut log,
+            Some(127),
+            None,
+            now,
+        );
     }
     /// Records an exit after the run's last lines, then schedules a permanent
     /// watch's restart with backoff or retires the watch.
     #[allow(clippy::too_many_arguments)]
-    fn exited(id: &str, restart: Restart, restarts: &mut VecDeque<Instant>, restart_at: &mut Option<Instant>, removed: &mut bool, log: &mut Log, code: Option<i32>, signal: Option<i32>, now: Instant) {
-        while restarts.front().is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(frame::RESTART_WINDOW_SECONDS)) {
+    fn exited(
+        id: &str,
+        restart: Restart,
+        restarts: &mut VecDeque<Instant>,
+        restart_at: &mut Option<Instant>,
+        removed: &mut bool,
+        log: &mut Log,
+        code: Option<i32>,
+        signal: Option<i32>,
+        now: Instant,
+    ) {
+        while restarts
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(frame::RESTART_WINDOW_SECONDS))
+        {
             restarts.pop_front();
         }
         let count = restarts.len() as u32;
         let permanent = restart == Restart::Permanent && !*removed;
         let gave_up = permanent && count >= frame::MAX_RESTARTS;
-        log.append(Event::Exit { code, signal, restarts: count, gave_up });
+        log.append(Event::Exit {
+            code,
+            signal,
+            restarts: count,
+            gave_up,
+        });
         if *removed {
             return;
         }
@@ -483,15 +660,22 @@ mod watches {
     /// re-runs it from its saved cursor.
     pub fn tail(args: &[String]) -> ExitCode {
         let [id, after] = args else { return ExitCode::from(2) };
-        let (true, Ok(mut last)) = (frame::valid_id(id), after.parse::<u64>()) else { return ExitCode::from(2) };
+        let (true, Ok(mut last)) = (frame::valid_id(id), after.parse::<u64>()) else {
+            return ExitCode::from(2);
+        };
         let _ = fs::create_dir_all(directory());
-        let Ok(path) = std::ffi::CString::new(directory().into_os_string().into_encoded_bytes()) else { return ExitCode::from(2) };
+        let Ok(path) = std::ffi::CString::new(directory().into_os_string().into_encoded_bytes()) else {
+            return ExitCode::from(2);
+        };
         let fd = unsafe { super::inotify_init1(0o4000) };
         // IN_MODIFY | IN_MOVED_TO | IN_CREATE
         if fd < 0 || unsafe { super::inotify_add_watch(fd, path.as_ptr(), 0x2 | 0x80 | 0x100) } < 0 {
             return ExitCode::from(1);
         }
-        let mut events = { use std::os::fd::FromRawFd; unsafe { fs::File::from_raw_fd(fd) } };
+        let mut events = {
+            use std::os::fd::FromRawFd;
+            unsafe { fs::File::from_raw_fd(fd) }
+        };
         let started = Instant::now();
         let mut out = std::io::stdout().lock();
         let mut emit = |bytes: &[u8], last: &mut u64| -> bool {
@@ -539,7 +723,11 @@ mod watches {
                     }
                 }
             }
-            let mut ready = super::PollFd { fd, events: 1, revents: 0 };
+            let mut ready = super::PollFd {
+                fd,
+                events: 1,
+                revents: 0,
+            };
             if unsafe { super::poll(&mut ready, 1, 30_000) } > 0 {
                 let mut drain = [0u8; 4096];
                 while events.read(&mut drain).is_ok_and(|n| n > 0) {}

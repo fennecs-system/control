@@ -10,47 +10,140 @@ pub(super) struct Entry {
 }
 
 const LOCAL: &[Entry] = &[
-    Entry {text:"/github",usage:control_context::github::USAGE,description:"Inspect, comment, edit or merge PRs through the configured GitHub tools"},
-    Entry {text:"/activity",usage:"/activity [compact|full]",description:"Fold or expand retained tool activity"},
-    Entry { text: "/compact", usage: "/compact", description: "Inspect the Memory Tree status, model, window and blocks" },
-    Entry { text: "/help", usage: "/help", description: "Show commands and keyboard shortcuts" },
-    Entry { text: "/context", usage: "/context", description: "Inspect the next message's DNA context" },
-    Entry { text: "/chat", usage: "/chat", description: "Return to the DM" },
-    Entry { text: "/chats", usage: "/chats", description: "Choose a DM" },
-    Entry { text: "/resume", usage: "/resume [ID]", description: "Choose or resume a DM" },
-    Entry { text: "/new", usage: "/new", description: "Start a fresh DM" },
-    Entry { text: "/genes", usage: "/genes", description: "Browse and select genes (alias /lenses)" },
-    Entry { text: "/use", usage: "/use GENE GENE | /use GENE, GENE | /use none", description: "Set this DM's DNA for future messages" },
-    Entry { text: "/personas", usage: "/personas", description: "List personas (purpose, DNA, standing, model)" },
-    Entry { text: "/persona", usage: "/persona NAME | /persona none", description: "Give this DM a persona for future messages" },
-    Entry { text: "/trust", usage: "/trust [REQUEST]", description: "Approve the folder request displayed in this DM" },
-    Entry { text: "/dismiss", usage: "/dismiss [REQUEST]", description: "Reject the displayed folder request; approved folders stay open" },
-    Entry { text: "/port allow", usage: "/port allow ID [--loopback]", description: "Approve the exact displayed port request" },
-    Entry { text: "/port deny", usage: "/port deny ID", description: "Deny a port request" },
-    Entry { text: "/bot pause", usage: "/bot pause", description: "Pause this bot and retain its pending events" },
-    Entry { text: "/bot resume", usage: "/bot resume", description: "Resume this DM's paused bot" },
-    Entry { text: "/bot allow", usage: "/bot allow REQUEST_ID", description: "Approve a displayed persistent-bot request" },
-    Entry { text: "/bot deny", usage: "/bot deny REQUEST_ID", description: "Deny a persistent-bot request" },
-    Entry { text: "/quit", usage: "/quit", description: "Exit the terminal client" },
+    Entry {
+        text: "/github",
+        usage: control_context::github::USAGE,
+        description: "Inspect, comment, edit or merge PRs through the configured GitHub tools",
+    },
+    Entry {
+        text: "/activity",
+        usage: "/activity [compact|full]",
+        description: "Fold or expand retained tool activity",
+    },
+    Entry {
+        text: "/compact",
+        usage: "/compact",
+        description: "Inspect the Memory Tree status, model, window and blocks",
+    },
+    Entry {
+        text: "/help",
+        usage: "/help",
+        description: "Show commands and keyboard shortcuts",
+    },
+    Entry {
+        text: "/context",
+        usage: "/context",
+        description: "Inspect the next message's DNA context",
+    },
+    Entry {
+        text: "/chat",
+        usage: "/chat",
+        description: "Return to the DM",
+    },
+    Entry {
+        text: "/chats",
+        usage: "/chats",
+        description: "Choose a DM",
+    },
+    Entry {
+        text: "/resume",
+        usage: "/resume [ID]",
+        description: "Choose or resume a DM",
+    },
+    Entry {
+        text: "/new",
+        usage: "/new",
+        description: "Start a fresh DM",
+    },
+    Entry {
+        text: "/genes",
+        usage: "/genes",
+        description: "Browse and select genes (alias /lenses)",
+    },
+    Entry {
+        text: "/use",
+        usage: "/use GENE GENE | /use GENE, GENE | /use none",
+        description: "Set this DM's DNA for future messages",
+    },
+    Entry {
+        text: "/personas",
+        usage: "/personas",
+        description: "List personas (purpose, DNA, standing, model)",
+    },
+    Entry {
+        text: "/persona",
+        usage: "/persona NAME | /persona none",
+        description: "Give this DM a persona for future messages",
+    },
+    Entry {
+        text: "/trust",
+        usage: "/trust [REQUEST]",
+        description: "Approve the folder request displayed in this DM",
+    },
+    Entry {
+        text: "/dismiss",
+        usage: "/dismiss [REQUEST]",
+        description: "Reject the displayed folder request; approved folders stay open",
+    },
+    Entry {
+        text: "/port allow",
+        usage: "/port allow ID [--loopback]",
+        description: "Approve the exact displayed port request",
+    },
+    Entry {
+        text: "/port deny",
+        usage: "/port deny ID",
+        description: "Deny a port request",
+    },
+    Entry {
+        text: "/bot pause",
+        usage: "/bot pause",
+        description: "Pause this bot and retain its pending events",
+    },
+    Entry {
+        text: "/bot resume",
+        usage: "/bot resume",
+        description: "Resume this DM's paused bot",
+    },
+    Entry {
+        text: "/bot allow",
+        usage: "/bot allow REQUEST_ID",
+        description: "Approve a displayed persistent-bot request",
+    },
+    Entry {
+        text: "/bot deny",
+        usage: "/bot deny REQUEST_ID",
+        description: "Deny a persistent-bot request",
+    },
+    Entry {
+        text: "/quit",
+        usage: "/quit",
+        description: "Exit the terminal client",
+    },
 ];
 
 fn build() -> impl Iterator<Item = Entry> {
-    LOCAL.iter().copied().chain(commands::DEFINITIONS.iter().map(|entry| Entry {
-        text: entry.text, usage: match entry.id {
-            "improve" => "/improve REQUEST",
-            "steer" => "/steer DIRECTION",
-            "btw" => "/btw QUESTION",
-            "spawn" => "/spawn TASK",
-            "answer" => "/answer QUESTION_ID CHOICE",
-            "open" => "/open /absolute/path [/another/path …] | /open --as NAME /absolute/path",
-            "bot" => "/bot on [every N]",
-            "model" => "/model [PROVIDER:MODEL | default]",
-            "rename" => "/rename NAME",
-            "memory-on" => "/memory on [MODEL]",
-            "services-stop" => "/services stop ID | all",
-            _ => entry.text,
-        }, description: entry.description,
-    }))
+    LOCAL
+        .iter()
+        .copied()
+        .chain(commands::DEFINITIONS.iter().map(|entry| Entry {
+            text: entry.text,
+            usage: match entry.id {
+                "improve" => "/improve REQUEST",
+                "steer" => "/steer DIRECTION",
+                "btw" => "/btw QUESTION",
+                "spawn" => "/spawn TASK",
+                "answer" => "/answer QUESTION_ID CHOICE",
+                "open" => "/open /absolute/path [/another/path …] | /open --as NAME /absolute/path",
+                "bot" => "/bot on [every N]",
+                "model" => "/model [PROVIDER:MODEL | default]",
+                "rename" => "/rename NAME",
+                "memory-on" => "/memory on [MODEL]",
+                "services-stop" => "/services stop ID | all",
+                _ => entry.text,
+            },
+            description: entry.description,
+        }))
 }
 
 /// Every entry in menu order, plus their positions sorted by text, built once.
@@ -99,15 +192,28 @@ pub(super) fn matching(input: &str) -> impl Iterator<Item = Entry> + '_ {
 }
 
 pub(super) fn highlight(input: &str) -> Option<std::ops::Range<usize>> {
-    if !input.starts_with('/') { return None; }
+    if !input.starts_with('/') {
+        return None;
+    }
     // The longest entry equal to the input up to a word boundary.
     let index = index();
-    let exact = input.char_indices().filter(|(_, c)| c.is_whitespace()).map(|(at, _)| at).chain([input.len()])
-        .rev().find(|&end| index.sorted[prefixed(index, &input[..end])].iter().any(|&p| index.entries[usize::from(p)].text.len() == end));
+    let exact = input
+        .char_indices()
+        .filter(|(_, c)| c.is_whitespace())
+        .map(|(at, _)| at)
+        .chain([input.len()])
+        .rev()
+        .find(|&end| {
+            index.sorted[prefixed(index, &input[..end])]
+                .iter()
+                .any(|&p| index.entries[usize::from(p)].text.len() == end)
+        });
     if let Some(end) = exact {
         return Some(0..end);
     }
-    if let Some(parsed) = commands::parse(input) { return Some(parsed.highlight); }
+    if let Some(parsed) = commands::parse(input) {
+        return Some(parsed.highlight);
+    }
     matching(input).next().map(|_| 0..input.len())
 }
 

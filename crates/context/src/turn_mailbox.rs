@@ -14,40 +14,16 @@ pub type Dropped = (String, &'static str);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Range {
-    Room {
-        room: String,
-        after: u64,
-        through: u64,
-    },
-    Watch {
-        watch: String,
-        after: u64,
-        through: u64,
-    },
-    Conversation {
-        chat: String,
-        after: u64,
-        through: u64,
-    },
+    Room { room: String, after: u64, through: u64 },
+    Watch { watch: String, after: u64, through: u64 },
+    Conversation { chat: String, after: u64, through: u64 },
 }
 impl Range {
     fn parts(&self) -> (&str, u64, u64) {
         match self {
-            Self::Room {
-                room,
-                after,
-                through,
-            } => (room, *after, *through),
-            Self::Watch {
-                watch,
-                after,
-                through,
-            } => (watch, *after, *through),
-            Self::Conversation {
-                chat,
-                after,
-                through,
-            } => (chat, *after, *through),
+            Self::Room { room, after, through } => (room, *after, *through),
+            Self::Watch { watch, after, through } => (watch, *after, *through),
+            Self::Conversation { chat, after, through } => (chat, *after, *through),
         }
     }
     fn source(&self) -> (&str, &str) {
@@ -63,9 +39,7 @@ impl Range {
     }
     fn through_mut(&mut self) -> &mut u64 {
         match self {
-            Self::Room { through, .. }
-            | Self::Watch { through, .. }
-            | Self::Conversation { through, .. } => through,
+            Self::Room { through, .. } | Self::Watch { through, .. } | Self::Conversation { through, .. } => through,
         }
     }
     pub fn through(&self) -> u64 {
@@ -73,11 +47,7 @@ impl Range {
     }
     fn validate(&self) -> Result<(), &'static str> {
         let (id, after, through) = self.parts();
-        if id.is_empty()
-            || id.len() > 128
-            || id.bytes().any(|b| b.is_ascii_control())
-            || after > through
-        {
+        if id.is_empty() || id.len() > 128 || id.bytes().any(|b| b.is_ascii_control()) || after > through {
             return Err(
                 "Invalid delivery source or range: the host issued a malformed receipt; ask the operator via control_design_ask",
             );
@@ -125,11 +95,7 @@ impl Handoff {
                 "Too many delivery receipts: retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} without processed, so the host applies every receipt it delivered",
             );
         }
-        if self
-            .progress
-            .as_ref()
-            .is_some_and(|p| p.chars().count() > 1000)
-        {
+        if self.progress.as_ref().is_some_and(|p| p.chars().count() > 1000) {
             return Err(
                 "Progress must contain at most 1000 characters: retry control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} with a shorter progress, or omit it",
             );
@@ -186,11 +152,7 @@ impl Mailbox {
                 )
             };
         }
-        if key.is_empty()
-            || key.len() > 128
-            || delivery.ranges.len() > 16
-            || self.deliveries.len() >= MAX_DELIVERIES
-        {
+        if key.is_empty() || key.len() > 128 || delivery.ranges.len() > 16 || self.deliveries.len() >= MAX_DELIVERIES {
             return Err(
                 "Delivery budget exceeded or invalid identity: this turn read its maximum of 128 deliveries; hand off with control_turn_handoff {\"disposition\":{\"kind\":\"continue\"}} and read the rest next turn",
             );
@@ -203,12 +165,7 @@ impl Mailbox {
     }
     /// Saving the returned state is the host's responsibility. A rejected draft
     /// never changes the accepted draft or processes any delivered evidence.
-    pub fn stage(
-        &mut self,
-        key: String,
-        handoff: Handoff,
-        revision: u64,
-    ) -> Result<(), &'static str> {
+    pub fn stage(&mut self, key: String, handoff: Handoff, revision: u64) -> Result<(), &'static str> {
         if let Some(previous) = self.drafts.get(&key) {
             return if previous == &handoff {
                 Ok(())
@@ -239,11 +196,7 @@ impl Mailbox {
                 );
             }
         }
-        if handoff
-            .resynchronised
-            .iter()
-            .any(|r| !handoff.processed.contains(r))
-        {
+        if handoff.resynchronised.iter().any(|r| !handoff.processed.contains(r)) {
             return Err(
                 "Resynchronisation requires a processed delivery receipt: list each resynchronised receipt in processed too: retry control_turn_handoff {\"processed\":[\"<receipt>\"],\"resynchronised\":[\"<receipt>\"],\"disposition\":{\"kind\":\"continue\"}}",
             );
@@ -291,9 +244,12 @@ impl Mailbox {
                 "Retained handoff refers to an unavailable receipt: retry control_turn_handoff without processed",
                 key.as_str(),
             ))?;
-            pending.extend(delivery.ranges.iter().map(|range| {
-                (range, delivery.gap && resynchronised.contains(key), key.as_str())
-            }));
+            pending.extend(
+                delivery
+                    .ranges
+                    .iter()
+                    .map(|range| (range, delivery.gap && resynchronised.contains(key), key.as_str())),
+            );
         }
         pending.sort_by_key(|(range, _, _)| range.parts().1);
         for (range, resynchronised, key) in pending {
@@ -393,9 +349,9 @@ impl Mailbox {
             );
         }
         Ok(Some(WorkingState {
-            revision: revision.checked_add(1).ok_or(
-                "Working state revision exhausted: ask the operator via control_design_ask",
-            )?,
+            revision: revision
+                .checked_add(1)
+                .ok_or("Working state revision exhausted: ask the operator via control_design_ask")?,
             run: run.into(),
             generation: generation.into(),
             checkpoint: checkpoint.into(),

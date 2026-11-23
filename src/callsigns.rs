@@ -11,11 +11,11 @@ use std::borrow::Cow;
 
 /// The NATO phonetic alphabet, then colours.
 pub const WORDS: &[&str] = &[
-    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima", "Mike",
-    "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "Xray", "Yankee",
-    "Zulu", "Amber", "Azure", "Cobalt", "Coral", "Crimson", "Cyan", "Ebony", "Emerald", "Garnet", "Indigo", "Ivory",
-    "Jade", "Lilac", "Magenta", "Maroon", "Ochre", "Olive", "Onyx", "Pearl", "Ruby", "Saffron", "Scarlet", "Sepia",
-    "Teal", "Umber", "Violet",
+    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima",
+    "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "Xray",
+    "Yankee", "Zulu", "Amber", "Azure", "Cobalt", "Coral", "Crimson", "Cyan", "Ebony", "Emerald", "Garnet", "Indigo",
+    "Ivory", "Jade", "Lilac", "Magenta", "Maroon", "Ochre", "Olive", "Onyx", "Pearl", "Ruby", "Saffron", "Scarlet",
+    "Sepia", "Teal", "Umber", "Violet",
 ];
 /// How many preceding chats (live or recent) a new callsign must differ from.
 const RECENT: usize = 48;
@@ -31,13 +31,19 @@ pub struct Callsign {
 impl Callsign {
     fn text(self, words: &'static [&'static str]) -> Cow<'static, str> {
         let word = words[usize::from(self.word)];
-        if self.number == 0 { Cow::Borrowed(word) } else { Cow::Owned(format!("{word} {}", self.number)) }
+        if self.number == 0 {
+            Cow::Borrowed(word)
+        } else {
+            Cow::Owned(format!("{word} {}", self.number))
+        }
     }
 }
 
 /// FNV-1a: fixed across builds and platforms, unlike the standard hasher.
 fn start(id: &str, words: usize) -> usize {
-    let hash = id.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
+    let hash = id.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
     (hash % words as u64) as usize
 }
 
@@ -52,9 +58,22 @@ fn assign<'a>(ids: impl Iterator<Item = &'a str>, words: &[&str], recent: usize,
     let mut ring = vec![Callsign { word: 0, number: 0 }; recent];
     for (index, id) in ids.enumerate() {
         let first = start(id, words.len());
-        let callsign = (first..words.len()).chain(0..first).find(|word| plain[*word] == 0)
-            .map(|word| Callsign { word: word as u16, number: 0 })
-            .unwrap_or_else(|| (2..).map(|number| Callsign { word: first as u16, number }).find(|c| !numbered.contains(c)).expect("numbers are unbounded"));
+        let callsign = (first..words.len())
+            .chain(0..first)
+            .find(|word| plain[*word] == 0)
+            .map(|word| Callsign {
+                word: word as u16,
+                number: 0,
+            })
+            .unwrap_or_else(|| {
+                (2..)
+                    .map(|number| Callsign {
+                        word: first as u16,
+                        number,
+                    })
+                    .find(|c| !numbered.contains(c))
+                    .expect("numbers are unbounded")
+            });
         visit(callsign);
         if recent == 0 {
             continue;
@@ -80,7 +99,9 @@ fn assign<'a>(ids: impl Iterator<Item = &'a str>, words: &[&str], recent: usize,
 /// Every chat's callsign, indexed like `chats`.
 pub fn all(chats: &[Session]) -> Vec<Callsign> {
     let mut all = Vec::with_capacity(chats.len());
-    assign(chats.iter().map(|chat| chat.id.as_str()), WORDS, RECENT, |callsign| all.push(callsign));
+    assign(chats.iter().map(|chat| chat.id.as_str()), WORDS, RECENT, |callsign| {
+        all.push(callsign)
+    });
     all
 }
 
@@ -96,7 +117,12 @@ pub fn name<'a>(chats: &'a [Session], id: &str) -> Option<Cow<'a, str>> {
         return Some(Cow::Borrowed(name));
     }
     let mut last = None;
-    assign(chats[..=index].iter().map(|chat| chat.id.as_str()), WORDS, RECENT, |callsign| last = Some(callsign));
+    assign(
+        chats[..=index].iter().map(|chat| chat.id.as_str()),
+        WORDS,
+        RECENT,
+        |callsign| last = Some(callsign),
+    );
     last.map(|callsign| callsign.text(WORDS))
 }
 
@@ -112,7 +138,12 @@ pub fn validate(name: &str) -> Result<String, &'static str> {
     if name.is_empty() {
         return Err("Usage: /rename NAME");
     }
-    if name.chars().count() > MAX_NAME || name.chars().any(|c| c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')) {
+    if name.chars().count() > MAX_NAME
+        || name.chars().any(|c| {
+            c.is_control()
+                || matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+        })
+    {
         return Err("Chat names are at most 32 printable characters.");
     }
     Ok(name)

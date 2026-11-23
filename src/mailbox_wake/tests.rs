@@ -1,8 +1,7 @@
 use super::*;
 #[test]
 fn atomic_mailbox_rename_wakes_without_waiting_for_lifecycle_poll() {
-    let directory =
-        std::env::temp_dir().join(format!("control-mailbox-wake-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("control-mailbox-wake-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let wake = MailboxWake::new(&directory);
     assert!(wake.descriptor.is_some());

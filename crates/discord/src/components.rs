@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 pub(super) fn tag() -> String {
     let node = control_config::node_id().unwrap_or_default();
     ring::digest::digest(&ring::digest::SHA256, format!("control-discord:{node}").as_bytes()).as_ref()[..4]
-        .iter().map(|b| format!("{b:02x}")).collect()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn custom_id(tag: &str, action: &str) -> String {
@@ -50,7 +52,10 @@ pub(super) fn message(request: &Request, tag: &str, links: bool) -> Value {
     if !links {
         description.push_str(&format!("\n\n{}", truncate(&request.link, 400)));
     }
-    let fields = request.fields.iter().take(25)
+    let fields = request
+        .fields
+        .iter()
+        .take(25)
         .map(|(name, value)| json!({"name":name,"value":truncate(value, 1024),"inline":value.chars().count() <= 40}))
         .collect::<Vec<_>>();
     let embed = json!({
@@ -66,7 +71,12 @@ pub(super) fn message(request: &Request, tag: &str, links: bool) -> Value {
         match &action.act {
             Act::Open(url) => links.then(|| json!({"type":2,"style":5,"label":label,"url":url})),
             Act::Reply | Act::Prompt => {
-                let style = match action.style { Style::Primary => 1, Style::Secondary => 2, Style::Success => 3, Style::Danger => 4 };
+                let style = match action.style {
+                    Style::Primary => 1,
+                    Style::Secondary => 2,
+                    Style::Success => 3,
+                    Style::Danger => 4,
+                };
                 Some(json!({"type":2,"style":style,"label":label,"custom_id":custom_id(tag, action.id)}))
             }
         }
@@ -98,12 +108,19 @@ pub(super) fn settled(message: &Value, settled: &Settled) -> Option<Value> {
             kept[key] = embed[key].clone();
         }
     }
-    let links = message["components"].as_array().into_iter().flatten()
+    let links = message["components"]
+        .as_array()
+        .into_iter()
+        .flatten()
         .flat_map(|row| row["components"].as_array().into_iter().flatten())
         .filter(|button| button["type"] == 2 && button["style"] == 5)
         .map(|button| json!({"type":2,"style":5,"label":button["label"],"url":button["url"]}))
         .collect::<Vec<_>>();
-    let rows = if links.is_empty() { json!([]) } else { json!([{"type":1,"components":links}]) };
+    let rows = if links.is_empty() {
+        json!([])
+    } else {
+        json!([{"type":1,"components":links}])
+    };
     Some(json!({"embeds":[kept],"components":rows}))
 }
 
@@ -144,11 +161,19 @@ fn snowflake(value: &Value) -> Option<DiscordId> {
 /// The text a modal submitted for its `text` input, in either component layout.
 fn submitted(data: &Value) -> Option<String> {
     let inputs = data["components"].as_array()?.iter().flat_map(|row| {
-        row["components"].as_array().into_iter().flatten().chain(row.get("component"))
+        row["components"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain(row.get("component"))
     });
     for input in inputs {
         if input["custom_id"] == "text" {
-            return input["value"].as_str().map(str::trim).filter(|text| !text.is_empty()).map(|text| text.chars().take(1500).collect());
+            return input["value"]
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(|text| text.chars().take(1500).collect());
         }
     }
     None
@@ -163,7 +188,11 @@ pub(super) fn press(interaction: &Value, tag: &str) -> Option<Press> {
         return None;
     }
     let data = &interaction["data"];
-    let action = data["custom_id"].as_str()?.strip_prefix("ctl:")?.strip_prefix(tag)?.strip_prefix(':')?;
+    let action = data["custom_id"]
+        .as_str()?
+        .strip_prefix("ctl:")?
+        .strip_prefix(tag)?
+        .strip_prefix(':')?;
     if action.is_empty() || action.len() > 12 || !action.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) {
         return None;
     }
@@ -177,7 +206,9 @@ pub(super) fn press(interaction: &Value, tag: &str) -> Option<Press> {
         return None;
     }
     snowflake(&interaction["id"])?;
-    let message = interaction["message"]["id"].as_str().filter(|m| m.parse::<DiscordId>().is_ok())?;
+    let message = interaction["message"]["id"]
+        .as_str()
+        .filter(|m| m.parse::<DiscordId>().is_ok())?;
     Some(Press {
         id: id.into(),
         token: token.into(),

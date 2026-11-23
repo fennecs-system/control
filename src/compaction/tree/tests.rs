@@ -1,8 +1,15 @@
 use super::*;
 use crate::compaction::tests::{fixture, hydrate, scratch};
 
-fn summarise(text: &'static str) -> impl FnMut(&crate::model_calls::Endpoint, &str, &str) -> io::Result<control_ai::model::Response> {
-    move |_, _, _| Ok(control_ai::model::Response { text: text.into(), tokens: None })
+fn summarise(
+    text: &'static str,
+) -> impl FnMut(&crate::model_calls::Endpoint, &str, &str) -> io::Result<control_ai::model::Response> {
+    move |_, _, _| {
+        Ok(control_ai::model::Response {
+            text: text.into(),
+            tokens: None,
+        })
+    }
 }
 /// The fixture chat (32 entries, 2 verbatim) with a published summary tree
 /// on disk: roots 0–16 (L4), 16–24 (L3), 24–28 (L2), 28–30 (L1).
@@ -16,7 +23,10 @@ fn published() -> (State, String, std::path::PathBuf) {
 fn window_text(state: &State, chat: &str) -> String {
     let session = state.chats.iter().find(|c| c.id == chat).unwrap();
     let conversation = Conversation::of(state, session);
-    selector(state).window(&conversation, session.messages.len()).render(&conversation).concat()
+    selector(state)
+        .window(&conversation, session.messages.len())
+        .render(&conversation)
+        .concat()
 }
 fn window(state: &State, chat: &str) -> Vec<Item> {
     let session = state.chats.iter().find(|c| c.id == chat).unwrap();
@@ -28,7 +38,12 @@ const ROOT: Block = Block { start: 0, level: 4 };
 /// A view of `n` entries with every cut block summarised, without disk.
 fn synthetic(state: &mut State, n: usize, covered: usize) -> String {
     let chat = crate::chat::create(state);
-    let message = crate::chat::Message { speaker: Default::default(), text: "Port 25565 relay decision".into(), run_id: None, reply: "Recorded".into() };
+    let message = crate::chat::Message {
+        speaker: Default::default(),
+        text: "Port 25565 relay decision".into(),
+        run_id: None,
+        reply: "Recorded".into(),
+    };
     state.chats.last_mut().unwrap().messages = vec![message; n];
     let nodes = cut(covered as u64, state.runtime.compaction.settings.recent_entries)
         .filter(|b| !b.is_item())
@@ -37,19 +52,29 @@ fn synthetic(state: &mut State, n: usize, covered: usize) -> String {
             start: b.start,
             level: b.level,
             input_bytes: 4000,
-            response: control_ai::model::Response { text: "s".repeat(600), tokens: Some(control_ai::Tokens { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 180 }) },
+            response: control_ai::model::Response {
+                text: "s".repeat(600),
+                tokens: Some(control_ai::Tokens {
+                    input_tokens: 1000,
+                    cached_input_tokens: 0,
+                    output_tokens: 180,
+                }),
+            },
             created_unix: 1_763_380_000,
         })
         .collect();
-    state.runtime.compaction.views.insert(chat.clone(), View {
-        identity: "synthetic".into(),
-        revision: 0,
-        count: covered,
-        source_hash: String::new(),
-        actor: crate::identity::Actor::LocalOperator,
-        model: "qwen-7b".into(),
-        nodes,
-    });
+    state.runtime.compaction.views.insert(
+        chat.clone(),
+        View {
+            identity: "synthetic".into(),
+            revision: 0,
+            count: covered,
+            source_hash: String::new(),
+            actor: crate::identity::Actor::LocalOperator,
+            model: "qwen-7b".into(),
+            nodes,
+        },
+    );
     chat
 }
 
@@ -61,7 +86,10 @@ fn overview_is_bounded_and_fast_for_long_histories() {
         let view = state.runtime.compaction.views.get(&chat);
         let cells = cells(view, n, 8);
         let summaries = cells.iter().filter(|c| c.kind == Kind::Summary).count();
-        assert!(summaries <= 2 * (usize::BITS - n.leading_zeros()) as usize, "{n}: {summaries}");
+        assert!(
+            summaries <= 2 * (usize::BITS - n.leading_zeros()) as usize,
+            "{n}: {summaries}"
+        );
         assert!(cells.len() <= summaries + MAX_ENTRY_CELLS);
         // Cells tile 0..n exactly, oldest first.
         assert_eq!(cells.first().unwrap().start, 0);
@@ -99,7 +127,10 @@ fn memory_tree_render_benchmark() {
             bytes = render(&state, &chat, "block=0.3").unwrap().len();
         }
         let cells = cells(state.runtime.compaction.views.get(&chat), n, 8).len();
-        eprintln!("overview {n:>6} entries: {cells:>3} cells, {bytes:>6} bytes, {:>7.1} µs/render", started.elapsed().as_secs_f64() * 1e6 / rounds as f64);
+        eprintln!(
+            "overview {n:>6} entries: {cells:>3} cells, {bytes:>6} bytes, {:>7.1} µs/render",
+            started.elapsed().as_secs_f64() * 1e6 / rounds as f64
+        );
     }
     let (state, chat, dir) = published();
     let fields = crate::fields("block=0.2");
@@ -110,7 +141,10 @@ fn memory_tree_render_benchmark() {
         let nodes = load_nodes(&detail, &dir);
         assert!(detail_page(&detail, nodes).contains("AUTOMATIC SUMMARY"));
     }
-    eprintln!("detail (path depth 2, 4 node files): {:.1} µs/page", started.elapsed().as_secs_f64() * 1e6 / rounds as f64);
+    eprintln!(
+        "detail (path depth 2, 4 node files): {:.1} µs/page",
+        started.elapsed().as_secs_f64() * 1e6 / rounds as f64
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -118,9 +152,15 @@ fn memory_tree_render_benchmark() {
 fn selecting_a_block_lazily_expands_its_children_summary_and_source() {
     let (state, chat, dir) = published();
     let overview = render(&state, &chat, "").unwrap();
-    assert!(overview.contains("/memory/node?block=0.4"), "root block links to its lazy detail");
+    assert!(
+        overview.contains("/memory/node?block=0.4"),
+        "root block links to its lazy detail"
+    );
     assert!(overview.contains("target='memory-detail'"));
-    assert!(!overview.contains("AUTOMATIC SUMMARY"), "the overview reads no summary text");
+    assert!(
+        !overview.contains("AUTOMATIC SUMMARY"),
+        "the overview reads no summary text"
+    );
     let page = |query: &str| {
         let detail = plan(&state, &chat, &crate::fields(query)).unwrap();
         let nodes = load_nodes(&detail, &dir);
@@ -128,10 +168,16 @@ fn selecting_a_block_lazily_expands_its_children_summary_and_source() {
     };
     let root = page("block=0.4");
     assert!(root.contains("AUTOMATIC SUMMARY"));
-    assert!(root.contains("node?block=0.3") && root.contains("node?block=8.3"), "two children");
+    assert!(
+        root.contains("node?block=0.3") && root.contains("node?block=8.3"),
+        "two children"
+    );
     assert!(root.contains("Regenerate summary"));
     assert!(root.contains("<td>automatic</td>"));
-    assert!(root.contains("<dt>Compression</dt><dd>") && root.contains("bits/char"), "the detail scores its summary");
+    assert!(
+        root.contains("<dt>Compression</dt><dd>") && root.contains("bits/char"),
+        "the detail scores its summary"
+    );
     // Descend to a leaf: its entries and original source link.
     let leaf = page("block=4.2");
     assert!(leaf.contains("0–16</a> › ") && leaf.contains("node?entry=4"));
@@ -150,12 +196,25 @@ fn regenerating_with_emphasis_adds_a_selectable_revision_the_next_turn_uses() {
     let (mut state, chat, dir) = published();
     let operator = crate::identity::Actor::LocalOperator;
     assert!(window_text(&state, &chat).contains("AUTOMATIC SUMMARY"));
-    let plan = surgery::plan(&state, &chat, &operator, ROOT, "  focus on the castle layout decisions ").unwrap();
+    let plan = surgery::plan(
+        &state,
+        &chat,
+        &operator,
+        ROOT,
+        "  focus on the castle layout decisions ",
+    )
+    .unwrap();
     let (base, response) = surgery::run(&plan, &dir, |_, system, input| {
         assert!(system.contains("focus on the castle layout decisions"));
-        assert!(system.starts_with(SYSTEM), "emphasis extends, never replaces, the summary rules");
+        assert!(
+            system.starts_with(SYSTEM),
+            "emphasis extends, never replaces, the summary rules"
+        );
         assert!(input.contains("Earlier child summary"));
-        Ok(control_ai::model::Response { text: "CASTLE LAYOUT REVISION".into(), tokens: None })
+        Ok(control_ai::model::Response {
+            text: "CASTLE LAYOUT REVISION".into(),
+            tokens: None,
+        })
     })
     .unwrap();
     let r1 = surgery::commit(&mut state, plan, base.clone(), response).unwrap();
@@ -165,9 +224,21 @@ fn regenerating_with_emphasis_adds_a_selectable_revision_the_next_turn_uses() {
     crate::chat::send(&mut state, &chat, "Continue the build", "test").unwrap();
     let index = state.runtime.runs.len() - 1;
     let id = state.runtime.runs[index].id.clone();
-    let trace = crate::turn_context::PlannedContext::prepare(&state, index).unwrap().persist().unwrap();
-    assert!(crate::turn_context::read(&trace).unwrap().text.contains("CASTLE LAYOUT REVISION"));
-    assert!(crate::chat::prompt(&state, &id).unwrap().contains("CASTLE LAYOUT REVISION"));
+    let trace = crate::turn_context::PlannedContext::prepare(&state, index)
+        .unwrap()
+        .persist()
+        .unwrap();
+    assert!(
+        crate::turn_context::read(&trace)
+            .unwrap()
+            .text
+            .contains("CASTLE LAYOUT REVISION")
+    );
+    assert!(
+        crate::chat::prompt(&state, &id)
+            .unwrap()
+            .contains("CASTLE LAYOUT REVISION")
+    );
     // A second revision keeps the first; every version stays selectable.
     let plan = surgery::plan(&state, &chat, &operator, ROOT, "keep the port/relay details").unwrap();
     let (_, response) = surgery::run(&plan, &dir, summarise("PORT RELAY REVISION")).unwrap();
@@ -176,20 +247,63 @@ fn regenerating_with_emphasis_adds_a_selectable_revision_the_next_turn_uses() {
     assert_eq!(edits.revisions.len(), 2);
     assert_eq!(edits.selection(ROOT), 2);
     assert!(window_text(&state, &chat).contains("PORT RELAY REVISION"));
-    edit(&mut state, &chat, &operator, Op::Select { block: ROOT, revision: 1 }).unwrap();
+    edit(
+        &mut state,
+        &chat,
+        &operator,
+        Op::Select {
+            block: ROOT,
+            revision: 1,
+        },
+    )
+    .unwrap();
     assert!(window_text(&state, &chat).contains("CASTLE LAYOUT REVISION"));
-    edit(&mut state, &chat, &operator, Op::Select { block: ROOT, revision: 0 }).unwrap();
+    edit(
+        &mut state,
+        &chat,
+        &operator,
+        Op::Select {
+            block: ROOT,
+            revision: 0,
+        },
+    )
+    .unwrap();
     let text = window_text(&state, &chat);
     assert!(text.contains("AUTOMATIC SUMMARY") && !text.contains("REVISION"));
-    assert!(edit(&mut state, &chat, &operator, Op::Select { block: ROOT, revision: 9 }).is_err());
-    assert!(edit(&mut state, &chat, &operator, Op::Select { block: Block { start: 16, level: 3 }, revision: 1 }).is_err(), "a revision belongs to its block");
+    assert!(
+        edit(
+            &mut state,
+            &chat,
+            &operator,
+            Op::Select {
+                block: ROOT,
+                revision: 9
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        edit(
+            &mut state,
+            &chat,
+            &operator,
+            Op::Select {
+                block: Block { start: 16, level: 3 },
+                revision: 1
+            }
+        )
+        .is_err(),
+        "a revision belongs to its block"
+    );
     let edits = state.chats[0].memory.clone().unwrap();
     assert_eq!(edits.revisions.len(), 2, "selection never deletes a revision");
     assert_eq!(edits.log.iter().filter(|e| e.action == "regenerate").count(), 2);
     // The detail page marks the versions and which one is in use.
     let detail = super::plan(&state, &chat, &crate::fields("block=0.4")).unwrap();
     let html = detail_page(&detail, load_nodes(&detail, &dir));
-    assert!(html.contains("<td>r1</td>") && html.contains("<td>r2</td>") && html.contains("keep the port/relay details"));
+    assert!(
+        html.contains("<td>r1</td>") && html.contains("<td>r2</td>") && html.contains("keep the port/relay details")
+    );
     assert!(html.contains("class='mt-current'><td>automatic</td>"));
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -202,15 +316,25 @@ fn a_revised_child_rebuilds_only_its_ancestors_from_the_revision() {
     let plan = surgery::plan(&state, &chat, &operator, child, "keep the port/relay details").unwrap();
     let (base, response) = surgery::run(&plan, &dir, summarise("CHILD REVISION")).unwrap();
     surgery::commit(&mut state, plan, base, response).unwrap();
-    assert!(!state.runtime.compaction.attempted.contains_key(&chat), "the compactor runs again");
+    assert!(
+        !state.runtime.compaction.attempted.contains_key(&chat),
+        "the compactor runs again"
+    );
     let job = hydrate(&state, prepare(&state).unwrap());
     let mut inputs = Vec::new();
     let view = execute(&job, &dir, |_, _, input| {
         inputs.push(input.to_owned());
-        Ok(control_ai::model::Response { text: "REBUILT PARENT".into(), tokens: None })
+        Ok(control_ai::model::Response {
+            text: "REBUILT PARENT".into(),
+            tokens: None,
+        })
     })
     .unwrap();
-    assert_eq!(inputs.len(), 1, "only the root above the revision is rebuilt: {inputs:?}");
+    assert_eq!(
+        inputs.len(),
+        1,
+        "only the root above the revision is rebuilt: {inputs:?}"
+    );
     assert!(inputs[0].contains("CHILD REVISION"));
     state.runtime.compaction.views.insert(chat.clone(), view);
     assert!(window_text(&state, &chat).contains("REBUILT PARENT"));
@@ -224,8 +348,14 @@ fn pinned_entries_stay_verbatim_until_unpinned() {
     assert!(!window(&state, &chat).iter().any(|i| matches!(i, Item::Entry(3))));
     edit(&mut state, &chat, &operator, Op::Pin(3)).unwrap();
     let items = window(&state, &chat);
-    let summary = items.iter().position(|i| matches!(i, Item::Summary(b, _) if *b == ROOT)).unwrap();
-    assert!(matches!(items[summary + 1], Item::Entry(3)), "pinned entry follows the summary that folds it");
+    let summary = items
+        .iter()
+        .position(|i| matches!(i, Item::Summary(b, _) if *b == ROOT))
+        .unwrap();
+    assert!(
+        matches!(items[summary + 1], Item::Entry(3)),
+        "pinned entry follows the summary that folds it"
+    );
     assert!(window_text(&state, &chat).contains("Entry 3: preserve"));
     assert!(edit(&mut state, &chat, &operator, Op::Pin(99)).is_err());
     let html = render(&state, &chat, "").unwrap();
@@ -236,7 +366,12 @@ fn pinned_entries_stay_verbatim_until_unpinned() {
     let mut plain = State::default();
     let id = crate::chat::create(&mut plain);
     for i in 0..400 {
-        plain.chats[0].messages.push(crate::chat::Message { speaker: Default::default(), text: format!("Note {i} {}", "x".repeat(200)), run_id: None, reply: String::new() });
+        plain.chats[0].messages.push(crate::chat::Message {
+            speaker: Default::default(),
+            text: format!("Note {i} {}", "x".repeat(200)),
+            run_id: None,
+            reply: String::new(),
+        });
     }
     assert!(!window(&plain, &id).iter().any(|i| matches!(i, Item::Entry(0))));
     edit(&mut plain, &id, &operator, Op::Pin(0)).unwrap();
@@ -252,7 +387,10 @@ fn dropped_ranges_leave_the_agent_view_and_summaries_until_restored() {
     state.chats[0].messages[0].text = "SECRET original assignment".into();
     edit(&mut state, &chat, &operator, Op::Drop { start: 30, end: 31 }).unwrap();
     edit(&mut state, &chat, &operator, Op::Drop { start: 0, end: 1 }).unwrap();
-    assert!(!state.runtime.compaction.views.contains_key(&chat), "the stale view is withdrawn");
+    assert!(
+        !state.runtime.compaction.views.contains_key(&chat),
+        "the stale view is withdrawn"
+    );
     let text = window_text(&state, &chat);
     assert!(!text.contains("SECRET"), "{text}");
     // Rebuilt summaries read a redaction marker instead of the entry.
@@ -260,10 +398,15 @@ fn dropped_ranges_leave_the_agent_view_and_summaries_until_restored() {
     let mut sources = String::new();
     let view = execute(&job, &dir, |_, _, input| {
         sources.push_str(input);
-        Ok(control_ai::model::Response { text: "REDACTED REBUILD".into(), tokens: None })
+        Ok(control_ai::model::Response {
+            text: "REDACTED REBUILD".into(),
+            tokens: None,
+        })
     })
     .unwrap();
-    assert!(!sources.contains("SECRET") && sources.contains("[Entry 1 was removed from the agent's view by the operator.]"));
+    assert!(
+        !sources.contains("SECRET") && sources.contains("[Entry 1 was removed from the agent's view by the operator.]")
+    );
     state.runtime.compaction.views.insert(chat.clone(), view);
     let text = window_text(&state, &chat);
     assert!(text.contains("REDACTED REBUILD") && !text.contains("SECRET"));
@@ -272,7 +415,10 @@ fn dropped_ranges_leave_the_agent_view_and_summaries_until_restored() {
     crate::chat::send(&mut state, &chat, "Continue", "test").unwrap();
     let index = state.runtime.runs.len() - 1;
     let id = state.runtime.runs[index].id.clone();
-    let trace = crate::turn_context::PlannedContext::prepare(&state, index).unwrap().persist().unwrap();
+    let trace = crate::turn_context::PlannedContext::prepare(&state, index)
+        .unwrap()
+        .persist()
+        .unwrap();
     assert!(!crate::turn_context::read(&trace).unwrap().text.contains("SECRET"));
     assert!(!crate::chat::prompt(&state, &id).unwrap().contains("SECRET"));
     let html = render(&state, &chat, "").unwrap();
@@ -284,7 +430,10 @@ fn dropped_ranges_leave_the_agent_view_and_summaries_until_restored() {
     assert!(window_text(&state, &chat).contains("hunter2"));
     let edits = state.chats[0].memory.clone().unwrap();
     assert_eq!(edits.drops.len(), 2);
-    assert_eq!(edits.log.iter().map(|e| e.action.as_str()).collect::<Vec<_>>(), ["drop", "drop", "restore"]);
+    assert_eq!(
+        edits.log.iter().map(|e| e.action.as_str()).collect::<Vec<_>>(),
+        ["drop", "drop", "restore"]
+    );
     assert!(edit(&mut state, &chat, &operator, Op::Drop { start: 5, end: 5 }).is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -293,10 +442,19 @@ fn dropped_ranges_leave_the_agent_view_and_summaries_until_restored() {
 fn surgery_is_operator_only() {
     let (mut state, chat, dir) = published();
     let agent = crate::identity::Actor::Unknown;
-    let discord = crate::identity::Actor::Discord { user_id: "123".parse().unwrap(), channel_id: "456".parse().unwrap() };
+    let discord = crate::identity::Actor::Discord {
+        user_id: "123".parse().unwrap(),
+        channel_id: "456".parse().unwrap(),
+    };
     for actor in [&agent, &discord] {
-        assert_eq!(edit(&mut state, &chat, actor, Op::Pin(1)), Err("Memory Tree edits are operator-only"));
-        assert_eq!(edit(&mut state, &chat, actor, Op::Drop { start: 0, end: 4 }), Err("Memory Tree edits are operator-only"));
+        assert_eq!(
+            edit(&mut state, &chat, actor, Op::Pin(1)),
+            Err("Memory Tree edits are operator-only")
+        );
+        assert_eq!(
+            edit(&mut state, &chat, actor, Op::Drop { start: 0, end: 4 }),
+            Err("Memory Tree edits are operator-only")
+        );
         assert!(surgery::plan(&state, &chat, actor, ROOT, "focus").is_err());
     }
     let shared = Arc::new(Mutex::new(state));
@@ -312,7 +470,16 @@ fn surgery_is_operator_only() {
     assert_eq!(definitions[0]["annotations"]["readOnlyHint"], true);
     // Invalid emphasis is refused before any model call.
     assert!(surgery::plan(&state, &chat, &crate::identity::Actor::LocalOperator, ROOT, "  ").is_err());
-    assert!(surgery::plan(&state, &chat, &crate::identity::Actor::LocalOperator, ROOT, &"x".repeat(401)).is_err());
+    assert!(
+        surgery::plan(
+            &state,
+            &chat,
+            &crate::identity::Actor::LocalOperator,
+            ROOT,
+            &"x".repeat(401)
+        )
+        .is_err()
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -322,12 +489,19 @@ fn empty_selection_shows_only_a_hint_and_forms_live_in_a_selection() {
     let detail = plan_detail(&state, &chat, "");
     let empty = detail_page(&detail, load_nodes(&detail, &dir));
     let body = empty.split_once("<main>").unwrap().1;
-    assert_eq!(body, "<p class='mt-empty'>Select a block to regenerate, pin or drop.</p></main></body></html>", "no edits: the hint alone");
+    assert_eq!(
+        body, "<p class='mt-empty'>Select a block to regenerate, pin or drop.</p></main></body></html>",
+        "no edits: the hint alone"
+    );
     let detail = plan_detail(&state, &chat, "block=0.4");
     let block = detail_page(&detail, load_nodes(&detail, &dir));
     assert!(block.contains("value='regenerate'") || detail.model.is_none());
     assert!(block.contains("Drop entries 0–16 from agent view"));
-    assert!(block.contains("<summary>Drop a different range…</summary>") && block.contains("name='start' type='number' min='0' max='31' value='0'") && block.contains("value='16' required"));
+    assert!(
+        block.contains("<summary>Drop a different range…</summary>")
+            && block.contains("name='start' type='number' min='0' max='31' value='0'")
+            && block.contains("value='16' required")
+    );
     let detail = plan_detail(&state, &chat, "entry=4");
     let entry = detail_page(&detail, load_nodes(&detail, &dir));
     assert!(entry.contains("Pin verbatim") && entry.contains("Drop from agent view"));
@@ -342,20 +516,50 @@ fn operator_forms_edit_and_redirect_to_the_memory_tree() {
     let (state, chat, dir) = published();
     let shared = Arc::new(Mutex::new(state));
     let mut out = Vec::new();
-    assert!(http(&mut out, &shared, "POST", &memory_url(&chat), "", b"action=pin&at=2"));
+    assert!(http(
+        &mut out,
+        &shared,
+        "POST",
+        &memory_url(&chat),
+        "",
+        b"action=pin&at=2"
+    ));
     let response = String::from_utf8_lossy(&out);
     assert!(response.starts_with("HTTP/1.1 303"), "{response}");
-    assert!(response.to_lowercase().contains(&format!("location: {}?entry=2", memory_url(&chat))), "{response}");
+    assert!(
+        response
+            .to_lowercase()
+            .contains(&format!("location: {}?entry=2", memory_url(&chat))),
+        "{response}"
+    );
     assert!(shared.lock().unwrap().chats[0].memory.as_ref().unwrap().pinned(2));
     let mut out = Vec::new();
-    assert!(http(&mut out, &shared, "GET", &format!("{}/node", memory_url(&chat)), "", b""));
+    assert!(http(
+        &mut out,
+        &shared,
+        "GET",
+        &format!("{}/node", memory_url(&chat)),
+        "",
+        b""
+    ));
     let page = String::from_utf8_lossy(&out);
     assert!(page.contains("<p class='mt-empty'>Select a block to regenerate, pin or drop.</p>"));
-    assert!(page.contains(&format!("<li>Pinned <a href='{}/node?entry=2'>#2</a>", memory_url(&chat))) && page.contains("value='unpin'"));
+    assert!(
+        page.contains(&format!(
+            "<li>Pinned <a href='{}/node?entry=2'>#2</a>",
+            memory_url(&chat)
+        )) && page.contains("value='unpin'")
+    );
     assert!(page.contains("<summary>Edit log · 1</summary>"));
-    assert!(!page.contains("type='number'") && !page.contains("value='pin'") && !page.contains("value='drop'"), "no pin/drop forms without a selection");
+    assert!(
+        !page.contains("type='number'") && !page.contains("value='pin'") && !page.contains("value='drop'"),
+        "no pin/drop forms without a selection"
+    );
     assert!(!page.contains("All edits"), "the empty view does not link to itself");
-    assert!(page.contains("frame-ancestors 'self'"), "detail pages load only in Control's frame");
+    assert!(
+        page.contains("frame-ancestors 'self'"),
+        "detail pages load only in Control's frame"
+    );
     let mut out = Vec::new();
     http(&mut out, &shared, "POST", &memory_url(&chat), "", b"action=unknown");
     assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 400"));
@@ -376,7 +580,10 @@ fn edits_survive_a_state_round_trip_and_old_state_has_none() {
     let back: crate::chat::Session = serde_json::from_value(old.clone()).unwrap();
     assert!(back.memory.is_none());
     state.chats[0].memory = None;
-    assert!(serde_json::to_value(&state.chats[0]).unwrap().get("memory").is_none(), "unedited chats save unchanged");
+    assert!(
+        serde_json::to_value(&state.chats[0]).unwrap().get("memory").is_none(),
+        "unedited chats save unchanged"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -388,7 +595,17 @@ fn edits_survive_a_state_round_trip_and_old_state_has_none() {
 fn memory_tree_preview() {
     let target = std::env::var("MEMORY_TREE_PREVIEW").expect("MEMORY_TREE_PREVIEW=/absolute/preview.html");
     let (mut state, _) = fixture();
-    let message = |i: usize| crate::chat::Message { speaker: Default::default(), text: format!("Entry {i}: castle wall at ({}, 64, {}) via relay port {}", i * 3, i * 7, 25565 + i % 4), run_id: None, reply: "Placed blocks and verified the route".into() };
+    let message = |i: usize| crate::chat::Message {
+        speaker: Default::default(),
+        text: format!(
+            "Entry {i}: castle wall at ({}, 64, {}) via relay port {}",
+            i * 3,
+            i * 7,
+            25565 + i % 4
+        ),
+        run_id: None,
+        reply: "Placed blocks and verified the route".into(),
+    };
     state.chats[0].messages = (0..213).map(message).collect();
     state.runtime.compaction.settings.recent_entries = 6;
     let chat = state.chats[0].id.clone();
@@ -405,22 +622,50 @@ fn memory_tree_preview() {
     let operator = crate::identity::Actor::LocalOperator;
     let focus = Block { start: 64, level: 6 };
     let plan = surgery::plan(&state, &chat, &operator, focus, "focus on the castle layout decisions").unwrap();
-    let (base, response) = surgery::run(&plan, &dir, summarise("Castle layout: keep at (384, 64, 896); four towers; gatehouse faces the relay spawn; moat deferred.")).unwrap();
+    let (base, response) = surgery::run(
+        &plan,
+        &dir,
+        summarise(
+            "Castle layout: keep at (384, 64, 896); four towers; gatehouse faces the relay spawn; moat deferred.",
+        ),
+    )
+    .unwrap();
     surgery::commit(&mut state, plan, base, response).unwrap();
     edit(&mut state, &chat, &operator, Op::Pin(37)).unwrap();
     edit(&mut state, &chat, &operator, Op::Pin(150)).unwrap();
-    edit(&mut state, &chat, &operator, Op::Select { block: focus, revision: 1 }).unwrap();
+    edit(
+        &mut state,
+        &chat,
+        &operator,
+        Op::Select {
+            block: focus,
+            revision: 1,
+        },
+    )
+    .unwrap();
     let drops = state.runtime.compaction.views.remove(&chat);
     edit(&mut state, &chat, &operator, Op::Drop { start: 196, end: 199 }).unwrap();
     state.runtime.compaction.views.insert(chat.clone(), drops.unwrap());
     // `MEMORY_TREE_PREVIEW_QUERY=` (empty) previews the page with nothing selected.
-    let query = std::env::var("MEMORY_TREE_PREVIEW_QUERY").unwrap_or_else(|_| format!("block={}.{}", focus.start, focus.level));
+    let query =
+        std::env::var("MEMORY_TREE_PREVIEW_QUERY").unwrap_or_else(|_| format!("block={}.{}", focus.start, focus.level));
     let detail = plan_detail(&state, &chat, &query);
     let detail = detail_page(&detail, load_nodes(&detail, &dir));
-    let styles = format!("{}{}", include_str!("../../../assets/style.css"), include_str!("../../../assets/runtime.css"));
-    let detail = detail.replace("<link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'>", &format!("<style>{styles}</style>"));
+    let styles = format!(
+        "{}{}",
+        include_str!("../../../assets/style.css"),
+        include_str!("../../../assets/runtime.css")
+    );
+    let detail = detail.replace(
+        "<link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'>",
+        &format!("<style>{styles}</style>"),
+    );
     let overview = render(&state, &chat, &query).unwrap();
-    let node = if query.is_empty() { format!("{}/node", memory_url(&chat)) } else { format!("{}/node?{query}", memory_url(&chat)) };
+    let node = if query.is_empty() {
+        format!("{}/node", memory_url(&chat))
+    } else {
+        format!("{}/node?{query}", memory_url(&chat))
+    };
     let src = format!("src='{}'", crate::escape(&node));
     assert!(overview.contains(&src));
     let overview = overview.replace(&src, &format!("srcdoc='{}'", crate::escape(&detail)));
@@ -445,10 +690,18 @@ fn compression_scores_reward_terse_facts_and_count_lost_ones() {
     assert!(entropy("chest19,71,-47 opened; beds5; wall110/110") > entropy("the the the the the the the the"));
     // Hard tokens: digits, paths and IDs, with trailing punctuation trimmed.
     let found = facts("Placed bed at x14,71,-48. See /workspace/castle/evidence/bed.json and svc_5011; done.");
-    assert!(found.contains("x14") && found.contains("-48") && found.contains("/workspace/castle/evidence/bed.json") && found.contains("svc_5011"));
+    assert!(
+        found.contains("x14")
+            && found.contains("-48")
+            && found.contains("/workspace/castle/evidence/bed.json")
+            && found.contains("svc_5011")
+    );
     assert!(!found.contains("Placed") && !found.contains("done"));
     // A parent that keeps one of three child facts reports it.
-    assert_eq!(kept("wall at z-54 done", &["north wall z-54 110/110", "chest 19,71"]), (1, 4));
+    assert_eq!(
+        kept("wall at z-54 done", &["north wall z-54 110/110", "chest 19,71"]),
+        (1, 4)
+    );
     assert_eq!(kept("nothing", &["no facts here"]), (0, 0));
 }
 
@@ -462,5 +715,11 @@ fn memory_page_response_head_is_pinned() {
     let text = String::from_utf8(out).unwrap();
     let (head, body) = text.split_once("\r\n\r\n").unwrap();
     assert!(body.starts_with("<!doctype html>"), "{body}");
-    assert_eq!(head, format!("HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'", body.len()));
+    assert_eq!(
+        head,
+        format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'",
+            body.len()
+        )
+    );
 }

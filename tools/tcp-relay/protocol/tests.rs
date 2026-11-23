@@ -1,4 +1,3 @@
-
 use super::*;
 #[test]
 fn framing_is_bounded_and_half_close_is_distinct_from_transport_eof() {
@@ -24,10 +23,7 @@ fn credit_is_bounded_by_the_window_and_never_reused() {
     for _ in 0..WINDOW {
         credit.grant().unwrap();
     }
-    assert!(
-        credit.grant().is_err(),
-        "a peer cannot grant more than the window"
-    );
+    assert!(credit.grant().is_err(), "a peer cannot grant more than the window");
     for _ in 0..WINDOW {
         credit.take(&alive).unwrap();
     }

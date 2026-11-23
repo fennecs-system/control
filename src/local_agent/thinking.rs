@@ -30,7 +30,12 @@ pub(super) struct Adaptive {
 }
 impl Adaptive {
     pub(super) fn new(base: Thinking, resumed: bool) -> Self {
-        Self { base, resuming: resumed, cue: Cue::Start, asked: None }
+        Self {
+            base,
+            resuming: resumed,
+            cue: Cue::Start,
+            asked: None,
+        }
     }
     /// The next request's level; `compacted`: the loop folded steps for it.
     pub(super) fn level(&mut self, compacted: bool) -> Thinking {

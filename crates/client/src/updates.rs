@@ -43,12 +43,7 @@ impl Hive {
         let connected = Arc::new(AtomicBool::new(false));
         let cancel = CancelToken::new();
         let socket = Arc::new(Mutex::new(None));
-        let (signal, online, stop, connection) = (
-            changed.clone(),
-            connected.clone(),
-            cancel.clone(),
-            socket.clone(),
-        );
+        let (signal, online, stop, connection) = (changed.clone(), connected.clone(), cancel.clone(), socket.clone());
         let thread = std::thread::Builder::new()
             .name("control-updates".into())
             .spawn(move || {
@@ -96,12 +91,7 @@ impl Updates {
 impl Drop for Updates {
     fn drop(&mut self) {
         self.cancel.cancel();
-        if let Some(socket) = self
-            .socket
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
+        if let Some(socket) = self.socket.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             let _ = socket.shutdown(Shutdown::Both);
         }
         if let Some(thread) = self.thread.take() {
@@ -132,12 +122,7 @@ fn receive(
     let mut header = String::new();
     loop {
         let mut line = String::new();
-        if reader
-            .by_ref()
-            .take(8193 - header.len() as u64)
-            .read_line(&mut line)?
-            == 0
-        {
+        if reader.by_ref().take(8193 - header.len() as u64).read_line(&mut line)? == 0 {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
         header.push_str(&line);
@@ -155,9 +140,7 @@ fn receive(
     {
         return Err(io::ErrorKind::InvalidData.into());
     }
-    reader
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_secs(20)))?;
+    reader.get_ref().set_read_timeout(Some(Duration::from_secs(20)))?;
     online.store(true, Ordering::Release);
     while !stop.is_cancelled() {
         let mut line = String::new();

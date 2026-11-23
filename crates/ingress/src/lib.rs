@@ -35,10 +35,7 @@ pub fn chat_id(user: DiscordId, channel: DiscordId) -> String {
 }
 pub fn chat_link(actor: &control_identity::Actor) -> Option<String> {
     match actor {
-        control_identity::Actor::DiscordDm {
-            user_id,
-            channel_id,
-        } => Some(format!(
+        control_identity::Actor::DiscordDm { user_id, channel_id } => Some(format!(
             "{}/dm/{}",
             control_config::server_url(),
             chat_id(*user_id, *channel_id)
@@ -48,9 +45,11 @@ pub fn chat_link(actor: &control_identity::Actor) -> Option<String> {
 }
 pub fn session_link(actor: &control_identity::Actor, id: Option<&str>) -> Option<String> {
     let fallback = chat_link(actor)?;
-    Some(id.filter(|id| !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
-        .map(|id| format!("{}/dm/{id}", control_config::server_url()))
-        .unwrap_or(fallback))
+    Some(
+        id.filter(|id| !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+            .map(|id| format!("{}/dm/{id}", control_config::server_url()))
+            .unwrap_or(fallback),
+    )
 }
 pub fn native_reply(actor: &control_identity::Actor, content: &str) -> Option<String> {
     let link = chat_link(actor)?;
@@ -75,7 +74,9 @@ pub fn native_reply(actor: &control_identity::Actor, content: &str) -> Option<St
     } else {
         "user"
     };
-    Some(format!("Woof! Control is online. Role: {role}. DM me a task, or use /improve for an architect request.\nContinue on this laptop: {link}"))
+    Some(format!(
+        "Woof! Control is online. Role: {role}. DM me a task, or use /improve for an architect request.\nContinue on this laptop: {link}"
+    ))
 }
 pub fn direct_command(content: &str) -> Option<(Action, &str)> {
     let text = content.trim();
@@ -99,11 +100,7 @@ pub fn chat_command(content: &str) -> Option<(Action, &str)> {
     if text == "/improve" {
         return Some((Action::Improve, "on"));
     }
-    if let Some(objective) = text
-        .strip_prefix("/improve ")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(objective) = text.strip_prefix("/improve ").map(str::trim).filter(|s| !s.is_empty()) {
         Some((Action::Improve, objective))
     } else {
         Some((Action::Task, text))
@@ -125,11 +122,7 @@ pub fn command(content: &str) -> Option<(Action, &str)> {
     Some(command_task(task))
 }
 fn command_task(task: &str) -> (Action, &str) {
-    if let Some(objective) = task
-        .strip_prefix("improve ")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(objective) = task.strip_prefix("improve ").map(str::trim).filter(|s| !s.is_empty()) {
         (Action::Improve, objective)
     } else {
         (Action::Task, task)

@@ -5,9 +5,9 @@
 //! search returns full schemas and `control_call` forwards to the same worker
 //! dispatch as a direct call, so authority, judge policy, handoff fences,
 //! nudges and fixes are unchanged. See the adjacent tests.
-use control_context::{tool_for_mcp, Audience};
+use control_context::{Audience, tool_for_mcp};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(crate) const SEARCH: &str = "control_tool_search";
 pub(crate) const CALL: &str = "control_call";
@@ -63,7 +63,9 @@ pub(crate) fn offered(facts: &Facts) -> Vec<Value> {
     if facts.shell {
         let mut shell = crate::claude::definition();
         if facts.judge {
-            shell["description"] = json!("Inspect source and run verification in a credential-free offline container. /workspace is read-only; use /tmp for scratch outputs. Bounded output and 25-second deadline.");
+            shell["description"] = json!(
+                "Inspect source and run verification in a credential-free offline container. /workspace is read-only; use /tmp for scratch outputs. Bounded output and 25-second deadline."
+            );
             shell["annotations"]["destructiveHint"] = json!(false);
         }
         tools.push(shell);
@@ -89,7 +91,8 @@ pub(crate) fn offered(facts: &Facts) -> Vec<Value> {
 }
 /// The session's `tools/list`: role core schemas plus the loaders.
 pub(crate) fn listed(facts: &Facts) -> Vec<Value> {
-    let mut tools = offered(facts).into_iter()
+    let mut tools = offered(facts)
+        .into_iter()
         .filter(|tool| control_context::loaded(name(tool), facts.role))
         .map(|tool| as_listed(facts, tool))
         .collect::<Vec<_>>();
@@ -102,7 +105,10 @@ pub(crate) fn listed(facts: &Facts) -> Vec<Value> {
 /// A core tool as the session's listing shows it.
 fn as_listed(facts: &Facts, mut tool: Value) -> Value {
     // A judge's few core tools keep their full, judge-specific text.
-    if let Some(brief) = control_context::mcp(name(&tool)).map(|m| m.brief).filter(|b| !b.is_empty() && !facts.judge) {
+    if let Some(brief) = control_context::mcp(name(&tool))
+        .map(|m| m.brief)
+        .filter(|b| !b.is_empty() && !facts.judge)
+    {
         tool["description"] = json!(brief);
     }
     compact(&mut tool["inputSchema"]);
@@ -122,7 +128,10 @@ fn known(facts: &Facts, tool: &Value, named: bool) -> Value {
         return value;
     }
     let shown = as_listed(facts, tool.clone());
-    let omitted = shown["inputSchema"]["properties"].as_object().into_iter().flatten()
+    let omitted = shown["inputSchema"]["properties"]
+        .as_object()
+        .into_iter()
+        .flatten()
         .filter(|(_, p)| p["description"] == "see control_tool_search")
         .map(|(key, _)| (key.clone(), tool["inputSchema"]["properties"][key].clone()))
         .collect::<serde_json::Map<_, _>>();
@@ -147,13 +156,24 @@ fn compact(schema: &mut Value) {
                         map.remove(key);
                     }
                 }
-                for key in ["maxLength", "minLength", "maxItems", "minItems", "uniqueItems", "additionalProperties"] {
+                for key in [
+                    "maxLength",
+                    "minLength",
+                    "maxItems",
+                    "minItems",
+                    "uniqueItems",
+                    "additionalProperties",
+                ] {
                     if map.get(key).is_some_and(|v| v.is_number() || v.is_boolean()) {
                         map.remove(key);
                     }
                 }
                 // A type's own range (u32::MAX and above) says nothing.
-                if map.get("maximum").and_then(Value::as_u64).is_some_and(|max| max >= u64::from(u32::MAX)) {
+                if map
+                    .get("maximum")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|max| max >= u64::from(u32::MAX))
+                {
                     map.remove("maximum");
                 }
                 map.values_mut().for_each(strip);
@@ -167,7 +187,9 @@ fn compact(schema: &mut Value) {
         map.remove("additionalProperties");
     }
     let required = schema["required"].as_array().cloned().unwrap_or_default();
-    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else { return };
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
     for (key, property) in properties.iter_mut() {
         strip(property);
         if property.to_string().len() > PROPERTY_BYTES && !required.iter().any(|r| r == key.as_str()) {
@@ -178,10 +200,15 @@ fn compact(schema: &mut Value) {
 }
 /// Tools the run may call that its listing leaves out.
 pub(crate) fn deferred(facts: &Facts) -> Vec<Value> {
-    offered(facts).into_iter().filter(|tool| !control_context::loaded(name(tool), facts.role)).collect()
+    offered(facts)
+        .into_iter()
+        .filter(|tool| !control_context::loaded(name(tool), facts.role))
+        .collect()
 }
 fn definitions(local: bool) -> Vec<Value> {
-    let mut tools = vec![json!({"name":SEARCH,"description":"Full schemas and descriptions for tools by names, or by query words. Neither lists the deferred tools. Read-only.","inputSchema":{"type":"object","properties":{"names":{"type":"array","items":{"type":"string"},"maxItems":NAMED_RESULTS},"query":{"type":"string","maxLength":200}},"additionalProperties":false}})];
+    let mut tools = vec![
+        json!({"name":SEARCH,"description":"Full schemas and descriptions for tools by names, or by query words. Neither lists the deferred tools. Read-only.","inputSchema":{"type":"object","properties":{"names":{"type":"array","items":{"type":"string"},"maxItems":NAMED_RESULTS},"query":{"type":"string","maxLength":200}},"additionalProperties":false}}),
+    ];
     if !local {
         tools.push(json!({"name":CALL,"description":"Call a deferred tool by name with its schema's arguments; same rules and result as a direct call.","inputSchema":{"type":"object","properties":{"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["tool"],"additionalProperties":false}}));
     }
@@ -191,7 +218,11 @@ fn definitions(local: bool) -> Vec<Value> {
 /// Full worker spelling; index entries omit the `control_` prefix.
 fn spelled(name: &str) -> String {
     let name = name.trim();
-    if name.starts_with("control_") || name.contains('.') { name.to_owned() } else { format!("control_{name}") }
+    if name.starts_with("control_") || name.contains('.') {
+        name.to_owned()
+    } else {
+        format!("control_{name}")
+    }
 }
 /// The prompt's deferred index: a terse line per tool family.
 pub(crate) fn index(facts: &Facts) -> String {
@@ -202,7 +233,9 @@ pub(crate) fn index(facts: &Facts) -> String {
     let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
     for tool in &tools {
         let name = name(tool);
-        let (Some(family), Some(entry)) = (tool_for_mcp(name), control_context::mcp(name)) else { continue };
+        let (Some(family), Some(entry)) = (tool_for_mcp(name), control_context::mcp(name)) else {
+            continue;
+        };
         let line = format!("{} ({})", name.trim_start_matches("control_"), entry.phrase);
         match groups.iter_mut().find(|(title, _)| *title == family.title) {
             Some((_, lines)) => lines.push(line),
@@ -232,17 +265,26 @@ struct SearchInput {
 }
 /// Answer `control_tool_search` from the run's callable tools.
 pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
-    let input: SearchInput = serde_json::from_value(if args.is_null() { json!({}) } else { args.clone() })
-        .map_err(|_| std::io::Error::other("Expected names (a list of tool names) or query (words), or neither to list the deferred tools"))?;
+    let input: SearchInput =
+        serde_json::from_value(if args.is_null() { json!({}) } else { args.clone() }).map_err(|_| {
+            std::io::Error::other(
+                "Expected names (a list of tool names) or query (words), or neither to list the deferred tools",
+            )
+        })?;
     let tools = offered(facts);
-    let next = if facts.local { "These tools are now callable directly by name." }
-        else { "Call one with control_call {\"tool\":\"<name>\",\"arguments\":{...}}." };
+    let next = if facts.local {
+        "These tools are now callable directly by name."
+    } else {
+        "Call one with control_call {\"tool\":\"<name>\",\"arguments\":{...}}."
+    };
     let bounded = |found: Vec<&Value>| {
         let mut size = 0;
         let mut kept = Vec::new();
         for tool in found {
             size += tool.to_string().len();
-            if size > RESULT_BYTES && !kept.is_empty() { break; }
+            if size > RESULT_BYTES && !kept.is_empty() {
+                break;
+            }
             kept.push(tool.clone());
         }
         kept
@@ -251,7 +293,9 @@ pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
     // with their index phrase, plus (when asked by name) only what the
     // listing left out.
     let split = |found: Vec<&Value>, named: bool| {
-        let (listed, new): (Vec<&Value>, Vec<&Value>) = found.into_iter().partition(|t| control_context::loaded(name(t), facts.role));
+        let (listed, new): (Vec<&Value>, Vec<&Value>) = found
+            .into_iter()
+            .partition(|t| control_context::loaded(name(t), facts.role));
         let found_new = !new.is_empty();
         let mut value = json!({"tools":bounded(new),"next":next});
         if !listed.is_empty() {
@@ -259,29 +303,55 @@ pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
             // Say so plainly: agents otherwise look the same loaded tools up
             // again every turn and get nothing for the round trip.
             let direct = "already_listed tools are in your tool list with their schemas: call them directly by name and do not search for them again.";
-            value["next"] = json!(if found_new { format!("{next} The {direct}") } else { format!("Nothing new: the {direct}") });
+            value["next"] = json!(if found_new {
+                format!("{next} The {direct}")
+            } else {
+                format!("Nothing new: the {direct}")
+            });
         }
         value
     };
     if let Some(names) = input.names.filter(|n| !n.is_empty()) {
         if names.len() > NAMED_RESULTS {
-            return Err(std::io::Error::other(format!("At most {NAMED_RESULTS} names per search; split the request.")));
+            return Err(std::io::Error::other(format!(
+                "At most {NAMED_RESULTS} names per search; split the request."
+            )));
         }
         let wanted = names.iter().map(|n| spelled(n)).collect::<Vec<_>>();
-        let found = wanted.iter().filter_map(|w| tools.iter().find(|t| name(t) == w)).collect::<Vec<_>>();
-        let unknown = wanted.iter().filter(|w| !tools.iter().any(|t| name(t) == w.as_str())).collect::<Vec<_>>();
+        let found = wanted
+            .iter()
+            .filter_map(|w| tools.iter().find(|t| name(t) == w))
+            .collect::<Vec<_>>();
+        let unknown = wanted
+            .iter()
+            .filter(|w| !tools.iter().any(|t| name(t) == w.as_str()))
+            .collect::<Vec<_>>();
         let mut value = split(found, true);
         if !unknown.is_empty() {
             value["unknown"] = json!(unknown);
-            value["fix"] = json!("These names are not callable in this session. Call control_tool_search {} to list the deferred tools, or search with {\"query\":\"<task words>\"}.");
+            value["fix"] = json!(
+                "These names are not callable in this session. Call control_tool_search {} to list the deferred tools, or search with {\"query\":\"<task words>\"}."
+            );
         }
         return Ok(value);
     }
-    let words = input.query.as_deref().unwrap_or("").to_lowercase().split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 1).map(str::to_owned).collect::<Vec<_>>();
+    let words = input
+        .query
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 1)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     if words.is_empty() {
-        let listing = tools.iter().filter(|t| !control_context::loaded(name(t), facts.role))
-            .filter_map(|t| control_context::mcp(name(t)).map(|m| json!({"name":m.name,"phrase":m.phrase,"family":tool_for_mcp(m.name).map(|f| f.title)})))
+        let listing = tools
+            .iter()
+            .filter(|t| !control_context::loaded(name(t), facts.role))
+            .filter_map(|t| {
+                control_context::mcp(name(t))
+                    .map(|m| json!({"name":m.name,"phrase":m.phrase,"family":tool_for_mcp(m.name).map(|f| f.title)}))
+            })
             .collect::<Vec<_>>();
         return Ok(json!({"deferred":listing,"next":"Pass names to read full schemas."}));
     }
@@ -290,14 +360,32 @@ pub(crate) fn search(facts: &Facts, args: &Value) -> std::io::Result<Value> {
         let entry = control_context::mcp(name);
         let family = tool_for_mcp(name);
         let phrase = entry.map_or("", |m| m.phrase).to_lowercase();
-        let about = family.map(|f| format!("{} {}", f.title, f.aliases)).unwrap_or_default().to_lowercase();
+        let about = family
+            .map(|f| format!("{} {}", f.title, f.aliases))
+            .unwrap_or_default()
+            .to_lowercase();
         let description = tool["description"].as_str().unwrap_or("").to_lowercase();
-        words.iter().map(|w| 4 * usize::from(name.contains(w.as_str())) + 3 * usize::from(phrase.contains(w.as_str()))
-            + 2 * usize::from(about.contains(w.as_str())) + usize::from(description.contains(w.as_str()))).sum()
+        words
+            .iter()
+            .map(|w| {
+                4 * usize::from(name.contains(w.as_str()))
+                    + 3 * usize::from(phrase.contains(w.as_str()))
+                    + 2 * usize::from(about.contains(w.as_str()))
+                    + usize::from(description.contains(w.as_str()))
+            })
+            .sum()
     };
-    let mut ranked = tools.iter().map(|t| (score(t), t)).filter(|(s, _)| *s > 0).collect::<Vec<_>>();
+    let mut ranked = tools
+        .iter()
+        .map(|t| (score(t), t))
+        .filter(|(s, _)| *s > 0)
+        .collect::<Vec<_>>();
     ranked.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    let found = ranked.into_iter().take(QUERY_RESULTS).map(|(_, t)| t).collect::<Vec<_>>();
+    let found = ranked
+        .into_iter()
+        .take(QUERY_RESULTS)
+        .map(|(_, t)| t)
+        .collect::<Vec<_>>();
     let mut value = split(found, false);
     if value["tools"].as_array().is_some_and(Vec::is_empty) && value.get("already_listed").is_none() {
         value["fix"] = json!("No callable tool matched. Call control_tool_search {} to list the deferred tools.");
@@ -330,7 +418,10 @@ pub(crate) fn unwrap(envelope: &Value) -> Result<Option<Value>, String> {
         return Err("control_call cannot call itself. Call the tool by name: control_call {\"tool\":\"<name>\",\"arguments\":{...}}.".into());
     }
     if !tool.starts_with("control_") || control_context::mcp(&tool).is_none() {
-        return Err(format!("Unknown tool {:?}; nothing ran. Next: call control_tool_search {{\"query\":\"<task words>\"}} to find a callable tool.", input.tool.chars().take(64).collect::<String>()));
+        return Err(format!(
+            "Unknown tool {:?}; nothing ran. Next: call control_tool_search {{\"query\":\"<task words>\"}} to find a callable tool.",
+            input.tool.chars().take(64).collect::<String>()
+        ));
     }
     let mut rewritten = envelope.clone();
     rewritten["request"]["params"] = json!({"name":tool,"arguments":arguments});

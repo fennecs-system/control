@@ -16,17 +16,23 @@ pub enum Kind {
 }
 pub fn kind(line: &str) -> Kind {
     // File headers before hunk lines, so they are not shown as an addition/removal.
-    if ["--- a/", "--- \"a/", "--- /dev/null", "+++ b/", "+++ \"b/", "+++ /dev/null"].iter().any(|p| line.starts_with(p)) {
+    if [
+        "--- a/",
+        "--- \"a/",
+        "--- /dev/null",
+        "+++ b/",
+        "+++ \"b/",
+        "+++ /dev/null",
+    ]
+    .iter()
+    .any(|p| line.starts_with(p))
+    {
         Kind::Header
     } else if line.starts_with('+') {
         Kind::Add
     } else if line.starts_with('-') {
         Kind::Remove
-    } else if line.starts_with("diff ")
-        || line.starts_with("@@")
-        || line.starts_with('\\')
-        || line.starts_with('…')
-    {
+    } else if line.starts_with("diff ") || line.starts_with("@@") || line.starts_with('\\') || line.starts_with('…') {
         Kind::Header
     } else {
         Kind::Context
@@ -54,11 +60,7 @@ impl Preview {
             if self.files == 1 { "file" } else { "files" },
             self.added,
             self.removed,
-            if self.omitted > 0 {
-                " · preview limited"
-            } else {
-                ""
-            }
+            if self.omitted > 0 { " · preview limited" } else { "" }
         )
     }
 }
@@ -90,10 +92,7 @@ pub fn discord_preview(patch: &str) -> String {
     format!("{fence}text\n{text}{fence}")
 }
 fn clean(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !c.is_control() || *c == '\t')
-        .collect()
+    value.chars().filter(|c| !c.is_control() || *c == '\t').collect()
 }
 fn path(value: &str) -> String {
     // Quote filenames so a filename cannot impersonate a hunk or terminal command.
@@ -130,9 +129,7 @@ fn operations<'a>(old: &[&'a str], new: &[&'a str], budget: &mut usize) -> Vec<(
                 ops.push((Kind::Context, a[i]));
                 i += 1;
                 j += 1;
-            } else if i < a.len()
-                && (j == b.len() || lcs[(i + 1) * width + j] >= lcs[i * width + j + 1])
-            {
+            } else if i < a.len() && (j == b.len() || lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) {
                 ops.push((Kind::Remove, a[i]));
                 i += 1;
             } else {
@@ -145,11 +142,7 @@ fn operations<'a>(old: &[&'a str], new: &[&'a str], budget: &mut usize) -> Vec<(
         ops.extend(a.iter().map(|s| (Kind::Remove, *s)));
         ops.extend(b.iter().map(|s| (Kind::Add, *s)));
     }
-    ops.extend(
-        old[old.len() - suffix..]
-            .iter()
-            .map(|s| (Kind::Context, *s)),
-    );
+    ops.extend(old[old.len() - suffix..].iter().map(|s| (Kind::Context, *s)));
     ops
 }
 pub fn between(before: &Snapshot, after: &Snapshot) -> Preview {
@@ -177,24 +170,14 @@ pub fn between(before: &Snapshot, after: &Snapshot) -> Preview {
             result.omitted += 1;
             continue;
         }
-        let a: Vec<_> = old
-            .map_or("", String::as_str)
-            .split_inclusive('\n')
-            .collect();
-        let b: Vec<_> = new
-            .map_or("", String::as_str)
-            .split_inclusive('\n')
-            .collect();
+        let a: Vec<_> = old.map_or("", String::as_str).split_inclusive('\n').collect();
+        let b: Vec<_> = new.map_or("", String::as_str).split_inclusive('\n').collect();
         let ops = operations(&a, &b, &mut budget);
         result.added += ops.iter().filter(|(k, _)| *k == Kind::Add).count();
         result.removed += ops.iter().filter(|(k, _)| *k == Kind::Remove).count();
         result.files += 1;
         let mut ranges: Vec<(usize, usize)> = Vec::new();
-        for (i, (kind, _)) in ops
-            .iter()
-            .enumerate()
-            .filter(|(_, (k, _))| *k != Kind::Context)
-        {
+        for (i, (kind, _)) in ops.iter().enumerate().filter(|(_, (k, _))| *k != Kind::Context) {
             let _ = kind;
             let start = i.saturating_sub(3);
             let end = (i + 4).min(ops.len());
@@ -230,21 +213,17 @@ pub fn between(before: &Snapshot, after: &Snapshot) -> Preview {
                 old_line += usize::from(*kind != Kind::Add);
                 new_line += usize::from(*kind != Kind::Remove);
             }
-            let old_count = ops[start..end]
-                .iter()
-                .filter(|(k, _)| *k != Kind::Add)
-                .count();
-            let new_count = ops[start..end]
-                .iter()
-                .filter(|(k, _)| *k != Kind::Remove)
-                .count();
-            let header = |old_count: usize, new_count: usize| format!(
-                "@@ -{},{} +{},{} @@\n",
-                old_line + usize::from(old_count > 0),
-                old_count,
-                new_line + usize::from(new_count > 0),
-                new_count
-            );
+            let old_count = ops[start..end].iter().filter(|(k, _)| *k != Kind::Add).count();
+            let new_count = ops[start..end].iter().filter(|(k, _)| *k != Kind::Remove).count();
+            let header = |old_count: usize, new_count: usize| {
+                format!(
+                    "@@ -{},{} +{},{} @@\n",
+                    old_line + usize::from(old_count > 0),
+                    old_count,
+                    new_line + usize::from(new_count > 0),
+                    new_count
+                )
+            };
             let header_at = patch.len();
             patch.push_str(&header(old_count, new_count));
             let (mut shown_old, mut shown_new) = (0, 0);

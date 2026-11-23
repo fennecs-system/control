@@ -1,4 +1,3 @@
-
 use super::*;
 use serde_json::json;
 
@@ -20,9 +19,6 @@ fn bounded_literal_selection_does_not_interpret_patterns() {
         json!({"kind":"exit_only","prefixes":["x"]}),
         json!({"kind":"unknown"}),
     ] {
-        assert!(
-            serde_json::from_value::<WakePolicy>(value.clone()).is_err(),
-            "{value}"
-        );
+        assert!(serde_json::from_value::<WakePolicy>(value.clone()).is_err(), "{value}");
     }
 }

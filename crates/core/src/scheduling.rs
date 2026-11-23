@@ -25,13 +25,7 @@ impl Phase {
     }
     #[inline]
     fn reserves_chat(self) -> bool {
-        self.occupies_slot()
-            || matches!(
-                self,
-                Self::Waiting {
-                    reserves_chat: true
-                }
-            )
+        self.occupies_slot() || matches!(self, Self::Waiting { reserves_chat: true })
     }
 }
 
@@ -134,11 +128,7 @@ pub struct AttemptStamp<'a> {
     pub workspace: Option<&'a str>,
     pub started_unix: u64,
 }
-pub fn current_attempt(
-    phase: Phase,
-    latest: Option<AttemptStamp<'_>>,
-    reported: AttemptStamp<'_>,
-) -> bool {
+pub fn current_attempt(phase: Phase, latest: Option<AttemptStamp<'_>>, reported: AttemptStamp<'_>) -> bool {
     phase.occupies_slot() && latest == Some(reported)
 }
 

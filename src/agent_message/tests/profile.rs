@@ -9,7 +9,8 @@ fn fixture(chats: usize) -> (State, String, String, usize) {
     crate::chat::send(&mut state, &lead, "Own an independent task", "benchmark").unwrap();
     state.runtime.runs[0].status = "running".into();
     state.runtime.runs[0].attempts.push(crate::usage::Attempt {
-        workspace_id: Some("benchmark-attempt".into()), ..Default::default()
+        workspace_id: Some("benchmark-attempt".into()),
+        ..Default::default()
     });
     let session = state.chats[0].clone();
     let run = state.runtime.runs[0].clone();
@@ -35,29 +36,60 @@ fn fixture(chats: usize) -> (State, String, String, usize) {
 #[test]
 #[ignore = "explicit synthetic release timing/flamegraph; no models, personal state or credentials"]
 fn routing_profile() {
-    println!("{}", json!({"workload":"coordination_input_bytes", "room_policy_bytes":control_context::agent_policy::ROOM_COMMUNICATION_GUIDANCE.len(), "message_schema_bytes":Tools.definitions()[0].to_string().len()}));
-    let rounds = std::env::var("CONTROL_PROFILE_ROUNDS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(10_000).clamp(1, 2_000_000);
-    let selected = std::env::var("CONTROL_PROFILE_CHATS").ok().and_then(|v| v.parse::<usize>().ok());
-    for chats in [16, 64, 1024].into_iter().filter(|n| selected.is_none_or(|value| *n == value)) {
+    println!(
+        "{}",
+        json!({"workload":"coordination_input_bytes", "room_policy_bytes":control_context::agent_policy::ROOM_COMMUNICATION_GUIDANCE.len(), "message_schema_bytes":Tools.definitions()[0].to_string().len()})
+    );
+    let rounds = std::env::var("CONTROL_PROFILE_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(10_000)
+        .clamp(1, 2_000_000);
+    let selected = std::env::var("CONTROL_PROFILE_CHATS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok());
+    for chats in [16, 64, 1024]
+        .into_iter()
+        .filter(|n| selected.is_none_or(|value| *n == value))
+    {
         let (mut state, sender, target, runs) = fixture(chats);
         let mut samples = Vec::new();
         for batch in 0..10 {
             let start = Instant::now();
             for _ in 0..rounds {
-                black_box(handle(&mut state,
-                    &AttemptRef { run: &sender, generation: "benchmark-attempt", nonce: "benchmark" },
-                    MessageCall { chat_id: target.clone(), text: "A dependency changed; proceed with your assignment".into(), services: vec![], urgent: true },
-                    |_| Ok(())).unwrap());
+                black_box(
+                    handle(
+                        &mut state,
+                        &AttemptRef {
+                            run: &sender,
+                            generation: "benchmark-attempt",
+                            nonce: "benchmark",
+                        },
+                        MessageCall {
+                            chat_id: target.clone(),
+                            text: "A dependency changed; proceed with your assignment".into(),
+                            services: vec![],
+                            urgent: true,
+                        },
+                        |_| Ok(()),
+                    )
+                    .unwrap(),
+                );
                 state.runtime.runs.truncate(runs);
                 let session = state.chats.last_mut().unwrap();
                 session.messages.clear();
                 state.agent_messages.clear();
             }
-            if batch > 0 { samples.push(start.elapsed().as_nanos() / rounds as u128); }
+            if batch > 0 {
+                samples.push(start.elapsed().as_nanos() / rounds as u128);
+            }
         }
         samples.sort_unstable();
-        println!("{}", json!({"workload":"agent_message_downward_cpu", "chats":chats,
+        println!(
+            "{}",
+            json!({"workload":"agent_message_downward_cpu", "chats":chats,
             "rounds_per_batch":rounds,"samples":samples,"median_ns":samples[4],"min_ns":samples[0],
-            "note":"Includes queue/evidence construction and in-memory rollback reset; excludes filesystem saves, model execution and fixture setup."}));
+            "note":"Includes queue/evidence construction and in-memory rollback reset; excludes filesystem saves, model execution and fixture setup."})
+        );
     }
 }

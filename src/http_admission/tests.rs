@@ -13,9 +13,7 @@ use std::{
 fn connection() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    client
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     (client, listener.accept().unwrap().0)
 }
 
@@ -101,14 +99,9 @@ fn completed_and_panicked_handlers_release_slots_but_panics_remain_visible() {
             })
             .unwrap()
     );
-    assert!(
-        requests.failed,
-        "reaping cannot erase the handler's failure"
-    );
+    assert!(requests.failed, "reaping cannot erase the handler's failure");
     let mut response = String::new();
-    BufReader::new(client)
-        .read_to_string(&mut response)
-        .unwrap();
+    BufReader::new(client).read_to_string(&mut response).unwrap();
     assert_eq!(response, "ok");
     assert!(requests.join().is_err());
 }
@@ -122,9 +115,7 @@ fn long_lived_streams_count_toward_capacity_and_join_waits_for_cancellation() {
     requests
         .dispatch(server, move |mut stream| {
             stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: ready\n\n",
-                )
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: ready\n\n")
                 .unwrap();
             stop.wait(None);
         })
