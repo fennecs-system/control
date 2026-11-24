@@ -108,7 +108,7 @@ pub fn capacity(
         return endpoint(runtime, model).map(|e| control_context::turn_context::Capacity {
             context_tokens: e.limits.context_tokens,
             output_tokens: e.limits.output_tokens,
-            overhead_tokens: crate::local_agent::OVERHEAD_TOKENS,
+            overhead_tokens: control_local::OVERHEAD_TOKENS,
         });
     }
     runtime

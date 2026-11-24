@@ -343,7 +343,8 @@ fn a_local_model_chat_compacts_on_its_own_endpoint_by_default_and_its_turn_fits(
 /// final report (never its in-turn summaries) enters the chat history.
 #[test]
 fn a_long_local_chat_compacts_across_turns_and_within_each_turn() {
-    use crate::local_agent::{Compactor as Steps, Host, Meter, Policy, Poll};
+    use crate::local_agent::{Compactor as Steps, Host, Policy, Poll};
+    use control_local::Meter;
     use serde_json::{Value, json};
     #[derive(Default)]
     struct Turn {

@@ -449,7 +449,6 @@ pub fn handle(
     method: &str,
     path: &str,
     query: &HashMap<String, String>,
-    body: &[u8],
 ) -> bool {
     if path == "/dna/export" && method == "GET" {
         let _ = control_http::respond(
@@ -493,34 +492,87 @@ pub fn handle(
         );
         return true;
     }
-    if path == "/dna/save" && method == "POST" {
-        let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
-        match save_with(state, draft.clone(), crate::storage::save) {
-            Ok(d) => {
+    false
+}
+/// `POST /dna/save`. The edit is staged under the state lock and its save is
+/// waited for after releasing it, so other requests do not queue behind the
+/// disk. While storage is unavailable the edit is refused before it is applied;
+/// once staged it is not rolled back (others may already read it), and if
+/// storage fails meanwhile the answer says it is not saved yet.
+pub(crate) fn http(stream: &mut impl Write, state: &crate::Store, method: &str, path: &str, body: &[u8]) -> bool {
+    if path != "/dna/save" || method != "POST" {
+        return false;
+    }
+    /// What the locked part decided.
+    enum Staged {
+        /// Where to send the browser once durable, and the save to wait for.
+        Saving(String, crate::storage::Saving),
+        Conflict(String),
+        NotSaved(String),
+    }
+    let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
+    let staged = state.write(|state| {
+        // Refused before the edit is applied while storage cannot take it.
+        if let crate::storage::Health::Degraded(unavailable) = crate::storage::health() {
+            return Staged::NotSaved(unavailable.to_string());
+        }
+        let mut saving = None;
+        match save_with(state, draft.clone(), |state| {
+            saving = Some(crate::storage::submit(state)?);
+            Ok(())
+        }) {
+            Ok(saved) => saving.map_or_else(
+                || Staged::NotSaved("not saved".into()),
+                |saving| {
+                    Staged::Saving(
+                        format!("Location: /dna?id={}&saved={}\r\n", saved.id, saved.revision),
+                        saving,
+                    )
+                },
+            ),
+            Err(error) => Staged::Conflict(render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false)),
+        }
+    });
+    let mut response = Vec::new();
+    let not_saved = |response: &mut Vec<u8>, message: &str| {
+        let _ = control_http::respond(
+            response,
+            "503 Service Unavailable",
+            "text/plain; charset=utf-8",
+            message.as_bytes(),
+            "",
+            control_http::Policy::Page,
+        );
+    };
+    match staged {
+        Ok(Staged::Saving(location, saving)) => match saving.wait() {
+            Ok(()) => {
                 let _ = control_http::respond(
-                    stream,
+                    &mut response,
                     "303 See Other",
                     "text/plain",
                     b"",
-                    &format!("Location: /dna?id={}&saved={}\r\n", d.id, d.revision),
+                    &location,
                     control_http::Policy::Page,
                 );
             }
-            Err(error) => {
-                let html = render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false);
-                let _ = control_http::respond(
-                    stream,
-                    "409 Conflict",
-                    "text/html; charset=utf-8",
-                    crate::shell("lens-page", &html).as_bytes(),
-                    "",
-                    control_http::Policy::Page,
-                );
-            }
+            Err(error) => not_saved(&mut response, &error.to_string()),
+        },
+        Ok(Staged::Conflict(html)) => {
+            let _ = control_http::respond(
+                &mut response,
+                "409 Conflict",
+                "text/html; charset=utf-8",
+                crate::shell("lens-page", &html).as_bytes(),
+                "",
+                control_http::Policy::Page,
+            );
         }
-        return true;
+        Ok(Staged::NotSaved(message)) => not_saved(&mut response, &message),
+        Err(_) => crate::unavailable(&mut response),
     }
-    false
+    let _ = stream.write_all(&response);
+    true
 }
 #[cfg(test)]
 mod tests;

@@ -103,6 +103,40 @@ fn a_torn_final_line_is_dropped_on_open() {
     );
 }
 
+#[test]
+fn a_batch_appends_whole_lines_at_consecutive_positions_or_nothing() {
+    let path = scratch("batch");
+    let mut journal = FileJournal::open(&path).unwrap();
+    journal.append(br#"{"turn":0}"#).unwrap();
+    assert_eq!(journal.append_batch(&[]).unwrap(), 1, "an empty batch writes nothing");
+    assert_eq!(
+        journal
+            .append_batch(&[br#"{"turn":1}"#.as_slice(), br#"{"turn":2,"text":"hi"}"#])
+            .unwrap(),
+        1
+    );
+    assert!(
+        journal
+            .append_batch(&[br#"{"turn":3}"#.as_slice(), b"not json"])
+            .is_err(),
+        "one invalid entry refuses the whole batch"
+    );
+    assert_eq!(journal.len(), 3);
+    assert_eq!(
+        journal.read(2).unwrap().as_deref(),
+        Some(&br#"{"turn":2,"text":"hi"}"#[..])
+    );
+    drop(journal);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "{\"turn\":0}\n{\"turn\":1}\n{\"turn\":2,\"text\":\"hi\"}\n"
+    );
+    // A crash halfway through a batch's write leaves whole earlier lines and a
+    // torn one; opening keeps the whole ones and drops the torn one.
+    std::fs::write(&path, "{\"turn\":0}\n{\"turn\":1}\n{\"tu").unwrap();
+    assert_eq!(FileJournal::open(&path).unwrap().len(), 2);
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Turn {
     n: u64,

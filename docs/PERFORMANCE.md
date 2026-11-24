@@ -125,7 +125,7 @@ of 16 typical calls, 14 are core and the other two need one
 `control_tool_search` by name (`a_member_turn_needs_few_lookups`). A local turn
 loads an indexed tool on first use without a model step.
 
-**Local planning reserve.** `OVERHEAD_TOKENS` in `src/local_agent.rs` is 7,168:
+**Local planning reserve.** `OVERHEAD_TOKENS` in `crates/local/src/lib.rs` is 7,168:
 4,096 for core schemas, 2,048 for schemas loaded during the turn and 1,024 for
 the first exchange. The local loop estimates 3 bytes per token, so the reserve
 must cover that estimate even where a real tokenizer counts fewer
@@ -209,9 +209,13 @@ copy of a real state file. On an 18.1 MB state (6,881 runs, 128 chats), APFS,
 | Replay of a 2,001-line log | — | 72 ms |
 | Clean start | 41.6 ms | 60 ms (snapshot plus archive blocks) |
 
-About 60% of a save is now the sync. Not measured: APFS metadata writes and
-concurrent saves (each save still syncs under the state mutex; there is no
-group commit).
+About 60% of a save is the sync. Saves commit in groups led by the callers
+(`control_journal::writer`): a save encodes and diffs under the state mutex,
+queues its line and waits; a waiter that finds nobody writing writes every
+queued line itself with one write and one sync. A lone save has no thread
+hand-off. Most callers still wait under the state mutex, so their
+saves still serialize there; only `POST /dna/save` waits after releasing it, so
+group commit pays off as more callers do. Not measured: APFS metadata writes.
 
 ```sh
 CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \

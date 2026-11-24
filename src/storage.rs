@@ -4,13 +4,15 @@ use crate::State;
 use crate::config::{STATE_LOG as LOG, state_schema as schema};
 use crate::runtime::RunStatus;
 use control_effect::sync::Changes;
+pub use control_journal::writer::Health;
 use control_journal::{
     FileJournal, Journal,
     lens::{self, Schema},
     snapshot::{self, Encoded},
+    writer::{self, Failure, Log, Record, Sink, Submit, Ticket, Unsaved, Writer},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -111,10 +113,10 @@ pub fn load() -> io::Result<State> {
 /// the bytes the log itself wrote.
 const LOG_MINIMUM: usize = 4 << 20;
 
-/// The published state this process extends: the snapshot's name, the log
-/// handle (exclusively locked) and the encoding the next diff starts from.
+/// The published state this process extends: the writer that owns its files
+/// (the log exclusively locked) and the encoding the next diff starts from.
 struct Published {
-    log: FileJournal,
+    writer: Writer,
     log_bytes: usize,
     base: Option<Encoded>,
 }
@@ -242,10 +244,11 @@ fn adopt(directory: &Path, recovered: Recovered) -> bool {
         .filter_map(|i| log.read(i).ok().flatten())
         .map(|line| line.len() + 1)
         .sum();
+    let writer = Writer::new(Files::new(directory, Some(log)), writer::retry_then_degrade);
     published().lock().unwrap_or_else(PoisonError::into_inner).insert(
         directory.to_owned(),
         Published {
-            log,
+            writer,
             log_bytes,
             base: Some(encoded),
         },
@@ -306,9 +309,47 @@ pub fn save(state: &State) -> io::Result<()> {
     legacy_result(checkpoint(state))
 }
 
-fn legacy_result(result: Result<(), CheckpointError>) -> io::Result<()> {
+/// A save staged under the caller's lock, waited for after releasing it.
+#[must_use = "the change is durable only once `wait` returns"]
+pub struct Saving(Ticket);
+impl Saving {
+    /// Waits until the change is durable. An error says the change is not
+    /// saved yet (storage is unavailable; it stays queued and is saved when
+    /// storage recovers) or never will be (the writer stopped and Control is
+    /// stopping with it).
+    pub fn wait(self) -> io::Result<()> {
+        match self.0.wait() {
+            Ok(_) => {
+                changes().bump();
+                crate::live_updates::notify();
+                Ok(())
+            }
+            Err(Unsaved::Halted(halted)) => {
+                crate::shutdown::request();
+                Err(halted.into())
+            }
+            Err(not_yet) => Err(not_yet.into()),
+        }
+    }
+}
+
+/// Stages `state` like [`save`] but returns before it is durable, so the
+/// caller can release its lock first and then [`Saving::wait`]. Others may
+/// see and extend the change before then, so it is never refused once staged:
+/// if storage fails it stays queued until storage recovers. An error here
+/// (storage already unavailable among them) means nothing was staged and the
+/// caller rolls back as after `save`; check [`health`] before changing state
+/// to refuse without touching it. Runs
+/// are not archived here: undoing that on a refusal needs the state.
+pub fn submit(state: &State) -> io::Result<Saving> {
+    let directory = crate::config::state_directory().map_err(io::Error::other)?;
+    let encoded = encode(state, &archived(&directory)).map_err(io::Error::other)?;
+    legacy_result(stage(&directory, encoded, false, Writer::submit)).map(Saving)
+}
+
+fn legacy_result<T>(result: Result<T, CheckpointError>) -> io::Result<T> {
     match result {
-        Ok(()) => Ok(()),
+        Ok(value) => Ok(value),
         Err(CheckpointError::NotReplaced(error)) => Err(error),
         Err(CheckpointError::Unconfirmed(error)) => {
             // Legacy callers roll back on ordinary errors. Unwinding while they
@@ -320,37 +361,11 @@ fn legacy_result(result: Result<(), CheckpointError>) -> io::Result<()> {
     }
 }
 
-/// Whether publication was attempted matters to an effect interpreter deciding
-/// whether rollback is safe. `Unconfirmed` requires reconciliation before retry;
-/// it does not mean the new state is absent. Legacy `save` callers must stop
-/// rather than erase an unconfirmed outcome into a rollback-safe error.
-#[derive(Debug)]
-pub enum CheckpointError {
-    /// Serialization, configuration or temporary-file preparation failed before
-    /// issuing rename. The published checkpoint was not touched by this call.
-    NotReplaced(io::Error),
-    /// Rename was attempted but publication was not durably acknowledged.
-    /// Even a rename error is conservative here (for example filesystem I/O
-    /// errors); a directory-sync error can leave the replacement visible.
-    Unconfirmed(io::Error),
-}
-
-impl std::fmt::Display for CheckpointError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotReplaced(error) => write!(formatter, "checkpoint not replaced: {error}"),
-            Self::Unconfirmed(error) => write!(formatter, "checkpoint unconfirmed: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for CheckpointError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::NotReplaced(error) | Self::Unconfirmed(error) => Some(error),
-        }
-    }
-}
+// Whether publication was attempted matters to an effect interpreter deciding
+// whether rollback is safe. `Unconfirmed` requires reconciliation before retry;
+// it does not mean the new state is absent. Legacy `save` callers must stop
+// rather than erase an unconfirmed outcome into a rollback-safe error.
+pub use control_journal::writer::Fault as CheckpointError;
 
 /// The state's saved encoding. Finished runs reuse their saved bytes
 /// (`history::Cached`), so this costs what changed plus a copy of the rest.
@@ -388,8 +403,9 @@ fn archived(directory: &Path) -> archive::Archive {
 }
 
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
-/// directory sync; only success wakes state-change subscribers. This API does
-/// not permit releasing the application's write lock during persistence.
+/// directory sync; only success wakes state-change subscribers. The caller
+/// waits under its lock (writing itself when nobody else is); [`submit`] is
+/// the variant that waits after releasing it.
 ///
 /// A checkpoint persists only what changed since the last one: one line of
 /// `state.log`, appended and synced, holding the patch from the previous
@@ -411,6 +427,10 @@ pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
     Ok(())
 }
 fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError> {
+    // Refused before the archive step moves anything; the caller rolls back.
+    if let Health::Degraded(unavailable) = health_in(directory) {
+        return Err(CheckpointError::NotReplaced(unavailable.into()));
+    }
     let directory = directory.to_owned();
     let mut archive = archived(&directory);
     let pending = archive::step(&directory, state, &mut archive).map_err(CheckpointError::NotReplaced)?;
@@ -435,64 +455,165 @@ fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError>
     Ok(())
 }
 
-/// Persists `encoded` in `directory`: nothing when unchanged, else one patch
-/// line, else (when `compact`, with no base yet, or once the log outgrows the
-/// snapshot) a compaction.
+/// Persists `encoded` in `directory` and waits for it under the caller's lock,
+/// which lets a refused save roll back.
 fn persist(directory: &Path, encoded: Encoded, compact: bool) -> Result<(), CheckpointError> {
+    match stage(directory, encoded, compact, Writer::submit_held)?.wait() {
+        Ok(_) => Ok(()),
+        Err(Failure::Refused(error)) => Err(CheckpointError::NotReplaced(error)),
+        Err(Failure::Halted(halted)) => Err(CheckpointError::Unconfirmed(halted.into())),
+    }
+}
+
+/// Whether this node's state takes saves now: ready, degraded (saves are
+/// refused with the cause until storage recovers; reads go on) or halted. A
+/// pure read for status pages and for refusing a change before applying it.
+pub fn health() -> Health {
+    crate::config::state_directory().map_or(Health::Ready, |directory| health_in(&directory))
+}
+fn health_in(directory: &Path) -> Health {
+    published()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(directory)
+        .map_or(Health::Ready, |current| current.writer.health())
+}
+
+/// A record the writer did not queue, as the legacy phases: unavailable
+/// storage is an ordinary error the caller rolls back; a halted writer is an
+/// unconfirmed checkpoint.
+fn refused(refusal: Submit) -> CheckpointError {
+    match refusal {
+        Submit::Unavailable(unavailable) => CheckpointError::NotReplaced(unavailable.into()),
+        Submit::Halted(halted) => CheckpointError::Unconfirmed(halted.into()),
+        Submit::Stale => CheckpointError::NotReplaced(io::Error::other("a compaction is never stale")),
+    }
+}
+
+/// Hands `encoded` to `directory`'s writer with `submit`: nothing new when
+/// unchanged, else one patch line, else (when `compact`, with no base yet,
+/// once the log outgrows the snapshot, or when the disk lost the base) a
+/// compaction. The base advances here, under the caller's lock, so the next
+/// save diffs against this one whether or not it is durable yet.
+fn stage<T>(
+    directory: &Path,
+    encoded: Encoded,
+    compact: bool,
+    submit: fn(&Writer, Option<Record>) -> Result<T, Submit>,
+) -> Result<T, CheckpointError> {
     let mut all = published().lock().unwrap_or_else(PoisonError::into_inner);
-    // `None`: compact; `Some(None)`: nothing changed; `Some(Some(patch))`: append.
-    let step = all.get(directory).filter(|_| !compact).and_then(|current| {
-        let base = current.base.as_ref()?;
-        match snapshot::diff(base, &encoded) {
-            Some(patch) if current.log_bytes + patch.len() >= base.bytes().len().max(LOG_MINIMUM) => None,
-            patch => Some(patch),
-        }
-    });
-    match step {
-        Some(None) => Ok(()),
-        Some(Some(patch)) => {
-            let current = all.get_mut(directory).expect("a base was found");
-            let line = snapshot::commit(&patch);
-            if let Err(error) = current.log.append(&line) {
-                let poisoned = current.log.poisoned();
-                // The next save starts over from a compaction.
-                all.remove(directory);
-                return Err(if poisoned {
-                    CheckpointError::Unconfirmed(error)
-                } else {
-                    CheckpointError::NotReplaced(error)
-                });
+    if !compact
+        && let Some(current) = all.get_mut(directory)
+        && let Some(base) = &current.base
+    {
+        let patch = snapshot::diff(base, &encoded);
+        let outgrown = patch
+            .as_ref()
+            .is_some_and(|patch| current.log_bytes + patch.len() >= base.bytes().len().max(LOG_MINIMUM));
+        if !outgrown {
+            let line = patch.map(|patch| snapshot::commit(&patch));
+            let bytes = line.as_ref().map_or(0, |line| line.len() + 1);
+            match submit(&current.writer, line.map(Record::Line)) {
+                Ok(staged) => {
+                    current.log_bytes += bytes;
+                    current.base = Some(encoded);
+                    return Ok(staged);
+                }
+                Err(Submit::Stale) => {}
+                Err(refusal) => return Err(refused(refusal)),
             }
-            current.log_bytes += line.len() + 1;
-            current.base = Some(encoded);
-            Ok(())
         }
-        None => {
-            // Compaction: the full snapshot, then an empty log naming it. A
-            // crash between the two leaves the old log, whose header names the
-            // old snapshot, so it is ignored: the new snapshot contains it.
-            let previous = all.remove(directory);
-            let nonce = snapshot::nonce();
-            let schema = serde_json::to_value(schema()).expect("schemas serialize");
-            write_checkpoint(directory, &snapshot::snapshot(&encoded, &nonce, &schema))?;
-            // The snapshot is durable; failing to start its log only costs the
-            // next save another compaction.
-            let log = previous.map_or_else(|| FileJournal::open(&directory.join(LOG)), |p| Ok(p.log));
-            let header = snapshot::header(&nonce, &schema);
-            if let Ok(mut log) = log
-                && log.truncate(0).and_then(|()| log.append(&header)).is_ok()
-            {
-                all.insert(
-                    directory.to_owned(),
-                    Published {
-                        log,
-                        log_bytes: header.len() + 1,
-                        base: Some(encoded),
-                    },
-                );
+    }
+    // Compaction: the full snapshot, then an empty log naming it. A crash
+    // between the two leaves the old log, whose header names the old
+    // snapshot, so it is ignored: the new snapshot contains it.
+    let nonce = snapshot::nonce();
+    let schema = serde_json::to_value(schema()).expect("schemas serialize");
+    let header = snapshot::header(&nonce, &schema);
+    let log_bytes = header.len() + 1;
+    let record = Record::Compact {
+        snapshot: snapshot::snapshot(&encoded, &nonce, &schema),
+        header,
+    };
+    let current = match all.entry(directory.to_owned()) {
+        Entry::Occupied(current) => current.into_mut(),
+        Entry::Vacant(vacant) => vacant.insert(Published {
+            writer: Writer::new(Files::new(directory, None), writer::retry_then_degrade),
+            log_bytes: 0,
+            base: None,
+        }),
+    };
+    let staged = submit(&current.writer, Some(record)).map_err(refused)?;
+    current.log_bytes = log_bytes;
+    current.base = Some(encoded);
+    Ok(staged)
+}
+
+/// The files a writer owns: `state.json`, replaced whole by a compaction, and
+/// `state.log`, appended to in between.
+struct Files {
+    directory: PathBuf,
+    log: Option<FileJournal>,
+    /// The header the log must restart with before its next line, when a
+    /// compaction could not restart it.
+    header: Option<Vec<u8>>,
+}
+impl Files {
+    fn new(directory: &Path, log: Option<FileJournal>) -> Self {
+        Self {
+            directory: directory.to_owned(),
+            log,
+            header: None,
+        }
+    }
+    /// The log, opened and restarted first where an earlier step failed.
+    fn log(&mut self) -> io::Result<&mut FileJournal> {
+        // Behind a new snapshot nothing in the log matters: a fresh handle
+        // repairs a tail a failed restart left unknown. The old handle goes
+        // first, or the reopen would wait for its lock.
+        if self.header.is_some() && self.log.as_ref().is_some_and(FileJournal::poisoned) {
+            self.log = None;
+        }
+        let log = match self.log.take() {
+            Some(log) => log,
+            None => FileJournal::open(&self.directory.join(LOG))?,
+        };
+        let log = self.log.insert(log);
+        if let Some(header) = &self.header {
+            log.truncate(0).and_then(|()| log.append(header))?;
+            self.header = None;
+        }
+        Ok(log)
+    }
+}
+impl Sink for Files {
+    fn append(&mut self, lines: &[&[u8]]) -> Result<(), CheckpointError> {
+        let log = self.log().map_err(CheckpointError::NotReplaced)?;
+        log.append_batch(lines).map(drop).map_err(|error| {
+            if log.poisoned() {
+                CheckpointError::Unconfirmed(error)
+            } else {
+                CheckpointError::NotReplaced(error)
             }
-            Ok(())
-        }
+        })
+    }
+    fn compact(&mut self, snapshot: &[u8], header: &[u8]) -> Result<Log, CheckpointError> {
+        write_checkpoint(&self.directory, snapshot)?;
+        // The snapshot is durable; a log that cannot restart only costs the
+        // next save another compaction (the writer says so on stderr).
+        self.header = Some(header.to_vec());
+        Ok(self.log().map_or_else(Log::Broken, |_| Log::Restarted))
+    }
+    /// A small synced file beside the state (a full disk refuses it), then the
+    /// log, restarted if a compaction left that undone.
+    fn probe(&mut self) -> io::Result<()> {
+        let path = self.directory.join("state.probe");
+        let written = fs::File::create(&path).and_then(|mut file| {
+            file.write_all(&[0; 4096])?;
+            file.sync_all()
+        });
+        let _ = fs::remove_file(&path);
+        written.and_then(|()| self.log().map(drop))
     }
 }
 fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> Result<(), CheckpointError> {
