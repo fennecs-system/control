@@ -1,6 +1,7 @@
 use super::*;
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
+mod crash;
 mod log;
 mod profiling;
 
@@ -435,7 +436,7 @@ fn profile_checkpoint_by_state_size() {
             (megabytes << 20) * 9 / 10 <= size && size <= (megabytes << 20) * 3 / 2,
             "fixture is {size} bytes"
         );
-        let state = Arc::new(Mutex::new(state));
+        let state = crate::store::Store::new(state);
         for loaded in [false, true] {
             let mut background = Background(Arc::new(AtomicBool::new(false)), Vec::new());
             let syncs = Arc::new(AtomicU64::new(0));
@@ -465,7 +466,7 @@ fn profile_checkpoint_by_state_size() {
                 background.1.push(std::thread::spawn(move || {
                     while !stop.load(Ordering::Relaxed) {
                         let started = Instant::now();
-                        drop(state.lock().unwrap());
+                        drop(state.guard().unwrap());
                         waits.lock().unwrap().push(started.elapsed());
                         std::thread::sleep(Duration::from_millis(1));
                     }
@@ -474,7 +475,7 @@ fn profile_checkpoint_by_state_size() {
             let before = syncs.load(Ordering::Relaxed);
             let (mut serialize, mut held) = (Vec::new(), Vec::new());
             for _ in 0..7 {
-                let guard = state.lock().unwrap();
+                let guard = state.guard().unwrap();
                 let started = Instant::now();
                 let data = serde_json::to_vec(&*guard).unwrap();
                 serialize.push(started.elapsed());

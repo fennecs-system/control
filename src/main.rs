@@ -671,6 +671,15 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         read_response(&mut stream, &state, &graveyard::NEXT_PAGE, page);
         return;
     }
+    if lens_library::http(
+        &mut stream,
+        &state,
+        method,
+        path,
+        &data[header_end..header_end + length],
+    ) {
+        return;
+    }
     state_response(&mut stream, &state, |mut stream, state| {
         let lens = lens_ui::selected(&state.lens_library, &header, query.get("lens").map(String::as_str));
         if method == "POST" && path == "/lens" {
@@ -720,14 +729,7 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         ) {
             return;
         }
-        if lens_library::handle(
-            &mut stream,
-            state,
-            method,
-            path,
-            &query,
-            &data[header_end..header_end + length],
-        ) {
+        if lens_library::handle(&mut stream, state, method, path, &query) {
             return;
         }
         if knowledge::handle(

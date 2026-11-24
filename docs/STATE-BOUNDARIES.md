@@ -121,10 +121,41 @@ Fault tests inject directory-sync failure and byte mismatches, and check
 shutdown, 503 and poison fencing in a child process. They are filesystem fault
 injections, not power-loss simulations.
 
+One `control_journal::writer::Writer` per state directory owns `state.json`
+and `state.log`. A save encodes and diffs under the state mutex, advances the
+diff base, queues the record and gets a ticket. Waiting on it, a caller that
+finds nobody writing becomes the leader and writes everything queued so far on
+its own thread, with one write and one sync (a compaction contains the lines
+queued before it); callers arriving meanwhile are written by the next leader.
+There is no writer thread. The bytes on disk are those
+the synchronous path wrote (`storage::tests::log` pins them). `storage::save`
+waits for its ticket under the mutex, so its callers see no change.
+`storage::submit` returns before durability for callers that release the
+mutex first and then wait; `POST /dna/save` is the only one so far.
+
+A failed save is an error, not a reason to stop. The policy is one function
+(`writer::retry_then_degrade`): a write that leaves the files intact
+(`NotReplaced`: a full disk, an I/O error on append) is retried twice within
+about 1.5 seconds, then the writer is degraded (`writer::Health::Degraded`,
+read with `storage::health`). While degraded, new saves are refused with
+"storage unavailable: <cause>; not saved": `storage::save` refuses before its
+archive step, but its callers have already changed memory and roll back as
+for any `NotReplaced`; `POST /dna/save` checks before applying the edit.
+Reads go on. A save whose caller still waits under the mutex is refused and
+rolled back rather than kept; a save already visible to others
+(`storage::submit`) stays queued, its caller is told it is not saved yet, and
+the writer keeps trying with backoff (at most 5 seconds apart) for as long as
+it takes, writing queued saves in order once the disk takes writes again. The
+first save after a refusal compacts. Only an unconfirmed write (a rename or
+directory sync failed, or a failed append could not be rolled back) halts the
+writer: every later save is refused and its waiters stop Control, as before.
+If a compaction's snapshot is durable but its log cannot restart, the writer
+says so on stderr and the next save compacts again.
+
 ## Limits and next steps
 
-Persistence is synchronous and runs under the write lock. Before releasing the
-lock during persistence, add durable intent and typed effect identity carrying
+Most saves still wait for durability under the write lock. Before more callers
+release the lock before waiting, add durable intent and typed effect identity carrying
 source generation and target revisions, revalidate authority and versions on
 completion, and reconcile unknown outcomes. A plan from these operations cannot
 be kept across another writer or an await: its rollback positions are only safe
