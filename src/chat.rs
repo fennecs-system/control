@@ -1553,7 +1553,8 @@ pub(crate) fn chat_id(arguments: &Value) -> Result<&str, &'static str> {
         .filter(|s| valid_id(s))
         .ok_or("Invalid chat ID.")
 }
-fn fixed_tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
+/// Every chat tool but `control.chat.send`: none queues work.
+pub(crate) fn fixed_tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
     let id = || chat_id(arguments);
     match name {
         "control.chats.list" => Ok(list(state)),

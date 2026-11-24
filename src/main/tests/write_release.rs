@@ -254,6 +254,7 @@ fn a_reply_that_showed_a_pending_change_waits_until_it_is_durable() {
         quick,
     );
     let replied = AtomicBool::new(false);
+    let replied_gated = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let sender = scope
             .spawn(|| session_http::send_commit(&store, &id, "", None, &message("Seen early"), stage(&writer), || {}));
@@ -271,13 +272,22 @@ fn a_reply_that_showed_a_pending_change_waits_until_it_is_durable() {
             replied.store(true, Ordering::SeqCst);
             String::from_utf8(reply).unwrap()
         });
+        // Routes that read state their own way (MCP, bots, ports, ...) answer
+        // through a gated stream, which waits before its first byte.
+        let gated = scope.spawn(|| {
+            let mut reply = Vec::new();
+            std::io::Write::write_all(&mut crate::store::Gated::new(&mut reply, &store), b"ok").unwrap();
+            replied_gated.store(true, Ordering::SeqCst);
+        });
         std::thread::sleep(Duration::from_millis(50));
         assert!(
             !replied.load(Ordering::SeqCst),
             "the reply waits for the change it showed"
         );
+        assert!(!replied_gated.load(Ordering::SeqCst), "the gated reply waits too");
         open.send(()).unwrap();
         assert!(reader.join().unwrap().contains("Seen early"));
+        gated.join().unwrap();
         assert!(matches!(sender.join().unwrap(), Ok(Commit::Saved(_))));
     });
     // Nothing in flight: a reply has nothing to wait for.

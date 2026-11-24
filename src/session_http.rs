@@ -462,12 +462,9 @@ impl control_mcp::Tools for Operator<'_> {
                 Some(crate::tool_registry::Route::Package) => {
                     Err("Package tools are served by the HTTP MCP endpoint.".into())
                 }
-                // Only `control.chat.send` queues work, and it is a checkpointed
-                // tool (`change`): these have nothing to release.
-                _ => chat::tool_queued(state, name, arguments, crate::store::legacy_tx()).map(|(value, effects)| {
-                    effects.forgo();
-                    value
-                }),
+                // `control.chat.send`, the one tool that queues work, is a
+                // checkpointed tool (`change`); these read or change in place.
+                _ => chat::fixed_tool(state, name, arguments).map_err(Into::into),
             }
         };
         match result {

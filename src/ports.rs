@@ -805,11 +805,11 @@ pub(crate) fn overview(ports: &[Port], decisions: &[crate::auto_approval::Record
         })
         .collect()
 }
-pub fn http(stream: &mut TcpStream, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
+pub fn http(stream: &mut impl Write, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     http_with_save(stream, shared, method, path, body, crate::storage::save)
 }
 pub(crate) fn http_with_save(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     shared: &Store,
     method: &str,
     path: &str,

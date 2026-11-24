@@ -538,8 +538,10 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         );
         return;
     }
+    // Routes below read state their own way: replies wait for released changes.
+    let mut gated = store::Gated::new(&mut stream, &state);
     if compaction::http(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -548,53 +550,29 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     ) {
         return;
     }
-    if providers::live_http(&mut stream, &state, method, path) {
+    if providers::live_http(&mut gated, &state, method, path) {
         return;
     }
-    if ports::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if ports::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if bots::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if bots::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if channel_settings::http(&mut stream, method, path, &data[header_end..header_end + length]) {
+    if channel_settings::http(&mut gated, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if permissions_page::http(&mut stream, method, path, &data[header_end..header_end + length]) {
+    if permissions_page::http(&mut gated, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if services::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if services::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if web_access::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if web_access::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
     if mcp_http::handle(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -603,17 +581,11 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     ) {
         return;
     }
-    if github::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if github::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
     if projects::http(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,

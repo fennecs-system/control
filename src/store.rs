@@ -127,9 +127,11 @@ impl Store {
         self.0.state.lock().map_err(|_| Unavailable)
     }
 
-    /// The newest released change, if it is not durable yet. Called with
-    /// the state lock held.
-    fn pending(&self) -> Seen {
+    /// The newest released change, if it is not durable yet. With the state
+    /// lock held it covers exactly what the caller saw; without it, a later
+    /// mark, which covers at least that (marks are set before the release
+    /// and become durable in order).
+    pub(crate) fn pending(&self) -> Seen {
         let seen = self.0.seen.lock().unwrap_or_else(PoisonError::into_inner);
         Seen(seen.as_ref().filter(|mark| !mark.durable()).cloned())
     }
@@ -245,5 +247,36 @@ pub(crate) fn legacy_tx() -> Tx {
 pub(crate) fn perform(released: Released) {
     if released.wake {
         crate::worker::wake();
+    }
+}
+
+/// A reply stream for routes that read state their own way (MCP, bots,
+/// ports, services, projects, …) and so take no `Seen` with their view.
+/// Before its first byte it waits for the newest released change, which
+/// covers everything the handler could have read.
+pub(crate) struct Gated<'a, W> {
+    inner: W,
+    store: &'a Store,
+    open: bool,
+}
+impl<'a, W: std::io::Write> Gated<'a, W> {
+    pub(crate) fn new(inner: W, store: &'a Store) -> Self {
+        Self {
+            inner,
+            store,
+            open: false,
+        }
+    }
+}
+impl<W: std::io::Write> std::io::Write for Gated<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if !self.open {
+            self.open = true;
+            self.store.pending().wait();
+        }
+        self.inner.write(bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }
