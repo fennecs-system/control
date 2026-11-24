@@ -237,7 +237,7 @@ fn render_with_content(state: &State, view: &str, lens: &str, channel: &str, sup
         "persona-page" => channel.to_owned(),
         "personas" => personas::render(state, "lead", None, None),
         "agents" => format!("<div class='section-heading'><div><span class='eyebrow'>EXECUTION / SIMULATED</span><h2>Agent sessions</h2></div></div><p class='muted'>Spawn a local demonstration session. Remote execution is not connected.</p>{}<form method='post' action='/spawn'><label>Session objective<input required name='objective' placeholder='Map the knowledge graph…' maxlength='300'></label><label>Provider<select name='provider'><option>Anthropic</option><option>OpenAI</option><option>Self-hosted</option></select></label><button class='primary'>＋ Spawn demo agent</button></form>", state.agents.iter().enumerate().map(|(i,a)| format!("<div class='session'><span class='dot'></span><div><strong>agent / {:03}</strong><p>{}</p></div><span class='tag'>simulated</span></div>", i+1, escape(a))).collect::<String>()),
-        "nodes" => "<span class='eyebrow'>NODES · PLANNED</span><h2>Nodes</h2><p class='muted'>Remote nodes are not connected.</p><div class='node-grid'><article><span class='node-icon'>⌘</span><h3>control.local</h3><p>This laptop</p><span class='tag'>local</span></article><article><span class='node-icon'>◇</span><h3>forge.tailnet</h3><p>Development · planned</p><span class='tag'>not connected</span></article><article><span class='node-icon'>◈</span><h3>archive.tailnet</h3><p>Knowledge · planned</p><span class='tag'>not connected</span></article></div>".into(),
+        "nodes" => NODES.into(),
         // Unknown views (including the retired Overview) show the Usage page.
         _ => usage::render(state),
     });
@@ -310,6 +310,163 @@ const BOTS_PAGE: Read<BotsPage, (bots::Page, String)> = Read {
         body: web_assets::with_client(&shell("agents", &page.render())),
         extra: cookie,
         policy: control_http::Policy::Client,
+    },
+};
+/// `GET /` other than the Bots page: an operator page, or a redirect from an
+/// older address. Served by [`OPERATOR_PAGES`].
+struct OperatorPage {
+    query: HashMap<String, String>,
+    /// The lens the request names (`lens_ui::requested`).
+    lens: String,
+    /// The UTC day that ends the Usage page's activity grid.
+    today: u64,
+    /// A page that reads files and no state, rendered before locking.
+    unlocked: Option<String>,
+}
+impl OperatorPage {
+    fn of(method: &str, path: &str, query: &HashMap<String, String>, header: &str) -> Option<Self> {
+        (method == "GET" && path == "/").then(|| Self {
+            query: query.clone(),
+            lens: lens_ui::requested(header, query.get("lens").map(String::as_str)).to_owned(),
+            today: usage::today(),
+            unlocked: match query.get("view").map(String::as_str) {
+                Some("discord-access") => Some(runtime::discord_access()),
+                Some("integrations") => Some(runtime::integrations()),
+                _ => None,
+            },
+        })
+    }
+}
+enum Operator {
+    /// `/?view=evolution` predates `/dms?improve=1`.
+    Improve,
+    /// An older address (`legacy_session_location`).
+    Moved { location: String, cookie: String },
+    Page {
+        view: String,
+        content: Box<Content>,
+        cookie: String,
+    },
+}
+/// An operator page's content, copied out of state.
+enum Content {
+    Usage {
+        page: usage::Page,
+        today: u64,
+    },
+    /// The permissions part is still rendered while state is read.
+    Authority(String, collective::Page),
+    Collective(collective::Page),
+    /// Still rendered while state is read.
+    Providers(String),
+    Tools(tool_catalog::Search),
+    /// Still rendered while state is read.
+    Knowledge(String),
+    Rooms(rooms::Page),
+    /// Content that reads no state.
+    Fixed(String),
+}
+impl Content {
+    fn render(self) -> String {
+        match self {
+            Self::Usage { page, today } => page.render(today),
+            Self::Authority(permissions, requests) => format!("{permissions}{}", requests.render()),
+            Self::Collective(page) => page.render(),
+            Self::Tools(search) => search.render(),
+            Self::Rooms(page) => page.render(),
+            Self::Providers(html) | Self::Knowledge(html) | Self::Fixed(html) => html,
+        }
+    }
+}
+const NODES: &str = "<span class='eyebrow'>NODES · PLANNED</span><h2>Nodes</h2><p class='muted'>Remote nodes are not connected.</p><div class='node-grid'><article><span class='node-icon'>⌘</span><h3>control.local</h3><p>This laptop</p><span class='tag'>local</span></article><article><span class='node-icon'>◇</span><h3>forge.tailnet</h3><p>Development · planned</p><span class='tag'>not connected</span></article><article><span class='node-icon'>◈</span><h3>archive.tailnet</h3><p>Knowledge · planned</p><span class='tag'>not connected</span></article></div>";
+const OPERATOR_PAGES: Read<OperatorPage, Operator> = Read {
+    view: |state,
+           OperatorPage {
+               query,
+               lens,
+               today,
+               unlocked,
+           }| {
+        if query.get("view").is_some_and(|view| view == "evolution") {
+            return Operator::Improve;
+        }
+        let cookie = if query.contains_key("lens") {
+            lens_ui::cookie(lens_ui::known(&state.lens_library, &lens))
+        } else {
+            String::new()
+        };
+        if let Some(location) = legacy_session_location(state, &query) {
+            return Operator::Moved { location, cookie };
+        }
+        // Query values are untrusted, so internal HTML-carrying views fall back to Usage.
+        let view = match query.get("view").map(String::as_str) {
+            Some("manage") => "nodes",
+            Some(view) if !INTERNAL_VIEWS.contains(&view) => view,
+            _ => "monitor",
+        };
+        let channel = query
+            .get(if view == "tools" { "q" } else { "channel" })
+            .map(String::as_str)
+            .unwrap_or("general");
+        let content = match view {
+            "authority" => Content::Authority(permissions_page::render(state), state.collective.access()),
+            "knowledge-review" => Content::Collective(state.collective.review()),
+            "providers" => Content::Providers(providers::render(&state.runtime)),
+            "tools" => Content::Tools(tool_catalog::Search::of(
+                state,
+                if channel == "general" { "" } else { channel },
+            )),
+            "editor" | "knowledge" => Content::Knowledge(knowledge::render(
+                &state.documents,
+                &state.collective,
+                if view == "editor" { "scratchpad" } else { "" },
+                None,
+            )),
+            "rooms" => Content::Rooms(rooms::Page::of(state, channel)),
+            "nodes" => Content::Fixed(NODES.to_owned()),
+            "discord-access" | "integrations" => Content::Fixed(unlocked.unwrap_or_default()),
+            _ => Content::Usage {
+                page: usage::Page::of(state),
+                today,
+            },
+        };
+        Operator::Page {
+            view: view.to_owned(),
+            content: Box::new(content),
+            cookie,
+        }
+    },
+    render: |operator| match operator {
+        Operator::Improve => Reply {
+            status: "303 See Other",
+            mime: "text/plain",
+            body: String::new(),
+            extra: "Location: /dms?improve=1\r\n".to_owned(),
+            policy: control_http::Policy::Embedded,
+        },
+        Operator::Moved { location, cookie } => Reply {
+            status: "303 See Other",
+            mime: "text/plain",
+            body: String::new(),
+            extra: format!("Location: {location}\r\n{cookie}"),
+            policy: control_http::Policy::Page,
+        },
+        Operator::Page { view, content, cookie } => {
+            let page = shell(&view, &content.render());
+            // The Models page's client refreshes its live server statistics.
+            let (body, policy) = if view == "providers" {
+                (web_assets::with_client(&page), control_http::Policy::Client)
+            } else {
+                (page, control_http::Policy::Page)
+            };
+            Reply {
+                status: "200 OK",
+                mime: "text/html; charset=utf-8",
+                body,
+                extra: cookie,
+                policy,
+            }
+        }
     },
 };
 /// `GET /` with its response policy. The Bots page's process tree is a
@@ -669,6 +826,10 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     if method == "GET" && path == "/bots/graveyard" {
         let page = graveyard::Query::from(&query);
         read_response(&mut stream, &state, &graveyard::NEXT_PAGE, page);
+        return;
+    }
+    if let Some(page) = OperatorPage::of(method, path, &query, &header) {
+        read_response(&mut stream, &state, &OPERATOR_PAGES, page);
         return;
     }
     if lens_library::http(

@@ -90,100 +90,149 @@ pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'stat
     }
 }
 pub fn render(state: &State, room: &str) -> String {
-    let room = if valid(room) { room } else { "general" };
-    let label = escape(&address::label(state, room));
-    let channel = address::Address::parse(room).unwrap().channel;
-    let mut html = String::from(
-        "<div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'><ul class='room-channels'>",
-    );
-    let rooms = names(state);
-    for channel in NAMES {
-        let current = if channel == room { " aria-current='page'" } else { "" };
-        html.push_str(&format!("<li class='room-channel'><a href='/?view=rooms&amp;channel={channel}'{current}><span class='room-name'>#{channel}</span></a>"));
-        let threads = rooms.iter().filter_map(|name| {
-            address::Address::parse(name)
-                .filter(|address| address.channel == channel)
-                .and_then(|address| address.thread.map(|thread| (name, thread)))
-        });
-        let mut has_threads = false;
-        for (name, thread) in threads {
-            if !has_threads {
-                html.push_str(&format!("<ul class='room-threads' aria-label='Threads in #{channel}'>"));
-                has_threads = true;
+    Page::of(state, room).render()
+}
+/// What the Rooms page shows for one room, copied out of state so it renders
+/// after the state lock is released.
+pub(crate) struct Page {
+    room: String,
+    label: String,
+    /// Every task thread, in menu order.
+    threads: Vec<Thread>,
+    /// The room's posts and linked DMs, as `control.room.read` answers.
+    read: Value,
+    /// DMs in the room with a turn under way or listening: (id, name, status).
+    active: Vec<(String, String, String)>,
+    claims: claims::Panel,
+}
+/// A task thread in the room menu.
+struct Thread {
+    room: String,
+    channel: String,
+    /// The thread's DM by name.
+    title: String,
+}
+impl Page {
+    pub(crate) fn of(state: &State, room: &str) -> Self {
+        let room = if valid(room) { room } else { "general" };
+        let threads = names(state)
+            .into_iter()
+            .filter_map(|name| {
+                let address = address::Address::parse(&name)?;
+                let (channel, title) = (
+                    address.channel.to_owned(),
+                    crate::callsigns::name_or_id(&state.chats, address.thread?).into_owned(),
+                );
+                Some(Thread {
+                    room: name,
+                    channel,
+                    title,
+                })
+            })
+            .collect();
+        let mut activity = std::collections::HashMap::new();
+        for run in state.runtime.runs.iter().rev().filter(|run| run.status.is_proceeding()) {
+            if let Some(chat) = run.chat_id.as_deref() {
+                activity.entry(chat).or_insert(run.status.as_str());
             }
-            let title = crate::callsigns::name_or_id(&state.chats, thread);
-            let current = if name == room { " aria-current='page'" } else { "" };
-            html.push_str(&format!("<li><a href='/?view=rooms&amp;channel={name}'{current} title='{}'><span class='room-thread-icon' aria-hidden='true'>↳</span><span class='room-name'>{}</span></a></li>", escape(&format!("#{channel} · {title}")), escape(&title)));
         }
-        if has_threads {
-            html.push_str("</ul>");
+        let active = state
+            .chats
+            .iter()
+            .rev()
+            .filter(|chat| chat.room.as_deref() == Some(room))
+            .filter_map(|chat| {
+                let status = activity
+                    .get(chat.id.as_str())
+                    .copied()
+                    .or_else(|| listening(state, &chat.id).then_some("listening"))?;
+                Some((
+                    chat.id.clone(),
+                    crate::callsigns::name_or_id(&state.chats, &chat.id).into_owned(),
+                    status.to_owned(),
+                ))
+            })
+            .collect();
+        Self {
+            room: room.to_owned(),
+            label: address::label(state, room),
+            threads,
+            read: read(state, room),
+            active,
+            claims: claims::Panel::of(state, room),
         }
-        html.push_str("</li>");
     }
-    html.push_str(&format!("</ul></nav></aside><section class='room-conversation' aria-label='{label}'><div class='room-heading'><h2 title='{label}'>{label}</h2><p class='muted'>Shared updates from people and agents in this room or task thread.</p></div><div class='room-feed transcript' role='region' aria-label='Room messages' tabindex='0'>"));
-    let data = read(state, room);
-    if data["posts"].as_array().unwrap().is_empty() {
-        html.push_str(
-            "<div class='conversation-empty'><p class='muted'>No updates yet. Start the conversation.</p></div>",
+    pub(crate) fn render(&self) -> String {
+        let room = self.room.as_str();
+        let label = escape(&self.label);
+        let channel = address::Address::parse(room).unwrap().channel;
+        let mut html = String::from(
+            "<div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'><ul class='room-channels'>",
         );
-    }
-    for post in data["posts"].as_array().unwrap().iter().rev() {
-        html.push_str(&format!(
-            "<article class='assistant-message'><span class='eyebrow'>{}</span><p class='preserve'>{}</p>",
-            escape(post["author"].as_str().unwrap()),
-            escape(post["text"].as_str().unwrap())
-        ));
-        if let Some(id) = post["chat"].as_str() {
-            html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(id)));
+        for channel in NAMES {
+            let current = if channel == room { " aria-current='page'" } else { "" };
+            html.push_str(&format!("<li class='room-channel'><a href='/?view=rooms&amp;channel={channel}'{current}><span class='room-name'>#{channel}</span></a>"));
+            let mut has_threads = false;
+            for thread in self.threads.iter().filter(|thread| thread.channel == channel) {
+                if !has_threads {
+                    html.push_str(&format!("<ul class='room-threads' aria-label='Threads in #{channel}'>"));
+                    has_threads = true;
+                }
+                let (name, title) = (&thread.room, &thread.title);
+                let current = if name == room { " aria-current='page'" } else { "" };
+                html.push_str(&format!("<li><a href='/?view=rooms&amp;channel={name}'{current} title='{}'><span class='room-thread-icon' aria-hidden='true'>↳</span><span class='room-name'>{}</span></a></li>", escape(&format!("#{channel} · {title}")), escape(title)));
+            }
+            if has_threads {
+                html.push_str("</ul>");
+            }
+            html.push_str("</li>");
         }
-        html.push_str("</article>");
-    }
-    html.push_str(&format!("</div><form class='conversation-composer' method='post' action='/room'><input type='hidden' name='channel' value='{room}'><textarea name='message' aria-label='Shared update' placeholder='Message {label}…' required maxlength='2000' rows='3'></textarea><div class='composer-footer'><span class='muted'>Shared update</span><button class='send-message' aria-label='Post update'>↑</button></div></form></section><aside class='room-details' aria-label='Room details'><h2>Active participants</h2><ul class='room-participants'>"));
-    let mut active = std::collections::HashSet::new();
-    let mut activity = std::collections::HashMap::new();
-    for run in state.runtime.runs.iter().rev().filter(|run| run.status.is_proceeding()) {
-        if let Some(chat) = run.chat_id.as_deref() {
-            activity.entry(chat).or_insert(run.status.as_str());
+        html.push_str(&format!("</ul></nav></aside><section class='room-conversation' aria-label='{label}'><div class='room-heading'><h2 title='{label}'>{label}</h2><p class='muted'>Shared updates from people and agents in this room or task thread.</p></div><div class='room-feed transcript' role='region' aria-label='Room messages' tabindex='0'>"));
+        let data = &self.read;
+        if data["posts"].as_array().unwrap().is_empty() {
+            html.push_str(
+                "<div class='conversation-empty'><p class='muted'>No updates yet. Start the conversation.</p></div>",
+            );
         }
-    }
-    for chat in state
-        .chats
-        .iter()
-        .rev()
-        .filter(|chat| chat.room.as_deref() == Some(room))
-    {
-        let status = activity
-            .get(chat.id.as_str())
-            .copied()
-            .or_else(|| listening(state, &chat.id).then_some("listening"));
-        if let Some(status) = status {
-            active.insert(chat.id.as_str());
-            html.push_str(&format!("<li><a href='/dm/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(&chat.id), escape(&crate::callsigns::name_or_id(&state.chats, &chat.id))));
-        }
-    }
-    if active.is_empty() {
-        html.push_str("<li class='muted'>No active participants.</li>");
-    }
-    html.push_str("</ul><h2>Linked DMs</h2><nav class='room-links' aria-label='Linked DMs'>");
-    let mut linked = 0;
-    for chat in data["chats"].as_array().unwrap() {
-        let id = chat["id"].as_str().unwrap();
-        if !active.contains(id) {
-            linked += 1;
+        for post in data["posts"].as_array().unwrap().iter().rev() {
             html.push_str(&format!(
-                "<a href='/dm/{}'>{} ↗</a>",
-                escape(id),
-                escape(chat["title"].as_str().unwrap())
+                "<article class='assistant-message'><span class='eyebrow'>{}</span><p class='preserve'>{}</p>",
+                escape(post["author"].as_str().unwrap()),
+                escape(post["text"].as_str().unwrap())
             ));
+            if let Some(id) = post["chat"].as_str() {
+                html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(id)));
+            }
+            html.push_str("</article>");
         }
+        html.push_str(&format!("</div><form class='conversation-composer' method='post' action='/room'><input type='hidden' name='channel' value='{room}'><textarea name='message' aria-label='Shared update' placeholder='Message {label}…' required maxlength='2000' rows='3'></textarea><div class='composer-footer'><span class='muted'>Shared update</span><button class='send-message' aria-label='Post update'>↑</button></div></form></section><aside class='room-details' aria-label='Room details'><h2>Active participants</h2><ul class='room-participants'>"));
+        for (id, name, status) in &self.active {
+            html.push_str(&format!("<li><a href='/dm/{}'><span class='dot' aria-hidden='true'></span><span>{}<small>{status}</small></span></a></li>", escape(id), escape(name)));
+        }
+        if self.active.is_empty() {
+            html.push_str("<li class='muted'>No active participants.</li>");
+        }
+        html.push_str("</ul><h2>Linked DMs</h2><nav class='room-links' aria-label='Linked DMs'>");
+        let mut linked = 0;
+        for chat in data["chats"].as_array().unwrap() {
+            let id = chat["id"].as_str().unwrap();
+            if !self.active.iter().any(|(active, _, _)| active == id) {
+                linked += 1;
+                html.push_str(&format!(
+                    "<a href='/dm/{}'>{} ↗</a>",
+                    escape(id),
+                    escape(chat["title"].as_str().unwrap())
+                ));
+            }
+        }
+        if linked == 0 {
+            html.push_str("<p class='muted'>No other linked DMs.</p>");
+        }
+        html.push_str("</nav>");
+        html.push_str(&self.claims.render(room));
+        html.push_str(&format!("<form class='room-new-chat' method='post' action='/dms'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button>+ {}</button></form></aside></div>", if channel == "general" { "none" } else { channel }, if room == channel { format!("New task in #{channel}") } else { "New DM in this thread".into() }));
+        html
     }
-    if linked == 0 {
-        html.push_str("<p class='muted'>No other linked DMs.</p>");
-    }
-    html.push_str("</nav>");
-    html.push_str(&claims::render(state, room));
-    html.push_str(&format!("<form class='room-new-chat' method='post' action='/dms'><input type='hidden' name='room' value='{room}'><input type='hidden' name='lens' value='{}'><button>+ {}</button></form></aside></div>", if channel == "general" { "none" } else { channel }, if room == channel { format!("New task in #{channel}") } else { "New DM in this thread".into() }));
-    html
 }
 
 /// Room tool schemas for a worker; judges get no notification tools.

@@ -335,70 +335,112 @@ pub fn definition(worker: bool) -> Value {
     })
 }
 pub fn panel(chats: &[crate::chat::Session], id: &str) -> String {
-    let Some(chat) = chats.iter().find(|c| c.id == id) else {
-        return String::new();
-    };
-    let path = chat.project.as_ref().map(|p| p.path.as_str()).unwrap_or("");
-    let approved = chat.project.as_ref().is_some_and(|p| !p.needs_approval());
-    let running = chat
-        .project
-        .as_ref()
-        .filter(|p| p.needs_approval())
-        .and_then(|p| importing(id).filter(|import| import.request == p.request));
-    let mut html = format!(
-        "<details class='project-picker' data-transcript-key='project-{}-{}'{}><summary>{}</summary>",
-        chat.project.as_ref().map(|p| p.request.as_str()).unwrap_or("new"),
-        if approved {
-            "approved"
-        } else if running.is_some() {
-            "importing"
-        } else {
-            "pending"
-        },
-        if chat.project.as_ref().is_some_and(|p| p.needs_approval()) {
-            " open"
-        } else {
-            ""
-        },
-        if approved {
-            "Folder opened"
-        } else if running.is_some() {
-            "Importing folder…"
-        } else {
-            "Open folder"
-        }
-    );
-    if let Some(project) = &chat.project {
-        html.push_str(&format!("<p><code>{}</code></p>", crate::escape(&project.path)));
-        if let Some(import) = &running {
-            // An earlier attempt's error gives way to this attempt's outcome.
-            html.push_str(&format!("<p role='status'>Approved · copying into <code>/workspace/{}</code> · {} {} copied · {} s</p><p class='muted'>The folder opens in this chat when the copy finishes. You can return to the chat; the import continues.</p>",
-                crate::escape(&project.name), import.entries, if import.entries == 1 {"entry"} else {"entries"}, import.elapsed.as_secs()));
-        } else if let Some(error) = &project.error {
-            html.push_str(&format!("<p role='alert'>{}</p>", crate::escape(error)));
-        }
-        if running.is_some() {
-        } else if !project.needs_approval() {
-            html.push_str(
-                "<p class='muted'>Changes stay in this chat’s worktree. The original folder is unchanged.</p>",
-            );
-            if let Some(workspace) = project
-                .head
-                .as_deref()
-                .and_then(|id| crate::runtime::workspace(id).ok())
-            {
-                html.push_str(&format!(
-                    "<p><code>{}</code></p>",
-                    crate::escape(&workspace.display().to_string())
-                ));
+    Panel::of(chats, id).map_or_else(String::new, |panel| panel.render())
+}
+/// What a chat's folder panel shows, copied out of state so it can render
+/// after the state lock is released.
+pub(crate) struct Panel {
+    chat: String,
+    folder: Option<Folder>,
+    /// The approved import of this request that is still copying.
+    running: Option<Importing>,
+}
+/// The folder request a panel shows.
+struct Folder {
+    request: String,
+    path: String,
+    name: String,
+    error: Option<String>,
+    approved: bool,
+    /// Every folder a pending `/open` list opens, as (name, path), when it
+    /// names more than one.
+    list: Vec<(String, String)>,
+    /// An approved folder's worktree.
+    workspace: Option<String>,
+}
+impl Panel {
+    pub(crate) fn of(chats: &[crate::chat::Session], id: &str) -> Option<Self> {
+        let chat = chats.iter().find(|c| c.id == id)?;
+        let project = chat.project.as_ref();
+        Some(Self {
+            chat: id.to_owned(),
+            running: project
+                .filter(|p| p.needs_approval())
+                .and_then(|p| importing(id).filter(|import| import.request == p.request)),
+            folder: project.map(|project| Folder {
+                request: project.request.clone(),
+                path: project.path.clone(),
+                name: project.name.clone(),
+                error: project.error.clone(),
+                approved: !project.needs_approval(),
+                list: if project.also.is_empty() {
+                    Vec::new()
+                } else {
+                    project
+                        .folders()
+                        .map(|(name, path)| (name.to_owned(), path.to_owned()))
+                        .collect()
+                },
+                workspace: project
+                    .head
+                    .as_deref()
+                    .filter(|_| !project.needs_approval())
+                    .and_then(|id| crate::runtime::workspace(id).ok())
+                    .map(|workspace| workspace.display().to_string()),
+            }),
+        })
+    }
+    pub(crate) fn render(&self) -> String {
+        let id = &self.chat;
+        let approved = self.folder.as_ref().is_some_and(|p| p.approved);
+        let running = self.running.as_ref();
+        let mut html = format!(
+            "<details class='project-picker' data-transcript-key='project-{}-{}'{}><summary>{}</summary>",
+            self.folder.as_ref().map(|p| p.request.as_str()).unwrap_or("new"),
+            if approved {
+                "approved"
+            } else if running.is_some() {
+                "importing"
+            } else {
+                "pending"
+            },
+            if self.folder.as_ref().is_some_and(|p| !p.approved) {
+                " open"
+            } else {
+                ""
+            },
+            if approved {
+                "Folder opened"
+            } else if running.is_some() {
+                "Importing folder…"
+            } else {
+                "Open folder"
             }
-        } else {
-            if project.also.is_empty() {
+        );
+        if let Some(project) = &self.folder {
+            html.push_str(&format!("<p><code>{}</code></p>", crate::escape(&project.path)));
+            if let Some(import) = &running {
+                // An earlier attempt's error gives way to this attempt's outcome.
+                html.push_str(&format!("<p role='status'>Approved · copying into <code>/workspace/{}</code> · {} {} copied · {} s</p><p class='muted'>The folder opens in this chat when the copy finishes. You can return to the chat; the import continues.</p>",
+                    crate::escape(&project.name), import.entries, if import.entries == 1 {"entry"} else {"entries"}, import.elapsed.as_secs()));
+            } else if let Some(error) = &project.error {
+                html.push_str(&format!("<p role='alert'>{}</p>", crate::escape(error)));
+            }
+            if running.is_some() {
+            } else if project.approved {
+                html.push_str(
+                    "<p class='muted'>Changes stay in this chat’s worktree. The original folder is unchanged.</p>",
+                );
+                if let Some(workspace) = &project.workspace {
+                    html.push_str(&format!("<p><code>{}</code></p>", crate::escape(workspace)));
+                }
+            } else if project.list.is_empty() {
                 html.push_str(&format!("<p>Open as <code>/workspace/{}</code></p><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust this folder’s code for this chat and allow local previews? Control will copy its files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folder stays unchanged.</p><button class='primary' name='approve' value='yes'>Trust folder and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form><form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' required></label><label>Workspace name<input name='name' value='{}' required></label><button>Change folder</button></form>",crate::escape(&project.name),crate::escape(&project.request),crate::escape(&project.path),crate::escape(&project.name)));
             } else {
                 // A list from one `/open`: one decision for all; changing it is a new /open.
                 let rows = project
-                    .folders()
+                    .list
+                    .iter()
                     .map(|(name, path)| {
                         format!(
                             "<li><code>{}</code> → <code>/workspace/{}</code></li>",
@@ -407,14 +449,14 @@ pub fn panel(chats: &[crate::chat::Session], id: &str) -> String {
                         )
                     })
                     .collect::<String>();
-                html.push_str(&format!("<ul class='project-folders'>{rows}</ul><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust these {} folders’ code for this chat and allow local previews? Control will copy their files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folders stay unchanged.</p><button class='primary' name='approve' value='yes'>Trust folders and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form><p class='muted'>To change the list, dismiss it and use /open again.</p>",crate::escape(&project.request),project.also.len()+1));
+                html.push_str(&format!("<ul class='project-folders'>{rows}</ul><form class='decision-form' method='post' action='/dm/{id}/project' target='_top'><input type='hidden' name='request' value='{}'><p>Trust these {} folders’ code for this chat and allow local previews? Control will copy their files into an isolated worktree. Credentials, generated directories and symlinks are excluded. The original folders stay unchanged.</p><button class='primary' name='approve' value='yes'>Trust folders and open</button><button class='secondary' name='dismiss' value='yes'>Dismiss</button><p role='alert' hidden></p></form><p class='muted'>To change the list, dismiss it and use /open again.</p>",crate::escape(&project.request),project.list.len()));
             }
+        } else {
+            html.push_str(&format!("<form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='' placeholder='/absolute/path' required></label><button>Continue</button></form>"));
         }
-    } else {
-        html.push_str(&format!("<form method='post' action='/dm/{id}/project' target='_top'><label>Folder on this node<input name='path' value='{}' placeholder='/absolute/path' required></label><button>Continue</button></form>",crate::escape(path)));
+        html.push_str("</details>");
+        html
     }
-    html.push_str("</details>");
-    html
 }
 /// The reply an `/open` command shows once its request is dismissed.
 pub(crate) const DISMISSED: &str = "Folder request dismissed.";
