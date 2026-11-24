@@ -1,6 +1,7 @@
 //! Credential-free preview services with loopback-only ingress and no egress.
 //! Each preview has a separate browser hostname; Control cookies are host-only.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, usage::Attempt};
 use control_isolation::{
     Access, Exec, ExecSpec, Isolation, Limits, Logs, MountKind, Network, Observed, Pid1, RunSpec, Size, Stream,
@@ -221,7 +222,7 @@ pub fn stop_resource(isolation: &dyn Isolation, preview: &Preview) -> io::Result
     )
     .map_err(fail)
 }
-pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Result<Value> {
+pub fn start(shared: &Store, run_id: &str, input: Input) -> io::Result<Value> {
     if input.command.trim().is_empty() || input.command.len() > 16000 || input.port == 0 {
         return Err(fail("Expected a server command and container port 1–65535"));
     }
@@ -229,7 +230,7 @@ pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Resu
     let hash = hash.as_ref().iter().map(|b| format!("{b:02x}")).collect::<String>();
     let listener;
     let mut preview = {
-        let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let mut state = shared.guard()?;
         if crate::shutdown::requested() {
             return Err(fail("Control is stopping; no preview was started"));
         }
@@ -293,23 +294,19 @@ pub fn start(shared: &Arc<Mutex<State>>, run_id: &str, input: Input) -> io::Resu
         .canonicalize()?;
     let result = launch(crate::engine::isolation(), &preview, &input.command, &workspace);
     preview.container_id = result.as_ref().ok().cloned();
-    let mut state = match shared.lock() {
-        Ok(state) => state,
-        Err(error) => {
-            drop(error);
-            fence_launch(shared, &preview);
-            return Err(fail("State unavailable; inspect retained preview intent"));
-        }
+    let Ok(checkpoint) = shared.write(|state| {
+        checkpoint_launch(
+            state,
+            run_id,
+            &preview,
+            result.is_ok(),
+            crate::shutdown::requested(),
+            crate::storage::save,
+        )
+    }) else {
+        fence_launch(shared, &preview);
+        return Err(fail("State unavailable; inspect retained preview intent"));
     };
-    let checkpoint = checkpoint_launch(
-        &mut state,
-        run_id,
-        &preview,
-        result.is_ok(),
-        crate::shutdown::requested(),
-        crate::storage::save,
-    );
-    drop(state);
     if let Err(error) = checkpoint {
         fence_launch(shared, &preview);
         return Err(error);
@@ -368,7 +365,7 @@ fn checkpoint_launch(
     Ok(())
 }
 
-fn fence_launch(shared: &Arc<Mutex<State>>, preview: &Preview) {
+fn fence_launch(shared: &Store, preview: &Preview) {
     preview.stopped.store(true, Ordering::Relaxed);
     // Only a verified stop frees the resource slot. Failed cleanup retains intent.
     let status = if preview.container_id.is_some() && stop_resource(crate::engine::isolation(), preview).is_ok() {
@@ -376,16 +373,17 @@ fn fence_launch(shared: &Arc<Mutex<State>>, preview: &Preview) {
     } else {
         PreviewStatus::Failed
     };
-    if let Ok(mut state) = shared.lock()
-        && let Some(record) = state
+    let _ = shared.write(|state| {
+        if let Some(record) = state
             .previews
             .iter_mut()
             .find(|p| p.id == preview.id && Arc::ptr_eq(&p.stopped, &preview.stopped))
-    {
-        record.status = status;
-        record.stopped.store(true, Ordering::Relaxed);
-        let _ = crate::storage::save(&state);
-    }
+        {
+            record.status = status;
+            record.stopped.store(true, Ordering::Relaxed);
+            let _ = crate::storage::save(state);
+        }
+    });
 }
 fn forward(mut stream: TcpStream, preview: &Preview) -> io::Result<()> {
     // macOS inherits the listener's nonblocking flag on accepted sockets.
@@ -480,7 +478,7 @@ fn allowed_header(header: &[u8], url: &str) -> bool {
     }
     hosts == 1
 }
-fn proxy(_shared: Arc<Mutex<State>>, preview: Preview, listener: TcpListener) -> io::Result<()> {
+fn proxy(_shared: Store, preview: Preview, listener: TcpListener) -> io::Result<()> {
     listener.set_nonblocking(true)?;
     std::thread::Builder::new()
         .name("control-preview-proxy".into())
@@ -509,8 +507,8 @@ fn proxy(_shared: Arc<Mutex<State>>, preview: Preview, listener: TcpListener) ->
         })?;
     Ok(())
 }
-pub fn restore(shared: Arc<Mutex<State>>) {
-    let records = shared.lock().map(|s| s.previews.clone()).unwrap_or_default();
+pub fn restore(shared: Store) {
+    let records = shared.read(|s| s.previews.clone()).unwrap_or_default();
     for preview in records.into_iter().filter(|p| p.status == PreviewStatus::Running) {
         if crate::shutdown::requested() {
             break;
@@ -530,42 +528,43 @@ pub fn restore(shared: Arc<Mutex<State>>) {
             let listener = TcpListener::bind(("127.0.0.1", url.port().ok_or_else(|| fail("Missing preview port"))?))?;
             proxy(shared.clone(), preview.clone(), listener)
         })();
-        if result.is_err()
-            && let Ok(mut state) = shared.lock()
-        {
-            if let Some(record) = state.previews.iter_mut().find(|p| {
-                p.id == preview.id && p.status == PreviewStatus::Running && p.container_id == preview.container_id
-            }) {
-                record.status = PreviewStatus::Unavailable;
-                record.stopped.store(true, Ordering::Relaxed);
-            }
-            let _ = crate::storage::save(&state);
+        if result.is_err() {
+            let _ = shared.write(|state| {
+                if let Some(record) = state.previews.iter_mut().find(|p| {
+                    p.id == preview.id && p.status == PreviewStatus::Running && p.container_id == preview.container_id
+                }) {
+                    record.status = PreviewStatus::Unavailable;
+                    record.stopped.store(true, Ordering::Relaxed);
+                }
+                let _ = crate::storage::save(state);
+            });
         }
     }
 }
-pub fn stop(shared: &Arc<Mutex<State>>, chat: &str, id: &str) -> io::Result<()> {
-    let preview = shared
-        .lock()
-        .map_err(|_| fail("State unavailable"))?
-        .previews
-        .iter()
-        .find(|p| p.chat == chat && p.id == id)
-        .cloned()
-        .ok_or_else(|| fail("Preview not found in this chat"))?;
+pub fn stop(shared: &Store, chat: &str, id: &str) -> io::Result<()> {
+    let preview = shared.read(|state| {
+        state
+            .previews
+            .iter()
+            .find(|p| p.chat == chat && p.id == id)
+            .cloned()
+            .ok_or_else(|| fail("Preview not found in this chat"))
+    })??;
     stop_resource(crate::engine::isolation(), &preview)?;
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let record = state
-        .previews
-        .iter_mut()
-        .find(|p| p.id == id)
-        .filter(|p| p.container_id == preview.container_id && p.url == preview.url)
-        .ok_or_else(|| fail("Preview changed while stopping; review its current state"))?;
-    record.status = PreviewStatus::Stopped;
-    record.stopped.store(true, Ordering::Relaxed);
-    for c in state.chats.iter_mut().filter(|c| c.id == chat) {
-        c.revision = c.revision.saturating_add(1);
-    }
-    crate::storage::save(&state)
+    shared.write(|state| {
+        let record = state
+            .previews
+            .iter_mut()
+            .find(|p| p.id == id)
+            .filter(|p| p.container_id == preview.container_id && p.url == preview.url)
+            .ok_or_else(|| fail("Preview changed while stopping; review its current state"))?;
+        record.status = PreviewStatus::Stopped;
+        record.stopped.store(true, Ordering::Relaxed);
+        for c in state.chats.iter_mut().filter(|c| c.id == chat) {
+            c.revision = c.revision.saturating_add(1);
+        }
+        crate::storage::save(state)
+    })?
 }
 pub fn links(previews: &[Preview], chat: &str) -> String {
     let mut html = String::new();

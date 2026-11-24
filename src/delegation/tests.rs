@@ -103,9 +103,9 @@ fn acknowledgement_is_idempotent_and_fences_other_requests() {
     })
     .unwrap();
     assert!(request_with_save(&mut s, &id, "changed", input(Role::Worker), |_| Ok(())).is_err());
-    let shared = std::sync::Arc::new(std::sync::Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     assert!(crate::design::requested(Some((&shared, &id))));
-    shared.lock().unwrap().runtime.runs[0].attempts[0].workspace_id = Some("later-generation".into());
+    shared.guard().unwrap().runtime.runs[0].attempts[0].workspace_id = Some("later-generation".into());
     assert!(!crate::design::requested(Some((&shared, &id))));
 }
 

@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 
 /// Sends one request through the `/mcp` route: (handled, status line, body).
-fn send(shared: &Arc<Mutex<State>>, method: &str, header: &str, body: &[u8]) -> (bool, String, String) {
+fn send(shared: &Store, method: &str, header: &str, body: &[u8]) -> (bool, String, String) {
     let mut response = Vec::new();
     let handled = handle(&mut response, shared, method, "/mcp", header, body);
     let response = String::from_utf8(response).unwrap();
@@ -17,7 +17,7 @@ fn send(shared: &Arc<Mutex<State>>, method: &str, header: &str, body: &[u8]) -> 
 /// The operator route's own framing answers before any tool runs.
 #[test]
 fn operator_mcp_http_framing_is_pinned() {
-    let shared = Arc::new(Mutex::new(State::default()));
+    let shared = crate::store::Store::new(State::default());
     let cases: [(&str, &str, &[u8], &str, &str); 7] = [
         (
             "GET",
@@ -85,7 +85,7 @@ fn operator_mcp_http_framing_is_pinned() {
 /// MCP, which declines package tools.
 #[test]
 fn unlocked_tools_keep_their_own_checks() {
-    let shared = Arc::new(Mutex::new(State::default()));
+    let shared = crate::store::Store::new(State::default());
     let invalid = (
         true,
         "HTTP/1.1 400 Bad Request".to_owned(),
@@ -148,7 +148,7 @@ fn unlocked_tools_keep_their_own_checks() {
 /// responds cannot move a byte.
 #[test]
 fn refused_method_response_bytes_are_pinned() {
-    let shared = Arc::new(Mutex::new(State::default()));
+    let shared = crate::store::Store::new(State::default());
     let mut out = Vec::new();
     assert!(handle(&mut out, &shared, "GET", "/mcp", "", b""));
     assert_eq!(

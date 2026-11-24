@@ -1,10 +1,8 @@
 //! Credential-free worker tools are authorized against the active run on the host.
+use crate::store::Store;
 use crate::{State, rooms};
 use serde_json::{Value, json};
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::path::Path;
 
 mod authority;
 mod compact;
@@ -23,12 +21,12 @@ fn direct(envelope: &Value) -> Result<std::borrow::Cow<'_, Value>, Value> {
         Err(message) => Err(control_mcp::tool_error(&envelope["request"]["id"], &message)),
     }
 }
-fn rpc_at(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
+fn rpc_at(shared: &Store, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
     rpc_for(shared, run_id, envelope, workspace, false)
 }
 /// `local`: Control's own loop ends each model request with the inbox, so
 /// its tool results carry neither the inbox nor a conversation hint.
-fn rpc_for(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, workspace: Option<&Path>, local: bool) -> Value {
+fn rpc_for(shared: &Store, run_id: &str, envelope: &Value, workspace: Option<&Path>, local: bool) -> Value {
     let envelope = match direct(envelope) {
         Ok(envelope) => envelope,
         Err(refused) => return refused,
@@ -60,41 +58,42 @@ fn rpc_for(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, workspace
         return response;
     };
     media_visible(result);
-    if name != "control_turn_handoff"
-        && let Ok(mut state) = shared.lock()
-    {
-        let mut notes = Vec::new();
-        if name != "control_turn_context" {
-            // A CLI agent's next request ends with this result: new
-            // conversation callbacks ride on it, delivered once.
-            let inbox = if local {
-                None
-            } else {
-                crate::turn_context::inbox(&mut state, run_id, crate::storage::save)
-            };
-            if crate::turn_context::callback_notice(&mut state, run_id, !local) && inbox.is_none() {
-                notes
-                    .push("New callbacks: read them with control_turn_context at the next action boundary.".to_owned());
+    if name != "control_turn_handoff" {
+        let _ = shared.write(|state| {
+            let mut notes = Vec::new();
+            if name != "control_turn_context" {
+                // A CLI agent's next request ends with this result: new
+                // conversation callbacks ride on it, delivered once.
+                let inbox = if local {
+                    None
+                } else {
+                    crate::turn_context::inbox(state, run_id, crate::storage::save)
+                };
+                if crate::turn_context::callback_notice(state, run_id, !local) && inbox.is_none() {
+                    notes.push(
+                        "New callbacks: read them with control_turn_context at the next action boundary.".to_owned(),
+                    );
+                }
+                notes.extend(inbox);
             }
-            notes.extend(inbox);
-        }
-        if !refused {
-            notes.extend(nudges::notes(&mut state, run_id, name, crate::config::unix_seconds()));
-        }
-        // A service command that could not reach a host one of this chat's
-        // egress requests names: wait for the decision, or use the relay.
-        if matches!(name, "control_service_exec" | "control_service_exec_status")
-            && let Some(hint) = crate::ports::egress_hint(
-                &state.runtime.runs,
-                &state.ports,
-                run_id,
-                &envelope["request"]["params"]["arguments"].to_string(),
-                &result.to_string(),
-            )
-        {
-            notes.push(hint);
-        }
-        attach_notes(result, &notes);
+            if !refused {
+                notes.extend(nudges::notes(state, run_id, name, crate::config::unix_seconds()));
+            }
+            // A service command that could not reach a host one of this chat's
+            // egress requests names: wait for the decision, or use the relay.
+            if matches!(name, "control_service_exec" | "control_service_exec_status")
+                && let Some(hint) = crate::ports::egress_hint(
+                    &state.runtime.runs,
+                    &state.ports,
+                    run_id,
+                    &envelope["request"]["params"]["arguments"].to_string(),
+                    &result.to_string(),
+                )
+            {
+                notes.push(hint);
+            }
+            attach_notes(result, &notes);
+        });
     }
     response
 }
@@ -139,7 +138,7 @@ fn media_visible(result: &mut Value) {
 }
 /// Dispatches one request; a successful tool result leaves in the shared
 /// compact shape ([`compact`]), whichever tool family produced it.
-fn dispatch_at(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
+fn dispatch_at(shared: &Store, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
     let mut response = dispatch_raw(shared, run_id, envelope, workspace);
     if let Ok(envelope) = direct(envelope)
         && envelope["request"]["method"] == "tools/call"
@@ -153,7 +152,7 @@ fn dispatch_at(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, works
     }
     response
 }
-fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
+fn dispatch_raw(shared: &Store, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
     let envelope = match direct(envelope) {
         Ok(envelope) => envelope,
         Err(refused) => return refused,
@@ -172,7 +171,7 @@ fn dispatch_raw(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, work
     if crate::shutdown::requested() {
         return error("Control is stopping; no new tools may run.");
     }
-    let Ok(state) = shared.lock() else {
+    let Ok(state) = shared.guard() else {
         return error("State unavailable; tools are disabled until Control is checked and restarted");
     };
     if crate::shutdown::requested() {
@@ -280,13 +279,7 @@ pub(crate) fn prompt_index(state: &State, run: &crate::runtime::Run) -> String {
 }
 /// The in-process equivalent of one mailbox request, for Control's own tool
 /// loop: identical fencing, policy, nudges and idempotency nonces.
-pub(crate) fn local_rpc(
-    state: &Arc<Mutex<State>>,
-    run: &str,
-    envelope: &Value,
-    workspace: &Path,
-    managed: bool,
-) -> Value {
+pub(crate) fn local_rpc(state: &Store, run: &str, envelope: &Value, workspace: &Path, managed: bool) -> Value {
     let mut response = if managed {
         rpc_for(state, run, envelope, Some(workspace), true)
     } else {
@@ -299,7 +292,7 @@ pub(crate) fn local_rpc(
 /// The chat's fresh observation (when `attach`) and the once-per-attempt
 /// polling nudge on a tool result. Both come after the result's own notes, so
 /// the observation is always the last text item.
-fn observed(shared: &Arc<Mutex<State>>, run_id: &str, envelope: &Value, response: &mut Value, attach: bool) {
+fn observed(shared: &Store, run_id: &str, envelope: &Value, response: &mut Value, attach: bool) {
     let Ok(envelope) = direct(envelope) else { return };
     let request = &envelope["request"];
     if request["method"] != "tools/call" {
@@ -332,7 +325,7 @@ fn attach_observation(result: &mut Value, block: String) {
         content.push(json!({"type":"text","text":block}));
     }
 }
-pub fn pump_at(state: &Arc<Mutex<State>>, run: &str, mailbox: &Path, workspace: &Path, managed: bool) {
+pub fn pump_at(state: &Store, run: &str, mailbox: &Path, workspace: &Path, managed: bool) {
     let Ok(envelope) = rooms::take_request(mailbox) else {
         return;
     };

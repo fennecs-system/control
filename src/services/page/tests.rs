@@ -444,7 +444,7 @@ fn preview_mixed_images_and_sizes() {
         !size_table.split("<h4>Total").next().unwrap().contains("Lite</strong>"),
         "no image rows among the sizes"
     );
-    let page = render(&Arc::new(Mutex::new(state))).unwrap();
+    let page = render(&crate::store::Store::new(state)).unwrap();
     if let Some(path) = std::env::var_os("CONTROL_QA_SERVICES_PREVIEW") {
         let mut page = page.clone();
         for (name, css) in [
@@ -492,7 +492,7 @@ fn state_derived_controls_sit_inside_the_refreshed_region() {
         |_| Ok(()),
     )
     .unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let region = || {
         let page = render(&shared).unwrap();
         let (outside, inside) = page
@@ -511,7 +511,7 @@ fn state_derived_controls_sit_inside_the_refreshed_region() {
             && !running.contains("value='delete'")
     );
     assert!(!running.contains("Recently stopped"));
-    shared.lock().unwrap().services[0].resource.phase = Phase::Stopped(StopReason::Requested);
+    shared.guard().unwrap().services[0].resource.phase = Phase::Stopped(StopReason::Requested);
     let stopped = region();
     // A stopped service leaves the cards by itself: no collection step.
     assert!(

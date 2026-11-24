@@ -1,16 +1,13 @@
 //! Shared MCP schemas and transport policy. Authorization remains at each broker.
 use serde_json::{Value, json};
-use std::{
-    io,
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::{io, sync::OnceLock};
 
 pub use crate::application::AttemptRef;
 pub use control_context::tool_policy::{Bridge, Route};
 /// Application state as seen by tool families. Each family defines its own
 /// operations trait and implements it for `LocalHost` in its module, where it
 /// meets `State`; adding a family only lists its tools below.
-pub struct LocalHost<'a>(pub &'a Arc<Mutex<crate::State>>);
+pub struct LocalHost<'a>(pub &'a crate::store::Store);
 pub struct AttemptCall<'a> {
     pub attempt: AttemptRef<'a>,
     pub host: &'a LocalHost<'a>,

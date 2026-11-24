@@ -58,7 +58,7 @@ fn dispatch_profile() {
         .clamp(1, 1_000_000);
     for services in [8, 128] {
         for running in [0, 1, 8, 64] {
-            let shared = Arc::new(Mutex::new(state(services, running)));
+            let shared = crate::store::Store::new(state(services, running));
             let mut threads = Vec::new();
             let mut samples = Vec::new();
             for batch in 0..11 {

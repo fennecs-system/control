@@ -41,7 +41,7 @@ fn concurrent_commands_launch_together_and_report_independently() {
     set(&mut state, &first, Status::Running);
     assert_eq!(launchable_ids(&state), std::slice::from_ref(&second));
     let snapshot = state.services[0].clone();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let finish = |id: &str, output: &str, code: i32| {
         update(
             &shared,
@@ -86,7 +86,7 @@ fn concurrent_commands_launch_together_and_report_independently() {
     );
     assert_eq!(read(&second)["exit_code"], 0);
     // Each command keeps its own request identity: a retry returns its own record.
-    let mut state = shared.lock().unwrap();
+    let mut state = shared.guard().unwrap();
     assert_eq!(
         submit(&mut state, &run, &node, &service, "player-a", "status --watch").unwrap(),
         first
@@ -180,7 +180,7 @@ fn persisted_command_records_stay_bounded() {
     // A request holds its text only until dispatch launches it (normally < 2 s).
     let requested = size(&state);
     let snapshot = state.services[0].clone();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     // What dispatch records at launch; the launched snapshot keeps the text.
     update(
         &shared,
@@ -194,9 +194,9 @@ fn persisted_command_records_stay_bounded() {
         false,
     )
     .unwrap();
-    let running = size(&shared.lock().unwrap());
+    let running = size(&shared.guard().unwrap());
     update(&shared, &snapshot, &id, |e| e.status = Status::Completed, false).unwrap();
-    let finished = size(&shared.lock().unwrap());
+    let finished = size(&shared.guard().unwrap());
     println!("requested {requested} B, running {running} B, finished {finished} B");
     assert!(
         requested < 19_000 && running < 19_000 && finished < 19_000,
@@ -357,7 +357,7 @@ fn restart_interrupts_every_running_command_once_and_reads_legacy_records() {
     // state.json from before concurrency has the same shape: a list with at
     // most one active record. Both round-trip through the current schema.
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    let shared = Arc::new(Mutex::new(restored));
+    let shared = crate::store::Store::new(restored);
     let saves = std::cell::Cell::new(0);
     recover(&shared, |_| {
         saves.set(saves.get() + 1);
@@ -365,7 +365,7 @@ fn restart_interrupts_every_running_command_once_and_reads_legacy_records() {
     })
     .unwrap();
     assert_eq!(saves.get(), 1, "one durable stop decision per service");
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert!(matches!(state.services[0].resource.phase, Phase::Stopping { .. }));
     let by_id = |id: &str| state.services[0].executions.iter().find(|e| names(&e.id, id)).unwrap();
     for id in &ids[..2] {
@@ -393,10 +393,10 @@ fn restart_interrupts_every_running_command_once_and_reads_legacy_records() {
         .as_object_mut()
         .unwrap()
         .remove("display_command");
-    let shared = Arc::new(Mutex::new(serde_json::from_value::<State>(json).unwrap()));
+    let shared = crate::store::Store::new(serde_json::from_value::<State>(json).unwrap());
     recover(&shared, |_| Ok(())).unwrap();
     assert_eq!(
-        shared.lock().unwrap().services[0].executions[0].status,
+        shared.guard().unwrap().services[0].executions[0].status,
         Status::Interrupted
     );
 }
@@ -413,7 +413,7 @@ fn results_show_short_handles_and_every_lookup_takes_handle_or_full_id() {
         submit(&mut state, &run, &node, &service, "short", "true").unwrap(),
         shown
     );
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let read = |id: &str| {
         status(
             &shared,
@@ -440,7 +440,7 @@ fn results_show_short_handles_and_every_lookup_takes_handle_or_full_id() {
     );
     // A handle that matches two records is refused rather than guessed.
     {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.guard().unwrap();
         let mut twin = state.services[0].executions[0].clone();
         twin.id = format!("{shown}{}", "f".repeat(64 - HANDLE));
         assert_ne!(twin.id, full);
@@ -463,7 +463,7 @@ fn results_show_short_handles_and_every_lookup_takes_handle_or_full_id() {
         exit_code: Some(3),
         diagnostic: String::new(),
     };
-    shared.lock().unwrap().services[0].command_receipts.push(receipt);
+    shared.guard().unwrap().services[0].command_receipts.push(receipt);
     assert_eq!(
         read(&"e".repeat(HANDLE)).unwrap(),
         json!({"execution_id": "e".repeat(HANDLE), "status": "failed", "exit_code": 3, "output_evicted": true})

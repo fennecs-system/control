@@ -1,7 +1,7 @@
 use super::*;
 use crate::State;
 use crate::runtime::RunStatus;
-use std::sync::{Arc, Mutex};
+use crate::store::Store;
 
 fn facts(role: Audience) -> Facts {
     Facts {
@@ -344,10 +344,10 @@ fn member_state() -> (String, Value) {
     assert_eq!(state.runtime.runs[index].status, RunStatus::Running);
     (id, serde_json::to_value(&state).unwrap())
 }
-fn fresh(snapshot: &Value) -> Arc<Mutex<State>> {
-    Arc::new(Mutex::new(serde_json::from_value(snapshot.clone()).unwrap()))
+fn fresh(snapshot: &Value) -> Store {
+    Store::new(serde_json::from_value(snapshot.clone()).unwrap())
 }
-fn rpc(shared: &Arc<Mutex<State>>, run: &str, name: &str, arguments: Value) -> Value {
+fn rpc(shared: &Store, run: &str, name: &str, arguments: Value) -> Value {
     super::super::rpc_at(
         shared,
         run,
@@ -355,7 +355,7 @@ fn rpc(shared: &Arc<Mutex<State>>, run: &str, name: &str, arguments: Value) -> V
         None,
     )
 }
-fn through_call(shared: &Arc<Mutex<State>>, run: &str, name: &str, arguments: Value) -> Value {
+fn through_call(shared: &Store, run: &str, name: &str, arguments: Value) -> Value {
     rpc(shared, run, CALL, json!({"tool":name,"arguments":arguments}))
 }
 
@@ -364,7 +364,7 @@ fn every_callable_tool_answers_identically_through_control_call() {
     let (run, snapshot) = member_state();
     let shared = fresh(&snapshot);
     let facts = {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let run = state.runtime.runs.get(&run).unwrap();
         Facts::of(&state, run, true)
     };
@@ -393,8 +393,8 @@ fn every_callable_tool_answers_identically_through_control_call() {
         let called = through_call(&call_state, &run, &tool, arguments.clone());
         assert_eq!(direct, called, "{tool} {arguments}");
         assert_eq!(
-            serde_json::to_value(&*direct_state.lock().unwrap()).unwrap(),
-            serde_json::to_value(&*call_state.lock().unwrap()).unwrap(),
+            serde_json::to_value(&*direct_state.guard().unwrap()).unwrap(),
+            serde_json::to_value(&*call_state.guard().unwrap()).unwrap(),
             "{tool}"
         );
     }
@@ -406,7 +406,7 @@ fn every_callable_tool_answers_identically_through_control_call() {
         "control_room_post",
         json!({"message":"Milestone 2 claimed","delivery":"record"}),
     );
-    assert_eq!(posted.lock().unwrap().collective.posts.len(), 1);
+    assert_eq!(posted.guard().unwrap().collective.posts.len(), 1);
 }
 
 #[test]
@@ -445,7 +445,7 @@ fn judges_handoff_fences_and_unknown_tools_apply_to_control_call() {
         json!({"disposition":{"kind":"continue"}}),
     );
     assert_eq!(handoff["result"]["isError"], false, "{handoff}");
-    let staged = serde_json::to_value(&*staged.lock().unwrap()).unwrap();
+    let staged = serde_json::to_value(&*staged.guard().unwrap()).unwrap();
     for tool in ["control_service_start", "control_room_post", "control_watch_stop"] {
         let direct = rpc(&fresh(&staged), &run, tool, json!({}));
         assert!(

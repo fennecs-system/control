@@ -1,5 +1,6 @@
 //! Exact-origin HTTP capabilities. Workers never acquire a network interface.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, identity::Actor};
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use scraper::{Html, Selector};
@@ -8,10 +9,7 @@ use serde_json::{Value, json};
 use std::{
     io::{self, Read},
     net::{IpAddr, SocketAddr, ToSocketAddrs},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -396,35 +394,35 @@ fn permitted(
     }
     Ok(())
 }
-pub fn worker(shared: &Arc<Mutex<State>>, run_id: &str, args: &Value) -> io::Result<Value> {
+pub fn worker(shared: &Store, run_id: &str, args: &Value) -> io::Result<Value> {
     let input: Input =
         serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Expected URL and optional capture"))?;
-    let (chat, actor, generation) = {
-        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+    let (chat, actor, generation) = shared.read(|state| -> io::Result<_> {
         let run = state
             .runtime
             .runs
             .get(run_id)
             .filter(|r| r.status == RunStatus::Running)
             .ok_or_else(|| io::Error::other("Run is not active"))?;
-        (
+        Ok((
             run.chat_id
                 .clone()
                 .ok_or_else(|| io::Error::other("A chat is required"))?,
             run.actor.clone(),
             run.attempts.last().and_then(|a| a.workspace_id.clone()),
-        )
-    };
+        ))
+    })??;
     let authorize = |url: &Url| {
-        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        if !state.runtime.runs.get(run_id).is_some_and(|r| {
-            r.status == RunStatus::Running
-                && r.actor == actor
-                && r.attempts.last().and_then(|a| a.workspace_id.as_ref()) == generation.as_ref()
-        }) {
-            return Err(io::Error::other("Attempt is no longer active"));
-        }
-        permitted(&state.chats, &state.web_grants, &chat, &actor, url, now())
+        shared.read(|state| {
+            if !state.runtime.runs.get(run_id).is_some_and(|r| {
+                r.status == RunStatus::Running
+                    && r.actor == actor
+                    && r.attempts.last().and_then(|a| a.workspace_id.as_ref()) == generation.as_ref()
+            }) {
+                return Err(io::Error::other("Attempt is no longer active"));
+            }
+            permitted(&state.chats, &state.web_grants, &chat, &actor, url, now())
+        })?
     };
     fetch_evidence(&mut Http, &input, &FETCH_ACTIVE, authorize, evidence)
 }
@@ -584,43 +582,38 @@ fn change_access(
 }
 
 /// This route runs only behind the authenticated local-operator HTTP gate.
-pub fn http(
-    stream: &mut std::net::TcpStream,
-    shared: &Arc<Mutex<State>>,
-    method: &str,
-    path: &str,
-    body: &[u8],
-) -> bool {
+pub fn http(stream: &mut std::net::TcpStream, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     if path != "/tools/browser/access" {
         return false;
     }
     let result = (|| -> io::Result<String> {
-        let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        if method == "POST" {
-            let fields = crate::fields(&String::from_utf8_lossy(body));
-            change_access(&mut state, &fields, now(), crate::storage::save)?;
-        } else if method != "GET" {
-            return Err(io::Error::other("Use GET or POST"));
-        }
-        let chats = state
-            .chats
-            .iter()
-            .zip(crate::callsigns::all(&state.chats))
-            .map(|(c, callsign)| {
-                format!(
-                    "<option value='{}'>{}</option>",
-                    crate::escape(&c.id),
-                    crate::escape(&crate::callsigns::label(c, callsign))
-                )
-            })
-            .collect::<String>();
-        let grants=state.web_grants.iter().filter(|g|g.expires>now()).map(|g|format!("<li>{} · {} · {}s <form class='decision-form' method='post' action='/tools/browser/access'><input type='hidden' name='revoke' value='{}'><button>Revoke</button></form></li>",crate::escape(&g.origin.0),crate::escape(&g.chat),g.expires.saturating_sub(now()),crate::escape(&g.id))).collect::<String>();
-        Ok(crate::shell(
-            "browser",
-            &format!(
-                "<h2>Web access</h2><form method='post' action='/tools/browser/access'><label>DM<select name='chat'>{chats}</select></label><label>Origin<input name='origin' type='url' placeholder='https://example.com' required></label><label>Seconds<input name='seconds' type='number' value='900' min='1' max='3600' required></label><button class='primary'>Allow origin</button></form><ul>{grants}</ul><a href='/tools/browser'>Browser</a>"
-            ),
-        ))
+        shared.write(|state| {
+            if method == "POST" {
+                let fields = crate::fields(&String::from_utf8_lossy(body));
+                change_access(state, &fields, now(), crate::storage::save)?;
+            } else if method != "GET" {
+                return Err(io::Error::other("Use GET or POST"));
+            }
+            let chats = state
+                .chats
+                .iter()
+                .zip(crate::callsigns::all(&state.chats))
+                .map(|(c, callsign)| {
+                    format!(
+                        "<option value='{}'>{}</option>",
+                        crate::escape(&c.id),
+                        crate::escape(&crate::callsigns::label(c, callsign))
+                    )
+                })
+                .collect::<String>();
+            let grants=state.web_grants.iter().filter(|g|g.expires>now()).map(|g|format!("<li>{} · {} · {}s <form class='decision-form' method='post' action='/tools/browser/access'><input type='hidden' name='revoke' value='{}'><button>Revoke</button></form></li>",crate::escape(&g.origin.0),crate::escape(&g.chat),g.expires.saturating_sub(now()),crate::escape(&g.id))).collect::<String>();
+            Ok(crate::shell(
+                "browser",
+                &format!(
+                    "<h2>Web access</h2><form method='post' action='/tools/browser/access'><label>DM<select name='chat'>{chats}</select></label><label>Origin<input name='origin' type='url' placeholder='https://example.com' required></label><label>Seconds<input name='seconds' type='number' value='900' min='1' max='3600' required></label><button class='primary'>Allow origin</button></form><ul>{grants}</ul><a href='/tools/browser'>Browser</a>"
+                ),
+            ))
+        })?
     })();
     let (status, page) = match result {
         Ok(page) => ("200 OK", page),

@@ -15,10 +15,10 @@ fn page_assembly_preserves_literal_template_and_demo_text_in_documents() {
 
 #[test]
 fn socket_writes_release_state_even_when_the_client_stalls_or_disconnects() {
-    struct DisconnectedClient<'a>(&'a Mutex<State>);
+    struct DisconnectedClient<'a>(&'a Store);
     impl Write for DisconnectedClient<'_> {
         fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-            let state = self.0.try_lock().expect("socket write held shared state");
+            let state = self.0.try_guard().expect("socket write held shared state");
             assert_eq!(state.runtime.notice, "committed");
             Err(std::io::ErrorKind::BrokenPipe.into())
         }
@@ -26,12 +26,12 @@ fn socket_writes_release_state_even_when_the_client_stalls_or_disconnects() {
             Ok(())
         }
     }
-    let state = Mutex::new(State::default());
+    let state = Store::new(State::default());
     state_response(&mut DisconnectedClient(&state), &state, |response, state| {
         state.runtime.notice = "committed".into();
         session_http::handle(response, state, "GET", "/dms", "none", "", b"");
     });
-    assert_eq!(state.lock().unwrap().runtime.notice, "committed");
+    assert_eq!(state.guard().unwrap().runtime.notice, "committed");
 }
 
 #[test]
@@ -98,9 +98,9 @@ fn public_root_never_reflects_query_html_and_bodies_need_a_valid_length() {
 }
 #[test]
 fn poisoned_state_returns_503_without_rendering_or_mutating() {
-    let state = Mutex::new(State::default());
+    let state = Store::new(State::default());
     let _ = std::panic::catch_unwind(|| {
-        let _guard = state.lock().unwrap();
+        let _guard = state.guard().unwrap();
         panic!("simulate interrupted state mutation");
     });
     let mut response = Vec::new();
@@ -109,7 +109,7 @@ fn poisoned_state_returns_503_without_rendering_or_mutating() {
     assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
     let (header, body) = response.split_once("\r\n\r\n").unwrap();
     assert!(header.contains(&format!("Content-Length: {}\r\n", body.len())));
-    assert!(state.is_poisoned());
+    assert!(state.is_unavailable());
     // Static UI dependencies remain available without touching mutable state.
     let mut stylesheet = Vec::new();
     assert!(serve_stylesheet(&mut stylesheet, "/style.css"));

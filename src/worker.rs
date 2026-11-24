@@ -1,5 +1,6 @@
 use crate::identity::{self, Action, Actor, Workspace};
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, runtime, storage};
 use control_isolation::Isolation;
 use std::{
@@ -80,15 +81,15 @@ impl Threads {
         Ok(())
     }
 }
-pub fn start(state: Arc<Mutex<State>>) -> Threads {
+pub fn start(state: Store) -> Threads {
     start_with(state, crate::engine::isolation(), run_task)
 }
 /// A worker turn, run on its own thread with the node's isolation backend.
-type Execute = fn(&'static dyn Isolation, Arc<Mutex<State>>, Task);
-fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execute: Execute) -> Threads {
+type Execute = fn(&'static dyn Isolation, Store, Task);
+fn start_with(state: Store, isolation: &'static dyn Isolation, execute: Execute) -> Threads {
     // Inbox admission is independent of the execution slot: a model can run for
     // minutes without preventing a new DM from becoming a durable queued turn.
-    let inbox_state = Arc::clone(&state);
+    let inbox_state = state.clone();
     let mut notified = std::collections::HashSet::new();
     let inbox = std::thread::spawn(move || {
         loop {
@@ -135,11 +136,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                 crate::github::refresh_availability();
                 if crate::backend::Backend::hosted().any(|backend| backend.image().is_some()) {
                     // Only attempt identities cross the lock; activity and transcripts stay put.
-                    let (owners, services) = {
-                        let Ok(s) = state.lock() else {
-                            crate::shutdown::request();
-                            break;
-                        };
+                    let Ok((owners, services)) = state.read(|s| {
                         (
                             crate::lifecycle::owners(&s.runtime.runs),
                             s.services
@@ -148,24 +145,25 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                                 .map(crate::services::Service::binding_snapshot)
                                 .collect::<Vec<_>>(),
                         )
+                    }) else {
+                        crate::shutdown::request();
+                        break;
                     };
                     let reconciled = crate::lifecycle::reconcile(isolation, &owners, &services)
                         .and_then(|()| crate::recovery::reconcile(isolation, &state).map_err(|e| e.to_string()));
-                    if let Ok(mut s) = state.lock() {
-                        match &reconciled {
-                            Err(message) => {
-                                s.runtime.notice.clone_from(message);
-                                s.runtime.paused = Some(message.clone());
-                                fenced = Some(message.clone());
-                            }
-                            Ok(()) => {
-                                s.runtime.paused = None;
-                                if fenced.take().is_some_and(|m| m == s.runtime.notice) {
-                                    s.runtime.notice.clear();
-                                }
+                    let _ = state.write(|s| match &reconciled {
+                        Err(message) => {
+                            s.runtime.notice.clone_from(message);
+                            s.runtime.paused = Some(message.clone());
+                            fenced = Some(message.clone());
+                        }
+                        Ok(()) => {
+                            s.runtime.paused = None;
+                            if fenced.take().is_some_and(|m| m == s.runtime.notice) {
+                                s.runtime.notice.clear();
                             }
                         }
-                    }
+                    });
                 }
             }
             if triggered {
@@ -177,7 +175,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                         break 'supervisor;
                     }
                     let planned = {
-                        let Ok(mut s) = state.lock() else {
+                        let Ok(mut s) = state.guard() else {
                             break 'supervisor;
                         };
                         crate::providers::accounts::refresh(&mut s.runtime);
@@ -233,14 +231,14 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                     let captured = match planned.as_ref().map(|p| p.persist()).transpose() {
                         Ok(reference) => reference,
                         Err(error) => {
-                            if let Ok(mut s) = state.lock() {
+                            let _ = state.write(|s| {
                                 s.runtime.notice = format!("Could not retain input before launch: {error}");
-                            }
+                            });
                             break;
                         }
                     };
                     let task = {
-                        let Ok(mut s) = state.lock() else {
+                        let Ok(mut s) = state.guard() else {
                             eprintln!("Worker dispatch stopped: state unavailable; restart Control after checking.");
                             crate::shutdown::request();
                             break 'supervisor;
@@ -285,7 +283,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                         Ok(worker) => workers.handles.push(worker),
                         Err(_) => {
                             workers.failed.store(true, std::sync::atomic::Ordering::Relaxed);
-                            if let Ok(mut s) = state.lock() {
+                            let _ = state.write(|s| {
                                 if let Some(run) = s.runtime.runs.get_mut(&run) {
                                     run.status = RunStatus::Blocked;
                                     run.result =
@@ -295,8 +293,8 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
                                         attempt.status = crate::usage::AttemptStatus::Blocked;
                                     }
                                 }
-                                let _ = storage::save(&s);
-                            }
+                                let _ = storage::save(s);
+                            });
                             crate::shutdown::request();
                             break 'supervisor;
                         }
@@ -312,7 +310,7 @@ fn start_with(state: Arc<Mutex<State>>, isolation: &'static dyn Isolation, execu
         failed,
     }
 }
-fn run_task(isolation: &dyn Isolation, state: Arc<Mutex<State>>, task: Task) {
+fn run_task(isolation: &dyn Isolation, state: Store, task: Task) {
     let mut attempt = task.4;
     let started = Instant::now();
     let workspace_id = attempt
@@ -378,7 +376,7 @@ fn run_task(isolation: &dyn Isolation, state: Arc<Mutex<State>>, task: Task) {
     // result in memory, tell the operator, and retry. Cancellation still applies.
     let mut delay = 2;
     loop {
-        let Ok(mut s) = state.lock() else {
+        let Ok(mut s) = state.guard() else {
             eprintln!("Worker result not committed: state unavailable; inspect artifacts before restarting.");
             return;
         };
@@ -931,7 +929,7 @@ fn checkpoint_prepared(
     Some(index)
 }
 
-fn ingest_discord(state: &Arc<Mutex<State>>, notified: &mut std::collections::HashSet<String>) -> Result<(), ()> {
+fn ingest_discord(state: &Store, notified: &mut std::collections::HashSet<String>) -> Result<(), ()> {
     let Ok(entries) = crate::config::state("discord-inbox")
         .map_err(|_| ())
         .and_then(|p| fs::read_dir(p).map_err(|_| ()))
@@ -939,7 +937,9 @@ fn ingest_discord(state: &Arc<Mutex<State>>, notified: &mut std::collections::Ha
         return Ok(());
     };
     let mut entries: Vec<_> = entries.flatten().collect();
-    let seen: std::collections::HashSet<String> = state.lock().map_err(|_| ())?.discord_seen.iter().cloned().collect();
+    let seen: std::collections::HashSet<String> = state
+        .read(|s| s.discord_seen.iter().cloned().collect())
+        .map_err(|_| ())?;
     entries.sort_by_key(|entry| {
         entry
             .path()
@@ -983,7 +983,7 @@ fn ingest_discord(state: &Arc<Mutex<State>>, notified: &mut std::collections::Ha
         if !valid {
             continue;
         }
-        let mut s = state.lock().map_err(|_| ())?;
+        let mut s = state.guard().map_err(|_| ())?;
         if crate::shutdown::requested() {
             return Ok(());
         }
@@ -1160,18 +1160,13 @@ pub(crate) fn record_usage_for(state: &mut State, id: &str, generation: &str, us
     true
 }
 
-pub(crate) fn observe_workspace_diff(
-    state: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    workspace: &Path,
-    status: &str,
-) {
+pub(crate) fn observe_workspace_diff(state: &Store, run: &str, generation: &str, workspace: &Path, status: &str) {
     // Judge /workspace may be scratch transport, not the read-only source.
     // Never present its scratch files as a patch to the reviewed project.
-    if state.lock().map_or(true, |s| {
-        s.runtime.runs.get(run).is_none_or(crate::delegation::is_judge)
-    }) {
+    if state
+        .read(|s| s.runtime.runs.get(run).is_none_or(crate::delegation::is_judge))
+        .unwrap_or(true)
+    {
         return;
     }
     // File reads and diff computation never hold the control-plane state lock.
@@ -1190,9 +1185,9 @@ pub(crate) fn observe_workspace_diff(
     } else {
         preview.summary()
     };
-    if let Ok(mut state) = state.lock() {
+    let _ = state.write(|state| {
         record_activity_for(
-            &mut state,
+            state,
             run,
             generation,
             crate::usage::Activity {
@@ -1203,31 +1198,31 @@ pub(crate) fn observe_workspace_diff(
                 status: status.into(),
             },
         );
-    }
+    });
 }
 fn project_operation<T>(
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    bridge: Option<(&Store, &str)>,
     generation: &str,
     key: &str,
     label: &str,
     operation: impl FnOnce() -> std::io::Result<T>,
 ) -> std::io::Result<T> {
     let record = |status: &str, output: String| {
-        if let Some((state, run)) = bridge
-            && let Ok(mut state) = state.lock()
-        {
-            record_activity_for(
-                &mut state,
-                run,
-                generation,
-                crate::usage::Activity {
-                    id: key.into(),
-                    kind: "workspace".into(),
-                    text: label.into(),
-                    output,
-                    status: status.into(),
-                },
-            );
+        if let Some((state, run)) = bridge {
+            let _ = state.write(|state| {
+                record_activity_for(
+                    state,
+                    run,
+                    generation,
+                    crate::usage::Activity {
+                        id: key.into(),
+                        kind: "workspace".into(),
+                        text: label.into(),
+                        output,
+                        status: status.into(),
+                    },
+                );
+            });
         }
     };
     record("in_progress", String::new());
@@ -1242,30 +1237,31 @@ fn project_operation<T>(
     result
 }
 
-pub(crate) fn interrupt_unfinished_tools(bridge: Option<(&Arc<Mutex<State>>, &str)>, generation: &str) {
+pub(crate) fn interrupt_unfinished_tools(bridge: Option<(&Store, &str)>, generation: &str) {
     let Some((shared, id)) = bridge else { return };
-    let Ok(mut state) = shared.lock() else { return };
-    let Some(attempt) = state
-        .runtime
-        .runs
-        .get_mut(id)
-        .and_then(|r| r.attempts.last_mut())
-        .filter(|a| a.workspace_id.as_deref() == Some(generation))
-    else {
-        return;
-    };
-    for activity in &mut attempt.activity {
-        if activity.kind == "mcp_tool_call" && matches!(activity.status.as_str(), "in_progress" | "running") {
-            activity.status = "interrupted".into();
-            activity.output = "The provider session ended before reporting this tool's result. Inspect host request/resource status before retrying; the effect may already have happened.".into();
+    let _ = shared.write(|state| {
+        let Some(attempt) = state
+            .runtime
+            .runs
+            .get_mut(id)
+            .and_then(|r| r.attempts.last_mut())
+            .filter(|a| a.workspace_id.as_deref() == Some(generation))
+        else {
+            return;
+        };
+        for activity in &mut attempt.activity {
+            if activity.kind == "mcp_tool_call" && matches!(activity.status.as_str(), "in_progress" | "running") {
+                activity.status = "interrupted".into();
+                activity.output = "The provider session ended before reporting this tool's result. Inspect host request/resource status before retrying; the effect may already have happened.".into();
+            }
         }
-    }
+    });
 }
 fn publish_workspace(
     attempt: &mut crate::usage::Attempt,
     workspace: &Path,
     id: &str,
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    bridge: Option<(&Store, &str)>,
 ) -> std::io::Result<()> {
     let result = if attempt.project.is_some() {
         project_operation(bridge, id, "project-checkpoint", "Saving checkpoint", || {
@@ -1288,7 +1284,7 @@ fn execute(
     actor: &Actor,
     action: Action,
     attempt: &mut crate::usage::Attempt,
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    bridge: Option<(&Store, &str)>,
 ) -> Result<String, (control_agent::Status, String)> {
     let blocked = |m: &str| (control_agent::Status::Blocked, m.to_owned());
     let failed = |m: &str| (control_agent::Status::Failed, m.to_owned());
@@ -1356,8 +1352,7 @@ fn execute(
     }
     if let Some((state, run)) = bridge {
         let packages = state
-            .lock()
-            .map(|s| crate::packages::planned(&s.runtime.runs, &s.packages, run))
+            .read(|s| crate::packages::planned(&s.runtime.runs, &s.packages, run))
             .map_err(|_| failed("State unavailable"))?;
         if !packages.is_empty() {
             project_operation(bridge, id, "tool-packages", "Copying tool packages", || {
@@ -1374,14 +1369,18 @@ fn execute(
             .unwrap_or(own),
         None => captured.unwrap_or_else(|| {
             let room = bridge.and_then(|(state, run_id)| {
-                let s = state.lock().ok()?;
-                let run = s.runtime.runs.get(run_id)?;
-                s.chats
-                    .iter()
-                    .find(|c| Some(&c.id) == run.chat_id.as_ref())?
-                    .room
-                    .clone()
-                    .filter(|r| crate::rooms::valid(r))
+                state
+                    .read(|s| {
+                        let run = s.runtime.runs.get(run_id)?;
+                        s.chats
+                            .iter()
+                            .find(|c| Some(&c.id) == run.chat_id.as_ref())?
+                            .room
+                            .clone()
+                            .filter(|r| crate::rooms::valid(r))
+                    })
+                    .ok()
+                    .flatten()
             });
             render_prompt(objective, scope, room.as_deref(), bridge.is_some())
         }),
@@ -1456,16 +1455,9 @@ fn login(
     crate::ports::key_relay::grant(&account, store, id)
 }
 /// The node's accounts as the running server holds them, else as saved.
-fn accounts(
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
-) -> std::io::Result<crate::accounts::Store<crate::backend::Backend>> {
+fn accounts(bridge: Option<(&Store, &str)>) -> std::io::Result<crate::accounts::Store<crate::backend::Backend>> {
     match bridge {
-        Some((state, _)) => Ok(state
-            .lock()
-            .map_err(|_| std::io::Error::other("State unavailable"))?
-            .runtime
-            .accounts
-            .clone()),
+        Some((state, _)) => Ok(state.read(|s| s.runtime.accounts.clone())?),
         None => crate::providers::accounts::read(),
     }
 }

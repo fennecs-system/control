@@ -511,9 +511,9 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     );
     let mut initial = State::default();
     let id = crate::chat::create(&mut initial);
-    let shared = Arc::new(Mutex::new(initial));
+    let shared = crate::store::Store::new(initial);
     let open = |path: &str, name: Option<&str>| {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.guard().unwrap();
         let text = match name {
             Some(name) => format!("/open --as {name} {path}"),
             None => format!("/open {path}"),
@@ -521,7 +521,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         crate::chat::send(&mut state, &id, &text, "test").unwrap();
     };
     let approve = || {
-        let request = shared.lock().unwrap().chats[0]
+        let request = shared.guard().unwrap().chats[0]
             .project
             .as_ref()
             .unwrap()
@@ -544,7 +544,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     open(&fixture.0.join("missing").display().to_string(), None);
     approve();
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let project = state.chats[0].project.as_ref().unwrap();
         assert!(project.error.is_some());
         assert!(project.grant.is_none());
@@ -552,7 +552,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     }
     open(&first.display().to_string(), None);
     approve();
-    let original = shared.lock().unwrap().chats[0].project.clone().unwrap();
+    let original = shared.guard().unwrap().chats[0].project.clone().unwrap();
     assert!(!original.pending);
     assert_eq!(original.mounts[0].name, "api");
     let mut attempt = crate::usage::Attempt {
@@ -575,11 +575,11 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
         || Ok("fixture-artifact".into()),
     )
     .unwrap();
-    shared.lock().unwrap().chats[0].project.as_mut().unwrap().head = attempt.project_checkpoint.clone();
+    shared.guard().unwrap().chats[0].project.as_mut().unwrap().head = attempt.project_checkpoint.clone();
     open(&second.display().to_string(), None);
     approve();
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let project = state.chats[0].project.as_ref().unwrap();
         assert_eq!(project.grant, original.grant);
         assert_eq!(project.head, attempt.project_checkpoint);
@@ -588,7 +588,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     }
     open(&second.display().to_string(), Some("api2"));
     approve();
-    let updated = shared.lock().unwrap().chats[0].project.clone().unwrap();
+    let updated = shared.guard().unwrap().chats[0].project.clone().unwrap();
     assert!(!updated.pending);
     assert!(updated.error.is_none());
     assert_eq!(updated.mounts.len(), 2);
@@ -611,7 +611,7 @@ fn live_folder_approval_errors_and_multiple_named_worktrees() {
     command(&second_run.join("workspace/api2"), &["status", "--porcelain"]);
     assert_eq!(fs::read_to_string(first.join("code.txt")).unwrap(), "first");
     assert!(!first.join(".git").exists());
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let transcript = crate::chat::transcript(&state, &id).unwrap().render();
     assert!(transcript.contains("Opened /workspace/api"));
     assert!(!transcript.contains("Trust folder and open"));
@@ -661,7 +661,7 @@ impl Drop for Held {
 fn no_save(_: &State) -> io::Result<()> {
     Ok(())
 }
-fn exchange(shared: &Arc<Mutex<State>>, method: &str, path: &str, query: &str, body: &str, save: Save) -> String {
+fn exchange(shared: &Store, method: &str, path: &str, query: &str, body: &str, save: Save) -> String {
     let mut response = Vec::new();
     assert!(http_in(
         &mut response,
@@ -674,8 +674,8 @@ fn exchange(shared: &Arc<Mutex<State>>, method: &str, path: &str, query: &str, b
     ));
     String::from_utf8(response).unwrap()
 }
-fn pending_request(shared: &Arc<Mutex<State>>) -> String {
-    shared.lock().unwrap().chats[0]
+fn pending_request(shared: &Store) -> String {
+    shared.guard().unwrap().chats[0]
         .project
         .as_ref()
         .unwrap()
@@ -694,7 +694,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     let mut initial = State::default();
     let id = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &id, &format!("/open {}", first.display()), "test").unwrap();
-    let shared = Arc::new(Mutex::new(initial));
+    let shared = crate::store::Store::new(initial);
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
     // The import is held before attaching, yet approval answers immediately.
@@ -746,7 +746,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
         "no second approval while importing"
     );
     {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.guard().unwrap();
         assert!(
             crate::chat::transcript(&state, &id)
                 .unwrap()
@@ -767,7 +767,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     assert!(done.starts_with("HTTP/1.1 303"), "{done}");
     assert!(done.contains(&format!("location: /dm/{id}\r\n")), "{done}");
     let grant = {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let project = state.chats[0].project.as_ref().unwrap();
         assert!(!project.needs_approval() && project.error.is_none());
         assert_eq!(project.mounts.len(), 1);
@@ -775,7 +775,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     };
     // Adding a folder to the open project follows the same path.
     crate::chat::send(
-        &mut shared.lock().unwrap(),
+        &mut shared.guard().unwrap(),
         &id,
         &format!("/open {}", second.display()),
         "test",
@@ -797,7 +797,7 @@ fn approval_responds_at_once_imports_in_the_background_and_returns_to_the_chat()
     wait_for_import(&id);
     let done = exchange(&shared, "GET", &page, &format!("importing={request}"), "", no_save);
     assert!(done.contains(&format!("location: /dm/{id}\r\n")), "{done}");
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let project = state.chats[0].project.as_ref().unwrap();
     assert_eq!(
         project.mounts.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
@@ -855,10 +855,10 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
     let mut initial = State::default();
     let id = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &id, &format!("/open {}", folder.display()), "test").unwrap();
-    let shared = Arc::new(Mutex::new(initial));
+    let shared = crate::store::Store::new(initial);
     let page = format!("/dm/{id}/project");
     {
-        let panel = crate::chat::requests(&shared.lock().unwrap(), &id).unwrap();
+        let panel = crate::chat::requests(&shared.guard().unwrap(), &id).unwrap();
         assert!(
             panel.contains(&format!("<form class='decision-form' method='post' action='{page}'")),
             "{panel}"
@@ -893,7 +893,7 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
     );
     wait_for_import(&id);
     assert!(
-        !shared.lock().unwrap().chats[0]
+        !shared.guard().unwrap().chats[0]
             .project
             .as_ref()
             .unwrap()
@@ -901,7 +901,7 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
     );
     // An import that fails is reported to the form that approved it.
     super::request(
-        &mut shared.lock().unwrap(),
+        &mut shared.guard().unwrap(),
         &id,
         fixture.0.join("missing").to_str().unwrap(),
         AGENT,
@@ -922,7 +922,7 @@ fn in_chat_folder_decisions_answer_like_port_decisions() {
         assert!(accepted.contains("\"error\""), "{accepted}");
     }
     assert!(
-        shared.lock().unwrap().chats[0]
+        shared.guard().unwrap().chats[0]
             .project
             .as_ref()
             .unwrap()
@@ -940,7 +940,7 @@ fn background_import_errors_appear_beside_the_request_for_retry() {
     fs::create_dir(&missing).unwrap();
     crate::chat::send(&mut initial, &id, &format!("/open {}", missing.display()), "test").unwrap();
     fs::remove_dir(&missing).unwrap();
-    let shared = Arc::new(Mutex::new(initial));
+    let shared = crate::store::Store::new(initial);
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
     let response = exchange(
@@ -965,7 +965,7 @@ fn background_import_errors_appear_beside_the_request_for_retry() {
     );
     assert!(!shown.contains("http-equiv='refresh'"));
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let project = state.chats[0].project.as_ref().unwrap();
         assert!(project.error.is_some() && project.grant.is_none());
         assert!(
@@ -994,7 +994,7 @@ fn background_import_errors_appear_beside_the_request_for_retry() {
     );
     assert!(retry.starts_with("HTTP/1.1 303"), "{retry}");
     wait_for_import(&id);
-    let project = shared.lock().unwrap().chats[0].project.clone().unwrap();
+    let project = shared.guard().unwrap().chats[0].project.clone().unwrap();
     assert!(!project.needs_approval() && project.error.is_none());
 }
 #[test]
@@ -1240,7 +1240,7 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
     let mut initial = State::default();
     let id = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &id, &format!("/open {}", folder.display()), "test").unwrap();
-    let shared = Arc::new(Mutex::new(initial));
+    let shared = crate::store::Store::new(initial);
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
     let stale = exchange(
@@ -1256,7 +1256,7 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
         "{stale}"
     );
     assert!(
-        shared.lock().unwrap().chats[0]
+        shared.guard().unwrap().chats[0]
             .project
             .as_ref()
             .is_some_and(|p| p.request == request)
@@ -1275,12 +1275,12 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
         "{unsaved}"
     );
     assert!(
-        shared.lock().unwrap().chats[0]
+        shared.guard().unwrap().chats[0]
             .project
             .as_ref()
             .is_some_and(|p| p.request == request && p.needs_approval())
     );
-    assert_eq!(shared.lock().unwrap().chats[0].messages.len(), 1);
+    assert_eq!(shared.guard().unwrap().chats[0].messages.len(), 1);
     let dismissed = exchange(
         &shared,
         "POST",
@@ -1294,7 +1294,7 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
         "{dismissed}"
     );
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         assert!(state.chats[0].project.is_none());
         assert_eq!(state.chats[0].messages[0].reply, DISMISSED);
         let transcript = crate::chat::transcript(&state, &id).unwrap().render();
@@ -1331,7 +1331,7 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
         no_save,
     );
     assert!(late.starts_with("HTTP/1.1 400"), "{late}");
-    assert!(importing(&id).is_none() && shared.lock().unwrap().chats[0].project.is_none());
+    assert!(importing(&id).is_none() && shared.guard().unwrap().chats[0].project.is_none());
 }
 fn failed_save(_: &State) -> io::Result<()> {
     Err(io::Error::other("disk full"))
@@ -1367,7 +1367,7 @@ fn approving_twice_starts_one_import_and_keeps_its_grant() {
     let mut initial = State::default();
     let id = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &id, &format!("/open {}", folder.display()), "test").unwrap();
-    let shared = Arc::new(Mutex::new(initial));
+    let shared = crate::store::Store::new(initial);
     let page = format!("/dm/{id}/project");
     let request = pending_request(&shared);
     let first = exchange(
@@ -1380,7 +1380,7 @@ fn approving_twice_starts_one_import_and_keeps_its_grant() {
     );
     assert!(first.ends_with("{\"ok\":true}"), "{first}");
     wait_for_import(&id);
-    let opened = shared.lock().unwrap().chats[0].project.clone().unwrap();
+    let opened = shared.guard().unwrap().chats[0].project.clone().unwrap();
     assert!(!opened.needs_approval() && opened.previous.is_none() && opened.origin.is_none());
     // Once attached, the approval is not replayed: refused, with nothing copied.
     for body in [
@@ -1395,7 +1395,7 @@ fn approving_twice_starts_one_import_and_keeps_its_grant() {
         assert!(importing(&id).is_none(), "no second copy starts");
     }
     assert_eq!(
-        snapshot(&shared.lock().unwrap().chats[0].project),
+        snapshot(&shared.guard().unwrap().chats[0].project),
         snapshot(&Some(opened))
     );
 }
@@ -1414,7 +1414,7 @@ fn failed_or_interrupted_imports_publish_nothing() {
     let id = crate::chat::create(&mut state);
     request(&mut state, &id, folder.to_str().unwrap(), AGENT).unwrap();
     let project = state.chats[0].project.clone().unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let published = || {
         fs::read_dir(root.join("grants"))
             .map(|entries| {
@@ -1439,7 +1439,7 @@ fn failed_or_interrupted_imports_publish_nothing() {
     assert!(import_in(&root, &shared, &id, &project.request, project.clone(), failed_save).is_err());
     assert!(published().is_empty(), "{:?}", published());
     assert!(
-        shared.lock().unwrap().chats[0]
+        shared.guard().unwrap().chats[0]
             .project
             .as_ref()
             .unwrap()
@@ -1450,7 +1450,7 @@ fn failed_or_interrupted_imports_publish_nothing() {
     fs::create_dir_all(root.join("grants/.pending-p-1/combined")).unwrap();
     fs::write(root.join("grants/.pending-p-1/combined/half.txt"), "partial").unwrap();
     import_in(&root, &shared, &id, &project.request, project.clone(), no_save).unwrap();
-    let grant = shared.lock().unwrap().chats[0]
+    let grant = shared.guard().unwrap().chats[0]
         .project
         .as_ref()
         .unwrap()
@@ -1572,11 +1572,11 @@ fn operator_open_list_reports_each_path_and_requests_the_valid_folders_together(
 
     // One approval copies both folders, each to its own mount.
     let root = fixture.0.join("projects");
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     fs::write(api.join("a.txt"), "a").unwrap();
     fs::write(other.join("b.txt"), "b").unwrap();
     import_in(&root, &shared, &id, &project.request, project.clone(), no_save).unwrap();
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let opened = state.chats[0].project.as_ref().unwrap();
     assert!(!opened.pending && opened.also.is_empty());
     assert_eq!(

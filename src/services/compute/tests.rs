@@ -135,14 +135,14 @@ fn five_default_workers_and_an_eight_gib_server_fit_the_pool() {
 #[test]
 fn concurrent_requests_cannot_oversubscribe_the_memory_pool() {
     let (state, run, _, time) = fixture();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let jobs = (0..4)
         .map(|slot| {
-            let shared = Arc::clone(&shared);
+            let shared = shared.clone();
             let run = run.clone();
             std::thread::spawn(move || {
                 request(
-                    &mut shared.lock().unwrap(),
+                    &mut shared.guard().unwrap(),
                     &run,
                     time,
                     &format!("parallel-{slot}"),
@@ -157,7 +157,7 @@ fn concurrent_requests_cannot_oversubscribe_the_memory_pool() {
         2
     );
     assert_eq!(
-        status(&shared.lock().unwrap().services)["capacity"]["available"]["memory_bytes"],
+        status(&shared.guard().unwrap().services)["capacity"]["available"]["memory_bytes"],
         4 * GIB
     );
 }

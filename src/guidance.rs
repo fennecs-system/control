@@ -82,14 +82,15 @@ impl AttemptTools for Tools {
         &[NAME]
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
-        let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        let run = state
-            .runtime
-            .runs
-            .get(cx.attempt.run)
-            .filter(|r| r.status == RunStatus::Running)
-            .ok_or_else(|| io::Error::other("Attempt is not active"))?;
-        answer(run, args)
+        cx.host.0.read(|state| {
+            let run = state
+                .runtime
+                .runs
+                .get(cx.attempt.run)
+                .filter(|r| r.status == RunStatus::Running)
+                .ok_or_else(|| io::Error::other("Attempt is not active"))?;
+            answer(run, args)
+        })?
     }
 }
 /// Answer a call from the active `run`; a pure read of its captured context.

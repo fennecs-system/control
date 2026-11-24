@@ -13,6 +13,7 @@
 //! closes when its grant is revoked or expires, like a port's own relay.
 use super::multiplex_transport::{Incoming, Transport};
 use super::*;
+use crate::store::Store;
 
 /// The proxy's loopback port inside every service with approved egress.
 pub(crate) const PROXY_PORT: NonZeroU16 = NonZeroU16::new(3129).unwrap();
@@ -114,7 +115,7 @@ struct Active {
 #[derive(Default)]
 pub(super) struct Proxies(Vec<(Key, Active)>);
 impl Proxies {
-    pub(super) fn sync(&mut self, shared: &Arc<Mutex<State>>, wanted: &[Key]) {
+    pub(super) fn sync(&mut self, shared: &Store, wanted: &[Key]) {
         for (_, active) in self
             .0
             .extract_if(.., |(key, active)| !wanted.contains(key) || active.handle.is_finished())
@@ -139,13 +140,13 @@ impl Proxies {
         }
     }
 }
-fn run(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>) {
+fn run(shared: &Store, key: &Key, cancel: &Arc<AtomicBool>) {
     let alive = || {
         !cancel.load(Ordering::Acquire)
             && !crate::shutdown::requested()
             && shared
-                .lock()
-                .is_ok_and(|state| grants(PortAuthority::of(&state), key, now()).next().is_some())
+                .read(|state| grants(PortAuthority::of(state), key, now()).next().is_some())
+                .unwrap_or(false)
     };
     while alive() {
         let _ = listen(shared, key, cancel, &alive);
@@ -157,19 +158,18 @@ fn run(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>) {
         }
     }
 }
-fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive: &dyn Fn() -> bool) -> io::Result<()> {
-    let (service, expires) = {
-        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+fn listen(shared: &Store, key: &Key, cancel: &Arc<AtomicBool>, alive: &dyn Fn() -> bool) -> io::Result<()> {
+    let (service, expires) = shared.read(|state| -> io::Result<_> {
         let time = now();
-        let ports = grants(PortAuthority::of(&state), key, time).collect::<Vec<_>>();
+        let ports = grants(PortAuthority::of(state), key, time).collect::<Vec<_>>();
         let first = ports.first().ok_or_else(|| io::Error::other("No approved egress"))?;
         let expires = ports
             .iter()
             .filter_map(|p| p.approval.as_ref().map(|a| a.expires))
             .max()
             .unwrap_or(time);
-        (authorized(PortAuthority::of(&state), first, time)?, expires)
-    };
+        Ok((authorized(PortAuthority::of(state), first, time)?, expires))
+    })??;
     let binding = crate::services::port_binding(crate::engine::isolation(), &service, &key.container)?;
     let (shared, key, cancel) = (shared.clone(), key.clone(), cancel.clone());
     multiplex::serve(
@@ -180,7 +180,7 @@ fn listen(shared: &Arc<Mutex<State>>, key: &Key, cancel: &Arc<AtomicBool>, alive
     )
 }
 /// Hands one relayed stream to [`handle`].
-fn session(shared: &Arc<Mutex<State>>, key: &Key, cancel: &AtomicBool, connection: Incoming, link: Arc<Transport>) {
+fn session(shared: &Store, key: &Key, cancel: &AtomicBool, connection: Incoming, link: Arc<Transport>) {
     bridge(connection, link, |client| {
         let _ = handle(shared, key, cancel, client);
     });
@@ -311,12 +311,7 @@ fn denied(host: &str, port: u16) -> String {
     )
 }
 /// Serves one proxy request read from `client`. Test seam: needs no relay.
-pub(super) fn handle(
-    shared: &Arc<Mutex<State>>,
-    key: &Key,
-    cancel: &AtomicBool,
-    mut client: TcpStream,
-) -> io::Result<()> {
+pub(super) fn handle(shared: &Store, key: &Key, cancel: &AtomicBool, mut client: TcpStream) -> io::Result<()> {
     client.set_read_timeout(Some(HEAD_TIMEOUT))?;
     let (head, rest) = read_head(&mut client)?;
     let request = match parse(&head) {
@@ -337,13 +332,13 @@ pub(super) fn handle(
         !cancel.load(Ordering::Acquire)
             && !crate::shutdown::requested()
             && shared
-                .lock()
-                .is_ok_and(|state| authorized(PortAuthority::of(&state), grant, now()).is_ok())
+                .read(|state| authorized(PortAuthority::of(state), grant, now()).is_ok())
+                .unwrap_or(false)
     };
     let grant = shared
-        .lock()
+        .read(|state| grant(PortAuthority::of(state), key, &host, port, now()))
         .ok()
-        .and_then(|state| grant(PortAuthority::of(&state), key, &host, port, now()));
+        .flatten();
     let Some((grant, target)) = grant.and_then(|g| g.approval.as_ref().and_then(|a| a.pinned).map(|t| (g, t))) else {
         return respond(&mut client, "403 Forbidden", &denied(&host, port));
     };

@@ -10,6 +10,7 @@
 //! evicted attempt's directory is deleted. `control_history_read` lists,
 //! reads and searches these roots beside the chat's own (`recall`).
 use super::*;
+use crate::store::Store;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -72,7 +73,7 @@ fn within(inner: &Root, block: Block) -> bool {
 /// without them `sources` holds one original per step. Returns the key.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn retain(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     run: &str,
     generation: &str,
     model: &crate::model_calls::Endpoint,
@@ -86,8 +87,7 @@ pub(crate) fn retain(
         return Err(io::Error::other("A step leaf needs one source per step"));
     }
     // Register the attempt before writing, so a concurrent prune keeps it.
-    let (evicted, registered, new) = {
-        let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+    let (evicted, registered, new) = shared.write(|state| -> io::Result<_> {
         let found = state
             .runtime
             .runs
@@ -117,12 +117,12 @@ pub(crate) fn retain(
         }
         let excess = turns.len().saturating_sub(TURNS);
         let evicted: Vec<String> = turns.drain(..excess).map(|t| t.generation).collect();
-        (
+        Ok((
             evicted,
             turns.iter().map(|t| t.generation.clone()).collect::<Vec<_>>(),
             new,
-        )
-    };
+        ))
+    })??;
     let parent = turns_directory()?;
     private_directory(&parent)?;
     for old in evicted {
@@ -159,29 +159,30 @@ pub(crate) fn retain(
         return Err(io::Error::other("Step node exceeds the summary node size"));
     }
     crate::config::write_in(&directory, &format!("{key}.json"), &bytes)?;
-    let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-    if let Some(turn) = state
-        .runtime
-        .compaction
-        .turns
-        .iter_mut()
-        .find(|t| t.generation == generation)
-    {
-        turn.roots.retain(|root| !within(root, block));
-        if !turn
-            .roots
-            .iter()
-            .any(|root| block.start >= root.start && block.end() <= root.start + (1u64 << root.level))
+    shared.write(|state| {
+        if let Some(turn) = state
+            .runtime
+            .compaction
+            .turns
+            .iter_mut()
+            .find(|t| t.generation == generation)
         {
-            turn.roots.push(Root {
-                key: key.clone(),
-                start: block.start,
-                level: block.level,
-            });
-            turn.roots.sort_by_key(|root| root.start);
+            turn.roots.retain(|root| !within(root, block));
+            if !turn
+                .roots
+                .iter()
+                .any(|root| block.start >= root.start && block.end() <= root.start + (1u64 << root.level))
+            {
+                turn.roots.push(Root {
+                    key: key.clone(),
+                    start: block.start,
+                    level: block.level,
+                });
+                turn.roots.sort_by_key(|root| root.start);
+            }
         }
-    }
-    Ok(key)
+        Ok(key)
+    })?
 }
 /// Delete step-tree directories no attempt is registered for, once stale.
 fn prune(parent: &std::path::Path, registered: &[String]) {

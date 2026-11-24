@@ -10,6 +10,7 @@
 //! (cost per outcome, progress per model turn). Reads are operator-only
 //! (`control.run.scores`) plus one line in the chat view.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{
     State,
     tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost},
@@ -19,7 +20,6 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     io,
-    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -336,18 +336,17 @@ fn retire(scores: &mut Vec<Probe>, chats: &[crate::chat::Session]) -> bool {
 }
 
 /// Samples due probes until shutdown. Probe commands run without the state lock.
-pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
+pub fn supervise(shared: Store) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         while !crate::shutdown::pause(TICK) {
-            let pending = match shared.lock() {
-                Ok(mut state) => {
-                    let State { scores, chats, .. } = &mut *state;
-                    if retire(scores, chats) {
-                        let _ = crate::storage::save(&state);
-                    }
-                    due(&state, now())
+            let Ok(pending) = shared.write(|state| {
+                let State { scores, chats, .. } = &mut *state;
+                if retire(scores, chats) {
+                    let _ = crate::storage::save(state);
                 }
-                Err(_) => return,
+                due(state, now())
+            }) else {
+                return;
             };
             for item in pending {
                 if crate::shutdown::requested() {
@@ -356,17 +355,21 @@ pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
                 let outcome = item
                     .target
                     .and_then(|(service, command)| sample(&service, &command, TIMEOUT));
-                let Ok(mut state) = shared.lock() else { return };
-                if apply(
-                    &mut state,
-                    &item.chat,
-                    &item.name,
-                    now(),
-                    item.trigger,
-                    item.milestones,
-                    outcome,
-                ) {
-                    let _ = crate::storage::save(&state);
+                let applied = shared.write(|state| {
+                    if apply(
+                        state,
+                        &item.chat,
+                        &item.name,
+                        now(),
+                        item.trigger,
+                        item.milestones,
+                        outcome,
+                    ) {
+                        let _ = crate::storage::save(state);
+                    }
+                });
+                if applied.is_err() {
+                    return;
                 }
             }
         }
@@ -553,8 +556,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
     let shared = host.0;
     let node = control_core::resources::NodeId::try_from(crate::config::node_id().map_err(io::Error::other)?)
         .map_err(|error| io::Error::other(error.to_string()))?;
-    let (caller, chat) = {
-        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+    let (caller, chat) = shared.read(|state| -> io::Result<_> {
         let run = state
             .runtime
             .runs
@@ -572,28 +574,26 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
             .chat_id
             .clone()
             .ok_or_else(|| io::Error::other("A chat is required"))?;
-        (run.clone(), chat)
-    };
+        Ok((run.clone(), chat))
+    })??;
     match call {
-        ScoreCall::Clear { name } => {
-            let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+        ScoreCall::Clear { name } => shared.write(|state| {
             let previous = state.scores.clone();
             state.scores.retain(|probe| !(probe.chat == chat && probe.name == name));
             let removed = previous.len() != state.scores.len();
-            if removed && let Err(error) = crate::storage::save(&state) {
+            if removed && let Err(error) = crate::storage::save(state) {
                 state.scores = previous;
                 return Err(error);
             }
             Ok(json!({"cleared":removed,"name":name}))
-        }
+        })?,
         ScoreCall::Declare {
             name,
             service_id,
             command,
             interval_seconds,
         } => {
-            let service = {
-                let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+            let service = shared.read(|state| -> io::Result<_> {
                 let replacing = state
                     .scores
                     .iter()
@@ -608,7 +608,7 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
                         "This node already keeps the maximum number of score probes",
                     ));
                 }
-                state
+                Ok(state
                     .services
                     .iter()
                     .find(|service| {
@@ -621,53 +621,54 @@ fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, call: ScoreCall) -> i
                             )
                     })
                     .ok_or_else(|| io::Error::other("Service is not owned by this chat or its team"))?
-                    .binding_snapshot()
-            };
+                    .binding_snapshot())
+            })??;
             // Test before accepting: a probe that cannot score is rejected now,
             // not discovered failing later.
             let values = sample(&service, &command, TEST_TIMEOUT)
                 .map_err(|error| io::Error::other(format!("The probe was not saved: {error}")))?;
             let time = now();
-            let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-            let milestones = milestones(TeamProgress::of(&state), &chat);
-            let mut probe = Probe {
-                chat: chat.clone(),
-                name: name.clone(),
-                service: service_id,
-                generation: service.resource.generation.get(),
-                command,
-                interval_seconds,
-                declared_unix: time,
-                last_unix: time,
-                milestones,
-                error: String::new(),
-                samples: VecDeque::new(),
-            };
-            push(
-                &mut probe.samples,
-                Sample {
-                    unix: time,
-                    trigger: Trigger::Declared,
-                    values: values.clone(),
-                },
-            );
-            let previous = state.scores.clone();
-            state
-                .scores
-                .retain(|existing| !(existing.chat == chat && existing.name == name));
-            if state.scores.len() >= MAX_PROBES {
-                state.scores = previous;
-                return Err(io::Error::other(
-                    "This node already keeps the maximum number of score probes",
-                ));
-            }
-            state.scores.push(probe);
-            if let Err(error) = crate::storage::save(&state) {
-                state.scores = previous;
-                return Err(error);
-            }
-            Ok(json!({"name":name,"values":values,"interval_seconds":interval_seconds,
-                "note":"Saved. Control samples it on schedule and at team milestones; the operator reads the series. Keep it quick and read-only."}))
+            shared.write(|state| {
+                let milestones = milestones(TeamProgress::of(state), &chat);
+                let mut probe = Probe {
+                    chat: chat.clone(),
+                    name: name.clone(),
+                    service: service_id,
+                    generation: service.resource.generation.get(),
+                    command,
+                    interval_seconds,
+                    declared_unix: time,
+                    last_unix: time,
+                    milestones,
+                    error: String::new(),
+                    samples: VecDeque::new(),
+                };
+                push(
+                    &mut probe.samples,
+                    Sample {
+                        unix: time,
+                        trigger: Trigger::Declared,
+                        values: values.clone(),
+                    },
+                );
+                let previous = state.scores.clone();
+                state
+                    .scores
+                    .retain(|existing| !(existing.chat == chat && existing.name == name));
+                if state.scores.len() >= MAX_PROBES {
+                    state.scores = previous;
+                    return Err(io::Error::other(
+                        "This node already keeps the maximum number of score probes",
+                    ));
+                }
+                state.scores.push(probe);
+                if let Err(error) = crate::storage::save(state) {
+                    state.scores = previous;
+                    return Err(error);
+                }
+                Ok(json!({"name":name,"values":values,"interval_seconds":interval_seconds,
+                    "note":"Saved. Control samples it on schedule and at team milestones; the operator reads the series. Keep it quick and read-only."}))
+            })?
         }
     }
 }

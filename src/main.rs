@@ -86,6 +86,8 @@ mod shutdown;
 mod solver;
 mod spawning;
 mod storage;
+mod store;
+use store::Store;
 #[cfg(test)]
 mod test_support;
 mod texts;
@@ -103,7 +105,7 @@ use std::{
     collections::HashMap,
     io::{Read as _, Write},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -419,7 +421,7 @@ fn read_until(
     }
     true
 }
-fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::Access>) {
+fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
     if shutdown::requested() {
         let _ = control_http::respond(
@@ -857,11 +859,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
 // Commit while locked, then release state before touching the socket. Slow
 // readers must never prevent other clients or the supervisor from progressing.
 // Routes that change state run here; routes that only read it use `Read`.
-fn state_response(stream: &mut impl Write, state: &Mutex<State>, respond: impl FnOnce(&mut Vec<u8>, &mut State)) {
+fn state_response(stream: &mut impl Write, state: &Store, respond: impl FnOnce(&mut Vec<u8>, &mut State)) {
     let mut response = Vec::new();
-    match state.lock() {
-        Ok(mut state) => respond(&mut response, &mut state),
-        Err(_) => unavailable(&mut response),
+    if state.write(|state| respond(&mut response, state)).is_err() {
+        unavailable(&mut response);
     }
     let _ = stream.write_all(&response);
 }
@@ -913,14 +914,9 @@ impl<Q, V: 'static> Read<Q, V> {
 }
 // Not inlined, so profiles can tell its wait for the state lock from rendering.
 #[inline(never)]
-pub(crate) fn read_response<Q, V: 'static>(
-    stream: &mut impl Write,
-    state: &Mutex<State>,
-    route: &Read<Q, V>,
-    request: Q,
-) {
+pub(crate) fn read_response<Q, V: 'static>(stream: &mut impl Write, state: &Store, route: &Read<Q, V>, request: Q) {
     // The guard is dropped as soon as the view is copied.
-    let view = state.lock().map(|state| (route.view)(&state, request));
+    let view = state.read(|state| (route.view)(state, request));
     let mut response = Vec::new();
     match view {
         Ok(view) => {
@@ -1129,7 +1125,7 @@ fn run() -> std::io::Result<()> {
     if let Err(error) = projects::discard_interrupted_imports() {
         eprintln!("Could not remove interrupted folder imports: {error}");
     }
-    let state = Arc::new(Mutex::new(loaded));
+    let state = Store::new(loaded);
     shutdown::install()?;
     // Blocking accept removes the 50 ms admission poll. Cancellation wakes it
     // through the same loopback listener, without doing socket I/O in a signal handler.
@@ -1185,28 +1181,31 @@ fn run() -> std::io::Result<()> {
     // Approved folder imports run after their HTTP response; each stops at its
     // next copied entry and records the interruption beside its request.
     projects::join_imports();
-    let state = state.lock().map_err(|_| {
-        std::io::Error::other("State unavailable during shutdown; retained attempts require inspection on restart.")
-    })?;
-    // A stopped node leaves a self-contained `state.json` (empty patch log), so
-    // older builds and offline readers need nothing else.
-    storage::compact(&state)?;
-    stopped?;
-    if service_failed {
-        return Err(std::io::Error::other(
-            "Service supervisor stopped unexpectedly; inspect retained service identities.",
-        ));
-    }
-    if port_failed {
-        return Err(std::io::Error::other(
-            "Port supervisor stopped unexpectedly; inspect retained port approvals.",
-        ));
-    }
-    requests_result?;
-    match listener_error {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
+    state
+        .read(|state| -> std::io::Result<()> {
+            // A stopped node leaves a self-contained `state.json` (empty patch log), so
+            // older builds and offline readers need nothing else.
+            storage::compact(state)?;
+            stopped?;
+            if service_failed {
+                return Err(std::io::Error::other(
+                    "Service supervisor stopped unexpectedly; inspect retained service identities.",
+                ));
+            }
+            if port_failed {
+                return Err(std::io::Error::other(
+                    "Port supervisor stopped unexpectedly; inspect retained port approvals.",
+                ));
+            }
+            requests_result?;
+            match listener_error {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
+        })
+        .map_err(|_| {
+            std::io::Error::other("State unavailable during shutdown; retained attempts require inspection on restart.")
+        })?
 }
 
 #[cfg(test)]

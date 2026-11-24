@@ -70,7 +70,7 @@ const SCENARIOS: [(&str, &[Condition]); 20] = [
 ];
 
 struct Fixture {
-    shared: Arc<Mutex<State>>,
+    shared: Store,
     run: String,
     chat: String,
     /// The chat's callsign: briefs name teams by it, and it hashes the id.
@@ -170,7 +170,7 @@ fn fixture(conditions: &[Condition]) -> Fixture {
     let callsign = crate::callsigns::name(&state.chats, &chat).unwrap().into_owned();
     Fixture {
         callsign,
-        shared: Arc::new(Mutex::new(state)),
+        shared: crate::store::Store::new(state),
         run: if conditions.contains(&Missing) {
             "missing-run".into()
         } else {
@@ -377,9 +377,9 @@ fn case((scenario, conditions): (&str, &[Condition]), label: &str, request: Valu
         Some(nonce) => json!({"nonce":nonce,"request":request}),
         None => json!({"request":request}),
     };
-    let before = serde_json::to_value(&*fixture.shared.lock().unwrap()).unwrap();
+    let before = serde_json::to_value(&*fixture.shared.guard().unwrap()).unwrap();
     let response = dispatch_raw(&fixture.shared, &fixture.run, &envelope, fixture.workspace.as_deref());
-    let after = serde_json::to_value(&*fixture.shared.lock().unwrap()).unwrap();
+    let after = serde_json::to_value(&*fixture.shared.guard().unwrap()).unwrap();
     let mut paths = Vec::new();
     changed(&before, &after, "", 0, &mut paths);
     let response = if request["method"] == "tools/list" {

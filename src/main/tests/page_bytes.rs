@@ -6,7 +6,7 @@ use std::io::Read;
 
 const SESSION: &str = "page-bytes-operator-session";
 
-fn exchange(state: &Arc<Mutex<State>>, method: &str, target: &str, cookie: &str, body: &str) -> String {
+fn exchange(state: &Store, method: &str, target: &str, cookie: &str, body: &str) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let mut client = TcpStream::connect(address).unwrap();
@@ -34,7 +34,7 @@ fn exchange(state: &Arc<Mutex<State>>, method: &str, target: &str, cookie: &str,
 }
 /// Each `(fixture name, method, target, cookie, body)` against its pinned
 /// bytes: the commands that refresh the changed ones, if any.
-fn changed(state: &Arc<Mutex<State>>, pages: &[(&str, &str, &str, &str, &str)]) -> Vec<String> {
+fn changed(state: &Store, pages: &[(&str, &str, &str, &str, &str)]) -> Vec<String> {
     pages
         .iter()
         .filter_map(|(name, method, target, cookie, body)| {
@@ -157,7 +157,7 @@ fn fixture() -> State {
 
 #[test]
 fn chat_pages_match_their_pinned_bytes() {
-    let state = Arc::new(Mutex::new(fixture()));
+    let state = Store::new(fixture());
     let pages = [
         ("dm", "/dm/c-100-0", ""),
         ("dm_open_picker", "/dm/c-100-1", "; control_conversations=open"),
@@ -176,7 +176,7 @@ fn chat_pages_match_their_pinned_bytes() {
 /// they hold the state lock while encoding.
 #[test]
 fn mcp_read_tools_match_their_pinned_bytes() {
-    let state = Arc::new(Mutex::new(fixture()));
+    let state = Store::new(fixture());
     let call = |id: &str, name: &str, arguments: &str| {
         format!(
             r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{name}","arguments":{arguments}}}}}"#
@@ -222,7 +222,7 @@ fn bots_fixture() -> State {
 
 #[test]
 fn bots_pages_match_their_pinned_bytes() {
-    let state = Arc::new(Mutex::new(bots_fixture()));
+    let state = Store::new(bots_fixture());
     let pages = [
         ("bots", "/?view=agents"),
         ("bots_search", "/?view=agents&q=ridge+1"),
@@ -242,7 +242,7 @@ fn history_pages_match_their_pinned_bytes() {
     state.chats[1].persona = Some("lead".into());
     state.runtime.notice = "Notice <for> & history".into();
     let dm = state.chats[0].id.clone();
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     let targets = [
         ("history", "/bots/history".to_owned()),
         ("history_expand", "/bots/history?expand=1".to_owned()),
@@ -262,7 +262,7 @@ fn history_pages_match_their_pinned_bytes() {
 
 #[test]
 fn dms_landing_matches_its_pinned_bytes() {
-    let state = Arc::new(Mutex::new(fixture()));
+    let state = Store::new(fixture());
     let pages = [
         ("dms", "/dms", ""),
         ("dms_new", "/dms?new=1", "; control_recent_chat=c-100-0"),

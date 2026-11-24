@@ -7,6 +7,7 @@ mod pathology;
 mod tools;
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, identity, tool_registry::AttemptRef};
 use control::permissions::{AutoApproval, Mode};
 use control_bot::{BotId, Budget, ChatId, Definition, Event, Restart, Source, Status, Topic, TurnId};
@@ -14,10 +15,7 @@ use control_effect::machine::{Machine, Now, Planned};
 pub use lifecycle::Facts;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{
-    io,
-    sync::{Arc, Mutex},
-};
+use std::io;
 pub use tools::{BotCall, BotOps, Tools};
 
 const COOLDOWN_MS: u64 = 30_000;
@@ -2258,11 +2256,10 @@ fn related(state: &State, chat: &str, requester: &str, actor: &identity::Actor) 
 }
 
 /// Worker tool entry point: agents request bots and read their state.
-pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: BotCall) -> io::Result<Value> {
+pub(crate) fn execute(shared: &Store, attempt: &AttemptRef<'_>, call: BotCall) -> io::Result<Value> {
     // Read outside the state lock.
     let policy = control::permissions::read().auto_approval;
-    let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-    handle_with(&mut state, attempt, call, crate::storage::save, &policy)
+    shared.write(|state| handle_with(state, attempt, call, crate::storage::save, &policy))?
 }
 #[cfg(test)]
 fn handle(
@@ -2812,12 +2809,12 @@ pub(crate) fn pending_json(state: &State, chat: &str) -> Value {
 }
 
 /// `POST /tools/bots` from the chat panel: allow or deny, then return to the chat.
-pub fn http(stream: &mut impl io::Write, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
+pub fn http(stream: &mut impl io::Write, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     http_with_save(stream, shared, method, path, body, crate::storage::save)
 }
 fn http_with_save(
     stream: &mut impl io::Write,
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     method: &str,
     path: &str,
     body: &[u8],
@@ -2838,23 +2835,26 @@ fn http_with_save(
         }
         let id = fields.get("id").ok_or("Missing request ID")?;
         let chat = chat.as_deref().ok_or("Missing chat")?;
-        let mut state = shared.lock().map_err(|_| "State unavailable")?;
-        let checkpoint = {
-            let targets = state
-                .bots
-                .approvals
-                .iter()
-                .filter(|a| &a.id == id)
-                .flat_map(|a| [a.chat.as_str(), a.requester.as_str()])
-                .collect();
-            crate::chat::Checkpoint::capture(&state, &targets)
-        };
-        let result = decide(&mut state, id, fields.contains_key("allow"), Some(chat), Now(now_ms()));
-        if result.is_err() || save(&state).is_err() {
-            checkpoint.restore(&mut state);
-            return result.and(Err("Could not save the decision. Try again."));
-        }
-        Ok(())
+        shared
+            .write(|state| {
+                let checkpoint = {
+                    let targets = state
+                        .bots
+                        .approvals
+                        .iter()
+                        .filter(|a| &a.id == id)
+                        .flat_map(|a| [a.chat.as_str(), a.requester.as_str()])
+                        .collect();
+                    crate::chat::Checkpoint::capture(state, &targets)
+                };
+                let result = decide(state, id, fields.contains_key("allow"), Some(chat), Now(now_ms()));
+                if result.is_err() || save(state).is_err() {
+                    checkpoint.restore(state);
+                    return result.and(Err("Could not save the decision. Try again."));
+                }
+                Ok(())
+            })
+            .map_err(|_| "State unavailable")?
     })();
     let _ = match (result, chat) {
         (result, _) if asynchronous => {

@@ -26,7 +26,7 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
     let workspace = crate::runtime::workspace("attempt-a").unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.canonicalize().unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let name = crate::test_support::unique("control-mailbox-qa");
     struct Cleanup(String);
     impl Drop for Cleanup {
@@ -183,7 +183,7 @@ fn live_mailbox_notifications_and_tool_calls_roundtrip() {
         room_read["posts"][0]["text"],
         "isolated-probe-22\nquoted: \"text\"; braces: } ]; slash: \\; unicode: 🦊\r\nlast line"
     );
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert_eq!(state.collective.posts.len(), 22);
     assert_eq!(state.chats.len(), 6);
     assert!(
@@ -227,7 +227,7 @@ fn ordinary_agents_receive_the_shared_continuity_mcp_without_bot_authority() {
         let id = state.runtime.runs[0].id().to_string();
         let attempt = &state.runtime.runs[0].attempts[0];
         assert!(attempt.turn_mailbox.is_some() && attempt.context_trace.is_some());
-        let shared = Arc::new(Mutex::new(state));
+        let shared = crate::store::Store::new(state);
         let listed = rpc_at(
             &shared,
             &id,
@@ -254,7 +254,7 @@ fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuit
     crate::chat::send(&mut state, &chat, "Work", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
     let id = state.runtime.runs[0].id().to_string();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let list = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/list"}});
     let legacy = rpc_at(&shared, &id, &list, None);
     assert!(
@@ -265,7 +265,7 @@ fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuit
             .any(|t| t["name"] == "control_turn_context")
     );
     {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.guard().unwrap();
         state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed::default()));
         let mut mailbox = Mailbox::default();
         mailbox
@@ -299,7 +299,7 @@ fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuit
             .iter()
             .any(|t| t["name"] == "control_turn_context")
     );
-    let before = serde_json::to_value(&*shared.lock().unwrap()).unwrap();
+    let before = serde_json::to_value(&*shared.guard().unwrap()).unwrap();
     for name in [
         "control_agent_spawn",
         "control_agent_spawn_blocking",
@@ -324,7 +324,7 @@ fn staged_handoffs_fence_mutators_by_host_policy_and_legacy_chats_hide_continuit
             "{name}"
         );
     }
-    assert_eq!(serde_json::to_value(&*shared.lock().unwrap()).unwrap(), before);
+    assert_eq!(serde_json::to_value(&*shared.guard().unwrap()).unwrap(), before);
 }
 fn design_transport_envelope() -> Value {
     // Reproduce the recorded successful transport shape with generic task
@@ -342,8 +342,8 @@ fn design_rpc_reports_fields_without_blaming_transport_and_retains_pause_fences(
     let input = crate::design::parse_input(envelope["request"]["params"]["arguments"].clone()).unwrap();
     let admitted =
         crate::design::tests::ask_without_io(&mut state, &id, envelope["nonce"].as_str().unwrap(), input).unwrap();
-    let shared = Arc::new(Mutex::new(state));
-    let before = serde_json::to_vec(&*shared.lock().unwrap()).unwrap();
+    let shared = crate::store::Store::new(state);
+    let before = serde_json::to_vec(&*shared.guard().unwrap()).unwrap();
     for (field, value, expected) in [
         ("question", json!(null), "question must be a string"),
         ("question", json!(" "), "question must contain"),
@@ -361,7 +361,7 @@ fn design_rpc_reports_fields_without_blaming_transport_and_retains_pause_fences(
         let message = crate::toolbox::failure_text(&response).unwrap();
         assert!(message.starts_with(expected), "{message}");
         assert!(!message.contains("identity"));
-        assert_eq!(serde_json::to_vec(&*shared.lock().unwrap()).unwrap(), before);
+        assert_eq!(serde_json::to_vec(&*shared.guard().unwrap()).unwrap(), before);
     }
     for _ in 0..2 {
         let replay = rpc_at(&shared, &id, &envelope, None);
@@ -395,11 +395,11 @@ fn design_rpc_reports_fields_without_blaming_transport_and_retains_pause_fences(
         crate::toolbox::failure_text(&rpc_at(&shared, &id, &write, None)).unwrap(),
         "This attempt is pausing for a design answer; no more tools may run."
     );
-    assert_eq!(serde_json::to_vec(&*shared.lock().unwrap()).unwrap(), before);
+    assert_eq!(serde_json::to_vec(&*shared.guard().unwrap()).unwrap(), before);
 }
 #[test]
 fn completed_child_summary_is_available_through_the_worker_broker() {
-    let shared = Arc::new(Mutex::new(crate::delegated_results::tests::fixture()));
+    let shared = crate::store::Store::new(crate::delegated_results::tests::fixture());
     let response = rpc_at(
         &shared,
         "resumed",
@@ -410,7 +410,7 @@ fn completed_child_summary_is_available_through_the_worker_broker() {
     let value: Value = serde_json::from_str(text).unwrap();
     assert_eq!(value["summary"]["text"], "All reques");
     assert_eq!(value["summary"]["next_offset"], 10);
-    assert_eq!(shared.lock().unwrap().runtime.runs.len(), 3);
+    assert_eq!(shared.guard().unwrap().runtime.runs.len(), 3);
 }
 #[test]
 fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
@@ -428,7 +428,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         parent: Some("parent".into()),
         bundle: None,
     });
-    let shared = Arc::new(Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     let callable = callable(&shared, &id);
     let names = callable.iter().map(String::as_str).collect::<Vec<_>>();
     assert!(names.contains(&"control_workspace_run"));
@@ -465,7 +465,7 @@ fn judge_tools_are_enforced_even_when_unadvertised_names_are_forged() {
         );
         assert!(crate::toolbox::failure_text(&denied).unwrap().contains("Judge policy"));
     }
-    assert_eq!(shared.lock().unwrap().runtime.runs.len(), 1);
+    assert_eq!(shared.guard().unwrap().runtime.runs.len(), 1);
     // Captured guidance is a read every role may make, judges included.
     assert!(names.contains(&"control_guidance"));
     let read = rpc_at(
@@ -501,7 +501,7 @@ fn an_approved_advisor_judge_gains_only_evidence_notes() {
         parent: None,
         bundle: None,
     });
-    let names = |shared: &Arc<Mutex<State>>| {
+    let names = |shared: &Store| {
         rpc_at(
             shared,
             &id,
@@ -514,10 +514,10 @@ fn an_approved_advisor_judge_gains_only_evidence_notes() {
             .map(|t| t["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>()
     };
-    let shared = Arc::new(Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     let judge = names(&shared);
     assert!(!judge.iter().any(|name| name == "control_agent_message"));
-    crate::bots::command(&mut shared.lock().unwrap(), &chat, "on").unwrap();
+    crate::bots::command(&mut shared.guard().unwrap(), &chat, "on").unwrap();
     let advisor = names(&shared);
     assert_eq!(
         advisor.iter().filter(|name| !judge.contains(name)).collect::<Vec<_>>(),
@@ -554,7 +554,7 @@ fn an_approved_advisor_judge_gains_only_evidence_notes() {
             "an advisor only steers the lead: {delivery}"
         );
     }
-    assert!(shared.lock().unwrap().collective.posts.is_empty());
+    assert!(shared.guard().unwrap().collective.posts.is_empty());
 }
 #[test]
 fn every_advertised_worker_tool_has_ui_registration() {
@@ -568,7 +568,7 @@ fn every_advertised_worker_tool_has_ui_registration() {
             run.status = RunStatus::Running;
             run.target.backend = backend;
             let id = run.id().to_string();
-            let shared = Arc::new(Mutex::new(state));
+            let shared = crate::store::Store::new(state);
             let response = rpc_at(
                 &shared,
                 &id,
@@ -579,7 +579,7 @@ fn every_advertised_worker_tool_has_ui_registration() {
                 let name = definition["name"].as_str().unwrap();
                 let entry =
                     control_context::tool_for_mcp(name).unwrap_or_else(|| panic!("Missing worker tool in UI: {name}"));
-                assert!(crate::tool_catalog::render(&shared.lock().unwrap(), name).contains(entry.title));
+                assert!(crate::tool_catalog::render(&shared.guard().unwrap(), name).contains(entry.title));
             }
         }
     }
@@ -612,7 +612,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
         continuation: None,
     });
     let id = run.id().to_string();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     for (name, args) in [
         ("control_workspace_start", json!({"command":"true"})),
         (
@@ -644,7 +644,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
         .unwrap()
         .call(&cx, "control_workspace_start", &json!({"command":"true"}));
     assert!(response.unwrap_err().to_string().contains("pausing for delegated"));
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert!(state.runtime.runs[0].attempts[0].command_jobs.is_empty());
     assert!(state.github_publications.is_empty());
 }
@@ -653,7 +653,7 @@ fn design_pause_blocks_further_tool_effects_until_user_answers() {
     let (mut state, _) = crate::design::tests::paused();
     state.runtime.runs[0].status = RunStatus::Running;
     let id = state.runtime.runs[0].id().to_string();
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     assert!(crate::design::requested(Some((&state, &id))));
     let response = rpc(
         &state,
@@ -661,14 +661,14 @@ fn design_pause_blocks_further_tool_effects_until_user_answers() {
         &json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_rust_run","arguments":{"code":"fn main() {}"}}}}),
     );
     assert!(crate::toolbox::failure_text(&response).unwrap().contains("pausing"));
-    state.lock().unwrap().runtime.runs[0].attempts[0].workspace_id = Some("retry-generation".into());
+    state.guard().unwrap().runtime.runs[0].attempts[0].workspace_id = Some("retry-generation".into());
     assert!(!crate::design::requested(Some((&state, &id))));
 }
-fn rpc(state: &Arc<Mutex<State>>, run: &str, value: &Value) -> Value {
+fn rpc(state: &Store, run: &str, value: &Value) -> Value {
     rpc_at(state, run, value, None)
 }
 /// Every tool a session may call: its listed core plus its deferred index.
-fn callable(state: &Arc<Mutex<State>>, run: &str) -> Vec<String> {
+fn callable(state: &Store, run: &str) -> Vec<String> {
     let listed = rpc(
         state,
         run,
@@ -702,7 +702,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     crate::chat::send(&mut state, &chat, "Tool error shapes", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
     let run = state.runtime.runs[0].id().to_string();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let call = |id: Value, name: &str, arguments: Value| {
         rpc(
             &shared,
@@ -751,7 +751,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
             assert!(message.starts_with(expected), "{message}");
         }
     }
-    assert!(shared.lock().unwrap().collective.posts.is_empty());
+    assert!(shared.guard().unwrap().collective.posts.is_empty());
     for (request, code) in [
         (
             json!({"jsonrpc":"1.0","id":6,"method":"tools/call","params":{"name":"control_room_list"}}),
@@ -780,7 +780,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let managed = state.runtime.runs[0].id().to_string();
     crate::chat::send(&mut state, &chat, "/steer Keep the public API", "test").unwrap();
-    let managed_state = Arc::new(Mutex::new(state));
+    let managed_state = crate::store::Store::new(state);
     let failed = rpc(
         &managed_state,
         &managed,
@@ -803,7 +803,7 @@ fn tool_failures_are_results_and_protocol_faults_stay_errors() {
     assert!(fault.get("result").is_none(), "{fault}");
     // Room-only methods keep their own protocol errors as well.
     let unsupported = crate::rooms::worker_rpc(
-        &mut shared.lock().unwrap(),
+        &mut shared.guard().unwrap(),
         &run,
         &json!({"request":{"jsonrpc":"2.0","id":9,"method":"prompts/list"}}),
     );
@@ -818,7 +818,7 @@ fn successful_results_leave_the_boundary_compact_and_identical_in_both_forms() {
     crate::chat::send(&mut state, &chat, "Compact results", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
     let run = state.runtime.runs[0].id().to_string();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let call = |nonce: &str, name: &str, arguments: Value| {
         let response = rpc(
             &shared,
@@ -878,7 +878,7 @@ fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
     let mut attempt = crate::usage::Attempt::new();
     attempt.workspace_id = Some("current-attempt".into());
     run.attempts.push(attempt);
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     let stale = std::env::temp_dir().canonicalize().unwrap();
     let request = json!({"nonce":"late-proposal","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_knowledge_propose","arguments":{"claim":"Must not persist","evidence":"stale mailbox","scope":"fixture","validity":"always"}}}});
     let response = rpc_at(&state, &id, &request, Some(&stale));
@@ -886,7 +886,7 @@ fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
         crate::toolbox::failure_text(&response).unwrap(),
         "Mailbox belongs to an inactive attempt"
     );
-    assert!(state.lock().unwrap().collective.proposals.is_empty());
+    assert!(state.guard().unwrap().collective.proposals.is_empty());
     for (name, args) in [
         ("control_room_post", json!({"message":"late effect"})),
         ("control_room_watch", json!({"enabled":true,"wake":true})),
@@ -902,8 +902,8 @@ fn stale_workspace_is_rejected_for_room_posts_before_dispatch() {
             "{text}"
         );
     }
-    assert!(state.lock().unwrap().collective.posts.is_empty());
-    assert!(state.lock().unwrap().collective.room_watches.is_empty());
+    assert!(state.guard().unwrap().collective.posts.is_empty());
+    assert!(state.guard().unwrap().collective.room_watches.is_empty());
 }
 #[test]
 fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
@@ -911,10 +911,10 @@ fn workspace_execution_is_backend_scoped_and_rejects_model_supplied_mounts() {
     state.runtime.enqueue("Test".into(), RunKind::Task, "test");
     state.runtime.runs[0].status = RunStatus::Running;
     let id = state.runtime.runs[0].id().to_string();
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     let request = json!({"request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_workspace_run","arguments":{"command":"true"}}}});
     assert!(crate::toolbox::failure_text(&rpc(&state, &id, &request)).is_some());
-    state.lock().unwrap().runtime.runs[0].target.backend = crate::backend::Backend::Claude;
+    state.guard().unwrap().runtime.runs[0].target.backend = crate::backend::Backend::Claude;
     let tools = rpc(
         &state,
         &id,
@@ -938,7 +938,7 @@ fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
     state.runtime.enqueue("Test tools".into(), RunKind::Task, "test");
     let run = state.runtime.runs[0].id().to_string();
     state.runtime.runs[0].status = RunStatus::Running;
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     let callable = callable(&state, &run);
     let names: std::collections::BTreeSet<_> = callable.iter().map(String::as_str).collect();
     for name in [
@@ -972,7 +972,7 @@ fn workers_get_concrete_tools_without_operator_authority_or_room_access() {
         &json!({"request":{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"control.chat.send"}}}),
     );
     assert!(crate::toolbox::failure_text(&forbidden).is_some());
-    state.lock().unwrap().runtime.runs[0].status = RunStatus::Completed;
+    state.guard().unwrap().runtime.runs[0].status = RunStatus::Completed;
     assert!(
         rpc(
             &state,
@@ -1012,7 +1012,7 @@ fn live_mailbox_survives_sustained_wake_driven_traffic() {
     let workspace = crate::runtime::workspace("attempt-stress").unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = workspace.canonicalize().unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let name = crate::test_support::unique("control-mailbox-stress");
     struct Cleanup(String);
     impl Drop for Cleanup {
@@ -1235,7 +1235,7 @@ fn tool_results_carry_the_observation_for_text_and_structured_clients() {
         "recent":[],"notifications":{"pending":0,"through":1,"recent":["hp=20"]}
     })).unwrap());
     crate::observe::declare_watch(&mut state, &chat, "w-1");
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let call = |name: &str| json!({"nonce":"1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":{}}}});
     let codex = || json!({"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"posted\":true}"}],"structuredContent":{"data":{"posted":true}},"isError":false}});
     let claude =
@@ -1263,7 +1263,7 @@ fn tool_results_carry_the_observation_for_text_and_structured_clients() {
         "text-only results stay text-only"
     );
 
-    shared.lock().unwrap().watches[0]
+    shared.guard().unwrap().watches[0]
         .notifications
         .as_mut()
         .unwrap()
@@ -1294,7 +1294,7 @@ fn tool_results_carry_the_observation_for_text_and_structured_clients() {
     assert_eq!(listed["result"], json!({"tools":[]}));
 
     // Stored activity never keeps the value.
-    let mut state = shared.lock().unwrap();
+    let mut state = shared.guard().unwrap();
     let output = format!("posted\n{block}");
     crate::worker::record_activity_for(
         &mut state,
@@ -1352,7 +1352,7 @@ fn an_approved_antibody_reads_every_team_notes_other_leads_and_notifies_the_oper
         workspace_id: Some("gen-1".into()),
         ..Default::default()
     }];
-    let shared = Arc::new(Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     let call = |nonce: &str, name: &str, arguments: Value| {
         rpc(
             &shared,
@@ -1363,8 +1363,8 @@ fn an_approved_antibody_reads_every_team_notes_other_leads_and_notifies_the_oper
     let failure = |value: Value| crate::toolbox::failure_text(&value).unwrap_or_default().to_owned();
     // Before approval it is an ordinary judge: no notes or notices.
     assert!(failure(call("n0", "control_operator_notify", json!({"text":"x"}))).contains("Judge policy"));
-    crate::bots::command(&mut shared.lock().unwrap(), &chat, "on").unwrap();
-    assert!(shared.lock().unwrap().bots.antibody(&chat));
+    crate::bots::command(&mut shared.guard().unwrap(), &chat, "on").unwrap();
+    assert!(shared.guard().unwrap().bots.antibody(&chat));
     // Read-only over the whole node.
     let brief = call("n1", "control_intel_brief", json!({}));
     assert_eq!(brief["result"]["isError"], false, "{brief}");
@@ -1426,7 +1426,7 @@ fn an_approved_antibody_reads_every_team_notes_other_leads_and_notifies_the_oper
         ))
         .contains("never repeated")
     );
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert_eq!(state.bots.notices.len(), 1);
     assert!(state.collective.posts.is_empty() && state.services.is_empty());
 }
@@ -1440,7 +1440,7 @@ fn a_cli_agent_gets_new_conversation_once_on_its_next_tool_result() {
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let id = state.runtime.runs[0].id().to_string();
     crate::chat::send(&mut state, &chat, "/steer Use the north gate", "test").unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let call = |nonce: &str| {
         rpc_at(
             &shared,
@@ -1470,7 +1470,7 @@ fn a_cli_agent_gets_new_conversation_once_on_its_next_tool_result() {
 /// so an inactive run answers even an unknown method with -32602.
 #[test]
 fn worker_envelopes_are_pinned() {
-    let shared = Arc::new(Mutex::new(State::default()));
+    let shared = crate::store::Store::new(State::default());
     let request = |request: Value| json!({"nonce":"1","request":request});
     for (envelope, expected) in [
         (
@@ -1509,7 +1509,7 @@ fn worker_envelopes_are_pinned() {
     crate::chat::send(&mut state, &chat, "Envelope shapes", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
     let run = state.runtime.runs[0].id().to_string();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     assert_eq!(
         dispatch_raw(
             &shared,

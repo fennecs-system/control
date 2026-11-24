@@ -2,11 +2,11 @@
 //! `watch-put`/`watch-rm`, and reads from the local spool.
 use super::{MAX_WATCHES, Watch, WatchCall};
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, identity, tool_registry::AttemptRef, watch_frame::Event};
 use serde_json::{Value, json};
 use std::{
     io::{self, Write},
-    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -135,10 +135,9 @@ fn arm_saved(state: &mut State, chat: &str, save: impl FnOnce(&State) -> io::Res
     Ok(armed)
 }
 
-pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: WatchCall) -> io::Result<Value> {
+pub(super) fn execute(shared: &Store, attempt: &AttemptRef<'_>, call: WatchCall) -> io::Result<Value> {
     let node = node()?;
-    let caller = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let caller = shared.read(|state| -> io::Result<_> {
         let run = state
             .runtime
             .runs
@@ -153,8 +152,8 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             return Err(fail("Judges cannot use watches"));
         }
         run.chat_id.as_ref().ok_or_else(|| fail("A chat is required"))?;
-        run.clone()
-    };
+        Ok(run.clone())
+    })??;
     let chat = caller.chat_id.clone().unwrap_or_default();
     let reachable = |state: &State, watch: &Watch| {
         watch.chat == chat
@@ -179,7 +178,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                 digest(&[attempt.run, attempt.generation, attempt.nonce, &service_id, &name])
             );
             let (service, proxy) = {
-                let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+                let state = shared.guard()?;
                 if let Some(existing) = state.watches.iter().find(|watch| watch.id == id) {
                     return Ok(existing.brief());
                 }
@@ -261,7 +260,7 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
                 recent: Vec::new(),
             };
             let summary = watch.brief();
-            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let mut state = shared.guard()?;
             let finished = {
                 let State { watches, bots, .. } = &mut *state;
                 retire(watches, &chat, |id| bots.retains_watch(id))
@@ -298,58 +297,54 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             value["wakes"] = json!(wakes(armed, bot));
             Ok(value)
         }
-        WatchCall::Wake => {
-            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            let armed = arm_saved(&mut state, &chat, crate::storage::save)?;
+        WatchCall::Wake => shared.write(|state| {
+            let armed = arm_saved(state, &chat, crate::storage::save)?;
             Ok(json!({"armed":armed,"wakes":wakes(armed, true)}))
-        }
-        WatchCall::Status { watch_id } => {
-            let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        })?,
+        WatchCall::Status { watch_id } => shared.read(|state| {
             let watches = state
                 .watches
                 .iter()
-                .filter(|watch| watch_id.as_ref().is_none_or(|id| &watch.id == id) && reachable(&state, watch))
+                .filter(|watch| watch_id.as_ref().is_none_or(|id| &watch.id == id) && reachable(state, watch))
                 .map(Watch::summary)
                 .collect::<Vec<_>>();
             if watch_id.is_some() && watches.is_empty() {
                 return Err(fail("Watch not found in this chat"));
             }
             Ok(json!({"watches":watches}))
-        }
+        })?,
         WatchCall::Events {
             watch_id,
             after,
             include_logs,
         } => {
-            let (seen, logs, read, salience) = {
-                let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let (seen, logs, read, salience) = shared.read(|state| -> io::Result<_> {
                 let watch = state
                     .watches
                     .iter()
                     .find(|watch| watch.id == watch_id)
-                    .filter(|watch| reachable(&state, watch))
+                    .filter(|watch| reachable(state, watch))
                     .ok_or_else(|| fail("Watch not found in this chat"))?;
                 let (seen, logs) = (watch.seen, include_logs || !watch.notification_channel);
-                let read = super::delivery::prepare_view(&state, attempt, &watch_id, after, logs)?;
+                let read = super::delivery::prepare_view(state, attempt, &watch_id, after, logs)?;
                 if read.after > seen {
                     return Err(fail("Watch cursor is beyond observed evidence"));
                 }
-                (seen, logs, read, watch.salience.as_ref().map(|s| s.counts()))
-            };
+                Ok((seen, logs, read, watch.salience.as_ref().map(|s| s.counts())))
+            })??;
             let page = super::page(&watch_id, read.after, read.maximum.unwrap_or(seen), logs);
             let (events, cursor, source_gap) = (page.events, page.cursor, page.gap || read.gap);
-            let receipt = {
-                let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let receipt = shared.write(|state| {
                 super::delivery::record(
-                    &mut state,
+                    state,
                     attempt,
                     &watch_id,
                     &read,
                     cursor,
                     source_gap,
                     crate::storage::save,
-                )?
-            };
+                )
+            })??;
             let events = events.into_iter().map(|(frame, truncated)| match frame.event {
                 Event::Line(line) => json!({"seq":frame.seq,"line":String::from_utf8_lossy(&line),"truncated":truncated}),
                 Event::Notification(payload) => json!({"seq":frame.seq,"notification":String::from_utf8_lossy(&payload),"truncated":truncated}),
@@ -361,42 +356,42 @@ pub(super) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
             )
         }
         WatchCall::Stop { watch_id } => {
-            let service = {
-                let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+            let service = shared.read(|state| -> io::Result<_> {
                 let watch = state
                     .watches
                     .iter()
                     .find(|watch| watch.id == watch_id)
-                    .filter(|watch| reachable(&state, watch))
+                    .filter(|watch| reachable(state, watch))
                     .ok_or_else(|| fail("Watch not found in this chat"))?;
-                state
+                Ok(state
                     .services
                     .iter()
                     .find(|service| {
                         service.resource.id.as_str() == watch.service
                             && service.resource.generation.get() == watch.generation
                     })
-                    .map(|service| service.binding_snapshot())
-            };
+                    .map(|service| service.binding_snapshot()))
+            })??;
             if let Some(service) = &service
                 && service.resource.phase.container().is_some()
                 && runner(service, &["watch-rm", &watch_id], "")? != Some(0)
             {
                 return Err(fail("The service could not stop the watch"));
             }
-            let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-            let index = state
-                .watches
-                .iter()
-                .position(|watch| watch.id == watch_id)
-                .ok_or_else(|| fail("Watch not found in this chat"))?;
-            let previous = state.watches[index].stopped;
-            state.watches[index].stopped = true;
-            if let Err(error) = crate::storage::save(&state) {
-                state.watches[index].stopped = previous;
-                return Err(error);
-            }
-            Ok(state.watches[index].brief())
+            shared.write(|state| {
+                let index = state
+                    .watches
+                    .iter()
+                    .position(|watch| watch.id == watch_id)
+                    .ok_or_else(|| fail("Watch not found in this chat"))?;
+                let previous = state.watches[index].stopped;
+                state.watches[index].stopped = true;
+                if let Err(error) = crate::storage::save(state) {
+                    state.watches[index].stopped = previous;
+                    return Err(error);
+                }
+                Ok(state.watches[index].brief())
+            })?
         }
     }
 }

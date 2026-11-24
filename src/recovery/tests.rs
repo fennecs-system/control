@@ -123,7 +123,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
         }),
         ..Default::default()
     });
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let host = crate::tool_registry::LocalHost(&shared);
     let cx = AttemptCall {
         host: &host,

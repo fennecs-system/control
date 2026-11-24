@@ -138,7 +138,7 @@ fn malformed_or_rejected_write_results_are_not_success() {
 }
 #[test]
 fn unauthorized_mutations_fail_before_config_or_credential_access() {
-    let state = Arc::new(Mutex::new(State::default()));
+    let state = crate::store::Store::new(State::default());
     assert!(execute(&state, Caller::Chat("not-authorized"), merge()).is_err());
     assert!(
         execute(

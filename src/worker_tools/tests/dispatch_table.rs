@@ -119,22 +119,22 @@ fn a_write_handler_rolls_back_when_its_checkpoint_fails() {
     crate::chat::send(&mut state, &chat, "Work", "test").unwrap();
     state.runtime.runs[0].status = RunStatus::Running;
     let run = state.runtime.runs[0].id().to_string();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let envelope = json!({"nonce":"1-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_project_request","arguments":{"path":"/tmp/control-rollback-project"}}}});
     let call = kinds::Call::of(&envelope, None);
     let entry = table::lookup(call.name);
     assert!(matches!(entry.handler, Handler::Write(_)));
-    let before = serde_json::to_value(&*shared.lock().unwrap()).unwrap();
-    let state = shared.lock().unwrap();
+    let before = serde_json::to_value(&*shared.guard().unwrap()).unwrap();
+    let state = shared.guard().unwrap();
     let caller = authority::admit(&state, &run, None).unwrap();
     let refused = entry.handler.answer(state, &shared, &caller, &call, |_| {
         Err(std::io::Error::other("disk full"))
     });
     assert_eq!(refused, control_mcp::failure("Could not save project request"));
-    assert_eq!(serde_json::to_value(&*shared.lock().unwrap()).unwrap(), before);
-    let state = shared.lock().unwrap();
+    assert_eq!(serde_json::to_value(&*shared.guard().unwrap()).unwrap(), before);
+    let state = shared.guard().unwrap();
     let caller = authority::admit(&state, &run, None).unwrap();
     let accepted = entry.handler.answer(state, &shared, &caller, &call, |_| Ok(()));
     assert_eq!(accepted["isError"], false, "{accepted}");
-    assert_ne!(serde_json::to_value(&*shared.lock().unwrap()).unwrap(), before);
+    assert_ne!(serde_json::to_value(&*shared.guard().unwrap()).unwrap(), before);
 }

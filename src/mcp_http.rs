@@ -3,12 +3,10 @@
 //! run without the state lock, so network, Git and compilation work never
 //! blocks other requests; everything else runs under it.
 use crate::State;
+use crate::store::Store;
 use control_http::Policy;
 use serde_json::Value;
-use std::{
-    io::Write,
-    sync::{Arc, Mutex},
-};
+use std::io::Write;
 
 /// The `Mcp-Protocol-Version` header, when the client sent one.
 fn protocol_version(header: &str) -> Option<&str> {
@@ -20,7 +18,7 @@ fn protocol_version(header: &str) -> Option<&str> {
 }
 pub(crate) fn handle(
     stream: &mut impl Write,
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     method: &str,
     path: &str,
     header: &str,
@@ -68,7 +66,7 @@ type Reply = Result<Value, &'static str>;
 /// intercepts used to run. `None` leaves the request to the operator MCP.
 /// Each keeps its own checks: GitHub answers unacknowledged requests itself,
 /// packages leave them to the operator MCP, and the toolbox refuses them.
-fn unlocked(shared: &Arc<Mutex<State>>, version: Option<&str>, request: &Value) -> Option<(Reply, Policy)> {
+fn unlocked(shared: &Store, version: Option<&str>, request: &Value) -> Option<(Reply, Policy)> {
     let call = control_mcp::call(request)?;
     let id = control_mcp::id(request);
     let acknowledged = control_mcp::is_v2(request) && !control_mcp::is_notification(request);

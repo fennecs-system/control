@@ -69,7 +69,7 @@ fn preview_origin_gate_rejects_control_hosts_cookies_and_ambiguous_headers() {
 #[test]
 fn previews_require_an_active_captured_project_and_reject_forged_mounts() {
     assert!(serde_json::from_value::<Input>(json!({"command":"true","port":8080,"mount":"/"})).is_err());
-    let state = Arc::new(Mutex::new(State::default()));
+    let state = crate::store::Store::new(State::default());
     assert!(
         start(
             &state,
@@ -81,7 +81,7 @@ fn previews_require_an_active_captured_project_and_reject_forged_mounts() {
         )
         .is_err()
     );
-    let mut locked = state.lock().unwrap();
+    let mut locked = state.guard().unwrap();
     let chat = crate::chat::create(&mut locked);
     crate::chat::send(&mut locked, &chat, "test", "fixture").unwrap();
     let run = &mut locked.runtime.runs[0];
@@ -102,7 +102,7 @@ fn previews_require_an_active_captured_project_and_reject_forged_mounts() {
         .to_string()
         .contains("trust a project")
     );
-    assert!(state.lock().unwrap().previews.is_empty());
+    assert!(state.guard().unwrap().previews.is_empty());
 }
 #[test]
 #[ignore = "requires isolated CONTROL_STATE_DIR/CONTROL_CONFIG_DIR under /private/tmp/control-preview-qa and CONTROL_QA_IMAGE; no credentials or model calls"]
@@ -140,11 +140,11 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
         ..Default::default()
     });
     let run_id = run.id().as_str().to_owned();
-    let state = Arc::new(Mutex::new(state));
-    struct Cleanup(Arc<Mutex<State>>);
+    let state = crate::store::Store::new(state);
+    struct Cleanup(Store);
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            for preview in self.0.lock().unwrap().previews.clone() {
+            for preview in self.0.guard().unwrap().previews.clone() {
                 let _ = stop_resource(crate::engine::isolation(), &preview);
             }
         }
@@ -196,7 +196,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     assert!(!workspace.join("forbidden-write").exists());
     {
         // A proxy must serve independently of a busy application state lock.
-        let _locked = state.lock().unwrap();
+        let _locked = state.guard().unwrap();
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(
             client.get(url.clone()).send().unwrap().text().unwrap(),
@@ -221,12 +221,12 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
         403
     );
     {
-        let mut locked = state.lock().unwrap();
+        let mut locked = state.guard().unwrap();
         locked.runtime.runs[0].status = RunStatus::Completed;
     }
     crate::lifecycle::reconcile(
         crate::engine::isolation(),
-        &crate::lifecycle::owners(&state.lock().unwrap().runtime.runs),
+        &crate::lifecycle::owners(&state.guard().unwrap().runtime.runs),
         &[],
     )
     .unwrap();
@@ -234,13 +234,15 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
         client.get(url.clone()).send().unwrap().text().unwrap(),
         "control-preview-ok"
     );
-    let saved = serde_json::to_vec(&*state.lock().unwrap()).unwrap();
+    let saved = serde_json::to_vec(&*state.guard().unwrap()).unwrap();
     let restarted: State = serde_json::from_slice(&saved).unwrap();
     assert_eq!(restarted.previews[0].url.as_deref(), Some(url.as_str()));
     // Simulate the old process releasing its listener, then restore only
     // durable intent and the verified existing container into a fresh node.
-    state.lock().unwrap().previews[0].status = PreviewStatus::Unrecognised("restoring".into());
-    state.lock().unwrap().previews[0].stopped.store(true, Ordering::Relaxed);
+    state.guard().unwrap().previews[0].status = PreviewStatus::Unrecognised("restoring".into());
+    state.guard().unwrap().previews[0]
+        .stopped
+        .store(true, Ordering::Relaxed);
     let start = Instant::now();
     loop {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", url.port().unwrap())) {
@@ -250,7 +252,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
         assert!(start.elapsed() < Duration::from_secs(3));
         std::thread::sleep(Duration::from_millis(25));
     }
-    let state = Arc::new(Mutex::new(restarted));
+    let state = crate::store::Store::new(restarted);
     let _restored_cleanup = Cleanup(state.clone());
     restore(state.clone());
     assert_eq!(
@@ -259,7 +261,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     );
     let id = result["id"].as_str().unwrap();
     assert!(stop(&state, "another-chat", id).is_err());
-    let mut wrong_identity = state.lock().unwrap().previews[0].clone();
+    let mut wrong_identity = state.guard().unwrap().previews[0].clone();
     wrong_identity.container_id = Some("0".repeat(64));
     assert!(
         stop_resource(crate::engine::isolation(), &wrong_identity).is_err(),
@@ -267,8 +269,8 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     );
     stop(&state, &chat, id).unwrap();
     stop(&state, &chat, id).unwrap();
-    assert_eq!(state.lock().unwrap().previews[0].status, PreviewStatus::Stopped);
-    state.lock().unwrap().runtime.runs[0].status = RunStatus::Running;
+    assert_eq!(state.guard().unwrap().previews[0].status, PreviewStatus::Stopped);
+    state.guard().unwrap().runtime.runs[0].status = RunStatus::Running;
     let replacement = super::start(
         &state,
         &run_id,
@@ -280,7 +282,7 @@ fn live_preview_is_local_readonly_credential_free_and_survives_run_completion() 
     .unwrap();
     assert_eq!(replacement["id"], result["id"]);
     assert_ne!(
-        state.lock().unwrap().previews[0].container_id,
+        state.guard().unwrap().previews[0].container_id,
         wrong_identity.container_id
     );
     stop(&state, &chat, id).unwrap();

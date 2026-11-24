@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const GENERATION: &str = "attempt-a";
 
 /// One chat with a running attempt and a service it owns.
-fn fixture() -> (Arc<Mutex<State>>, String, String) {
+fn fixture() -> (Store, String, String) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Play the game", "test").unwrap();
@@ -21,7 +21,7 @@ fn fixture() -> (Arc<Mutex<State>>, String, String) {
             "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},"lease":[1,u64::MAX],"phase":"Requested"},
         "origin":{"run":run,"attempt":GENERATION},"actor":{"type":"local_operator"},"command":"true","uid":502,"gid":20
     })).unwrap());
-    (Arc::new(Mutex::new(state)), chat, run)
+    (crate::store::Store::new(state), chat, run)
 }
 fn attempt(run: &str) -> AttemptRef<'_> {
     AttemptRef {
@@ -33,7 +33,7 @@ fn attempt(run: &str) -> AttemptRef<'_> {
 fn input(args: Value) -> Input {
     serde_json::from_value(args).unwrap()
 }
-fn declare(shared: &Arc<Mutex<State>>, run: &str, args: Value, probe: Prober) -> Value {
+fn declare(shared: &Store, run: &str, args: Value, probe: Prober) -> Value {
     set_with(shared, &attempt(run), input(args), |_| Ok(()), probe).unwrap()
 }
 
@@ -94,9 +94,9 @@ fn returns<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> T {
         .expect("returned without waiting for the probe")
 }
 /// Waits until the chat's background refresh has recorded its result.
-fn refreshed(shared: &Arc<Mutex<State>>) {
+fn refreshed(shared: &Store) {
     for _ in 0..60_000 {
-        if shared.lock().unwrap().observations.refreshing.is_empty() {
+        if shared.guard().unwrap().observations.refreshing.is_empty() {
             return;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -150,7 +150,7 @@ fn a_declared_command_ends_each_turn_and_never_enters_the_transcript_or_checkpoi
     );
     assert!(block.contains("hp=20") && block.ends_with("[End observation]"));
 
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let saved = serde_json::to_string(&*state).unwrap();
     assert!(!saved.contains("hp=20"), "values stay out of the checkpoint");
     assert!(
@@ -205,7 +205,7 @@ fn a_slow_refresh_never_blocks_a_turn_and_falls_back_to_the_last_value_with_its_
     );
     // The probe is held until released: returning shows the wait is bounded.
     let fallback = returns({
-        let (shared, run) = (Arc::clone(&shared), run.clone());
+        let (shared, run) = (shared.clone(), run.clone());
         move || text(&shared, &run, Duration::from_millis(50), slow_turn)
     });
     assert!(
@@ -215,7 +215,7 @@ fn a_slow_refresh_never_blocks_a_turn_and_falls_back_to_the_last_value_with_its_
     // The refresh finishes in the background and the next turn sees it; a
     // refresh already in flight is not started twice.
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let chat = state.runtime.runs[0].chat_id.clone().unwrap();
         assert!(
             state.observations.refreshing.contains(&chat),
@@ -283,7 +283,7 @@ fn values_are_capped_to_max_bytes_on_a_character_boundary() {
     declare(&shared, &run, json!({"service_id":"svc-game","command":"dump"}), huge);
     assert_eq!(
         shared
-            .lock()
+            .guard()
             .unwrap()
             .observations
             .declared
@@ -319,18 +319,18 @@ fn a_failed_command_keeps_its_output_with_the_exit_status() {
         );
     }
     // A service that is gone is not probed.
-    shared.lock().unwrap().services.clear();
+    shared.guard().unwrap().services.clear();
     let block = append_with(&shared, &run, "turn".into(), |_, _, _, _| {
         panic!("a missing service is not probed")
     });
     assert!(block.contains("service unavailable to this chat"), "{block}");
 }
 
-fn text(shared: &Arc<Mutex<State>>, run: &str, wait: Duration, probe: Prober) -> String {
+fn text(shared: &Store, run: &str, wait: Duration, probe: Prober) -> String {
     block_with(shared, run, wait, probe).unwrap().0.text
 }
-fn watch(shared: &Arc<Mutex<State>>, chat: &str) {
-    shared.lock().unwrap().watches.push(serde_json::from_value(json!({
+fn watch(shared: &Store, chat: &str) {
+    shared.guard().unwrap().watches.push(serde_json::from_value(json!({
         "id":"w-1","name":"game events","chat":chat,"service":"svc-game","generation":1,"permanent":true,"command":"run","stopped":false,
         "recent":["line one"],"notifications":{"pending":0,"through":2,"recent":["{\"hp\":18}","{\"hp\":17}"]}
     })).unwrap());
@@ -375,7 +375,7 @@ fn tool_results_carry_the_whole_observation_only_when_it_changed_for_this_attemp
         json!({"service_id":"svc-game","command":"cached","refresh_seconds":3600}),
         ticking,
     );
-    shared.lock().unwrap().runtime.runs[0]
+    shared.guard().unwrap().runtime.runs[0]
         .attempts
         .push(crate::usage::Attempt {
             workspace_id: Some("attempt-b".into()),
@@ -392,10 +392,10 @@ fn tool_results_carry_the_whole_observation_only_when_it_changed_for_this_attemp
             .starts_with("[Observation unchanged")
     );
     // An ended run gets nothing.
-    shared.lock().unwrap().runtime.runs[0].status = RunStatus::Completed;
+    shared.guard().unwrap().runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(for_result_with(&shared, &run, ticking), None);
     // The last-shown hashes are memory only.
-    let saved = serde_json::to_string(&*shared.lock().unwrap()).unwrap();
+    let saved = serde_json::to_string(&*shared.guard().unwrap()).unwrap();
     assert!(!saved.contains("hp=20") && !saved.contains("attempt-a/"), "{saved}");
 }
 
@@ -408,7 +408,7 @@ fn the_wake_counts_as_shown_and_local_steps_always_get_the_whole_refreshed_block
         json!({"service_id":"svc-game","command":"look","refresh_seconds":3600}),
         ticking,
     );
-    shared.lock().unwrap().observations.shown.clear();
+    shared.guard().unwrap().observations.shown.clear();
     let wake = append_with(&shared, &run, "turn".into(), ticking);
     assert!(wake.contains("look -> hp=20"));
     assert!(
@@ -446,7 +446,7 @@ fn a_slow_probe_never_blocks_a_step_or_result() {
     );
     // The probe is held until released: returning shows the step did not await it.
     let step = returns({
-        let (shared, run) = (Arc::clone(&shared), run.clone());
+        let (shared, run) = (shared.clone(), run.clone());
         move || {
             block_with(&shared, &run, Duration::from_millis(50), slow_step)
                 .unwrap()
@@ -463,7 +463,7 @@ fn a_slow_probe_never_blocks_a_step_or_result() {
     // The background refresh landed; a result sees the new value, and the next
     // slow refresh, held again, is not awaited either.
     let result = returns({
-        let (shared, run) = (Arc::clone(&shared), run.clone());
+        let (shared, run) = (shared.clone(), run.clone());
         move || result_within(&shared, &run, Duration::from_millis(50), slow_step).unwrap()
     });
     assert!(result.contains("slow fresh value"), "{result}");
@@ -482,7 +482,7 @@ fn a_watch_source_attaches_its_newest_notification_without_running_anything() {
             .starts_with("[Observation unchanged")
     );
     assert!(step_with(&shared, &run, false, never).unwrap().contains("{\"hp\":17}"));
-    shared.lock().unwrap().watches[0]
+    shared.guard().unwrap().watches[0]
         .notifications
         .as_mut()
         .unwrap()
@@ -644,8 +644,8 @@ fn a_watch_source_reuses_its_latest_notification_without_running_anything() {
         "{block}"
     );
     // Another chat's watch is refused.
-    shared.lock().unwrap().watches[0].chat = "someone-else".into();
-    shared.lock().unwrap().watches[0].service = "svc-other".into();
+    shared.guard().unwrap().watches[0].chat = "someone-else".into();
+    shared.guard().unwrap().watches[0].service = "svc-other".into();
     let refused = set_with(
         &shared,
         &attempt(&run),
@@ -710,12 +710,16 @@ fn measure_observation_tokens_per_tool_result() {
     for (label, changing) in [("unchanged", false), ("changing", true)] {
         let (shared, chat, run) = fixture();
         watch(&shared, &chat);
-        shared.lock().unwrap().watches[0].notifications.as_mut().unwrap().recent = vec![value(0)];
+        shared.guard().unwrap().watches[0]
+            .notifications
+            .as_mut()
+            .unwrap()
+            .recent = vec![value(0)];
         declare(&shared, &run, json!({"watch_id":"w-1"}), broken);
         let per_result: Vec<u32> = (1..=8)
             .map(|n| {
                 if changing {
-                    shared.lock().unwrap().watches[0]
+                    shared.guard().unwrap().watches[0]
                         .notifications
                         .as_mut()
                         .unwrap()
