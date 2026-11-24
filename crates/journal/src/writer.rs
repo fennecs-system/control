@@ -7,12 +7,14 @@
 //! paying N in turn. There is no batching window: a record that arrives while
 //! the disk is idle is written at once.
 //!
-//! Records are written in [`Seq`] order and a ticket resolves only once its
-//! record (and every earlier one) is durable. A failed write is retried or
-//! given up as the [`Policy`] decides; a record can be refused (nothing
-//! written, the caller rolls back) only while it is the one record in flight
-//! and its caller still holds the lock it staged under, since otherwise a later
-//! record may already extend it.
+//! Records are written in [`Seq`] order and a ticket resolves once its record
+//! (and every earlier one) is durable. A failed write is handled as the
+//! [`Policy`] says: retried, or the writer becomes degraded, or (only when what
+//! is on disk is unknown) it halts. A degraded writer refuses new records, so
+//! callers refuse the change before applying it; records already queued stay
+//! queued and are written in order once the disk takes writes again, except
+//! those whose callers still hold the lock they staged under: those are
+//! refused, and their callers roll back.
 use std::{
     fmt, io,
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
@@ -91,61 +93,72 @@ pub trait Sink: Send + 'static {
     fn append(&mut self, lines: &[&[u8]]) -> Result<(), Fault>;
     /// Publishes `snapshot` durably, then starts its log with `header`.
     fn compact(&mut self, snapshot: &[u8], header: &[u8]) -> Result<Log, Fault>;
-}
-
-/// Whether the caller of a failed record can still undo it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Rollback {
-    /// The only record in flight, and its caller holds the lock it staged under.
-    Possible,
-    /// Later records may extend it, or its caller already let others see it.
-    Impossible,
+    /// Whether the store takes durable writes again, without changing what
+    /// it holds. Asked while degraded with nothing queued.
+    fn probe(&mut self) -> io::Result<()>;
 }
 
 /// A failed write, as the policy sees it.
 #[derive(Debug)]
 pub struct Attempt<'a> {
     pub fault: &'a Fault,
-    pub rollback: Rollback,
-    /// Since the first failure of this batch.
-    pub failing_for: Duration,
-    /// Failures of this batch so far, this one included.
+    /// Consecutive failures so far, this one included.
     pub failures: u32,
 }
 
 /// What the writer does after a failed write.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// Give the error to the record's caller, which rolls back. Only honoured
-    /// with [`Rollback::Possible`]; otherwise it halts.
-    Refuse,
+    /// Try the same write again after the pause.
     Retry(Duration),
+    /// Refuse new records until a write or probe succeeds; try again after
+    /// the pause, for as long as it takes.
+    Degrade(Duration),
     /// Stop writing for good: every waiter and later record gets [`Halted`].
     Halt,
 }
 
 pub type Policy = fn(&Attempt) -> Verdict;
 
-/// How long a failing disk may stall writers before the writer gives up.
-pub const STALL: Duration = Duration::from_secs(30);
+/// Quick retries that absorb a blip before the writer degrades.
+pub const QUICK_RETRIES: u32 = 2;
+/// The longest pause between tries while degraded.
+pub const PROBE_MAX: Duration = Duration::from_secs(5);
 
-/// Today's contract, plus a bounded stall: an unconfirmed write halts at once;
-/// a record its caller can undo is refused as before; anything else (a record
-/// others may extend) is retried with backoff for up to [`STALL`], then halts.
-pub fn stall_then_halt(attempt: &Attempt) -> Verdict {
-    match (attempt.fault, attempt.rollback) {
-        (Fault::Unconfirmed(_), _) => Verdict::Halt,
-        (Fault::NotReplaced(_), Rollback::Possible) => Verdict::Refuse,
-        (Fault::NotReplaced(_), Rollback::Impossible) if attempt.failing_for >= STALL => Verdict::Halt,
-        (Fault::NotReplaced(_), Rollback::Impossible) => Verdict::Retry(
-            Duration::from_millis(10)
-                .saturating_mul(1 << attempt.failures.min(7))
-                .min(Duration::from_secs(1)),
+/// A failed write is an error, not a reason to stop: two quick retries
+/// (0.5 s, then 1 s), then degraded, trying again with backoff up to
+/// [`PROBE_MAX`] until the disk takes writes. Only an unconfirmed write, which
+/// leaves what is on disk unknown, halts.
+pub fn retry_then_degrade(attempt: &Attempt) -> Verdict {
+    match attempt.fault {
+        Fault::Unconfirmed(_) => Verdict::Halt,
+        Fault::NotReplaced(_) if attempt.failures <= QUICK_RETRIES => {
+            Verdict::Retry(Duration::from_millis(500).saturating_mul(attempt.failures))
+        }
+        Fault::NotReplaced(_) => Verdict::Degrade(
+            Duration::from_millis(250)
+                .saturating_mul(1 << (attempt.failures - QUICK_RETRIES - 1).min(5))
+                .min(PROBE_MAX),
         ),
     }
 }
 
-/// The writer stopped after a write it could not complete or confirm.
+/// The store does not take writes now; the cause is the last failure.
+#[derive(Clone, Debug)]
+pub struct Unavailable(Arc<str>);
+impl fmt::Display for Unavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "storage unavailable: {}; not saved", self.0)
+    }
+}
+impl std::error::Error for Unavailable {}
+impl From<Unavailable> for io::Error {
+    fn from(unavailable: Unavailable) -> Self {
+        io::Error::other(unavailable)
+    }
+}
+
+/// The writer stopped after a write it could not confirm.
 #[derive(Clone, Debug)]
 pub struct Halted(Arc<str>);
 impl fmt::Display for Halted {
@@ -160,6 +173,14 @@ impl From<Halted> for io::Error {
     }
 }
 
+/// Whether the writer takes records.
+#[derive(Clone, Debug)]
+pub enum Health {
+    Ready,
+    Degraded(Unavailable),
+    Halted(Halted),
+}
+
 /// Why a record was not queued.
 #[derive(Debug)]
 pub enum Submit {
@@ -167,15 +188,50 @@ pub enum Submit {
     /// have (an earlier record was refused, or a log could not be started):
     /// submit a compaction instead.
     Stale,
+    Unavailable(Unavailable),
     Halted(Halted),
 }
 
 /// Why a [`Held`] save did not become durable.
 #[derive(Debug)]
 pub enum Failure {
-    /// Nothing was written; the caller rolls back.
+    /// Nothing was written and nothing will be; the caller rolls back.
     Refused(io::Error),
     Halted(Halted),
+}
+
+/// Why a [`Ticket`] did not resolve as durable.
+#[derive(Debug)]
+pub enum Unsaved {
+    /// Still queued: written once the store takes writes again.
+    NotYet(Unavailable),
+    Halted(Halted),
+}
+impl fmt::Display for Unsaved {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotYet(Unavailable(cause)) => write!(
+                formatter,
+                "storage unavailable: {cause}; not saved yet, saved once storage recovers"
+            ),
+            Self::Halted(halted) => halted.fmt(formatter),
+        }
+    }
+}
+impl std::error::Error for Unsaved {}
+impl From<Unsaved> for io::Error {
+    fn from(unsaved: Unsaved) -> Self {
+        io::Error::other(unsaved)
+    }
+}
+
+/// Whether the caller of a record can still undo it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rollback {
+    /// Its caller waits under the lock it staged under.
+    Possible,
+    /// Its caller already let others see the change.
+    Impossible,
 }
 
 struct Entry {
@@ -189,10 +245,11 @@ struct Queue {
     /// The last sequence number handed out.
     last: u64,
     pending: Vec<Entry>,
-    /// Every record up to here is durable or was refused.
+    /// Every record up to here is durable (or was refused).
     settled: u64,
     /// Records refused so far (each a failed save, so few), with their error.
     refused: Vec<(u64, io::ErrorKind, String)>,
+    degraded: Option<Unavailable>,
     halted: Option<Halted>,
     stale: bool,
     closing: bool,
@@ -207,22 +264,23 @@ impl Shared {
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    /// Waits until `seq` is settled, then says how.
-    fn wait(&self, seq: u64) -> Result<Durable, Failure> {
+    /// Waits until `outcome` has an answer for the queue.
+    fn wait<T>(&self, outcome: impl Fn(&Queue) -> Option<T>) -> T {
         let mut queue = self.lock();
         loop {
-            if let Some((_, kind, message)) = queue.refused.iter().find(|(refused, ..)| *refused == seq) {
-                return Err(Failure::Refused(io::Error::new(*kind, message.clone())));
-            }
-            if queue.settled >= seq {
-                return Ok(Durable { seq: Seq(seq) });
-            }
-            if let Some(halted) = &queue.halted {
-                return Err(Failure::Halted(halted.clone()));
+            if let Some(answer) = outcome(&queue) {
+                return answer;
             }
             queue = self.settled.wait(queue).unwrap_or_else(PoisonError::into_inner);
         }
     }
+}
+fn refusal(queue: &Queue, seq: u64) -> Option<io::Error> {
+    queue
+        .refused
+        .iter()
+        .find(|(refused, ..)| *refused == seq)
+        .map(|(_, kind, message)| io::Error::new(*kind, message.clone()))
 }
 
 /// A record whose caller has released (or will release) its lock before
@@ -233,12 +291,22 @@ pub struct Ticket {
     shared: Arc<Shared>,
 }
 impl Ticket {
-    pub fn wait(self) -> Result<Durable, Halted> {
-        self.shared.wait(self.seq).map_err(|failure| match failure {
-            Failure::Halted(halted) => halted,
-            // Only an unchanged save waiting on another caller's record can
-            // see a refusal, and refusals need that caller to hold the lock.
-            Failure::Refused(error) => Halted(error.to_string().into()),
+    /// Durable, or an answer that it is not saved yet (it stays queued) or
+    /// never will be (halted): never a wait for a disk that does not recover.
+    pub fn wait(self) -> Result<Durable, Unsaved> {
+        let seq = self.seq;
+        self.shared.wait(|queue| {
+            if queue.settled >= seq && refusal(queue, seq).is_none() {
+                Some(Ok(Durable { seq: Seq(seq) }))
+            } else if let Some(halted) = &queue.halted {
+                Some(Err(Unsaved::Halted(halted.clone())))
+            } else if let Some(unavailable) = &queue.degraded {
+                Some(Err(Unsaved::NotYet(unavailable.clone())))
+            } else {
+                // Only an unchanged save can follow a refused record, and
+                // refusing it needs its caller to hold the lock.
+                refusal(queue, seq).map(|error| Err(Unsaved::NotYet(Unavailable(error.to_string().into()))))
+            }
         })
     }
 }
@@ -251,10 +319,21 @@ pub struct Held {
 }
 impl Held {
     pub fn wait(self) -> Result<Durable, Failure> {
-        self.shared.wait(self.seq)
+        let seq = self.seq;
+        self.shared.wait(|queue| {
+            if let Some(error) = refusal(queue, seq) {
+                Some(Err(Failure::Refused(error)))
+            } else if queue.settled >= seq {
+                Some(Ok(Durable { seq: Seq(seq) }))
+            } else {
+                queue.halted.clone().map(|halted| Err(Failure::Halted(halted)))
+            }
+        })
     }
 }
-/// The thread that owns a sink. Dropping it writes what is queued, then joins.
+
+/// The thread that owns a sink. Dropping it writes what is queued (unless the
+/// store is degraded: that stays unsaved), then joins.
 pub struct Writer {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
@@ -276,6 +355,15 @@ impl Writer {
             shared,
             thread: Some(thread),
         })
+    }
+    /// Whether records are taken now: a pure read for status pages.
+    pub fn health(&self) -> Health {
+        let queue = self.shared.lock();
+        match (&queue.halted, &queue.degraded) {
+            (Some(halted), _) => Health::Halted(halted.clone()),
+            (None, Some(unavailable)) => Health::Degraded(unavailable.clone()),
+            (None, None) => Health::Ready,
+        }
     }
     /// Queues `record` after every record before it, for a caller that lets
     /// others see its change before waiting; `None` (nothing changed) waits
@@ -300,6 +388,9 @@ impl Writer {
         let mut queue = self.shared.lock();
         if let Some(halted) = &queue.halted {
             return Err(Submit::Halted(halted.clone()));
+        }
+        if let Some(unavailable) = &queue.degraded {
+            return Err(Submit::Unavailable(unavailable.clone()));
         }
         let Some(record) = record else {
             return if queue.stale {
@@ -331,32 +422,29 @@ impl Drop for Writer {
 }
 
 fn run(shared: &Shared, mut sink: impl Sink, policy: Policy) {
+    // Records taken from the queue and not yet written.
+    let mut taken: Vec<Entry> = Vec::new();
+    let mut failures = 0;
     loop {
-        let batch = {
+        {
             let mut queue = shared.lock();
-            while queue.pending.is_empty() && !queue.closing {
+            while queue.pending.is_empty() && taken.is_empty() && queue.degraded.is_none() && !queue.closing {
                 queue = shared.work.wait(queue).unwrap_or_else(PoisonError::into_inner);
             }
-            if queue.pending.is_empty() {
+            taken.append(&mut queue.pending);
+            if queue.closing && (taken.is_empty() || queue.degraded.is_some()) {
                 return;
             }
-            std::mem::take(&mut queue.pending)
-        };
-        if write_batch(shared, &mut sink, policy, &batch).is_err() {
-            return;
         }
-    }
-}
-
-/// Writes `batch`, retrying as `policy` says, and settles its records.
-/// `Err` once the writer halted.
-fn write_batch(shared: &Shared, sink: &mut impl Sink, policy: Policy, batch: &[Entry]) -> Result<(), Halted> {
-    let mut rest = batch;
-    let mut failures = 0;
-    let mut first_failure = None;
-    while let Some(last) = rest.last() {
-        let fault = match write(sink, rest) {
+        // Nothing to write while degraded: ask whether the store recovered.
+        let written = if taken.is_empty() {
+            sink.probe().map(|()| (0, Log::Restarted)).map_err(Fault::NotReplaced)
+        } else {
+            write(&mut sink, &taken)
+        };
+        let fault = match written {
             Ok((written, log)) => {
+                failures = 0;
                 let mut queue = shared.lock();
                 if let Log::Broken(error) = log {
                     eprintln!(
@@ -364,53 +452,74 @@ fn write_batch(shared: &Shared, sink: &mut impl Sink, policy: Policy, batch: &[E
                     );
                     queue.stale = true;
                 }
-                queue.settled = rest[written - 1].seq;
+                if let Some(last) = taken.drain(..written).next_back() {
+                    queue.settled = last.seq;
+                }
+                if taken.is_empty() && queue.degraded.take().is_some() {
+                    eprintln!("state writer: storage takes writes again; saves resume");
+                }
                 shared.settled.notify_all();
-                rest = &rest[written..];
                 continue;
             }
             Err(fault) => fault,
         };
         failures += 1;
-        let failing_for = first_failure.get_or_insert_with(Instant::now).elapsed();
-        eprintln!("state writer: save failed ({failures} time(s)): {fault}");
+        eprintln!("state writer: save failed ({failures} time(s) in a row): {fault}");
         let mut queue = shared.lock();
-        // Refusable only while nothing newer was queued: a newer record may
-        // extend this one. Checked and acted on under one lock with `submit`.
-        let rollback = match rest {
-            [only] if only.rollback == Rollback::Possible && queue.pending.is_empty() && queue.last == only.seq => {
-                Rollback::Possible
-            }
-            _ => Rollback::Impossible,
-        };
-        match policy(&Attempt {
+        let pause = match policy(&Attempt {
             fault: &fault,
-            rollback,
-            failing_for,
             failures,
         }) {
-            Verdict::Retry(pause) => {
-                drop(queue);
-                std::thread::sleep(pause);
+            Verdict::Retry(pause) => pause,
+            Verdict::Degrade(pause) => {
+                degrade(&mut queue, &mut taken, &fault);
+                pause
             }
-            Verdict::Refuse if rollback == Rollback::Possible => {
-                let error = fault.error();
-                queue.refused.push((last.seq, error.kind(), error.to_string()));
-                queue.settled = last.seq;
-                // The next save compacts: memory, base and disk agree again.
-                queue.stale = true;
+            Verdict::Halt => {
+                queue.halted = Some(Halted(fault.to_string().into()));
                 shared.settled.notify_all();
-                return Ok(());
+                return;
             }
-            Verdict::Refuse | Verdict::Halt => {
-                let halted = Halted(fault.to_string().into());
-                queue.halted = Some(halted.clone());
-                shared.settled.notify_all();
-                return Err(halted);
-            }
+        };
+        shared.settled.notify_all();
+        // Pause, but let a dropped writer stop waiting.
+        let until = Instant::now() + pause;
+        while !queue.closing
+            && let Some(left) = until.checked_duration_since(Instant::now())
+        {
+            queue = shared
+                .work
+                .wait_timeout(queue, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
         }
     }
-    Ok(())
+}
+
+/// Enters (or stays in) the degraded state after `fault`. Records whose
+/// callers still hold their lock are refused, newest first, down to the
+/// newest one already visible to others: nothing queued depends on them, and
+/// their callers roll back. The rest stay taken, to be written in order.
+fn degrade(queue: &mut Queue, taken: &mut Vec<Entry>, fault: &Fault) {
+    taken.append(&mut queue.pending);
+    let kept = taken
+        .iter()
+        .rposition(|entry| entry.rollback == Rollback::Impossible)
+        .map_or(0, |at| at + 1);
+    let error = fault.error();
+    let cause: Arc<str> = error.to_string().into();
+    let refused: Vec<_> = taken
+        .drain(kept..)
+        .map(|entry| (entry.seq, error.kind(), Unavailable(cause.clone()).to_string()))
+        .collect();
+    if !refused.is_empty() {
+        // The next save compacts: memory, base and disk agree again.
+        queue.stale = true;
+        queue.refused.extend(refused);
+    }
+    if queue.degraded.replace(Unavailable(cause)).is_none() {
+        eprintln!("state writer: storage unavailable ({fault}); new saves are refused until it recovers");
+    }
 }
 
 /// Writes a prefix of `rest`: everything up to and including its last

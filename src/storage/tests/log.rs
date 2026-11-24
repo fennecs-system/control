@@ -350,9 +350,11 @@ fn a_crash_at_every_step_of_compaction_recovers_the_committed_state() {
 }
 
 /// A full disk (here a file-size limit, in a child process because the limit
-/// is per process): the append and the compaction both fail as not replaced,
-/// leave no partial line or snapshot, and the next save after space returns
-/// succeeds from the same base.
+/// is per process): a compaction and an append each fail as not replaced
+/// after quick retries and leave no partial line or snapshot; meanwhile the
+/// writer is degraded and refuses saves at once, before anything moves; once
+/// space returns it recovers by itself and the next save succeeds. The
+/// process never stops.
 #[test]
 fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
     const CHILD: &str = "CONTROL_STATE_LOG_FULL_DISK_CHILD";
@@ -377,8 +379,6 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
     let scratch = Scratch::new("full-disk");
     let (mut state, chat) = with_chat();
     scratch.save(&state);
-    let (snapshot_before, log_before) = (scratch.snapshot(), scratch.log());
-    let before = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     let limit = |bytes: u64| unsafe {
         let mut current = std::mem::zeroed::<libc::rlimit>();
         assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut current), 0);
@@ -386,31 +386,50 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
         assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &current), 0);
     };
     unsafe { libc::signal(libc::SIGXFSZ, libc::SIG_IGN) };
-    limit(log_before.len() as u64 + 16);
-    crate::chat::send(&mut state, &chat, &"does not fit ".repeat(100), "test").unwrap();
     let encode = |state: &State| super::encode(state, &archived(&scratch.0)).unwrap();
-    assert!(
-        matches!(
-            persist(&scratch.0, encode(&state), false),
-            Err(CheckpointError::NotReplaced(_))
-        ),
-        "append fails cleanly"
-    );
-    assert!(
-        matches!(
-            persist(&scratch.0, encode(&state), true),
-            Err(CheckpointError::NotReplaced(_))
-        ),
-        "compaction fails cleanly"
-    );
-    assert_eq!(
-        (scratch.snapshot(), scratch.log()),
-        (snapshot_before, log_before),
-        "no partial line or snapshot"
-    );
-    assert!(recovered(&scratch) == before);
-    limit(libc::RLIM_INFINITY);
-    scratch.save(&state);
+    let recovers = || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !matches!(health_in(&scratch.0), Health::Ready) {
+            assert!(std::time::Instant::now() < deadline, "the writer recovers by itself");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    for (compact, what) in [(true, "a compaction"), (false, "an append")] {
+        let (snapshot_before, log_before) = (scratch.snapshot(), scratch.log());
+        let before = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
+        limit(log_before.len() as u64 + 16);
+        crate::chat::send(&mut state, &chat, &"does not fit ".repeat(100), "test").unwrap();
+        assert!(
+            matches!(
+                persist(&scratch.0, encode(&state), compact),
+                Err(CheckpointError::NotReplaced(_))
+            ),
+            "{what} fails cleanly"
+        );
+        assert!(matches!(health_in(&scratch.0), Health::Degraded(_)), "{what}: degraded");
+        let started = std::time::Instant::now();
+        let Err(CheckpointError::NotReplaced(refusal)) = checkpoint_in(&scratch.0, &state) else {
+            panic!("{what}: a save while degraded is refused");
+        };
+        assert!(refusal.to_string().starts_with("storage unavailable: "), "{refusal}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "refused at once"
+        );
+        assert_eq!(
+            (scratch.snapshot(), scratch.log()),
+            (snapshot_before, log_before),
+            "{what}: no partial line or snapshot"
+        );
+        // Read without taking the files from the degraded writer.
+        let on_disk: serde_json::Value = crate::config::read_state_in(&scratch.0, usize::MAX >> 1)
+            .unwrap()
+            .unwrap();
+        assert!(on_disk["chats"] == before["chats"], "{what}: the change is not on disk");
+        limit(libc::RLIM_INFINITY);
+        recovers();
+        scratch.save(&state);
+    }
     assert!(same(&scratch.restart(), &state), "saves resume once space returns");
 }
 

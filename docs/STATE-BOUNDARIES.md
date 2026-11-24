@@ -109,15 +109,24 @@ waits for its ticket under the mutex, so its callers see no change.
 `storage::submit` returns before durability for callers that release the
 mutex first and then wait; `POST /dna/save` is the only one so far.
 
-The writer's failure policy is one function (`writer::stall_then_halt`): an
-unconfirmed write halts the writer at once; a record that is alone in flight
-and whose caller still holds the mutex is refused as before (`NotReplaced`, the
-caller rolls back, the next save compacts); any other failed record may
-already be extended by a later one, so it is retried with backoff for up to 30
-seconds, then the writer halts. A halted writer refuses every later save, and
-its waiters stop Control as an unconfirmed checkpoint does. If a compaction's
-snapshot is durable but its log cannot restart, the writer says so on stderr
-and the next save compacts again.
+A failed save is an error, not a reason to stop. The policy is one function
+(`writer::retry_then_degrade`): a write that leaves the files intact
+(`NotReplaced`: a full disk, an I/O error on append) is retried twice within
+about 1.5 seconds, then the writer is degraded (`writer::Health::Degraded`,
+read with `storage::health`). While degraded, new saves are refused with
+"storage unavailable: <cause>; not saved": `storage::save` refuses before its
+archive step, but its callers have already changed memory and roll back as
+for any `NotReplaced`; `POST /dna/save` checks before applying the edit.
+Reads go on. A save whose caller still waits under the mutex is refused and
+rolled back rather than kept; a save already visible to others
+(`storage::submit`) stays queued, its caller is told it is not saved yet, and
+the writer keeps trying with backoff (at most 5 seconds apart) for as long as
+it takes, writing queued saves in order once the disk takes writes again. The
+first save after a refusal compacts. Only an unconfirmed write (a rename or
+directory sync failed, or a failed append could not be rolled back) halts the
+writer: every later save is refused and its waiters stop Control, as before.
+If a compaction's snapshot is durable but its log cannot restart, the writer
+says so on stderr and the next save compacts again.
 
 ## Limits and next steps
 

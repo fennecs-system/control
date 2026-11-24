@@ -1,8 +1,9 @@
 use super::*;
 use std::sync::mpsc;
 
-/// A sink in memory: what it wrote, scripted failures, and an optional gate
-/// that holds its first call until the test opens it.
+/// A sink in memory: what it wrote, scripted failures (shared by writes and
+/// probes), and an optional gate that holds its first call until the test
+/// opens it.
 #[derive(Default)]
 struct Fake {
     written: Arc<Mutex<Vec<Vec<String>>>>,
@@ -14,25 +15,28 @@ struct Fake {
     gate: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
 }
 impl Fake {
+    fn fail(&mut self) -> Option<io::Error> {
+        *self.attempts.lock().unwrap() += 1;
+        (self.failures > 0).then(|| {
+            if self.failures != u32::MAX {
+                self.failures -= 1;
+            }
+            io::Error::other("injected")
+        })
+    }
     fn call(&mut self, written: Vec<String>) -> Result<(), Fault> {
         if let Some((entered, open)) = self.gate.take() {
             entered.send(()).unwrap();
             open.recv().unwrap();
         }
-        *self.attempts.lock().unwrap() += 1;
-        if self.failures > 0 {
-            if self.failures != u32::MAX {
-                self.failures -= 1;
+        match self.fail() {
+            Some(error) if self.unconfirmed => Err(Fault::Unconfirmed(error)),
+            Some(error) => Err(Fault::NotReplaced(error)),
+            None => {
+                self.written.lock().unwrap().push(written);
+                Ok(())
             }
-            let error = io::Error::other("injected");
-            return Err(if self.unconfirmed {
-                Fault::Unconfirmed(error)
-            } else {
-                Fault::NotReplaced(error)
-            });
         }
-        self.written.lock().unwrap().push(written);
-        Ok(())
     }
 }
 impl Sink for Fake {
@@ -52,14 +56,17 @@ impl Sink for Fake {
             Log::Restarted
         })
     }
+    fn probe(&mut self) -> io::Result<()> {
+        self.fail().map_or(Ok(()), Err)
+    }
 }
 
-/// `stall_then_halt` with a stall short enough for a test.
+/// `retry_then_degrade` with pauses short enough for a test.
 fn quick(attempt: &Attempt) -> Verdict {
-    match stall_then_halt(attempt) {
-        Verdict::Retry(_) if attempt.failing_for >= Duration::from_millis(200) => Verdict::Halt,
+    match retry_then_degrade(attempt) {
         Verdict::Retry(_) => Verdict::Retry(Duration::from_millis(1)),
-        verdict => verdict,
+        Verdict::Degrade(_) => Verdict::Degrade(Duration::from_millis(2)),
+        Verdict::Halt => Verdict::Halt,
     }
 }
 fn line(text: &str) -> Option<Record> {
@@ -71,15 +78,26 @@ fn compact(text: &str) -> Option<Record> {
         header: b"header".to_vec(),
     })
 }
-
-#[test]
-fn records_queued_during_a_write_share_the_next_one() {
+fn gated() -> (Fake, mpsc::Receiver<()>, mpsc::Sender<()>) {
     let (entered_tx, entered) = mpsc::channel();
     let (open, open_rx) = mpsc::channel();
     let fake = Fake {
         gate: Some((entered_tx, open_rx)),
         ..Fake::default()
     };
+    (fake, entered, open)
+}
+fn until(writer: &Writer, ready: fn(&Health) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready(&writer.health()) {
+        assert!(Instant::now() < deadline, "health stayed {:?}", writer.health());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn records_queued_during_a_write_share_the_next_one() {
+    let (fake, entered, open) = gated();
     let written = fake.written.clone();
     let writer = Writer::spawn(fake, quick).unwrap();
     let first = writer.submit(line("1")).unwrap();
@@ -103,12 +121,7 @@ fn records_queued_during_a_write_share_the_next_one() {
 
 #[test]
 fn a_compaction_contains_the_lines_queued_before_it() {
-    let (entered_tx, entered) = mpsc::channel();
-    let (open, open_rx) = mpsc::channel();
-    let fake = Fake {
-        gate: Some((entered_tx, open_rx)),
-        ..Fake::default()
-    };
+    let (fake, entered, open) = gated();
     let written = fake.written.clone();
     let writer = Writer::spawn(fake, quick).unwrap();
     let tickets = [writer.submit(line("0")).unwrap()];
@@ -123,39 +136,47 @@ fn a_compaction_contains_the_lines_queued_before_it() {
 }
 
 #[test]
-fn a_disk_failing_a_few_times_stalls_writers_then_recovers() {
+fn a_blip_is_absorbed_by_quick_retries() {
     let fake = Fake {
-        failures: 3,
+        failures: QUICK_RETRIES,
         ..Fake::default()
     };
-    let (written, attempts) = (fake.written.clone(), fake.attempts.clone());
+    let attempts = fake.attempts.clone();
     let writer = Writer::spawn(fake, quick).unwrap();
-    writer.submit(line("kept")).unwrap().wait().unwrap();
-    assert_eq!(*attempts.lock().unwrap(), 4);
-    assert_eq!(*written.lock().unwrap(), [vec!["kept"]]);
-    writer.submit(line("next")).unwrap().wait().unwrap();
+    writer.submit_held(line("kept")).unwrap().wait().unwrap();
+    assert_eq!(*attempts.lock().unwrap(), QUICK_RETRIES + 1);
+    assert!(matches!(writer.health(), Health::Ready));
 }
 
+/// Released records already applied in memory stay queued while the disk is
+/// down, new ones are refused before anything changes, and once the disk
+/// recovers the queued ones are written in order and saves resume.
 #[test]
-fn a_disk_failing_forever_halts_the_writer_for_every_later_save() {
-    let fake = Fake {
-        failures: u32::MAX,
-        ..Fake::default()
-    };
+fn a_failing_disk_degrades_refuses_new_writes_and_writes_queued_records_in_order_on_recovery() {
+    let (mut fake, entered, open) = gated();
+    fake.failures = 30;
     let written = fake.written.clone();
     let writer = Writer::spawn(fake, quick).unwrap();
-    let started = Instant::now();
-    assert!(writer.submit(line("lost")).unwrap().wait().is_err());
-    assert!(started.elapsed() >= Duration::from_millis(200), "it stalled first");
-    assert!(matches!(writer.submit(compact("later")), Err(Submit::Halted(_))));
-    assert!(matches!(writer.submit_held(None), Err(Submit::Halted(_))));
-    assert!(written.lock().unwrap().is_empty());
+    let first = writer.submit(line("1")).unwrap();
+    entered.recv().unwrap();
+    let second = writer.submit(line("2")).unwrap();
+    open.send(()).unwrap();
+    assert!(matches!(first.wait(), Err(Unsaved::NotYet(_))), "an answer, not a hang");
+    assert!(matches!(second.wait(), Err(Unsaved::NotYet(_))));
+    assert!(matches!(writer.submit(line("refused")), Err(Submit::Unavailable(_))));
+    assert!(matches!(writer.submit_held(None), Err(Submit::Unavailable(_))));
+    until(&writer, |health| matches!(health, Health::Ready));
+    assert_eq!(*written.lock().unwrap(), [vec!["1", "2"]], "written in order, once");
+    writer.submit(line("3")).unwrap().wait().unwrap();
+    assert_eq!(*written.lock().unwrap(), [vec!["1", "2"], vec!["3"]]);
 }
 
+/// A record whose caller still holds its lock is refused instead (the caller
+/// rolls back), and the first save after recovery compacts.
 #[test]
-fn a_held_record_alone_in_flight_is_refused_and_the_next_save_compacts() {
+fn a_held_record_is_refused_on_degrading_and_the_next_save_after_recovery_compacts() {
     let fake = Fake {
-        failures: 1,
+        failures: QUICK_RETRIES + 2,
         ..Fake::default()
     };
     let written = fake.written.clone();
@@ -164,6 +185,7 @@ fn a_held_record_alone_in_flight_is_refused_and_the_next_save_compacts() {
         writer.submit_held(line("refused")).unwrap().wait(),
         Err(Failure::Refused(_))
     ));
+    until(&writer, |health| matches!(health, Health::Ready));
     assert!(matches!(
         writer.submit_held(line("on the old base")),
         Err(Submit::Stale)
@@ -172,6 +194,27 @@ fn a_held_record_alone_in_flight_is_refused_and_the_next_save_compacts() {
     writer.submit_held(compact("whole")).unwrap().wait().unwrap();
     writer.submit_held(line("after")).unwrap().wait().unwrap();
     assert_eq!(*written.lock().unwrap(), [vec!["compact whole"], vec!["after"]]);
+}
+
+#[test]
+fn a_disk_failing_forever_refuses_every_write_and_never_halts() {
+    let fake = Fake {
+        failures: u32::MAX,
+        ..Fake::default()
+    };
+    let (written, attempts) = (fake.written.clone(), fake.attempts.clone());
+    let writer = Writer::spawn(fake, quick).unwrap();
+    assert!(matches!(
+        writer.submit(line("queued")).unwrap().wait(),
+        Err(Unsaved::NotYet(_))
+    ));
+    let tried = *attempts.lock().unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(*attempts.lock().unwrap() > tried, "it keeps trying");
+    assert!(matches!(writer.health(), Health::Degraded(_)));
+    assert!(matches!(writer.submit(compact("later")), Err(Submit::Unavailable(_))));
+    assert!(written.lock().unwrap().is_empty());
+    drop(writer); // returns: a degraded writer does not hold up shutdown
 }
 
 #[test]
@@ -188,6 +231,8 @@ fn an_unconfirmed_write_halts_at_once_even_when_its_caller_could_roll_back() {
         Err(Failure::Halted(_))
     ));
     assert_eq!(*attempts.lock().unwrap(), 1, "never retried");
+    assert!(matches!(writer.health(), Health::Halted(_)));
+    assert!(matches!(writer.submit(line("later")), Err(Submit::Halted(_))));
 }
 
 #[test]
@@ -203,12 +248,7 @@ fn a_log_that_cannot_restart_after_a_compaction_makes_the_next_save_compact() {
 
 #[test]
 fn an_unchanged_save_waits_for_the_records_before_it_and_dropping_drains() {
-    let (entered_tx, entered) = mpsc::channel();
-    let (open, open_rx) = mpsc::channel();
-    let fake = Fake {
-        gate: Some((entered_tx, open_rx)),
-        ..Fake::default()
-    };
+    let (fake, entered, open) = gated();
     let written = fake.written.clone();
     let writer = Writer::spawn(fake, quick).unwrap();
     let changed = writer.submit(line("changed")).unwrap();
@@ -223,29 +263,14 @@ fn an_unchanged_save_waits_for_the_records_before_it_and_dropping_drains() {
 }
 
 #[test]
-fn the_policy_refuses_only_undoable_records_and_bounds_the_stall() {
+fn the_policy_retries_a_blip_then_degrades_with_capped_backoff_and_halts_only_when_unconfirmed() {
     let not_replaced = Fault::NotReplaced(io::Error::other("full"));
     let unconfirmed = Fault::Unconfirmed(io::Error::other("rename"));
-    let attempt = |fault, rollback, seconds| Attempt {
-        fault,
-        rollback,
-        failing_for: Duration::from_secs(seconds),
-        failures: 3,
-    };
-    assert_eq!(
-        stall_then_halt(&attempt(&unconfirmed, Rollback::Possible, 0)),
-        Verdict::Halt
-    );
-    assert_eq!(
-        stall_then_halt(&attempt(&not_replaced, Rollback::Possible, 0)),
-        Verdict::Refuse
-    );
-    assert_eq!(
-        stall_then_halt(&attempt(&not_replaced, Rollback::Impossible, 0)),
-        Verdict::Retry(Duration::from_millis(80))
-    );
-    assert_eq!(
-        stall_then_halt(&attempt(&not_replaced, Rollback::Impossible, 30)),
-        Verdict::Halt
-    );
+    let verdict = |fault, failures| retry_then_degrade(&Attempt { fault, failures });
+    assert_eq!(verdict(&unconfirmed, 1), Verdict::Halt);
+    assert_eq!(verdict(&not_replaced, 1), Verdict::Retry(Duration::from_millis(500)));
+    assert_eq!(verdict(&not_replaced, 2), Verdict::Retry(Duration::from_secs(1)));
+    assert_eq!(verdict(&not_replaced, 3), Verdict::Degrade(Duration::from_millis(250)));
+    assert_eq!(verdict(&not_replaced, 5), Verdict::Degrade(Duration::from_secs(1)));
+    assert_eq!(verdict(&not_replaced, 1000), Verdict::Degrade(PROBE_MAX));
 }

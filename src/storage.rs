@@ -4,11 +4,12 @@ use crate::State;
 use crate::config::{STATE_LOG as LOG, state_schema as schema};
 use crate::runtime::RunStatus;
 use control_effect::sync::Changes;
+pub use control_journal::writer::Health;
 use control_journal::{
     FileJournal, Journal,
     lens::{self, Schema},
     snapshot::{self, Encoded},
-    writer::{self, Failure, Log, Record, Sink, Submit, Ticket, Writer},
+    writer::{self, Failure, Log, Record, Sink, Submit, Ticket, Unsaved, Writer},
 };
 use std::{
     collections::{HashMap, hash_map::Entry},
@@ -243,7 +244,7 @@ fn adopt(directory: &Path, recovered: Recovered) -> bool {
         .filter_map(|i| log.read(i).ok().flatten())
         .map(|line| line.len() + 1)
         .sum();
-    let Ok(writer) = Writer::spawn(Files::new(directory, Some(log)), writer::stall_then_halt) else {
+    let Ok(writer) = Writer::spawn(Files::new(directory, Some(log)), writer::retry_then_degrade) else {
         return false;
     };
     published().lock().unwrap_or_else(PoisonError::into_inner).insert(
@@ -314,8 +315,10 @@ pub fn save(state: &State) -> io::Result<()> {
 #[must_use = "the change is durable only once `wait` returns"]
 pub struct Saving(Ticket);
 impl Saving {
-    /// Waits until the change is durable. An error means the writer stopped
-    /// for good and Control is stopping with it.
+    /// Waits until the change is durable. An error says the change is not
+    /// saved yet (storage is unavailable; it stays queued and is saved when
+    /// storage recovers) or never will be (the writer stopped and Control is
+    /// stopping with it).
     pub fn wait(self) -> io::Result<()> {
         match self.0.wait() {
             Ok(_) => {
@@ -323,19 +326,22 @@ impl Saving {
                 crate::live_updates::notify();
                 Ok(())
             }
-            Err(halted) => {
+            Err(Unsaved::Halted(halted)) => {
                 crate::shutdown::request();
                 Err(halted.into())
             }
+            Err(not_yet) => Err(not_yet.into()),
         }
     }
 }
 
 /// Stages `state` like [`save`] but returns before it is durable, so the
 /// caller can release its lock first and then [`Saving::wait`]. Others may
-/// see and extend the change before then, so it is never refused: a failing
-/// disk stalls it and, past the writer's limit, stops Control. An error here
-/// means nothing was staged and the caller rolls back as after `save`. Runs
+/// see and extend the change before then, so it is never refused once staged:
+/// if storage fails it stays queued until storage recovers. An error here
+/// (storage already unavailable among them) means nothing was staged and the
+/// caller rolls back as after `save`; check [`health`] before changing state
+/// to refuse without touching it. Runs
 /// are not archived here: undoing that on a refusal needs the state.
 pub fn submit(state: &State) -> io::Result<Saving> {
     let directory = crate::config::state_directory().map_err(io::Error::other)?;
@@ -423,6 +429,10 @@ pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
     Ok(())
 }
 fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError> {
+    // Refused before the archive step moves anything; the caller rolls back.
+    if let Health::Degraded(unavailable) = health_in(directory) {
+        return Err(CheckpointError::NotReplaced(unavailable.into()));
+    }
     let directory = directory.to_owned();
     let mut archive = archived(&directory);
     let pending = archive::step(&directory, state, &mut archive).map_err(CheckpointError::NotReplaced)?;
@@ -457,6 +467,31 @@ fn persist(directory: &Path, encoded: Encoded, compact: bool) -> Result<(), Chec
     }
 }
 
+/// Whether this node's state takes saves now: ready, degraded (saves are
+/// refused with the cause until storage recovers; reads go on) or halted. A
+/// pure read for status pages and for refusing a change before applying it.
+pub fn health() -> Health {
+    crate::config::state_directory().map_or(Health::Ready, |directory| health_in(&directory))
+}
+fn health_in(directory: &Path) -> Health {
+    published()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(directory)
+        .map_or(Health::Ready, |current| current.writer.health())
+}
+
+/// A record the writer did not queue, as the legacy phases: unavailable
+/// storage is an ordinary error the caller rolls back; a halted writer is an
+/// unconfirmed checkpoint.
+fn refused(refusal: Submit) -> CheckpointError {
+    match refusal {
+        Submit::Unavailable(unavailable) => CheckpointError::NotReplaced(unavailable.into()),
+        Submit::Halted(halted) => CheckpointError::Unconfirmed(halted.into()),
+        Submit::Stale => CheckpointError::NotReplaced(io::Error::other("a compaction is never stale")),
+    }
+}
+
 /// Hands `encoded` to `directory`'s writer with `submit`: nothing new when
 /// unchanged, else one patch line, else (when `compact`, with no base yet,
 /// once the log outgrows the snapshot, or when the disk lost the base) a
@@ -468,7 +503,6 @@ fn stage<T>(
     compact: bool,
     submit: fn(&Writer, Option<Record>) -> Result<T, Submit>,
 ) -> Result<T, CheckpointError> {
-    let halted = |halted: writer::Halted| CheckpointError::Unconfirmed(halted.into());
     let mut all = published().lock().unwrap_or_else(PoisonError::into_inner);
     if !compact
         && let Some(current) = all.get_mut(directory)
@@ -488,7 +522,7 @@ fn stage<T>(
                     return Ok(staged);
                 }
                 Err(Submit::Stale) => {}
-                Err(Submit::Halted(error)) => return Err(halted(error)),
+                Err(refusal) => return Err(refused(refusal)),
             }
         }
     }
@@ -506,16 +540,13 @@ fn stage<T>(
     let current = match all.entry(directory.to_owned()) {
         Entry::Occupied(current) => current.into_mut(),
         Entry::Vacant(vacant) => vacant.insert(Published {
-            writer: Writer::spawn(Files::new(directory, None), writer::stall_then_halt)
+            writer: Writer::spawn(Files::new(directory, None), writer::retry_then_degrade)
                 .map_err(CheckpointError::NotReplaced)?,
             log_bytes: 0,
             base: None,
         }),
     };
-    let staged = submit(&current.writer, Some(record)).map_err(|refusal| match refusal {
-        Submit::Halted(error) => halted(error),
-        Submit::Stale => CheckpointError::NotReplaced(io::Error::other("a compaction is never stale")),
-    })?;
+    let staged = submit(&current.writer, Some(record)).map_err(refused)?;
     current.log_bytes = log_bytes;
     current.base = Some(encoded);
     Ok(staged)
@@ -575,6 +606,17 @@ impl Sink for Files {
         // next save another compaction (the writer says so on stderr).
         self.header = Some(header.to_vec());
         Ok(self.log().map_or_else(Log::Broken, |_| Log::Restarted))
+    }
+    /// A small synced file beside the state (a full disk refuses it), then the
+    /// log, restarted if a compaction left that undone.
+    fn probe(&mut self) -> io::Result<()> {
+        let path = self.directory.join("state.probe");
+        let written = fs::File::create(&path).and_then(|mut file| {
+            file.write_all(&[0; 4096])?;
+            file.sync_all()
+        });
+        let _ = fs::remove_file(&path);
+        written.and_then(|()| self.log().map(drop))
     }
 }
 fn write_checkpoint(directory: &std::path::Path, data: &[u8]) -> Result<(), CheckpointError> {

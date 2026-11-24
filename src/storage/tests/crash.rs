@@ -64,6 +64,9 @@ impl Sink for Dying {
     fn compact(&mut self, snapshot: &[u8], header: &[u8]) -> Result<Log, CheckpointError> {
         self.files.compact(snapshot, header)
     }
+    fn probe(&mut self) -> io::Result<()> {
+        self.files.probe()
+    }
 }
 
 /// Save `n` of the child's fixed sequence.
@@ -110,7 +113,7 @@ fn child(directory: &Path, crash: Crash, released: bool) {
                 crash,
                 appends: 0,
             },
-            writer::stall_then_halt,
+            writer::retry_then_degrade,
         )
         .unwrap();
         all.insert(
