@@ -1,0 +1,24 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 3292
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'
+
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><meta name="darkreader-lock"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Control</title><link rel="stylesheet" href="/style.css"><link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>
+<body>
+<aside class="sidebar">
+  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true">⌘</span>CONTROL<span class="version">/ 0.1</span></a>
+  <div class="workspace"><span class="dot"></span><div>Local workspace<small>control.local</small></div></div>
+  <div class="nav-label">WORKSPACE</div>
+  <nav aria-label="Workspace"><a href='/dms'><span aria-hidden='true'>⌁</span><span>DMs</span></a><a href='/?view=agents'><span aria-hidden='true'>⌁</span><span>Bots</span></a><a href='/knowledge'><span aria-hidden='true'>▤</span><span>Knowledge</span></a><a href='/?view=rooms'><span aria-hidden='true'>#</span><span>Rooms</span></a><a href='/?view=tools'><span aria-hidden='true'>⊞</span><span>Tools</span></a><a href='/dna'><span aria-hidden='true'>◈</span><span>DNA</span></a><a href='/personas'><span aria-hidden='true'>◇</span><span>Personas</span></a><a href='/?view=monitor'><span aria-hidden='true'>▥</span><span>Usage</span></a><a href='/?view=manage' aria-current='location'><span aria-hidden='true'>⚙</span><span>Manage</span></a></nav>
+  <div class="sidebar-bottom"><div class="profile"><span class="avatar">OP</span><div>Operator<small>Local access</small></div></div></div>
+</aside>
+<div class="shell">
+  <header><div class="header-left"><a class="new-chat-link" href="/dms?new=1"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>New DM</a><span class="header-context">Manage<span class='slash' aria-hidden='true'>/</span>Nodes</span></div><div class="header-right"><a class='discuss-page' href='/dms?discuss=nodes'>Discuss design ↗</a><a class="node-link" href="/?view=nodes"><span class="node-indicator" aria-hidden="true"></span>Local</a></div></header>
+  <div class="body-grid with-section-nav"><aside class='section-navigation'><h2>Manage</h2><nav aria-label='Manage'><a href='/?view=nodes' aria-current='page'>Nodes</a><a href='/?view=authority'>Permissions</a><a href='/?view=providers'>Models &amp; providers</a><a href='/?view=discord-access'>Discord access</a><a href='/?view=integrations'>Integrations</a></nav></aside><main><span class='eyebrow'>NODES · PLANNED</span><h2>Nodes</h2><p class='muted'>Remote nodes are not connected.</p><div class='node-grid'><article><span class='node-icon'>⌘</span><h3>control.local</h3><p>This laptop</p><span class='tag'>local</span></article><article><span class='node-icon'>◇</span><h3>forge.tailnet</h3><p>Development · planned</p><span class='tag'>not connected</span></article><article><span class='node-icon'>◈</span><h3>archive.tailnet</h3><p>Knowledge · planned</p><span class='tag'>not connected</span></article></div><div class="bottom-note"><span>⌘ CONTROL</span></div></main></div>
+</div>
+</body></html>

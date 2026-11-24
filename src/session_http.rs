@@ -474,13 +474,21 @@ impl control_mcp::Tools for Operator<'_> {
     }
 }
 
-/// The chat pages that only read state: `GET /dm/{id}`, its transcript and
-/// its DM picker. The server copies their view under the state lock and
-/// renders it after the lock is released (`crate::Read`).
+/// The chat pages that only read state: `GET /dm/{id}`, its transcript, its
+/// DM picker and its requests panel. The server copies their view under the
+/// state lock and renders it after the lock is released (`crate::Read`).
 pub(crate) enum ChatPage {
-    Page { id: String, picker_open: bool },
+    Page {
+        id: String,
+        picker_open: bool,
+    },
     Transcript(String),
     Conversations(String),
+    /// The panel shows each question's age at `now`, read before locking.
+    Requests {
+        id: String,
+        now: crate::design::UnixSeconds,
+    },
 }
 impl ChatPage {
     pub(crate) fn of(method: &str, path: &str, header: &str) -> Option<Self> {
@@ -494,6 +502,10 @@ impl ChatPage {
             }),
             "transcript" => Some(Self::Transcript(id)),
             "conversations" => Some(Self::Conversations(id)),
+            "requests" => Some(Self::Requests {
+                id,
+                now: crate::design::UnixSeconds::now(),
+            }),
             _ => None,
         }
     }
@@ -506,6 +518,7 @@ pub(crate) enum ChatView {
     },
     Transcript(Result<chat::Transcript, &'static str>),
     Conversations(Result<crate::navigation::Picker, &'static str>),
+    Requests(Result<chat::Requests, &'static str>, crate::design::UnixSeconds),
 }
 /// Why a DM page is not shown.
 pub(crate) enum Absent {
@@ -532,6 +545,7 @@ pub(crate) const CHAT_PAGES: crate::Read<ChatPage, ChatView> = crate::Read {
         ChatPage::Conversations(id) => ChatView::Conversations(
             chat::viewable(&state.chats, &id).map(|_| crate::navigation::Picker::of(&state.chats, &id)),
         ),
+        ChatPage::Requests { id, now } => ChatView::Requests(chat::Requests::of(state, &id), now),
     },
     render: |view| {
         let embedded = |status, mime, body: String| crate::Reply {
@@ -570,6 +584,7 @@ pub(crate) const CHAT_PAGES: crate::Read<ChatPage, ChatView> = crate::Read {
             } => embedded("404 Not Found", "text/plain", message.to_owned()),
             ChatView::Transcript(transcript) => html(transcript.map(|transcript| transcript.render())),
             ChatView::Conversations(picker) => html(picker.map(|picker| picker.render())),
+            ChatView::Requests(requests, now) => html(requests.map(|requests| requests.render(now))),
         }
     },
 };
@@ -848,25 +863,6 @@ pub fn handle(
                 "404 Not Found",
                 "text/plain",
                 error.to_string().as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
-    } else if method == "GET" && operation == "requests" {
-        let _ = match chat::requests(state, id) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                html.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(message) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                message.as_bytes(),
                 "",
                 control_http::Policy::Embedded,
             ),

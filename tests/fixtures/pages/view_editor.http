@@ -1,0 +1,24 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 3725
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'
+
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><meta name="darkreader-lock"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Control</title><link rel="stylesheet" href="/style.css"><link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>
+<body>
+<aside class="sidebar">
+  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true">⌘</span>CONTROL<span class="version">/ 0.1</span></a>
+  <div class="workspace"><span class="dot"></span><div>Local workspace<small>control.local</small></div></div>
+  <div class="nav-label">WORKSPACE</div>
+  <nav aria-label="Workspace"><a href='/dms'><span aria-hidden='true'>⌁</span><span>DMs</span></a><a href='/?view=agents'><span aria-hidden='true'>⌁</span><span>Bots</span></a><a href='/knowledge' aria-current='page'><span aria-hidden='true'>▤</span><span>Knowledge</span></a><a href='/?view=rooms'><span aria-hidden='true'>#</span><span>Rooms</span></a><a href='/?view=tools'><span aria-hidden='true'>⊞</span><span>Tools</span></a><a href='/dna'><span aria-hidden='true'>◈</span><span>DNA</span></a><a href='/personas'><span aria-hidden='true'>◇</span><span>Personas</span></a><a href='/?view=monitor'><span aria-hidden='true'>▥</span><span>Usage</span></a><a href='/?view=manage'><span aria-hidden='true'>⚙</span><span>Manage</span></a></nav>
+  <div class="sidebar-bottom"><div class="profile"><span class="avatar">OP</span><div>Operator<small>Local access</small></div></div></div>
+</aside>
+<div class="shell">
+  <header><div class="header-left"><a class="new-chat-link" href="/dms?new=1"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>New DM</a><span class="header-context"></span></div><div class="header-right"><a class='discuss-page' href='/dms?discuss=knowledge'>Discuss design ↗</a><a class="node-link" href="/?view=nodes"><span class="node-indicator" aria-hidden="true"></span>Local</a></div></header>
+  <div class="body-grid "><main><div class='section-heading knowledge-heading'><h2>Knowledge</h2><a class='primary add-note' href='/knowledge?mode=new' aria-label='Create a note'>＋ <span>New note</span></a></div><div class='tabs knowledge-tabs'><a href='/knowledge' aria-current='page'>Documents</a><a href='/knowledge?mode=graph'>Graph</a><a href='/knowledge?mode=review'>Review</a></div><div class='knowledge-workspace'><aside class='note-files' aria-label='Notes'><span class='eyebrow'>DOCUMENTS</span><a href='/knowledge?doc=scratchpad' aria-current='page'><span>▤</span> Scratchpad.md</a></aside><section class='knowledge-content'><form class='note-editor' method='post' action='/knowledge/save'><input type='hidden' name='id' value='scratchpad'><input type='hidden' name='revision' value='0'><div class='note-toolbar'><label class='note-name'>Name<input name='title' required maxlength='80' value='Scratchpad.md' placeholder='Untitled.md'></label><button class='primary'>Save changes ↗</button></div><p class='note-status'>Draft · save to keep your changes</p><label class='note-body-label'>Markdown · connect notes with [[note name]]<textarea class='editor' name='body' maxlength='32000' rows='22' aria-label='Note text'>Notes link [[Plan]] &amp; &lt;more&gt;</textarea></label></form><div class='note-connections'><h3>Connections</h3><span class='muted'>Unresolved · plan</span></div></section></div><div class="bottom-note"><span>⌘ CONTROL</span></div></main></div>
+</div>
+</body></html>

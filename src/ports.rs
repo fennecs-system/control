@@ -1008,33 +1008,95 @@ pub(crate) fn pending_json(state: &State, id: &str) -> Vec<Value> {
 }
 
 fn route(ports: &[Port], port: &Port) -> String {
-    match (&port.target, &port.peer) {
-        (Some(target), _) => format!(
-            "Service :{} → {}:{}",
-            port.service_port,
-            crate::escape(&target.host),
-            target.port
-        ),
-        (None, Some(peer)) => {
-            let ingress = ports.iter().find(|p| &p.id == peer);
-            format!(
-                "Service :{} → peer ingress {} (service {} :{})",
-                port.service_port,
-                crate::escape(ingress.map_or(peer.as_str(), |p| p.name.0.as_str())),
-                crate::escape(ingress.map_or("unknown", |p| p.service.as_str())),
-                ingress.map_or(0, |p| p.service_port.get()),
-            )
+    Route::of(ports, port).render()
+}
+/// Where a port leads, copied out of state for a page rendered later.
+pub(crate) enum Route {
+    Target {
+        service: NonZeroU16,
+        host: String,
+        port: NonZeroU16,
+    },
+    /// Another service's ingress; `ingress` is `None` when that port is gone.
+    Peer {
+        service: NonZeroU16,
+        peer: String,
+        ingress: Option<Ingress>,
+    },
+    Loopback {
+        service: NonZeroU16,
+    },
+}
+/// The ingress a peer route reaches, by the names the page shows.
+pub(crate) struct Ingress {
+    name: String,
+    service: String,
+    port: u16,
+}
+impl Route {
+    fn of(ports: &[Port], port: &Port) -> Self {
+        let service = port.service_port;
+        match (&port.target, &port.peer) {
+            (Some(target), _) => Self::Target {
+                service,
+                host: target.host.clone(),
+                port: target.port,
+            },
+            (None, Some(peer)) => Self::Peer {
+                service,
+                peer: peer.as_str().to_owned(),
+                ingress: ports.iter().find(|p| &p.id == peer).map(|p| Ingress {
+                    name: p.name.0.clone(),
+                    service: p.service.as_str().to_owned(),
+                    port: p.service_port.get(),
+                }),
+            },
+            (None, None) => Self::Loopback { service },
         }
-        (None, None) => format!("Host loopback → service :{}", port.service_port),
+    }
+    fn render(&self) -> String {
+        match self {
+            Self::Target { service, host, port } => {
+                format!("Service :{service} → {}:{port}", crate::escape(host))
+            }
+            Self::Peer { service, peer, ingress } => format!(
+                "Service :{service} → peer ingress {} (service {} :{})",
+                crate::escape(ingress.as_ref().map_or(peer.as_str(), |ingress| ingress.name.as_str())),
+                crate::escape(ingress.as_ref().map_or("unknown", |ingress| ingress.service.as_str())),
+                ingress.as_ref().map_or(0, |ingress| ingress.port),
+            ),
+            Self::Loopback { service } => format!("Host loopback → service :{service}"),
+        }
     }
 }
-pub(crate) fn pending_panel(state: &State, id: &str) -> String {
-    pending_for_chat(state,id).into_iter().map(|port| {
-        let detail=route(&state.ports,port);
-        let loopback=if port.target.as_ref().is_some_and(|target|target.host.parse::<IpAddr>().is_ok_and(|ip|ip.is_loopback())) {
+/// A pending port request as the chat's requests panel shows it.
+pub(crate) struct Pending {
+    id: String,
+    name: String,
+    route: Route,
+    loopback: bool,
+}
+pub(crate) fn pending(state: &State, id: &str) -> Vec<Pending> {
+    pending_for_chat(state, id)
+        .into_iter()
+        .map(|port| Pending {
+            id: port.id.as_str().to_owned(),
+            name: port.name.0.clone(),
+            route: Route::of(&state.ports, port),
+            loopback: port
+                .target
+                .as_ref()
+                .is_some_and(|target| target.host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())),
+        })
+        .collect()
+}
+pub(crate) fn pending_panel(pending: &[Pending], id: &str) -> String {
+    pending.iter().map(|port| {
+        let detail=port.route.render();
+        let loopback=if port.loopback {
             "<label><input type='checkbox' name='loopback' value='yes' required> Allow this exact loopback target</label>"
         }else{""};
-        format!("<article class='assistant-message port-request' data-transcript-key='port-{}'><h3>Port access · {}</h3><p>{detail}</p><form class='decision-form' method='post' action='/tools/ports' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label>{loopback}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",port.id.as_str(),crate::escape(&port.name.0),port.id.as_str(),crate::escape(id))
+        format!("<article class='assistant-message port-request' data-transcript-key='port-{}'><h3>Port access · {}</h3><p>{detail}</p><form class='decision-form' method='post' action='/tools/ports' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><label>Allow for<select name='seconds'><option value='-1'>Service lifetime</option><option value='900'>Up to 15 minutes</option><option value='3600'>Up to 1 hour</option></select></label>{loopback}<button class='primary'>Allow port</button><button name='revoke' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",port.id,crate::escape(&port.name),port.id,crate::escape(id))
     }).collect()
 }
 

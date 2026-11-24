@@ -1482,47 +1482,72 @@ fn command_text(text: &str) -> String {
     }
 }
 /// Independently embeddable approval view. Reuses each domain's scoped forms.
+/// The server serves it through `session_http::CHAT_PAGES`.
+#[cfg(test)]
 pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
-    let session = viewable(&state.chats, id)?;
-    let questions = crate::design::pending(state, id);
-    let folders = state
-        .chats
-        .iter()
-        .filter(|c| {
-            c.actor == session.actor
-                && Lineage::of(&state.chats).within(&c.id, id)
-                && c.project.as_ref().is_some_and(|p| p.pending || p.grant.is_none())
+    Requests::of(state, id).map(|requests| requests.render(crate::design::UnixSeconds::now()))
+}
+/// What the requests panel shows, copied out of state so the panel renders
+/// after the state lock is released.
+pub(crate) struct Requests {
+    id: String,
+    folders: Vec<crate::projects::Panel>,
+    /// Pending design questions, each with the chat that asked it.
+    questions: Vec<(crate::design::Question, String)>,
+    ports: Vec<crate::ports::Pending>,
+    bots: Vec<crate::bots::Pending>,
+    knowledge: Vec<Value>,
+}
+impl Requests {
+    pub(crate) fn of(state: &State, id: &str) -> Result<Self, &'static str> {
+        let session = viewable(&state.chats, id)?;
+        let folders = state
+            .chats
+            .iter()
+            .filter(|c| {
+                c.actor == session.actor
+                    && Lineage::of(&state.chats).within(&c.id, id)
+                    && c.project.as_ref().is_some_and(|p| p.pending || p.grant.is_none())
+            })
+            .filter_map(|folder| crate::projects::Panel::of(&state.chats, &folder.id))
+            .collect();
+        let questions = crate::design::pending(state, id)
+            .into_iter()
+            .filter_map(|run| Some((run.question.clone()?, run.chat_id.clone().unwrap_or_default())))
+            .collect();
+        Ok(Self {
+            id: id.to_owned(),
+            folders,
+            questions,
+            ports: crate::ports::pending(state, id),
+            bots: crate::bots::pending(state, id),
+            knowledge: crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id),
         })
-        .collect::<Vec<_>>();
-    let knowledge = crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id);
-    let count = questions.len()
-        + folders.len()
-        + crate::ports::pending_for_chat(state, id).len()
-        + crate::bots::pending_count(state, id)
-        + knowledge.len();
-    let mut html = format!(
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='requests-panel' data-request-count='{count}'>"
-    );
-    if count == 0 {
-        html.push_str("<p class='message-status'>No pending requests</p>");
     }
-    for folder in folders {
-        html.push_str(&crate::projects::panel(&state.chats, &folder.id));
+    /// The panel, with each question's age at `now`.
+    pub(crate) fn render(&self, now: crate::design::UnixSeconds) -> String {
+        let count =
+            self.questions.len() + self.folders.len() + self.ports.len() + self.bots.len() + self.knowledge.len();
+        let mut html = format!(
+            "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='color-scheme' content='dark'><meta name='darkreader-lock'><link rel='stylesheet' href='/style.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'></head><body class='requests-panel' data-request-count='{count}'>"
+        );
+        if count == 0 {
+            html.push_str("<p class='message-status'>No pending requests</p>");
+        }
+        html.extend(self.folders.iter().map(crate::projects::Panel::render));
+        html.extend(self.questions.iter().map(|(question, chat)| {
+            let age = question
+                .asked_at()
+                .map(|at| format!(" · open {}", control_client::operator::age(now.0.saturating_sub(at.0))))
+                .unwrap_or_default();
+            format!("<article class='assistant-message pending-decision' data-transcript-key='decision-{}'><p class='message-status'>Agent decision{age} · <a target='_top' href='/dm/{}'>View agent ↗</a></p>{}</article>",escape(question.id.as_str()),escape(chat),crate::design::render(question,&self.id,true))
+        }));
+        html.push_str(&crate::ports::pending_panel(&self.ports, &self.id));
+        html.push_str(&crate::bots::pending_panel(&self.bots, &self.id));
+        html.push_str(&crate::knowledge_tools::pending_panel(&self.knowledge));
+        html.push_str("</body></html>");
+        html
     }
-    let now = crate::design::UnixSeconds::now();
-    for run in questions {
-        let question = run.question.as_ref().unwrap();
-        let age = question
-            .asked_at()
-            .map(|at| format!(" · open {}", control_client::operator::age(now.0.saturating_sub(at.0))))
-            .unwrap_or_default();
-        html.push_str(&format!("<article class='assistant-message pending-decision' data-transcript-key='decision-{}'><p class='message-status'>Agent decision{age} · <a target='_top' href='/dm/{}'>View agent ↗</a></p>{}</article>",escape(question.id.as_str()),escape(run.chat_id.as_deref().unwrap_or("")),crate::design::render(question,id,true)));
-    }
-    html.push_str(&crate::ports::pending_panel(state, id));
-    html.push_str(&crate::bots::pending_panel(state, id));
-    html.push_str(&crate::knowledge_tools::pending_panel(&knowledge));
-    html.push_str("</body></html>");
-    Ok(html)
 }
 
 /// The operator's chat tools. A send can refuse a model selection with

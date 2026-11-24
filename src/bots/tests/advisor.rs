@@ -526,7 +526,7 @@ fn a_lead_requests_its_judge_as_advisor_and_the_operator_approves_it() {
     );
     let request = ask(&mut state, "advisor", &judge, None).unwrap();
     assert!(!state.bots.advises(&judge), "a request grants nothing");
-    assert!(pending_panel(&state, &lead).contains("its team (read-only observer)"));
+    assert!(pending_panel(&pending(&state, &lead), &lead).contains("its team (read-only observer)"));
     let id = request["request_id"].as_str().unwrap().to_owned();
     decide(&mut state, &id, true, Some(&lead), Now(1)).unwrap();
     assert!(state.bots.advises(&judge));

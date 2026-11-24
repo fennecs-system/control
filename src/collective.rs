@@ -68,7 +68,7 @@ pub(crate) struct Knowledge {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::knowledge_tools::Source>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Request {
     capability: String,
     resource: String,
@@ -200,23 +200,80 @@ impl Collective {
         }
     }
     pub fn render(&self, view: &str, _channel: &str) -> Option<String> {
-        let mut html = match view {
-            "knowledge-review" => {
+        self.page(view).map(|page| page.render())
+    }
+    /// The Knowledge review or Access requests page, copied out of state so
+    /// it renders after the state lock is released.
+    fn page(&self, view: &str) -> Option<Page> {
+        match view {
+            "knowledge-review" => Some(self.review()),
+            "authority" => Some(self.access()),
+            _ => None,
+        }
+    }
+    pub(crate) fn review(&self) -> Page {
+        self.with(Kind::Review(
+            self.proposals
+                .iter()
+                .map(|p| Entry {
+                    claim: p.claim.clone(),
+                    evidence: p.evidence.clone(),
+                    scope: p.scope.clone(),
+                    validity: p.validity.clone(),
+                    status: p.status.clone(),
+                    source: p.source.as_ref().map(|s| (s.chat.clone(), s.run.clone())),
+                })
+                .collect(),
+        ))
+    }
+    pub(crate) fn access(&self) -> Page {
+        self.with(Kind::Access(self.requests.clone()))
+    }
+    fn with(&self, kind: Kind) -> Page {
+        Page {
+            kind,
+            notice: self.notice.clone(),
+        }
+    }
+}
+/// A Collective page as [`Collective::page`] copies it.
+pub(crate) struct Page {
+    kind: Kind,
+    notice: String,
+}
+enum Kind {
+    Review(Vec<Entry>),
+    Access(Vec<Request>),
+}
+/// A knowledge proposal as the review page shows it.
+struct Entry {
+    claim: String,
+    evidence: String,
+    scope: String,
+    validity: String,
+    status: ProposalStatus,
+    /// The proposing chat and run, when an agent proposed it.
+    source: Option<(String, Option<String>)>,
+}
+impl Page {
+    pub(crate) fn render(&self) -> String {
+        let mut html = match &self.kind {
+            Kind::Review(proposals) => {
                 let mut h = heading(
                     "KNOWLEDGE",
                     "Review knowledge",
                     "Check the evidence before accepting a claim.",
                 );
-                if self.proposals.is_empty() {
+                if proposals.is_empty() {
                     h.push_str("<div class='empty'>No entries to review.</div>");
                 }
-                for (id, p) in self.proposals.iter().enumerate() {
+                for (id, p) in proposals.iter().enumerate() {
                     h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Evidence</dt><dd>{}</dd><dt>Scope</dt><dd>{}</dd><dt>Recheck when</dt><dd>{}</dd></dl>", escape(p.status.as_str()), escape(&p.claim), escape(&p.evidence), escape(&p.scope), escape(&p.validity)));
-                    if let Some(source) = &p.source {
+                    if let Some((chat, run)) = &p.source {
                         h.push_str(&format!(
                             "<p class='muted'>From <a href='/dm/{}'>chat</a> · run {}</p>",
-                            escape(&source.chat),
-                            escape(source.run.as_deref().unwrap_or("local operator"))
+                            escape(chat),
+                            escape(run.as_deref().unwrap_or("local operator"))
                         ));
                     }
                     if p.status == ProposalStatus::Pending {
@@ -232,16 +289,16 @@ impl Collective {
                 h.push_str("<button class='primary'>Submit for review ↗</button></form>");
                 h
             }
-            "authority" => {
+            Kind::Access(requests) => {
                 let mut h = heading(
                     "ACCESS",
                     "Access requests",
                     "Preview only: decisions are recorded but do not grant access or run tools.",
                 );
-                if self.requests.is_empty() {
+                if requests.is_empty() {
                     h.push_str("<div class='empty'>No pending requests.</div>");
                 }
-                for (id, r) in self.requests.iter().enumerate() {
+                for (id, r) in requests.iter().enumerate() {
                     h.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3><dl><dt>Resource</dt><dd>{}</dd><dt>Purpose</dt><dd>{}</dd><dt>Route</dt><dd>{} {}</dd></dl>", escape(r.status.as_str()), escape(&r.capability), escape(&r.resource), escape(&r.purpose), escape(&r.authority), if r.authority == "judge" { "· manual review" } else { "· local operator" }));
                     if r.status == RequestStatus::Pending {
                         h.push_str(&format!("<form method='post' action='/decide' class='actions'><input type='hidden' name='id' value='{id}'><button class='primary' name='decision' value='approved'>Record approval</button><button name='decision' value='denied'>Deny</button></form>"));
@@ -254,7 +311,6 @@ impl Collective {
                 h.push_str("<label>Reviewer<select name='authority'><option value='human'>Human operator</option><option value='judge'>Judge · not connected</option></select></label><button class='primary'>Submit request ↗</button></form>");
                 h
             }
-            _ => return None,
         };
         if !self.notice.is_empty() {
             html = format!(
@@ -262,7 +318,7 @@ impl Collective {
                 escape(&self.notice)
             );
         }
-        Some(html)
+        html
     }
 }
 

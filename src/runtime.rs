@@ -267,38 +267,8 @@ impl Runtime {
     }
     pub fn render(&self, view: &str, _lens: &str) -> Option<String> {
         match view {
-            "discord-access" => {
-                let mut h="<span class='eyebrow'>DISCORD</span><h2>Access</h2><p class='muted'>Access uses Discord IDs. Display names cannot grant permissions.</p>".to_owned();
-                match identity::Policy::load() {
-                    Ok(policy) => {
-                        h.push_str("<p>DMs only. Server messages are ignored.</p>");
-                        for p in policy.principals {
-                            h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p></article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can run tasks and request source changes for local review."}else{"Can run tasks. Cannot change Control, access settings, or deploy."}));
-                        }
-                    }
-                    Err(message) => h.push_str(&format!("<div class='callout'>{}</div>", escape(message))),
-                }
-                h.push_str("<div class='callout'>Bind IDs locally with <code>cargo run -- --bind-discord &lt;label&gt; &lt;ID&gt;</code>. Access settings cannot be changed through Discord.</div>");
-                Some(h)
-            }
-            "agents" => {
-                // The Bots page process tree shows active turns; only queued work
-                // that has not started is listed here.
-                let mut h = String::new();
-                let mut queued = self
-                    .runs
-                    .iter()
-                    .filter(|r| r.status == RunStatus::Queued)
-                    .collect::<Vec<_>>();
-                queued.sort_by_key(|r| r.queue_order);
-                if !queued.is_empty() {
-                    h.push_str("<h3 class='form-title'>Queued</h3>");
-                    for run in queued {
-                        h.push_str(&run_record(run));
-                    }
-                }
-                Some(h)
-            }
+            "discord-access" => Some(discord_access()),
+            "agents" => Some(Queued::of(self).render()),
             "integrations" => Some(integrations()),
             _ => None,
         }
@@ -339,54 +309,127 @@ pub(crate) fn usage(run: &Run) -> String {
         ),
     }
 }
-fn run_record(run: &Run) -> String {
-    let mut html = format!(
-        "<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}{}</p>",
-        escape(run.status.as_str()),
-        escape(run.kind.as_str()),
-        escape(&run.source),
-        escape(&run.objective),
-        escape(run.id()),
-        escape(run.target.backend.label()),
-        run.target
-            .shown_model()
-            .map(|m| format!(" · {}", escape(&m)))
-            .unwrap_or_default(),
-        usage(run)
-    );
-    if let Some(persona) = &run.persona {
-        html.push_str(&format!(
-            "<span class='tag'>{} · depth {}</span>",
-            if persona.role == crate::delegation::Role::Judge {
-                "judge · read only"
-            } else {
-                "worker"
-            },
-            persona.depth
-        ));
-        if let Some(bundle) = &persona.bundle {
-            html.push_str(&format!(
-                "<a class='tag' href='/personas?id={}'>persona {}@{}</a>",
-                escape(&bundle.id),
-                escape(&bundle.id),
-                bundle.revision
-            ));
+/// The Bots page's queued turns, copied out of state so the panel renders
+/// after the state lock is released. The process tree shows active turns;
+/// only queued work that has not started is listed here.
+pub(crate) struct Queued(Vec<Record>);
+impl Queued {
+    pub(crate) fn of(runtime: &Runtime) -> Self {
+        let mut queued = runtime
+            .runs
+            .iter()
+            .filter(|r| r.status == RunStatus::Queued)
+            .collect::<Vec<_>>();
+        queued.sort_by_key(|r| r.queue_order);
+        Self(queued.into_iter().map(Record::of).collect())
+    }
+    pub(crate) fn render(&self) -> String {
+        if self.0.is_empty() {
+            return String::new();
+        }
+        std::iter::once("<h3 class='form-title'>Queued</h3>".to_owned())
+            .chain(self.0.iter().map(Record::render))
+            .collect()
+    }
+}
+/// A run as its record card shows it.
+struct Record {
+    status: String,
+    kind: String,
+    source: String,
+    objective: String,
+    id: String,
+    backend: &'static str,
+    model: Option<String>,
+    /// Attempts and tokens (`usage`).
+    usage: String,
+    persona: Option<Persona>,
+    result: String,
+    chat: Option<String>,
+    proceeding: bool,
+    resumable: bool,
+}
+/// A delegated run's role on its record card.
+struct Persona {
+    judge: bool,
+    depth: u8,
+    /// The captured persona bundle: id and revision.
+    bundle: Option<(String, u64)>,
+}
+impl Record {
+    fn of(run: &Run) -> Self {
+        Self {
+            status: run.status.as_str().to_owned(),
+            kind: run.kind.as_str().to_owned(),
+            source: run.source.clone(),
+            objective: run.objective.as_str().to_owned(),
+            id: run.id().as_str().to_owned(),
+            backend: run.target.backend.label(),
+            model: run.target.shown_model(),
+            usage: usage(run),
+            persona: run.persona.as_ref().map(|persona| Persona {
+                judge: persona.role == crate::delegation::Role::Judge,
+                depth: persona.depth,
+                bundle: persona
+                    .bundle
+                    .as_ref()
+                    .map(|bundle| (bundle.id.clone(), bundle.revision)),
+            }),
+            result: run.result.as_str().to_owned(),
+            chat: run.chat_id.clone().filter(|id| crate::chat::valid_id(id)),
+            proceeding: run.status.is_proceeding(),
+            resumable: run.status.is_resumable(),
         }
     }
-    if !run.result.is_empty() {
-        html.push_str(&format!("<pre class='run-result'>{}</pre>", escape(&run.result)));
+    fn render(&self) -> String {
+        let mut html = format!(
+            "<article class='record'><span class='tag'>{}</span><span class='eyebrow'>{} / {}</span><h3>{}</h3><p class='muted tiny'>run {} · {}{}{}</p>",
+            escape(&self.status),
+            escape(&self.kind),
+            escape(&self.source),
+            escape(&self.objective),
+            escape(&self.id),
+            escape(self.backend),
+            self.model
+                .as_ref()
+                .map(|m| format!(" · {}", escape(m)))
+                .unwrap_or_default(),
+            self.usage
+        );
+        if let Some(persona) = &self.persona {
+            html.push_str(&format!(
+                "<span class='tag'>{} · depth {}</span>",
+                if persona.judge { "judge · read only" } else { "worker" },
+                persona.depth
+            ));
+            if let Some((id, revision)) = &persona.bundle {
+                html.push_str(&format!(
+                    "<a class='tag' href='/personas?id={}'>persona {}@{}</a>",
+                    escape(id),
+                    escape(id),
+                    revision
+                ));
+            }
+        }
+        if !self.result.is_empty() {
+            html.push_str(&format!("<pre class='run-result'>{}</pre>", escape(&self.result)));
+        }
+        if let Some(chat) = &self.chat {
+            html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(chat)));
+        }
+        if self.proceeding {
+            html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(&self.id)));
+        }
+        if self.resumable {
+            html.push_str(&format!("<form class='decision-form' method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(&self.id)));
+        }
+        html.push_str("</article>");
+        html
     }
-    if let Some(chat) = run.chat_id.as_ref().filter(|id| crate::chat::valid_id(id)) {
-        html.push_str(&format!("<a href='/dm/{}'>Open DM ↗</a>", escape(chat)));
-    }
-    if run.status.is_proceeding() {
-        html.push_str(&format!("<form class='decision-form' method='post' action='/cancel-run'><input type='hidden' name='id' value='{}'><button>Cancel</button></form>",escape(run.id())));
-    }
-    if run.status.is_resumable() {
-        html.push_str(&format!("<form class='decision-form' method='post' action='/retry-run'><input type='hidden' name='id' value='{}'><button class='primary'>Retry</button></form>",escape(run.id())));
-    }
-    html.push_str("</article>");
-    html
+}
+#[cfg(test)]
+fn run_record(run: &Run) -> String {
+    Record::of(run).render()
 }
 
 /// Only allow known source roots. Never recursively copy the repository root,
@@ -451,7 +494,23 @@ pub fn workspace(id: &str) -> Result<PathBuf, &'static str> {
     }
     Ok(crate::config::state("runs")?.join(id).join("workspace"))
 }
-fn integrations() -> String {
+/// The Discord access page. It reads the access policy file and no state.
+pub(crate) fn discord_access() -> String {
+    let mut h="<span class='eyebrow'>DISCORD</span><h2>Access</h2><p class='muted'>Access uses Discord IDs. Display names cannot grant permissions.</p>".to_owned();
+    match identity::Policy::load() {
+        Ok(policy) => {
+            h.push_str("<p>DMs only. Server messages are ignored.</p>");
+            for p in policy.principals {
+                h.push_str(&format!("<article class='record'><span class='tag'>{:?}</span><h3>@{}</h3><p>Discord ID: {}</p><p class='muted'>{}</p></article>",p.role,escape(&p.label),p.user_id.map(|id|id.to_string()).unwrap_or_else(||"not bound — no access".into()),if p.role==identity::Role::Architect {"Can run tasks and request source changes for local review."}else{"Can run tasks. Cannot change Control, access settings, or deploy."}));
+            }
+        }
+        Err(message) => h.push_str(&format!("<div class='callout'>{}</div>", escape(message))),
+    }
+    h.push_str("<div class='callout'>Bind IDs locally with <code>cargo run -- --bind-discord &lt;label&gt; &lt;ID&gt;</code>. Access settings cannot be changed through Discord.</div>");
+    h
+}
+/// The Integrations page. It reads Discord's status and login files, and no state.
+pub(crate) fn integrations() -> String {
     let status: serde_json::Value = crate::config::state("discord-status.json")
         .ok()
         .and_then(|p| fs::read(p).ok())
