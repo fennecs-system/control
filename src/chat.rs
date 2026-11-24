@@ -1,3 +1,7 @@
+use crate::application::{
+    effects::Effects,
+    runs::{Refusal, Submission, Tx},
+};
 use crate::conversation::Compactor as _;
 use crate::runtime::RunStatus;
 use crate::{
@@ -260,7 +264,8 @@ impl FollowUp {
             }
         }
     }
-    /// Queues the turn in `chat` and returns it for kind-specific fields.
+    /// Queues the turn in `chat` and returns it for kind-specific fields,
+    /// with the wake to release once the save holding it is durable.
     pub(crate) fn enqueue<'a>(
         self,
         state: &'a mut State,
@@ -268,10 +273,16 @@ impl FollowUp {
         objective: String,
         kind: crate::runtime::RunKind,
         source: &str,
-    ) -> Result<&'a mut crate::runtime::Run, &'static str> {
-        state
-            .runtime
-            .enqueue_for(objective, kind, source, self.actor, self.action)?;
+        tx: Tx,
+    ) -> Result<(&'a mut crate::runtime::Run, Effects), &'static str> {
+        let submission = Submission {
+            objective,
+            kind,
+            source: source.into(),
+            actor: self.actor,
+            action: self.action,
+        };
+        let queued = state.runtime.queue(submission, tx)?;
         let run = state.runtime.runs.last_mut().unwrap();
         run.chat_id = Some(chat.to_owned());
         run.target = self.target;
@@ -279,7 +290,7 @@ impl FollowUp {
         run.lenses = self.lenses;
         run.persona = Some(self.persona);
         run.resource_grants = self.grants;
-        Ok(run)
+        Ok((run, queued.into()))
     }
 }
 #[cfg(test)]
@@ -346,7 +357,8 @@ pub fn create(state: &mut State) -> String {
     });
     id
 }
-pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'static str> {
+/// A Discord message, as a send; the caller saves, then releases the wake.
+pub fn receive(state: &mut State, incoming: &discord::Incoming, tx: Tx) -> Result<Effects, &'static str> {
     let actor = incoming.actor();
     identity::authorize(&actor, incoming.action)?;
     let id = crate::design::discord_chat(state, incoming);
@@ -384,7 +396,7 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming) -> Result<(), &'
     } else {
         incoming.objective.clone()
     };
-    send(state, &id, &text, &format!("discord:{}", incoming.message_id)).map_err(fixed)
+    send_queued(state, &id, &text, &format!("discord:{}", incoming.message_id), tx).map_err(fixed)
 }
 /// A send refusal as fixed text, for callers that only carry fixed text (the
 /// Discord inbox). Only a refused model selection is generated text.
@@ -397,7 +409,18 @@ pub(crate) fn fixed(error: Cow<'static, str>) -> &'static str {
 
 /// Explicit user-created child work. Only immutable ordinary-task checkpoints
 /// are inherited; execution restores a separate writable copy for the child.
+/// `fork_queued` for tests, which run no dispatcher to wake.
+#[cfg(test)]
 pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -> Result<String, Cow<'static, str>> {
+    fork_queued(state, parent_id, objective, source, Tx::at(crate::ids::stamp())).map(|(child, _)| child)
+}
+fn fork_queued(
+    state: &mut State,
+    parent_id: &str,
+    objective: &str,
+    source: &str,
+    tx: Tx,
+) -> Result<(String, Effects), Cow<'static, str>> {
     let parent = state
         .chats
         .iter()
@@ -429,11 +452,13 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
     session.room = parent.room;
     session.design_context = parent.design_context;
     // Treat the task as text: a nested /spawn or /improve cannot gain authority or recurse.
-    let result = enqueue_text(state, &child, objective, source);
-    if let Err(error) = result {
-        state.chats.pop();
-        return Err(error);
-    }
+    let effects = match enqueue_text(state, &child, objective, source, tx) {
+        Ok(effects) => effects,
+        Err(error) => {
+            state.chats.pop();
+            return Err(error);
+        }
+    };
     if let Some(from) = from {
         let previous = &state.runtime.runs[from];
         // A chosen model was admitted when the task was queued; otherwise the
@@ -465,10 +490,23 @@ pub fn fork(state: &mut State, parent_id: &str, objective: &str, source: &str) -
             run.lenses = lenses;
         }
     }
-    Ok(child)
+    Ok((child, effects))
 }
 
+/// `send_queued` for tests, which run no dispatcher to wake.
+#[cfg(test)]
 pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), Cow<'static, str>> {
+    send_queued(state, id, text, source, Tx::at(crate::ids::stamp())).map(|_| ())
+}
+/// Sends `text` to chat `id`: a command, an answer or a turn. Returns the
+/// wake to release once the save holding a queued turn is durable.
+pub(crate) fn send_queued(
+    state: &mut State,
+    id: &str,
+    text: &str,
+    source: &str,
+    tx: Tx,
+) -> Result<Effects, Cow<'static, str>> {
     if control_context::limits::message_too_long(text) {
         return Err(control_context::limits::CHAT_MESSAGE_ERROR.into());
     }
@@ -476,9 +514,30 @@ pub fn send(state: &mut State, id: &str, text: &str, source: &str) -> Result<(),
     if !text.trim().starts_with('/') && crate::projects::importing(id).is_some() {
         return Err("A folder is still importing into this chat. Send again once it opens.".into());
     }
-    send_command(state, id, text, source)?;
+    let effects = send_command(state, id, text, source, tx)?;
     touch(state, id);
-    Ok(())
+    Ok(effects)
+}
+/// Whether sending `text` may change bot state: `/bot` and `/cancel` (whose
+/// `all` stops bots). Everything else a send runs leaves bots alone, so its
+/// rollback need not copy them. A new command must be placed here.
+fn changes_bots(text: &str) -> bool {
+    commands::parse(text.trim()).is_some_and(|command| match command.kind {
+        Kind::Bot | Kind::Cancel => true,
+        Kind::Improve
+        | Kind::Steer
+        | Kind::Btw
+        | Kind::Spawn
+        | Kind::Answer
+        | Kind::Open
+        | Kind::Listen
+        | Kind::Room
+        | Kind::Model
+        | Kind::Rename
+        | Kind::Memory
+        | Kind::Compact
+        | Kind::Services => false,
+    })
 }
 fn next_activity(state: &State) -> u64 {
     state
@@ -548,7 +607,7 @@ pub fn rename(state: &mut State, id: &str, name: &str) -> Result<String, &'stati
     session.revision = session.revision.saturating_add(1);
     Ok(name)
 }
-fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), Cow<'static, str>> {
+fn send_command(state: &mut State, id: &str, text: &str, source: &str, tx: Tx) -> Result<Effects, Cow<'static, str>> {
     if crate::shutdown::requested() {
         return Err("Control is stopping; try again after restart.".into());
     }
@@ -564,7 +623,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply,
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     let memory = commands::tail(text.trim(), Kind::Memory)
         .map(str::to_owned)
@@ -587,7 +646,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply,
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Services) {
         // Each stop saves at once, like the services page; the reply is checkpointed by the caller.
@@ -604,7 +663,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply,
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Bot) {
         let reply = crate::bots::command(state, id, option)?;
@@ -616,7 +675,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply: reply.into(),
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Listen) {
         let enabled = match option.trim() {
@@ -636,7 +695,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply: reply.into(),
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(name) = commands::tail(text.trim(), Kind::Rename) {
         let name = rename(state, id, name)?;
@@ -647,7 +706,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             run_id: None,
             reply: format!("Renamed this DM to {name}."),
         });
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(option) = commands::tail(text.trim(), Kind::Room) {
         let reply = attach_room(state, id, option.trim())?;
@@ -659,7 +718,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply,
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(path) = commands::tail(text.trim(), Kind::Open) {
         // `~` is the Control node user's home: paths are read on the node.
@@ -706,17 +765,17 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             }
         }
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(answer) = commands::tail(text.trim(), Kind::Answer) {
         let (question, answer) = answer
             .trim()
             .split_once(char::is_whitespace)
             .ok_or("Use /answer QUESTION_ID followed by an option number or your direction.")?;
-        return crate::design::answer(state, id, Some(question), answer.trim(), source).map_err(Into::into);
+        return crate::design::answer_queued(state, id, Some(question), answer.trim(), source, tx).map_err(Into::into);
     }
     if !text.trim().starts_with('/') && crate::design::waiting(state, id).is_some() {
-        return crate::design::answer(state, id, None, text, source).map_err(Into::into);
+        return crate::design::answer_queued(state, id, None, text, source, tx).map_err(Into::into);
     }
     if let Some(target) = commands::tail(text.trim(), Kind::Cancel) {
         let session = state.chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
@@ -748,7 +807,7 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
                 reply: format!("Cancelled {} run(s) and stopped {bots} bot(s) across {} chat(s). Services keep running; /services lists them and /services stop all stops them.", runs.len(), chats.len()),
             });
             session.revision = session.revision.saturating_add(1);
-            return Ok(());
+            return Ok(Effects::none());
         }
         let run = state
             .runtime
@@ -780,13 +839,13 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             .into(),
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     if let Some(question) = commands::tail(text.trim(), Kind::Btw) {
         if question.trim().is_empty() {
             return Err("Use /btw followed by a side question.".into());
         }
-        let child = fork(state, id, question.trim(), source)?;
+        let (child, effects) = fork_queued(state, id, question.trim(), source, tx)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
         session.messages.push(Message {
             speaker: Default::default(),
@@ -795,10 +854,10 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply: format!("Agent conversation: /dm/{child}"),
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(effects);
     }
     if let Some(objective) = commands::tail(text.trim(), Kind::Spawn) {
-        let child = fork(state, id, objective, source)?;
+        let (child, effects) = fork_queued(state, id, objective, source, tx)?;
         let session = state.chats.iter_mut().find(|s| s.id == id).unwrap();
         session.messages.push(Message {
             speaker: Default::default(),
@@ -807,16 +866,23 @@ fn send_command(state: &mut State, id: &str, text: &str, source: &str) -> Result
             reply: format!("Agent conversation: /dm/{child}"),
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(effects);
     }
-    send_inner(state, id, text, source, false)
+    send_inner(state, id, text, source, false, tx)
 }
 
-fn enqueue_text(state: &mut State, id: &str, text: &str, source: &str) -> Result<(), Cow<'static, str>> {
-    send_inner(state, id, text, source, true)
+fn enqueue_text(state: &mut State, id: &str, text: &str, source: &str, tx: Tx) -> Result<Effects, Cow<'static, str>> {
+    send_inner(state, id, text, source, true, tx)
 }
 
-fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bool) -> Result<(), Cow<'static, str>> {
+fn send_inner(
+    state: &mut State,
+    id: &str,
+    text: &str,
+    source: &str,
+    literal: bool,
+    tx: Tx,
+) -> Result<Effects, Cow<'static, str>> {
     let index = state.chats.iter().position(|s| s.id == id).ok_or("Chat not found.")?;
     let actor = state.chats[index].actor.clone();
     let mode_command = match if literal { "" } else { text.trim() } {
@@ -840,7 +906,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             .into(),
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     let steering = if literal {
         None
@@ -877,7 +943,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
     } else {
         None
     };
-    let run_id = if native.is_none() {
+    let (run_id, effects) = if native.is_none() {
         let resources = latest_task(state, id, &state.chats[index].actor)
             .map(|from| {
                 crate::services::grants(crate::services::ServiceAuthority::of(state), &state.runtime.runs[from])
@@ -889,17 +955,18 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
             .as_ref()
             .map(|model| crate::providers::selection::admit(&state.runtime, model))
             .transpose()?;
-        state.runtime.enqueue_for(
-            objective.into(),
-            if action == Action::Improve {
+        let submission = Submission {
+            objective: objective.into(),
+            kind: if action == Action::Improve {
                 RunKind::SelfImprovement
             } else {
                 RunKind::Chat
             },
-            source,
+            source: source.into(),
             actor,
             action,
-        )?;
+        };
+        let queued = state.runtime.queue(submission, tx).map_err(Refusal::message)?;
         let run = state.runtime.runs.last_mut().unwrap();
         if let Some(target) = target {
             run.target = target;
@@ -911,14 +978,16 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         run.resource_grants = resources;
         run.lenses = Some(selected_lenses(&state.chats[index]));
         *run.context = Some(context);
+        let effects = Effects::from(queued);
         let queued = state.runtime.runs.len() - 1;
         if let Err(error) = crate::personas::apply_to_root(state, id, queued) {
             state.runtime.runs.pop();
+            effects.forgo();
             return Err(error);
         }
-        Some(state.runtime.runs[queued].id().as_str().to_owned())
+        (Some(state.runtime.runs[queued].id().as_str().to_owned()), effects)
     } else {
-        None
+        (None, Effects::none())
     };
     let session = &mut state.chats[index];
     session.improve_mode = action == Action::Improve;
@@ -932,7 +1001,7 @@ fn send_inner(state: &mut State, id: &str, text: &str, source: &str, literal: bo
         reply: native.unwrap_or_default(),
     });
     session.revision = session.revision.saturating_add(1);
-    Ok(())
+    Ok(effects)
 }
 
 pub fn prompt(state: &State, run_id: &str) -> Option<String> {
@@ -1458,10 +1527,24 @@ pub fn requests(state: &State, id: &str) -> Result<String, &'static str> {
 
 /// The operator's chat tools. A send can refuse a model selection with
 /// generated text (the accounts that exist); every other refusal is fixed.
+/// `tool_queued` for tests, which run no dispatcher to wake.
+#[cfg(test)]
 pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, Cow<'static, str>> {
+    tool_queued(state, name, arguments, Tx::at(crate::ids::stamp())).map(|(value, _)| value)
+}
+/// A chat tool's answer, with the wake to release once the save holding a
+/// turn it queued is durable.
+pub(crate) fn tool_queued(
+    state: &mut State,
+    name: &str,
+    arguments: &Value,
+    tx: Tx,
+) -> Result<(Value, Effects), Cow<'static, str>> {
     match name {
-        "control.chat.send" => send_tool(state, arguments),
-        _ => fixed_tool(state, name, arguments).map_err(Into::into),
+        "control.chat.send" => send_tool(state, arguments, tx),
+        _ => fixed_tool(state, name, arguments)
+            .map(|value| (value, Effects::none()))
+            .map_err(Into::into),
     }
 }
 pub(crate) fn chat_id(arguments: &Value) -> Result<&str, &'static str> {
@@ -1565,7 +1648,7 @@ fn fixed_tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value,
         _ => Err("Unknown tool."),
     }
 }
-fn send_tool(state: &mut State, arguments: &Value) -> Result<Value, Cow<'static, str>> {
+fn send_tool(state: &mut State, arguments: &Value, tx: Tx) -> Result<(Value, Effects), Cow<'static, str>> {
     let id = chat_id(arguments)?;
     let text = arguments["message"].as_str().ok_or("Missing message.")?;
     let index = state.chats.iter().position(|c| c.id == id).ok_or("Chat not found.")?;
@@ -1589,15 +1672,18 @@ fn send_tool(state: &mut State, arguments: &Value) -> Result<Value, Cow<'static,
         state.chats[index].lenses = Some(lenses);
     }
     state.chats[index].improve_mode = improve;
-    if let Err(error) = send(state, id, text, "session-chat") {
-        (
-            state.chats[index].lens,
-            state.chats[index].lenses,
-            state.chats[index].improve_mode,
-        ) = previous;
-        return Err(error);
-    }
-    Ok(detail(state, id)?)
+    let effects = match send_queued(state, id, text, "session-chat", tx) {
+        Ok(effects) => effects,
+        Err(error) => {
+            (
+                state.chats[index].lens,
+                state.chats[index].lenses,
+                state.chats[index].improve_mode,
+            ) = previous;
+            return Err(error);
+        }
+    };
+    Ok((detail(state, id)?, effects))
 }
 
 /// The given chats and every chat spawned from them, at any depth.
@@ -1627,13 +1713,22 @@ pub(crate) struct Checkpoint {
     notice: String,
     posts: usize,
     watches: Vec<crate::rooms::Watch>,
-    bots: crate::bots::Bots,
+    /// Only when the command may change bots (`changes_bots`): a clone of
+    /// every bot's state is the costliest part of a capture.
+    bots: Option<crate::bots::Bots>,
     mailbox_origins: Vec<(usize, Vec<control_context::turn_mailbox::Range>)>,
     /// Cancellation marks of the targets' descendants (`/cancel all`).
     cancelled: Vec<(usize, Option<u64>)>,
 }
 impl Checkpoint {
     pub(crate) fn capture(state: &State, targets: &std::collections::HashSet<&str>) -> Self {
+        Self::scoped(state, targets, true)
+    }
+    /// For sending `text`: bots are kept only if the command may change them.
+    pub(crate) fn for_send(state: &State, targets: &std::collections::HashSet<&str>, text: &str) -> Self {
+        Self::scoped(state, targets, changes_bots(text))
+    }
+    fn scoped(state: &State, targets: &std::collections::HashSet<&str>, bots: bool) -> Self {
         Self {
             chats: state.chats.len(),
             previous: state
@@ -1653,7 +1748,7 @@ impl Checkpoint {
             notice: state.runtime.notice.clone(),
             posts: state.collective.posts.len(),
             watches: state.collective.room_watches.clone(),
-            bots: state.bots.clone(),
+            bots: bots.then(|| state.bots.clone()),
             mailbox_origins: state
                 .runtime
                 .runs
@@ -1689,7 +1784,9 @@ impl Checkpoint {
             }
         }
         state.collective.room_watches = self.watches;
-        state.bots = self.bots;
+        if let Some(bots) = self.bots {
+            state.bots = bots;
+        }
         for (i, baseline) in self.mailbox_origins {
             if let Some(mailbox) = state.runtime.runs[i]
                 .attempts

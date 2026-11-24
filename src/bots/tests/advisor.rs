@@ -144,7 +144,7 @@ fn a_judge_advises_on_team_facts_only_without_timers_rooms_or_grants() {
         turn: TurnId(99),
         reasons: Vec::new(),
     };
-    assert!(queue(&mut state, &request).is_err());
+    assert!(queue(&mut state, &request, crate::store::legacy_tx()).is_err());
     command_at(&mut state, &advisor, "off", Now(2)).unwrap();
     assert!(!state.bots.advises(&advisor));
 }

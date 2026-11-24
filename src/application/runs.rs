@@ -233,6 +233,102 @@ impl Submission {
     }
 }
 
+/// The clock reading one transaction runs with. The driver takes it once,
+/// before the operation; logic reads it from here and never from the clock.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Tx {
+    /// Nanoseconds since the epoch, strictly increasing across transactions.
+    stamp: u64,
+}
+impl Tx {
+    pub(crate) fn at(stamp: u64) -> Self {
+        Self { stamp }
+    }
+    /// A fresh run id: the stamp names the transaction, the ledger position
+    /// the run within it (`created_ms` reads the stamp back).
+    fn run_id(self, runs: &Runs) -> RunId {
+        format!("{:x}-{}", self.stamp, runs.len()).into()
+    }
+}
+
+/// Why a submission was not queued. Nothing was changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// The actor may not take the action; the policy's reason.
+    Unauthorized(&'static str),
+    QueueFull,
+    /// Empty or over the message limit.
+    Objective,
+}
+impl Refusal {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::Unauthorized(reason) => reason,
+            Self::QueueFull => crate::scheduler::QUEUE_FULL,
+            Self::Objective => control_context::limits::CHAT_MESSAGE_ERROR,
+        }
+    }
+}
+impl From<Refusal> for &'static str {
+    fn from(refusal: Refusal) -> Self {
+        refusal.message()
+    }
+}
+
+/// A submission whose actor may take its action. Only
+/// [`Submission::authorize`] makes one, so [`admit`] cannot skip the check.
+pub(crate) struct Authorized(Submission);
+impl Submission {
+    /// Checks the actor against `policy` (the identity policy is a file the
+    /// driver reads; tests pass their own).
+    pub(crate) fn authorize<W>(
+        self,
+        policy: impl FnOnce(&Actor, Action) -> Result<W, &'static str>,
+    ) -> Result<Authorized, Refusal> {
+        policy(&self.actor, self.action)
+            .map(|_| Authorized(self))
+            .map_err(Refusal::Unauthorized)
+    }
+}
+
+/// What admission reads: the ledger (capacity, queue order, the next id) and
+/// the target new work runs on.
+pub(crate) struct Admission<'a> {
+    pub runs: &'a Runs,
+    pub target: crate::providers::Target,
+}
+
+/// Builds the queued run for an authorized submission, or says why not. Pure:
+/// the clock and ids come from `tx`; queueing it is [`Runs::queue`].
+pub(crate) fn admit(admission: Admission<'_>, Authorized(submission): Authorized, tx: Tx) -> Result<Run, Refusal> {
+    if !control_core::scheduling::has_capacity(admission.runs.iter()) {
+        return Err(Refusal::QueueFull);
+    }
+    if submission.objective.is_empty() || control_context::limits::message_too_long(&submission.objective) {
+        return Err(Refusal::Objective);
+    }
+    let order = admission
+        .runs
+        .iter()
+        .map(|run| run.queue_order)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    Ok(submission.into_run(tx.run_id(admission.runs), order, admission.target))
+}
+
+/// A run is in the queue. The dispatcher is told only once the save holding
+/// it is durable: it becomes [`Effects`](crate::application::effects::Effects).
+#[must_use = "a queued run wakes the dispatcher only after its save is durable"]
+pub(crate) struct Queued(());
+impl Runs {
+    /// Appends an admitted run to the queue.
+    pub(crate) fn queue(&mut self, run: Run) -> Queued {
+        self.push(run);
+        Queued(())
+    }
+}
+
 #[cfg(test)]
 mod tests;
 impl Record {

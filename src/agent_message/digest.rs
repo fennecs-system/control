@@ -4,7 +4,9 @@
 //! to such a recipient is delivered at once. Bots get the same bound from
 //! their supervisor's deferral (see `bots::Message::Retained`).
 use crate::State;
+use crate::application::effects::Effects;
 use crate::application::messages::{Sent, awaiting};
+use crate::application::runs::Tx;
 use crate::runtime::RunStatus;
 use control_context::agent_policy::RunKind;
 
@@ -109,7 +111,7 @@ pub(crate) fn reconcile(
         .iter()
         .map(|session| (session.messages.len(), session.revision))
         .collect::<Vec<_>>();
-    let delivered = deliver(state, now_ms);
+    let (delivered, effects) = deliver(state, now_ms, crate::store::legacy_tx());
     // After delivery a carried message has a later turn, so it is no longer awaited.
     let retired = overdue
         .into_iter()
@@ -119,9 +121,12 @@ pub(crate) fn reconcile(
         state.agent_messages[index].digest = false;
     }
     if delivered == 0 && retired.is_empty() {
+        effects.forgo();
         return Ok(());
     }
-    if save(state).is_err() {
+    let saved = save(state);
+    crate::store::perform(effects.after_held_save(&saved));
+    if saved.is_err() {
         state.runtime.runs.truncate(runs);
         state.runtime.notice = notice;
         for (session, (messages, revision)) in state.chats.iter_mut().zip(chats) {
@@ -193,9 +198,11 @@ pub(crate) fn settle(
 }
 /// Queues one digest turn per starved chat with its latest task's settings
 /// and the services granted to the messages it carries. Returns how many were
-/// queued; a full queue or revoked authority leaves the rest for a later pass.
-pub(crate) fn deliver(state: &mut State, now_ms: u64) -> usize {
+/// queued, with the wake to release once the save holding them is durable; a
+/// full queue or revoked authority leaves the rest for a later pass.
+pub(crate) fn deliver(state: &mut State, now_ms: u64, tx: Tx) -> (usize, Effects) {
     let mut queued = 0;
+    let mut effects = Effects::none();
     for chat in starved(state, now_ms) {
         let Some(session) = state.chats.iter().find(|session| session.id == chat) else {
             continue;
@@ -246,15 +253,17 @@ pub(crate) fn deliver(state: &mut State, now_ms: u64) -> usize {
         {
             follow_up.grant(run.resource_grants.iter().cloned());
         }
-        let Ok(run) = follow_up.enqueue(
+        let Ok((run, more)) = follow_up.enqueue(
             state,
             &chat,
             objective,
             RunKind::AgentMessage,
             if notes { NOTE_DIGEST } else { "agent-digest" },
+            tx,
         ) else {
             continue;
         };
+        effects = effects.and(more);
         let id = run.id().as_str().to_owned();
         let session = state.chats.iter_mut().find(|session| session.id == chat).unwrap();
         session.messages.push(crate::chat::Message {
@@ -266,5 +275,5 @@ pub(crate) fn deliver(state: &mut State, now_ms: u64) -> usize {
         session.revision = session.revision.saturating_add(1);
         queued += 1;
     }
-    queued
+    (queued, effects)
 }

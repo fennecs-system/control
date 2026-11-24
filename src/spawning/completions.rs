@@ -142,10 +142,15 @@ pub(super) fn reconcile(
     let messages_len = state.chats[chat_index].messages.len();
     let revision = state.chats[chat_index].revision;
     let notice = state.runtime.notice.clone();
-    let response = follow_up
-        .enqueue(state, &chat, objective, RunKind::AgentCompletion, "agent-completion")?
-        .id()
-        .to_string();
+    let (run, effects) = follow_up.enqueue(
+        state,
+        &chat,
+        objective,
+        RunKind::AgentCompletion,
+        "agent-completion",
+        crate::store::legacy_tx(),
+    )?;
+    let response = run.id().to_string();
     let batch = &mut state.runtime.runs[index].spawns[batch_index];
     let receipts_len = batch.completions.len();
     batch.completions.extend(ids.into_iter().map(|child| Receipt {
@@ -160,7 +165,9 @@ pub(super) fn reconcile(
         reply: String::new(),
     });
     session.revision = session.revision.saturating_add(1);
-    if save(state).is_err() {
+    let saved = save(state);
+    crate::store::perform(effects.after_held_save(&saved));
+    if saved.is_err() {
         state.runtime.runs.truncate(runs_len);
         state.runtime.runs[index].spawns[batch_index]
             .completions

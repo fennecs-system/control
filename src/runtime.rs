@@ -49,8 +49,9 @@ pub struct Runtime {
     #[serde(skip)]
     pub paused: Option<String>,
 }
+use crate::application::effects::Effects;
 pub(crate) use crate::application::runs::Runs;
-use crate::application::runs::Submission;
+use crate::application::runs::{Admission, Queued, Refusal, Submission, Tx, admit};
 pub use crate::application::runs::{Run, RunStatus};
 
 // Pending transitions change status/result and possibly a design answer. Keep
@@ -159,16 +160,47 @@ impl Runtime {
             model: Some(self.configured_model()),
         }
     }
-    pub fn enqueue(&mut self, objective: String, kind: RunKind, source: &str) {
+    /// Authorizes, admits and queues `submission`: the one way new work
+    /// enters the queue. The caller saves, then releases the wake.
+    pub(crate) fn queue(&mut self, submission: Submission, tx: Tx) -> Result<Queued, Refusal> {
+        let authorized = submission.authorize(identity::authorize)?;
+        let admission = Admission {
+            runs: &self.runs,
+            target: self.default_target(),
+        };
+        let run = admit(admission, authorized, tx)?;
+        self.notice = "Run queued.".into();
+        Ok(self.runs.queue(run))
+    }
+    /// An operator's task; a refusal becomes the notice.
+    pub(crate) fn task(&mut self, objective: String, kind: RunKind, source: &str, tx: Tx) -> Effects {
         let action = if kind == RunKind::SelfImprovement {
             Action::Improve
         } else {
             Action::Task
         };
-        if let Err(message) = self.enqueue_for(objective, kind, source, Actor::LocalOperator, action) {
-            self.notice = message.into();
-        }
+        let submission = Submission {
+            objective,
+            kind,
+            source: source.into(),
+            actor: Actor::LocalOperator,
+            action,
+        };
+        self.queue(submission, tx).map_or_else(
+            |refusal| {
+                self.notice = refusal.message().into();
+                Effects::none()
+            },
+            Effects::from,
+        )
     }
+    /// `task` for tests, which run no dispatcher to wake.
+    #[cfg(test)]
+    pub fn enqueue(&mut self, objective: String, kind: RunKind, source: &str) {
+        let _ = self.task(objective, kind, source, Tx::at(crate::ids::stamp()));
+    }
+    /// `queue` for tests, which run no dispatcher to wake.
+    #[cfg(test)]
     pub fn enqueue_for(
         &mut self,
         objective: String,
@@ -177,35 +209,49 @@ impl Runtime {
         actor: Actor,
         action: Action,
     ) -> Result<(), &'static str> {
-        identity::authorize(&actor, action)?;
-        crate::scheduler::admit(self)?;
-        if objective.is_empty() || control_context::limits::message_too_long(&objective) {
-            return Err(control_context::limits::CHAT_MESSAGE_ERROR);
-        }
-        let stamp = crate::ids::stamp();
-        let request = Submission {
+        let submission = Submission {
             objective,
             kind,
             source: source.into(),
             actor,
             action,
         };
-        self.runs.push(
-            request.into_run(
-                format!("{stamp:x}-{}", self.runs.len()),
-                self.runs
-                    .iter()
-                    .map(|r| r.queue_order)
-                    .max()
-                    .unwrap_or(0)
-                    .saturating_add(1),
-                self.default_target(),
-            ),
-        );
-        self.notice = "Run queued.".into();
-        crate::worker::wake();
+        let _ = self.queue(submission, Tx::at(crate::ids::stamp()))?;
         Ok(())
     }
+    /// `POST /task`; a refusal becomes the notice.
+    pub(crate) fn post_task(&mut self, f: &HashMap<String, String>, tx: Tx) -> Effects {
+        self.notice.clear();
+        self.task(field(f, "objective"), RunKind::Task, "website", tx)
+    }
+    fn retry(&mut self, id: &str) {
+        if let Err(message) = crate::scheduler::admit(self) {
+            self.notice = message.into();
+            return;
+        }
+        let order = self
+            .runs
+            .iter()
+            .map(|r| r.queue_order)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        if let Some(run) = self
+            .runs
+            .get_mut(id)
+            .filter(|r| r.status.is_resumable() && !crate::design::asked(r))
+        {
+            if let Err(message) = identity::authorize(&run.actor, run.action) {
+                self.notice = message.into();
+                return;
+            }
+            run.status = RunStatus::Queued;
+            run.queue_order = order;
+            run.result.clear();
+        }
+    }
+    /// `POST /cancel-run` and `POST /retry-run`. A retried run is picked up
+    /// by the dispatcher's next scan, as before.
     pub fn action(&mut self, path: &str, f: &HashMap<String, String>) -> &'static str {
         self.notice.clear();
         if path == "/cancel-run" {
@@ -214,35 +260,8 @@ impl Runtime {
                 .map(|()| "Cancellation requested.".to_owned())
                 .unwrap_or_else(str::to_owned);
         }
-        if path == "/task" {
-            self.enqueue(field(f, "objective"), RunKind::Task, "website");
-        }
         if path == "/retry-run" {
-            if let Err(message) = crate::scheduler::admit(self) {
-                self.notice = message.into();
-                return crate::history_view::AFTER_ACTION;
-            }
-            let id = field(f, "id");
-            let order = self
-                .runs
-                .iter()
-                .map(|r| r.queue_order)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1);
-            if let Some(run) = self
-                .runs
-                .get_mut(&id)
-                .filter(|r| r.status.is_resumable() && !crate::design::asked(r))
-            {
-                if let Err(message) = identity::authorize(&run.actor, run.action) {
-                    self.notice = message.into();
-                    return crate::history_view::AFTER_ACTION;
-                }
-                run.status = RunStatus::Queued;
-                run.queue_order = order;
-                run.result.clear();
-            }
+            self.retry(&field(f, "id"));
         }
         crate::history_view::AFTER_ACTION
     }

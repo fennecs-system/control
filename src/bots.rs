@@ -5,6 +5,7 @@
 pub(crate) mod lifecycle;
 mod pathology;
 mod tools;
+use crate::application::{effects::Effects, runs::Tx};
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
 use crate::store::Store;
@@ -1337,7 +1338,9 @@ fn active_since(state: &State, antibody: &str, since: u64) -> bool {
 }
 /// Queues one bot turn in its chat, reusing the chat's latest task context like
 /// room listening does. Errors leave the request for a later attempt.
-fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
+/// Queues the bot's turn; returns the wake to release once the save holding
+/// it is durable.
+fn queue(state: &mut State, request: &Request, tx: Tx) -> Result<Effects, &'static str> {
     let chat = request.chat.0.as_str();
     let session = state
         .chats
@@ -1422,7 +1425,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         && reasons.iter().all(|reason| *reason == Reason::Timer)
         && !active_since(state, chat, latest.created_ms().unwrap_or(0))
         && state.bots.teams.values().all(|team| team.conditions().is_empty());
-    let run = follow_up.enqueue(state, chat, objective, RunKind::BotWake, "bot")?;
+    let (run, effects) = follow_up.enqueue(state, chat, objective, RunKind::BotWake, "bot", tx)?;
     run.bot_turn = Some(Box::new(Turn {
         bot: request.bot.0.clone(),
         turn: request.turn.0,
@@ -1442,7 +1445,7 @@ fn queue(state: &mut State, request: &Request) -> Result<(), &'static str> {
         reply: String::new(),
     });
     session.revision = session.revision.saturating_add(1);
-    Ok(())
+    Ok(effects)
 }
 
 /// Runs in the existing worker supervisor. Feeds new room posts, finished bot
@@ -2006,14 +2009,18 @@ fn reconcile_with_wake_at(
     let planned = !effects.is_empty();
     record(state, effects);
     let mut queued = false;
+    let mut effects = Effects::none();
     let requests = std::mem::take(&mut state.bots.requests);
     for request in requests {
         if !state.bots.supervisor.eligible(&request.bot, &request.turn) {
             queued = true;
             continue;
         }
-        match queue(state, &request) {
-            Ok(()) => queued = true,
+        match queue(state, &request, crate::store::legacy_tx()) {
+            Ok(more) => {
+                queued = true;
+                effects = effects.and(more);
+            }
             Err(_) => state.bots.requests.push(request),
         }
     }
@@ -2032,7 +2039,9 @@ fn reconcile_with_wake_at(
     {
         return Ok(());
     }
-    if save(state).is_err() {
+    let saved = save(state);
+    let wake_queued = effects.after_held_save(&saved).wake;
+    if saved.is_err() {
         state.bots = previous;
         (state.collective.claims, state.collective.claim_seq) = claims;
         state.watches = watches;
@@ -2052,7 +2061,7 @@ fn reconcile_with_wake_at(
     if !cfg!(test) {
         crate::watches::discard(&collected);
     }
-    if resumed {
+    if resumed || wake_queued {
         wake();
     }
     Ok(())

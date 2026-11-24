@@ -51,8 +51,15 @@ fn a_follow_up_turn_carries_the_runs_settings_and_merged_grants() {
     assert!(follow_up.grants.is_empty(), "no service is accessible to the run");
     follow_up.grant([grant("svc-a"), grant("svc-b")]);
     follow_up.grant([grant("svc-b"), grant("svc-c")]);
-    let run = follow_up
-        .enqueue(&mut state, &chat, "Follow up".into(), RunKind::AgentMessage, "test")
+    let (run, _) = follow_up
+        .enqueue(
+            &mut state,
+            &chat,
+            "Follow up".into(),
+            RunKind::AgentMessage,
+            "test",
+            crate::store::legacy_tx(),
+        )
         .unwrap();
     assert_eq!(
         (run.chat_id.as_deref(), run.objective.as_str(), run.status.as_str()),
