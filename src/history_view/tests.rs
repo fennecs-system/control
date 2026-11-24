@@ -430,3 +430,26 @@ fn every_run_status_keeps_its_row_label_and_colour_class() {
     run.status = RunStatus::Unrecognised("legacy".into());
     assert_eq!((status_label(run), status_group(run)), ("legacy", "completed"));
 }
+
+#[test]
+fn in_dm_agrees_with_the_key_of_every_run() {
+    let mut state = State::default();
+    let chats = [
+        None,
+        Some(""),
+        Some("c-1"),
+        Some("c-10"),
+        Some(OUTSIDE),
+        Some("bad id"),
+        Some("C-1"),
+    ];
+    for chat in chats {
+        turn(&mut state, chat, RunKind::Chat, "completed", "m");
+    }
+    for dm in ["c-1", "c-10", OUTSIDE, "bad id", "", "c-2"] {
+        let in_dm = in_dm(dm);
+        for run in state.runtime.runs.iter() {
+            assert_eq!(in_dm(run), key(run) == dm, "dm {dm:?}, chat {:?}", run.chat_id);
+        }
+    }
+}
