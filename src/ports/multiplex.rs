@@ -1,6 +1,7 @@
 //! One verified container listener, with independent bounded TCP sessions.
 use super::multiplex_transport::{Incoming, Transport};
 use super::*;
+use crate::store::Store;
 const _: () = assert!(MAX_CONNECTIONS == super::multiplex_transport::CONNECTIONS);
 
 struct Process {
@@ -74,7 +75,7 @@ pub(super) fn serve(
     }
     Err(io::Error::other("Relay stopped or lost its host connection"))
 }
-fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> io::Result<()> {
+fn listen(shared: &Store, port: &Port, cancel: &Arc<AtomicBool>) -> io::Result<()> {
     let service = live_service(shared, port, cancel)?;
     let binding = crate::services::port_binding(crate::engine::isolation(), &service, &port.container)?;
     live_service(shared, port, cancel)?;
@@ -97,7 +98,7 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
             // generation/grant checks; no client-provided target exists.
             let socket = (|| {
                 live_service(shared, port, cancel)?;
-                if !shared.lock().is_ok_and(|state| peer_listening(&state.ports, port)) {
+                if !shared.read(|state| peer_listening(&state.ports, port)).unwrap_or(false) {
                     return Err(io::Error::other("Peer ingress is not listening"));
                 }
                 let target = port
@@ -121,7 +122,7 @@ fn listen(shared: &Arc<Mutex<State>>, port: &Port, cancel: &Arc<AtomicBool>) -> 
         },
     )
 }
-pub(super) fn egress(shared: Arc<Mutex<State>>, port: Port, cancel: Arc<AtomicBool>) -> io::Result<()> {
+pub(super) fn egress(shared: Store, port: Port, cancel: Arc<AtomicBool>) -> io::Result<()> {
     while live_service(&shared, &port, &cancel).is_ok() {
         if let Err(error) = listen(&shared, &port, &cancel) {
             receipt(&shared, &port, false, &error.to_string());

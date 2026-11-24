@@ -177,7 +177,7 @@ fn live_port_controls_have_equal_buttons_and_themed_checkbox() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let (mut state, run, _) = fixture();
     request(&mut state, &run, Direction::Egress).unwrap();
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();

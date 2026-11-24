@@ -14,7 +14,7 @@ use control_codex::{
 /// The Codex exit check as the host applies it to the attempt.
 fn finish_codex_tools(
     attempt: &mut crate::usage::Attempt,
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    bridge: Option<(&Store, &str)>,
     generation: &str,
     host_finished: bool,
     unfinished: bool,
@@ -243,7 +243,7 @@ fn unfinished_codex_tool_prevents_success_without_publishing_or_retrying() {
             output: String::new(),
         },
     );
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let mut attempt = attempt;
     let result = finish_codex_tools(&mut attempt, Some((&shared, &id)), &generation, false, true);
     assert!(matches!(&result, Err((control_agent::Status::Interrupted, _))));
@@ -251,7 +251,7 @@ fn unfinished_codex_tool_prevents_success_without_publishing_or_retrying() {
         attempt.termination,
         Some(crate::attempt_control::Termination::ProviderError)
     );
-    let mut state = shared.lock().unwrap();
+    let mut state = shared.guard().unwrap();
     commit(
         &mut state,
         &id,
@@ -303,7 +303,7 @@ fn codex_completion_distinguishes_finished_tools_and_host_handoffs() {
                 ..event
             },
         );
-        let shared = Arc::new(Mutex::new(state));
+        let shared = crate::store::Store::new(state);
         assert!(
             finish_codex_tools(
                 &mut attempt,
@@ -316,7 +316,7 @@ fn codex_completion_distinguishes_finished_tools_and_host_handoffs() {
         );
         assert!(attempt.termination.is_none());
         assert_eq!(
-            shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status,
+            shared.guard().unwrap().runtime.runs[0].attempts[0].activity[0].status,
             status
         );
     }
@@ -432,10 +432,10 @@ fn stale_codex_exit_cannot_interrupt_another_attempt() {
             output: String::new(),
         },
     );
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     interrupt_unfinished_tools(Some((&shared, &id)), "stale-generation");
     assert_eq!(
-        shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status,
+        shared.guard().unwrap().runtime.runs[0].attempts[0].activity[0].status,
         "in_progress"
     );
 }
@@ -475,12 +475,12 @@ fn both_adapters_can_commit_host_finished_handoff_without_a_final_model_reply() 
             state.runtime.runs[0].attempts[0].turn_mailbox = Some(Box::new(mailbox)).into();
             let mut attempt = state.runtime.runs[0].attempts[0].clone();
             attempt.explicit_timeout_seconds = Some(600);
-            let shared = Arc::new(Mutex::new(state));
+            let shared = crate::store::Store::new(state);
             let decision = crate::attempt_control::poll(Some((&shared, &id)), &attempt, Duration::from_secs(600));
             let crate::attempt_control::Decision::Finish(summary) = decision else {
                 panic!("host must finish accepted handoff");
             };
-            let mut state = shared.lock().unwrap();
+            let mut state = shared.guard().unwrap();
             if cancelled {
                 state.runtime.runs[0].status = RunStatus::Cancelling;
             }
@@ -640,14 +640,14 @@ fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures()
     checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let run = state.runtime.runs[0].id().as_str().to_owned();
     let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let result = project_operation(
         Some((&shared, &run)),
         &generation,
         "project-prepare",
         "Preparing workspace",
         || {
-            let state = shared.try_lock().expect("Project I/O must not hold the state lock");
+            let state = shared.try_guard().expect("Project I/O must not hold the state lock");
             assert_eq!(state.runtime.runs[0].attempts[0].activity[0].status, "in_progress");
             Ok("ready")
         },
@@ -655,7 +655,7 @@ fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures()
     .unwrap();
     assert_eq!(result, "ready");
     assert_eq!(
-        shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status,
+        shared.guard().unwrap().runtime.runs[0].attempts[0].activity[0].status,
         "completed"
     );
     let error = project_operation(
@@ -667,7 +667,7 @@ fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures()
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "disk full");
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let activity = &state.runtime.runs[0].attempts[0].activity;
     assert_eq!(activity.len(), 2);
     assert_eq!(activity[1].status, "failed");
@@ -680,30 +680,30 @@ fn project_io_activity_is_live_without_holding_state_lock_and_retains_failures()
         "project-prepare",
         "Preparing workspace",
         || {
-            shared.lock().unwrap().runtime.runs[0].status = RunStatus::Cancelling;
+            shared.guard().unwrap().runtime.runs[0].status = RunStatus::Cancelling;
             Ok(())
         },
     )
     .unwrap();
     assert_eq!(
-        shared.lock().unwrap().runtime.runs[0].attempts[0].activity[0].status,
+        shared.guard().unwrap().runtime.runs[0].attempts[0].activity[0].status,
         "cancelled"
     );
-    shared.lock().unwrap().runtime.runs[0].status = RunStatus::Running;
+    shared.guard().unwrap().runtime.runs[0].status = RunStatus::Running;
     let error = project_operation(
         Some((&shared, &run)),
         &generation,
         "project-checkpoint",
         "Saving checkpoint",
         || {
-            shared.lock().unwrap().runtime.runs[0].status = RunStatus::Cancelling;
+            shared.guard().unwrap().runtime.runs[0].status = RunStatus::Cancelling;
             Err::<(), _>(std::io::Error::other("disk full"))
         },
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "disk full");
     assert_eq!(
-        shared.lock().unwrap().runtime.runs[0].attempts[0].activity[1].status,
+        shared.guard().unwrap().runtime.runs[0].attempts[0].activity[1].status,
         "failed"
     );
 }
@@ -995,7 +995,7 @@ fn reports_keep_valid_utf8_prefixes_but_reject_malformed_files_and_links() {
 #[test]
 #[ignore = "run alone with isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR; requests process-wide shutdown"]
 fn isolated_supervisor_retains_intent_after_worker_panic() {
-    fn panic_worker(_: &dyn control_isolation::Isolation, _: Arc<Mutex<State>>, _: Task) {
+    fn panic_worker(_: &dyn control_isolation::Isolation, _: Store, _: Task) {
         panic!("Injected worker failure");
     }
     assert!(
@@ -1010,7 +1010,7 @@ fn isolated_supervisor_retains_intent_after_worker_panic() {
     let chat = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &chat, "Work", "test").unwrap();
     storage::save(&initial).unwrap();
-    let state = Arc::new(Mutex::new(initial));
+    let state = crate::store::Store::new(initial);
     let threads = start_with(state, crate::engine::isolation(), panic_worker);
     let start = Instant::now();
     while !crate::shutdown::requested() {
@@ -1081,9 +1081,9 @@ fn overlapping_commits_rollback_only_their_own_conversation() {
 #[ignore = "run alone with isolated CONTROL_STATE_DIR and CONTROL_CONFIG_DIR; requests process-wide shutdown"]
 fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     // The real dispatcher, durable checkpoints and commit path, without model calls.
-    fn execute(_: &dyn control_isolation::Isolation, state: Arc<Mutex<State>>, task: Task) {
+    fn execute(_: &dyn control_isolation::Isolation, state: Store, task: Task) {
         {
-            let mut s = state.lock().unwrap();
+            let mut s = state.guard().unwrap();
             s.runtime.runs.get_mut(&task.0).unwrap().result = "entered".into();
             storage::save(&s).unwrap();
         }
@@ -1094,7 +1094,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
             std::thread::sleep(Duration::from_millis(10));
         }
         commit(
-            &mut state.lock().unwrap(),
+            &mut state.guard().unwrap(),
             &task.0,
             task.3,
             task.4,
@@ -1133,12 +1133,12 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         .iter()
         .map(|r| r.id().as_str().to_owned())
         .collect();
-    let state = Arc::new(Mutex::new(initial));
+    let state = crate::store::Store::new(initial);
     let threads = start_with(state.clone(), crate::engine::isolation(), execute);
     let wait = |expected: &[(usize, &str, Option<&str>)]| {
         let start = Instant::now();
         loop {
-            let s = state.lock().unwrap();
+            let s = state.guard().unwrap();
             assert!(s.runtime.runs.iter().filter(|r| r.status.occupies_slot()).count() <= 2);
             if expected.iter().all(|(i, status, result)| {
                 s.runtime.runs[*i].status == RunStatus::named(status)
@@ -1158,7 +1158,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         (3, "queued", None),
     ]);
     {
-        let mut s = state.lock().unwrap();
+        let mut s = state.guard().unwrap();
         crate::lifecycle::request_cancel(&mut s.runtime, &ids[2], &Actor::LocalOperator).unwrap();
         storage::save(&s).unwrap();
     }
@@ -1176,13 +1176,13 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         (3, "running", Some("entered")),
     ]);
     {
-        let mut s = state.lock().unwrap();
+        let mut s = state.guard().unwrap();
         crate::chat::send(&mut s, &a, "Keep queued", "test").unwrap();
         storage::save(&s).unwrap();
     }
     crate::shutdown::request();
     threads.join().unwrap();
-    let s = state.lock().unwrap();
+    let s = state.guard().unwrap();
     assert_eq!(s.runtime.runs[1].status, RunStatus::Interrupted);
     assert_eq!(s.runtime.runs[3].status, RunStatus::Interrupted);
     assert_eq!(s.runtime.runs[4].status, RunStatus::Queued);

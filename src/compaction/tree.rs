@@ -8,6 +8,7 @@
 //! lock. No scripts: links, a named frame and forms.
 use super::*;
 use crate::identity::Actor;
+use crate::store::Store;
 use std::fmt::Write as _;
 
 /// Recent verbatim cells drawn individually; older verbatim entries share one.
@@ -981,7 +982,7 @@ fn load_nodes(d: &Detail, directory: &std::path::Path) -> io::Result<Loaded> {
 /// (disk reads outside the lock), operator edits, and retained evidence.
 pub(crate) fn http(
     stream: &mut impl std::io::Write,
-    state: &Arc<Mutex<State>>,
+    state: &Store,
     method: &str,
     path: &str,
     query: &str,
@@ -1002,8 +1003,8 @@ pub(crate) fn http(
     match (method, operation) {
         ("GET", "memory/node") => {
             let fields = crate::fields(query);
-            let detail = match state.lock() {
-                Ok(s) => plan(&s, chat, &fields),
+            let detail = match state.read(|s| plan(s, chat, &fields)) {
+                Ok(detail) => detail,
                 Err(_) => Err("State unavailable"),
             };
             match detail {
@@ -1068,7 +1069,7 @@ pub(crate) fn http(
 /// One operator form submission. The HTTP console is the local operator;
 /// agents have no route or tool that reaches this.
 pub(crate) fn post(
-    state: &Arc<Mutex<State>>,
+    state: &Store,
     chat: &str,
     actor: &Actor,
     fields: &HashMap<String, String>,
@@ -1122,15 +1123,18 @@ pub(crate) fn post(
         }
         _ => return Err("Unknown Memory Tree action"),
     };
-    let mut s = state.lock().map_err(|_| "State unavailable")?;
-    let previous = edit(&mut s, chat, actor, op)?;
-    if crate::storage::save(&s).is_err() {
-        if let Some(session) = s.chats.iter_mut().find(|c| c.id == chat) {
-            session.memory = previous;
-        }
-        return Err("Could not save the Memory Tree edit");
-    }
-    Ok(location)
+    state
+        .write(|s| {
+            let previous = edit(s, chat, actor, op)?;
+            if crate::storage::save(s).is_err() {
+                if let Some(session) = s.chats.iter_mut().find(|c| c.id == chat) {
+                    session.memory = previous;
+                }
+                return Err("Could not save the Memory Tree edit");
+            }
+            Ok(location)
+        })
+        .map_err(|_| "State unavailable")?
 }
 
 #[cfg(test)]

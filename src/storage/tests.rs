@@ -120,10 +120,10 @@ fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
     }
     let directory = crate::test_support::scratch("control-checkpoint-fence");
     fs::create_dir(&directory).unwrap();
-    let state = std::sync::Mutex::new(State::default());
+    let state = crate::store::Store::new(State::default());
     let intended = std::cell::RefCell::new(Vec::new());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut state = state.lock().unwrap();
+        let mut state = state.guard().unwrap();
         state
             .runtime
             .enqueue("accepted continuation".into(), RunKind::PortDecision, "test");
@@ -137,7 +137,7 @@ fn unreconciled_legacy_save_stops_and_fences_state_in_a_separate_process() {
     assert!(result.is_err());
     assert!(crate::shutdown::requested());
     assert!(
-        state.is_poisoned(),
+        state.is_unavailable(),
         "dispatch and request handlers must not reacquire state"
     );
     let mut response = Vec::new();
@@ -436,7 +436,7 @@ fn profile_checkpoint_by_state_size() {
             (megabytes << 20) * 9 / 10 <= size && size <= (megabytes << 20) * 3 / 2,
             "fixture is {size} bytes"
         );
-        let state = Arc::new(Mutex::new(state));
+        let state = crate::store::Store::new(state);
         for loaded in [false, true] {
             let mut background = Background(Arc::new(AtomicBool::new(false)), Vec::new());
             let syncs = Arc::new(AtomicU64::new(0));
@@ -466,7 +466,7 @@ fn profile_checkpoint_by_state_size() {
                 background.1.push(std::thread::spawn(move || {
                     while !stop.load(Ordering::Relaxed) {
                         let started = Instant::now();
-                        drop(state.lock().unwrap());
+                        drop(state.guard().unwrap());
                         waits.lock().unwrap().push(started.elapsed());
                         std::thread::sleep(Duration::from_millis(1));
                     }
@@ -475,7 +475,7 @@ fn profile_checkpoint_by_state_size() {
             let before = syncs.load(Ordering::Relaxed);
             let (mut serialize, mut held) = (Vec::new(), Vec::new());
             for _ in 0..7 {
-                let guard = state.lock().unwrap();
+                let guard = state.guard().unwrap();
                 let started = Instant::now();
                 let data = serde_json::to_vec(&*guard).unwrap();
                 serialize.push(started.elapsed());

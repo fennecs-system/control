@@ -290,7 +290,7 @@ fn live_long_messages_validate_and_deliver_without_truncation() {
 fn browser_fixture(long_messages_only: bool) {
     use std::io::{BufRead, Read, Write};
     use std::sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     };
     let (mut initial, chat) = crate::design::tests::paused();
@@ -317,8 +317,8 @@ fn browser_fixture(long_messages_only: bool) {
     initial.services[0] = serde_json::from_value(service).unwrap();
     // In-memory mutations have no storage checkpoint. Publish the same hint
     // when the fixture's write guard drops; HTTP reads use the inner mutex.
-    struct FixtureState(Arc<Mutex<crate::State>>);
-    struct FixtureWrite<'a>(std::sync::MutexGuard<'a, crate::State>, bool);
+    struct FixtureState(crate::store::Store);
+    struct FixtureWrite<'a>(crate::store::Guard<'a>, bool);
     impl std::ops::Deref for FixtureWrite<'_> {
         type Target = crate::State;
         fn deref(&self) -> &Self::Target {
@@ -340,10 +340,10 @@ fn browser_fixture(long_messages_only: bool) {
     }
     impl FixtureState {
         fn lock(&self) -> Result<FixtureWrite<'_>, ()> {
-            self.0.lock().map(|guard| FixtureWrite(guard, false)).map_err(|_| ())
+            self.0.guard().map(|guard| FixtureWrite(guard, false)).map_err(|_| ())
         }
     }
-    let state = FixtureState(Arc::new(Mutex::new(initial)));
+    let state = FixtureState(crate::store::Store::new(initial));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let server = format!("http://{}", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
@@ -422,7 +422,7 @@ fn browser_fixture(long_messages_only: bool) {
             } else if method == "POST" && path.ends_with("/messages") {
                 let id = path.trim_start_matches("/dm/").trim_end_matches("/messages");
                 let fields = crate::fields(&String::from_utf8_lossy(&body));
-                let mut state = served.lock().unwrap();
+                let mut state = served.guard().unwrap();
                 send_message(&mut stream, &mut state, id, "engineering", &headers, &fields, |_| {
                     if reject.load(Ordering::Relaxed) {
                         Err(std::io::Error::other("fixture disk full"))
@@ -437,7 +437,7 @@ fn browser_fixture(long_messages_only: bool) {
                     }
                 }
             } else if let Some(query) = path.strip_prefix("/?") {
-                let html = crate::public_render(&served.lock().unwrap(), &crate::fields(query), "none");
+                let html = crate::public_render(&served.guard().unwrap(), &crate::fields(query), "none");
                 let _ = control_http::respond(
                     &mut stream,
                     "200 OK",
@@ -449,7 +449,7 @@ fn browser_fixture(long_messages_only: bool) {
             } else {
                 crate::session_http::handle(
                     &mut stream,
-                    &mut served.lock().unwrap(),
+                    &mut served.guard().unwrap(),
                     &method,
                     &path,
                     "engineering",

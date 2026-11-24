@@ -372,24 +372,24 @@ fn fenced_missing_services_release_capacity_only_after_persisted_stop_and_observ
     assert!(admit_fixture(&mut state, &run, time, |_| Ok(())).is_err());
     // Restart preserves cleanup intent, without reviving the original work.
     let state: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let engine = Fake::new(Engine {
         unavailable: true,
         ..Default::default()
     });
     assert!(drive(&shared, &engine, "node-a", time, |_| Ok(())).is_err());
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Stopping { .. }
     ));
     engine.state().unavailable = false;
     drive(&shared, &engine, "node-a", time, |_| Err(fail("disk full"))).unwrap_err();
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Stopping { .. }
     ));
     drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
-    let mut state = shared.lock().unwrap();
+    let mut state = shared.guard().unwrap();
     assert_eq!(state.services[0].resource.phase, Phase::Stopped(StopReason::Requested));
     assert!(
         state.services[1..]
@@ -411,7 +411,7 @@ fn stopping_a_paused_service_reverifies_identity_and_retains_output() {
     for mismatch in [false, true] {
         let (mut state, run, _, time) = fixture();
         admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
-        let shared = Arc::new(Mutex::new(state));
+        let shared = crate::store::Store::new(state);
         let engine = Fake::default();
         for _ in 0..3 {
             drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
@@ -419,7 +419,7 @@ fn stopping_a_paused_service_reverifies_identity_and_retains_output() {
         engine.state().records.values_mut().next().unwrap().status = "paused".into();
         drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
         {
-            let mut state = shared.lock().unwrap();
+            let mut state = shared.guard().unwrap();
             assert!(matches!(
                 state.services[0].resource.phase,
                 Phase::Fenced {
@@ -434,9 +434,9 @@ fn stopping_a_paused_service_reverifies_identity_and_retains_output() {
             engine.state().records.values_mut().next().unwrap().network = "bridge".into();
         }
         drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
-        assert!(shared.lock().unwrap().services[0].resource.phase.reserves_capacity());
+        assert!(shared.guard().unwrap().services[0].resource.phase.reserves_capacity());
         drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         if mismatch {
             assert!(matches!(
                 state.services[0].resource.phase,
@@ -465,20 +465,20 @@ fn stopping_a_paused_service_reverifies_identity_and_retains_output() {
 fn missing_from_label_inventory_does_not_prove_a_recorded_container_is_gone() {
     let (mut state, run, _, time) = fixture();
     admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let engine = Fake::default();
     for _ in 0..3 {
         drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     }
     {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.guard().unwrap();
         let id = state.services[0].resource.id.as_str().to_owned();
         page::stop(&mut state, &id, time, |_| Ok(())).unwrap();
     }
     engine.state().hide_inventory = true;
     drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Fenced {
             fault: Fault::IdentityMismatch,
             ..
@@ -491,13 +491,13 @@ fn missing_from_label_inventory_does_not_prove_a_recorded_container_is_gone() {
 #[test]
 fn exited_service_keeps_output_before_removal_and_failed_save_prevents_removal() {
     let (state, run, _, time) = fixture();
-    let shared = Arc::new(Mutex::new(state));
-    admit_fixture(&mut shared.lock().unwrap(), &run, time, |_| Ok(())).unwrap();
+    let shared = crate::store::Store::new(state);
+    admit_fixture(&mut shared.guard().unwrap(), &run, time, |_| Ok(())).unwrap();
     let engine = Fake::default();
     for offset in 0..4 {
         drive(&shared, &engine, "node-a", time + offset, |_| Ok(())).unwrap();
     }
-    let id = shared.lock().unwrap().services[0]
+    let id = shared.guard().unwrap().services[0]
         .resource
         .phase
         .container()
@@ -515,11 +515,11 @@ fn exited_service_keeps_output_before_removal_and_failed_save_prevents_removal()
     })
     .unwrap();
     assert_eq!(engine.state().removes, 0);
-    assert!(shared.lock().unwrap().services[0].output.is_empty());
+    assert!(shared.guard().unwrap().services[0].output.is_empty());
     drive(&shared, &engine, "node-a", time + 5, |_| Ok(())).unwrap();
     assert_eq!(engine.state().removes, 1);
     drive(&shared, &engine, "node-a", time + 6, |_| Ok(())).unwrap();
-    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.guard().unwrap()).unwrap()).unwrap();
     assert!(matches!(restored.services[0].resource.phase, Phase::Stopped(_)));
     assert_eq!(restored.services[0].summary()["output"], "retained final diagnostic");
     assert_eq!(restored.services[0].summary()["exit_code"], 7);
@@ -606,7 +606,7 @@ fn admission_is_bounded_deduplicated_and_rolls_back_before_any_effect() {
 fn persistence_failures_cannot_launch_and_created_id_is_recovered_before_start() {
     let (mut s, run, _, time) = fixture();
     admit_fixture(&mut s, &run, time, |_| Ok(())).unwrap();
-    let shared = Arc::new(Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     let engine = Fake::default();
     assert!(drive(&shared, &engine, "node-a", time, |_| Err(fail("disk full"))).is_err());
     assert_eq!(engine.state().creates, 0);
@@ -627,9 +627,9 @@ fn persistence_failures_cannot_launch_and_created_id_is_recovered_before_start()
         },
         (1, 0)
     );
-    assert_eq!(shared.lock().unwrap().services[0].resource.phase, Phase::Creating);
-    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
-    let shared = Arc::new(Mutex::new(restored));
+    assert_eq!(shared.guard().unwrap().services[0].resource.phase, Phase::Creating);
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.guard().unwrap()).unwrap()).unwrap();
+    let shared = crate::store::Store::new(restored);
     drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     assert_eq!(
         {
@@ -648,7 +648,7 @@ fn persistence_failures_cannot_launch_and_created_id_is_recovered_before_start()
     );
     drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Running(_)
     ));
 }
@@ -731,16 +731,16 @@ fn completed_history_is_bounded_without_replaying_live_attempt_receipts() {
 fn revocation_quiesces_a_running_service_and_failed_stop_save_cannot_remove_it() {
     let (mut s, run, _, time) = fixture();
     admit_fixture(&mut s, &run, time, |_| Ok(())).unwrap();
-    let shared = Arc::new(Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     let engine = Fake::default();
     for _ in 0..3 {
         drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     }
-    shared.lock().unwrap().services[0].actor = Actor::Unknown;
+    shared.guard().unwrap().services[0].actor = Actor::Unknown;
     assert!(drive(&shared, &engine, "node-a", time, |_| Err(fail("disk full"))).is_err());
     assert_eq!(engine.state().removes, 0);
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Running(_)
     ));
     for _ in 0..3 {
@@ -754,7 +754,7 @@ fn revocation_quiesces_a_running_service_and_failed_stop_save_cannot_remove_it()
         (1, 1)
     );
     assert_eq!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Stopped(StopReason::Revoked)
     );
 }
@@ -762,18 +762,18 @@ fn revocation_quiesces_a_running_service_and_failed_stop_save_cannot_remove_it()
 fn services_survive_turns_and_restoration_without_a_second_start() {
     let (mut s, run, _, time) = fixture();
     admit_fixture(&mut s, &run, time, |_| Ok(())).unwrap();
-    let shared = Arc::new(Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     let engine = Fake::default();
     for _ in 0..3 {
         drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     }
     {
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.guard().unwrap();
         s.runtime.runs[0].status = RunStatus::Completed;
         s.runtime.runs[0].attempts.clear();
     }
-    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
-    let shared = Arc::new(Mutex::new(restored));
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.guard().unwrap()).unwrap()).unwrap();
+    let shared = crate::store::Store::new(restored);
     for _ in 0..3 {
         drive(&shared, &engine, "node-a", time + 1, |_| {
             panic!("Unchanged Running services must not save")
@@ -788,7 +788,7 @@ fn services_survive_turns_and_restoration_without_a_second_start() {
         (1, 1, 0)
     );
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Running(_)
     ));
     drive(&shared, &engine, "node-a", time + 60, |_| Ok(())).unwrap();
@@ -797,7 +797,7 @@ fn services_survive_turns_and_restoration_without_a_second_start() {
     assert_eq!(engine.state().removes, 1);
     drive(&shared, &engine, "node-a", time + 60, |_| Ok(())).unwrap();
     assert_eq!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Stopped(StopReason::Expired)
     );
 }
@@ -829,7 +829,7 @@ fn scope_or_identity_mismatch_never_authorizes_start_or_removal() {
         }
         assert!(verify(&service, &o).is_err(), "{field} must be enforced");
     }
-    let shared = Arc::new(Mutex::new(s));
+    let shared = crate::store::Store::new(s);
     let engine = Fake::default();
     drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     engine.state().records.values_mut().next().unwrap().network = "bridge".into();
@@ -841,7 +841,7 @@ fn scope_or_identity_mismatch_never_authorizes_start_or_removal() {
         },
         (0, 0)
     );
-    let s = shared.lock().unwrap();
+    let s = shared.guard().unwrap();
     assert!(matches!(s.services[0].resource.phase, Phase::Fenced { .. }));
     assert!(
         s.services[0].resource.phase.container().is_some(),
@@ -858,7 +858,7 @@ fn refused_creation_fails_once_keeps_its_diagnostic_and_releases_capacity() {
             s.services[0].resource.phase = Phase::Creating;
             s.services[0].diagnostic = "Could not create capped service: old".into();
         }
-        let shared = Arc::new(Mutex::new(s));
+        let shared = crate::store::Store::new(s);
         let engine = Fake::new(Engine {
             refuse: true,
             leave,
@@ -866,7 +866,7 @@ fn refused_creation_fails_once_keeps_its_diagnostic_and_releases_capacity() {
         });
         drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
         assert_eq!(
-            shared.lock().unwrap().services[0].resource.phase,
+            shared.guard().unwrap().services[0].resource.phase,
             Phase::Stopping {
                 container: None,
                 reason: StopReason::Failed
@@ -886,7 +886,7 @@ fn refused_creation_fails_once_keeps_its_diagnostic_and_releases_capacity() {
             engine.state().records.is_empty(),
             "A container the refusal left is removed"
         );
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let service = &state.services[0];
         assert_eq!(service.resource.phase, Phase::Stopped(StopReason::Failed));
         assert_eq!(service.phase_name(), "Failed");
@@ -909,7 +909,7 @@ fn unsupported_storage_quota_is_refused_before_admission() {
 }
 #[test]
 fn idle_supervision_does_not_query_the_engine() {
-    let shared = Arc::new(Mutex::new(State::default()));
+    let shared = crate::store::Store::new(State::default());
     let engine = Fake::default();
     drive(&shared, &engine, "node-a", now(), |_| panic!("Idle must not save")).unwrap();
     assert_eq!(engine.state().inspections, 0);
@@ -1098,19 +1098,19 @@ fn live_fenced_paused_service_can_be_stopped_without_restart() {
     }
     let _cleanup = Container(id.clone());
     state.services[0].resource.phase = Phase::Starting(id.clone());
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     for _ in 0..2 {
         drive(&shared, crate::engine::isolation(), &node, time, |_| Ok(())).unwrap();
     }
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Running(_)
     ));
     crate::engine::query(&["pause", id.as_str()]).unwrap();
     drive(&shared, crate::engine::isolation(), &node, time, |_| Ok(())).unwrap();
     assert!(exists(crate::engine::isolation(), &id).unwrap());
     {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.guard().unwrap();
         assert!(matches!(
             state.services[0].resource.phase,
             Phase::Fenced {
@@ -1123,10 +1123,10 @@ fn live_fenced_paused_service_can_be_stopped_without_restart() {
     }
     drive(&shared, crate::engine::isolation(), &node, time, |_| Ok(())).unwrap();
     assert!(!exists(crate::engine::isolation(), &id).unwrap());
-    assert!(shared.lock().unwrap().services[0].resource.phase.reserves_capacity());
+    assert!(shared.guard().unwrap().services[0].resource.phase.reserves_capacity());
     drive(&shared, crate::engine::isolation(), &node, time, |_| Ok(())).unwrap();
     assert_eq!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Stopped(StopReason::Requested)
     );
 }
@@ -1190,8 +1190,8 @@ fn live_workspace_survives_restart_exit_cleanup_and_container_replacement() {
     // Reproduce daemon shutdown's observable consequence without restarting
     // the operator's Docker daemon or touching other services.
     crate::engine::query(&["stop", "--time=1", id.as_str()]).unwrap();
-    let shared = Arc::new(Mutex::new(State::default()));
-    shared.lock().unwrap().services.push(service.clone());
+    let shared = crate::store::Store::new(State::default());
+    shared.guard().unwrap().services.push(service.clone());
     drive(&shared, crate::engine::isolation(), &node, time, |_| Ok(())).unwrap();
     assert!(
         !exists(crate::engine::isolation(), &id).unwrap(),
@@ -1199,14 +1199,14 @@ fn live_workspace_survives_restart_exit_cleanup_and_container_replacement() {
     );
     drive(&shared, crate::engine::isolation(), &node, time, |_| Ok(())).unwrap();
     assert_eq!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Stopped(StopReason::Exited)
     );
     drop(cleanup);
     assert!(inventory(crate::engine::isolation(), &node).unwrap().is_empty());
     // A different service handle under the same owner reopens the volume.
     // Serialize first, like a Control restart, rather than relying on memory.
-    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.guard().unwrap()).unwrap()).unwrap();
     service = restored.services[0].binding_snapshot();
     service.resource.id = "replacement-probe".to_owned().try_into().unwrap();
     service.resource.phase = Phase::Creating;

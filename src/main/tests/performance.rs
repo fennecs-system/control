@@ -250,7 +250,9 @@ fn operator_views() {
             ("chat_read", &|s| {
                 chat::detail(s, "benchmark-chat").unwrap().to_string().len()
             }),
-            ("chats_list", &|s| chat::list(s).to_string().len()),
+            ("chats_list", &|s| {
+                serde_json::to_string(&chat::Listing::of(s)).unwrap().len()
+            }),
             ("requests_list", &|s| chat::pending_requests(s).to_string().len()),
         ];
         for (name, workload) in workloads {
@@ -328,7 +330,9 @@ fn chat_lists() {
         }
         let active: &'static str = state.chats[chats / 2].id.clone().leak();
         let workloads: [(&str, &View); 3] = [
-            ("chats_list", &|s| chat::list(s).to_string().len()),
+            ("chats_list", &|s| {
+                serde_json::to_string(&chat::Listing::of(s)).unwrap().len()
+            }),
             ("web_conversation_tree", &move |s| {
                 crate::navigation::Picker::of(&s.chats, active).render().len()
             }),

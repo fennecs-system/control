@@ -2,6 +2,7 @@
 //! engine options enter the request. Uncertain effects are never replayed.
 use super::*;
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use control_effect::sync::{CancelToken, Changes, Recv};
 use std::{io::Read, process::Child, thread::JoinHandle, time::Instant};
 mod routine;
@@ -478,7 +479,7 @@ pub(super) fn owned(
     target(authority, node, active, service)
 }
 pub(super) fn exec(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     run: &str,
     generation: &str,
     nonce: &str,
@@ -488,12 +489,11 @@ pub(super) fn exec(
     // An invalid wait refuses the request before anything is submitted.
     let wait = wait_bound(input.wait_seconds)?;
     let service_id = input.service_id.clone();
-    let admitted = {
-        let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-        let mut admitted = admit(&mut state, run, generation, nonce, node, input, crate::storage::save)?;
-        routine::hint(&state, run, generation, &service_id, &mut admitted);
-        admitted
-    };
+    let admitted = shared.write(|state| -> io::Result<Value> {
+        let mut admitted = admit(state, run, generation, nonce, node, input, crate::storage::save)?;
+        routine::hint(state, run, generation, &service_id, &mut admitted);
+        Ok(admitted)
+    })??;
     let execution_id = admitted["execution_id"].as_str().unwrap_or_default().to_owned();
     // settle keeps admitted fields, so inline results also carry the hint.
     Ok(settle(
@@ -524,7 +524,7 @@ pub(super) struct Waiter<'a> {
 /// summary lacks (a copy's tally) are kept. Waiting never creates or replays
 /// an effect, so a retried request simply waits on the same execution.
 pub(super) fn settle(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     waiter: Waiter<'_>,
     execution_id: &str,
     admitted: Value,
@@ -587,7 +587,7 @@ fn turn_end(state: &State, run: &str) -> Option<Instant> {
     Some(Instant::now() + Duration::from_secs(end.saturating_sub(now())))
 }
 fn wait_until(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     waiter: Waiter<'_>,
     execution_id: &str,
     mut last: Value,
@@ -599,7 +599,7 @@ fn wait_until(
         // Read the generation before the state so no completion is missed.
         let seen = signal.generation();
         let limit = {
-            let Ok(state) = shared.lock() else { return last };
+            let Ok(state) = shared.guard() else { return last };
             // An ended run or replaced attempt stops waiting with what it saw.
             let Ok(index) = owned(
                 ServiceAuthority::of(&state),
@@ -642,7 +642,7 @@ pub struct Handle {
 }
 /// Reads a request's status, waiting up to `wait_seconds` for it to finish.
 pub(super) fn status_wait(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     run: &str,
     generation: &str,
     node: &NodeId,
@@ -665,18 +665,13 @@ pub(super) fn status_wait(
         &crate::shutdown::token(),
     ))
 }
-pub(super) fn status(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    node: &NodeId,
-    input: Handle,
-) -> io::Result<Value> {
-    let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let index = owned(ServiceAuthority::of(&state), run, generation, node, &input.service_id)?;
-    lookup(&state.services[index], &input.execution_id)?
-        .map(|recorded| recorded.summary())
-        .ok_or_else(|| fail("Service command not found"))
+pub(super) fn status(shared: &Store, run: &str, generation: &str, node: &NodeId, input: Handle) -> io::Result<Value> {
+    shared.read(|state| -> io::Result<Value> {
+        let index = owned(ServiceAuthority::of(state), run, generation, node, &input.service_id)?;
+        lookup(&state.services[index], &input.execution_id)?
+            .map(|recorded| recorded.summary())
+            .ok_or_else(|| fail("Service command not found"))
+    })?
 }
 /// One request on a service: a shell command or an exclusive copy.
 pub(super) struct Work {
@@ -1098,49 +1093,49 @@ pub(super) fn logs(isolation: &dyn Isolation, id: &ContainerId) -> io::Result<St
     Ok(result.output.text())
 }
 fn update(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     service: &Service,
     id: &str,
     change: impl FnOnce(&mut Execution),
     persist: bool,
 ) -> io::Result<()> {
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let Some(index) = state
-        .services
-        .iter()
-        .position(|s| s.resource.id == service.resource.id && s.resource.generation == service.resource.generation)
-    else {
-        return Err(fail("Service generation changed"));
-    };
-    let execution = state.services[index]
-        .executions
-        .iter_mut()
-        .find(|e| names(&e.id, id))
-        .ok_or_else(|| fail("Service command missing"))?;
-    let previous = persist.then(|| execution.clone());
-    let previous_status = execution.status;
-    let previous_output = (execution.output.len(), execution.truncated, execution.status);
-    change(execution);
-    let changed = previous_output != (execution.output.len(), execution.truncated, execution.status);
-    let run = execution.run.clone();
-    let transitioned = execution.status != previous_status;
-    if persist && let Err(error) = crate::storage::save(&state) {
-        if let Some(previous) = previous {
-            *state.services[index]
+    let transitioned =
+        shared.write(|state| -> io::Result<bool> {
+            let Some(index) = state.services.iter().position(|s| {
+                s.resource.id == service.resource.id && s.resource.generation == service.resource.generation
+            }) else {
+                return Err(fail("Service generation changed"));
+            };
+            let execution = state.services[index]
                 .executions
                 .iter_mut()
-                .find(|e| e.id == id)
-                .unwrap() = previous;
-        }
-        return Err(error);
-    }
-    if changed {
-        let chat = state.runtime.runs.get(&run).and_then(|r| r.chat_id.clone());
-        if let Some(chat) = chat {
-            crate::chat::activity_changed(&mut state, &chat);
-        }
-    }
-    drop(state);
+                .find(|e| names(&e.id, id))
+                .ok_or_else(|| fail("Service command missing"))?;
+            let previous = persist.then(|| execution.clone());
+            let previous_status = execution.status;
+            let previous_output = (execution.output.len(), execution.truncated, execution.status);
+            change(execution);
+            let changed = previous_output != (execution.output.len(), execution.truncated, execution.status);
+            let run = execution.run.clone();
+            let transitioned = execution.status != previous_status;
+            if persist && let Err(error) = crate::storage::save(state) {
+                if let Some(previous) = previous {
+                    *state.services[index]
+                        .executions
+                        .iter_mut()
+                        .find(|e| e.id == id)
+                        .unwrap() = previous;
+                }
+                return Err(error);
+            }
+            if changed {
+                let chat = state.runtime.runs.get(&run).and_then(|r| r.chat_id.clone());
+                if let Some(chat) = chat {
+                    crate::chat::activity_changed(state, &chat);
+                }
+            }
+            Ok(transitioned)
+        })??;
     // A finished command may free a slot for queued work and has a result
     // for its waiters; a launch tells waiters it started.
     if transitioned {
@@ -1148,22 +1143,23 @@ fn update(
     }
     Ok(())
 }
-fn stop(shared: &Arc<Mutex<State>>, service: &Service) -> io::Result<()> {
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    if let Some(index) = state
-        .services
-        .iter()
-        .position(|s| s.resource.id == service.resource.id && s.resource.generation == service.resource.generation)
-    {
-        transition(
-            &mut state,
-            index,
-            Event::Stop(StopReason::Requested),
-            now(),
-            crate::storage::save,
-        )?;
-    }
-    Ok(())
+fn stop(shared: &Store, service: &Service) -> io::Result<()> {
+    shared.write(|state| -> io::Result<()> {
+        if let Some(index) = state
+            .services
+            .iter()
+            .position(|s| s.resource.id == service.resource.id && s.resource.generation == service.resource.generation)
+        {
+            transition(
+                state,
+                index,
+                Event::Stop(StopReason::Requested),
+                now(),
+                crate::storage::save,
+            )?;
+        }
+        Ok(())
+    })?
 }
 /// The command runs with `CONTROL_EXEC=<execution id>` set at exec, so it and
 /// every process it starts, detached ones included, can be found inside the
@@ -1225,7 +1221,7 @@ fn reap(isolation: &dyn Isolation, service: &Service, execution: &str) -> bool {
     )
     .is_ok_and(|r| r.exit_code == Some(0) && !r.timed_out)
 }
-fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
+fn execute(shared: Store, service: Service, execution: Execution) {
     let isolation = crate::engine::isolation();
     // A copy reads its requesting attempt's live workspace. A source that is
     // gone, unsafe or over its bounds fails before anything enters the service.
@@ -1265,8 +1261,7 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         let user = service.user();
         // Approved egress also brings the service's HTTPS_PROXY settings.
         let proxy = shared
-            .lock()
-            .map(|state| crate::ports::proxy_env(&state.ports, &service))
+            .read(|state| crate::ports::proxy_env(&state.ports, &service))
             .unwrap_or_default();
         let marker = [(MARKER, execution.id.as_str())]
             .into_iter()
@@ -1313,8 +1308,8 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
                 crate::shutdown::requested()
                     || !authorized.get()
                     || shared
-                        .lock()
-                        .map_or(true, |s| !s.services.iter().any(|s| s.resource == service.resource))
+                        .read(|s| !s.services.iter().any(|s| s.resource == service.resource))
+                        .unwrap_or(true)
             },
             |output| {
                 let _ = update(
@@ -1405,34 +1400,36 @@ fn execute(shared: Arc<Mutex<State>>, service: Service, execution: Execution) {
         true,
     );
 }
-pub(super) fn recover(shared: &Arc<Mutex<State>>, save: impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    for index in 0..state.services.len() {
-        if !state.services[index]
-            .executions
-            .iter()
-            .any(|e| e.status == Status::Running)
-        {
-            continue;
-        }
-        let old = state.services[index].clone();
-        for execution in &mut state.services[index].executions {
-            if execution.status == Status::Running {
-                execution.status = Status::Interrupted;
-                execution.command.clear();
-                execution.diagnostic =
-                    "Control restarted before command completion; service stop requested, no replay".into();
+pub(super) fn recover(shared: &Store, save: impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
+    shared.write(|state| -> io::Result<()> {
+        for index in 0..state.services.len() {
+            if !state.services[index]
+                .executions
+                .iter()
+                .any(|e| e.status == Status::Running)
+            {
+                continue;
+            }
+            let old = state.services[index].clone();
+            for execution in &mut state.services[index].executions {
+                if execution.status == Status::Running {
+                    execution.status = Status::Interrupted;
+                    execution.command.clear();
+                    execution.diagnostic =
+                        "Control restarted before command completion; service stop requested, no replay".into();
+                }
+            }
+            let resource = &state.services[index].resource;
+            let decision =
+                decide(resource, resource.stamp(), Event::Stop(StopReason::Requested), now()).map_err(fail)?;
+            state.services[index].resource.phase = decision.phase;
+            if let Err(error) = save(state) {
+                state.services[index] = old;
+                return Err(error);
             }
         }
-        let resource = &state.services[index].resource;
-        let decision = decide(resource, resource.stamp(), Event::Stop(StopReason::Requested), now()).map_err(fail)?;
-        state.services[index].resource.phase = decision.phase;
-        if let Err(error) = save(&state) {
-            state.services[index] = old;
-            return Err(error);
-        }
-    }
-    Ok(())
+        Ok(())
+    })?
 }
 /// Requests a running service can launch now, in admission order, in one
 /// pass. Admission bounds how many commands are active and admits nothing
@@ -1456,7 +1453,7 @@ fn launchable(executions: &[Execution]) -> Vec<&Execution> {
     }
     ready
 }
-pub(super) fn dispatch(shared: &Arc<Mutex<State>>, threads: &mut Vec<JoinHandle<()>>) -> io::Result<()> {
+pub(super) fn dispatch(shared: &Store, threads: &mut Vec<JoinHandle<()>>) -> io::Result<()> {
     let mut index = 0;
     while index < threads.len() {
         if threads[index].is_finished() {
@@ -1465,8 +1462,7 @@ pub(super) fn dispatch(shared: &Arc<Mutex<State>>, threads: &mut Vec<JoinHandle<
             index += 1;
         }
     }
-    let cancelled = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let cancelled = shared.read(|state| {
         state
             .services
             .iter()
@@ -1478,7 +1474,7 @@ pub(super) fn dispatch(shared: &Arc<Mutex<State>>, threads: &mut Vec<JoinHandle<
                     .map(|e| (s.binding_snapshot(), e.id.clone()))
             })
             .collect::<Vec<_>>()
-    };
+    })?;
     for (service, id) in cancelled {
         update(
             shared,
@@ -1492,8 +1488,7 @@ pub(super) fn dispatch(shared: &Arc<Mutex<State>>, threads: &mut Vec<JoinHandle<
             true,
         )?;
     }
-    let ready = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let ready = shared.read(|state| {
         state
             .services
             .iter()
@@ -1504,7 +1499,7 @@ pub(super) fn dispatch(shared: &Arc<Mutex<State>>, threads: &mut Vec<JoinHandle<
                     .map(move |e| (s.binding_snapshot(), e.clone()))
             })
             .collect::<Vec<_>>()
-    };
+    })?;
     for (service, execution) in ready {
         update(
             shared,

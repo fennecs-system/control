@@ -214,7 +214,7 @@ fn export_response_bytes_are_pinned() {
 #[test]
 fn saving_a_gene_redirects_once_durable_and_answers_a_stale_revision_in_place() {
     crate::storage::initialize().unwrap();
-    let state = std::sync::Mutex::new(State::default());
+    let state = crate::Store::new(State::default());
     let post = |body: &str| {
         let mut out = Vec::new();
         assert!(http(&mut out, &state, "POST", "/dna/save", body.as_bytes()));
@@ -227,19 +227,15 @@ fn saving_a_gene_redirects_once_durable_and_answers_a_stale_revision_in_place() 
         "{saved}"
     );
     assert!(
-        !state.is_poisoned() && state.try_lock().is_ok(),
+        !state.is_unavailable() && state.try_guard().is_some(),
         "released before answering"
     );
     let stale = post("id=durable-gene&name=Durable&revision=0&instructions=Lost");
     assert!(stale.starts_with("HTTP/1.1 409 ") && stale.contains("Lost"), "{stale}");
     assert_eq!(
         state
-            .lock()
-            .unwrap()
-            .lens_library
-            .get("durable-gene")
-            .unwrap()
-            .instructions,
+            .read(|state| state.lens_library.get("durable-gene").unwrap().instructions.clone())
+            .unwrap(),
         "Kept"
     );
 }

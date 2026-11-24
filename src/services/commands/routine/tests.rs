@@ -85,7 +85,7 @@ fn an_inline_result_keeps_the_hint() {
         .unwrap();
     assert!(hinted(&admitted));
     let snapshot = state.services[0].clone();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let execution = admitted["execution_id"].as_str().unwrap().to_owned();
     update(&shared, &snapshot, &execution, |e| e.status = Status::Running, false).unwrap();
     update(

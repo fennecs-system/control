@@ -6,7 +6,7 @@ use std::io::Read;
 
 const SESSION: &str = "url-names-operator-session";
 
-fn request(state: &Arc<Mutex<State>>, method: &str, target: &str, body: &str) -> String {
+fn request(state: &Store, method: &str, target: &str, body: &str) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let mut client = TcpStream::connect(address).unwrap();
@@ -61,10 +61,10 @@ fn local_links(html: &str) -> Vec<String> {
     links
 }
 
-fn fixture() -> (Arc<Mutex<State>>, String) {
+fn fixture() -> (Store, String) {
     let mut state = State::default();
     let id = chat::create(&mut state);
-    (Arc::new(Mutex::new(state)), id)
+    (crate::store::Store::new(state), id)
 }
 
 #[test]

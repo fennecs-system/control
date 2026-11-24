@@ -1,7 +1,7 @@
 use super::*;
 
 /// A running attempt in a fresh chat: (state, chat, run, generation).
-fn running() -> (Arc<Mutex<State>>, String, String, String) {
+fn running() -> (Store, String, String, String) {
     let mut state = State::default();
     let chat = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &chat, "Set up the Java build", "test").unwrap();
@@ -9,7 +9,7 @@ fn running() -> (Arc<Mutex<State>>, String, String, String) {
     let run = &state.runtime.runs[0];
     let generation = run.attempts.last().unwrap().workspace_id.clone().unwrap();
     let id = run.id().as_str().to_owned();
-    (Arc::new(Mutex::new(state)), chat, id, generation)
+    (crate::store::Store::new(state), chat, id, generation)
 }
 const DIAGNOSIS: &str = "tool: $ readelf -l /opt/jdk/bin/java\n[Requesting program interpreter: /lib/ld-linux-aarch64.so.1]\n$ ls /lib/ld-linux-aarch64.so.1\nls: cannot access '/lib/ld-linux-aarch64.so.1': No such file or directory";
 
@@ -39,7 +39,7 @@ fn compacted_steps_join_the_tree_and_recall_returns_their_verbatim_excerpts() {
     let first = leaf(0, step(1)).unwrap();
     let second = leaf(1, format!("{}\n{DIAGNOSIS}", step(2))).unwrap();
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let roots: Vec<_> = state.runtime.compaction.turns[0]
             .roots
             .iter()
@@ -74,7 +74,7 @@ fn compacted_steps_join_the_tree_and_recall_returns_their_verbatim_excerpts() {
         )
         .is_err()
     );
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let actor = state.chats[0].actor.clone();
     let listing = listing(&state.runtime.compaction, &chat, &actor);
     assert_eq!(listing[0]["roots"].as_array().unwrap().len(), 1, "{listing}");
@@ -132,7 +132,7 @@ fn compacted_steps_join_the_tree_and_recall_returns_their_verbatim_excerpts() {
     assert!(read(json!({"query":"jdk","limit_bytes":0})).is_err());
     // The operator sees the same trees on the DM's Memory Tree page, and the
     // evidence reader expands them down to the original step.
-    let page = super::super::render(&shared.lock().unwrap(), &chat, "").unwrap();
+    let page = super::super::render(&shared.guard().unwrap(), &chat, "").unwrap();
     assert!(
         page.contains("Local turn step trees")
             && page.contains(&format!("?root={parent}'>Local turn {generation}: steps 1–2")),
@@ -178,7 +178,7 @@ fn every_tree_node_uses_one_structured_summary_format() {
 fn only_recent_attempts_stay_recallable() {
     let (shared, _, run, generation) = running();
     let model = crate::model_calls::tests::endpoint();
-    let leaf = |shared: &Arc<Mutex<State>>, generation: &str| {
+    let leaf = |shared: &Store, generation: &str| {
         retain(
             shared,
             &run,
@@ -196,14 +196,14 @@ fn only_recent_attempts_stay_recallable() {
     // Later attempts of the run, each the current one when it retains.
     for attempt in 0..TURNS {
         let next = format!("{generation}-later-{attempt}");
-        shared.lock().unwrap().runtime.runs[0]
+        shared.guard().unwrap().runtime.runs[0]
             .attempts
             .last_mut()
             .unwrap()
             .workspace_id = Some(next.clone());
         leaf(&shared, &next).unwrap();
     }
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert_eq!(state.runtime.compaction.turns.len(), TURNS);
     assert!(
         !state

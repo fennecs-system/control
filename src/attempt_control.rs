@@ -1,12 +1,10 @@
 //! Attempt lifecycle projections. Providers interpret these decisions; workload
 //! health and progress remain tool/service concerns, not supervisor heuristics.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, usage::Attempt};
 use serde::{Deserialize, Serialize};
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 
 /// Why an attempt ended before publishing. `StepLimit`: a local-model turn reached
 /// its model-step cap (`local_agent_steps`) without a final report or handoff.
@@ -78,23 +76,24 @@ fn decide(limit: Option<u64>, elapsed: Duration, handoff: Option<String>) -> Dec
         Decision::Continue
     }
 }
-pub fn poll(bridge: Option<(&Arc<Mutex<State>>, &str)>, attempt: &Attempt, elapsed: Duration) -> Decision {
+pub fn poll(bridge: Option<(&Store, &str)>, attempt: &Attempt, elapsed: Duration) -> Decision {
     let Some((shared, id)) = bridge else {
         return decide(limit(attempt, false), elapsed, None);
     };
-    let Ok(state) = shared.lock() else {
-        return Decision::Continue;
-    };
-    let Some(run) = state.runtime.runs.get(id) else {
-        return Decision::Continue;
-    };
-    let handoff = run
-        .attempts
-        .last()
-        .filter(|live| live.workspace_id == attempt.workspace_id)
-        .and_then(|live| Some((live, live.turn_mailbox.as_ref()?.accepted()?)))
-        .map(|(live, h)| reply(requested(run), &live.activity, h.progress.as_deref()));
-    decide(deadline(&state, run, attempt), elapsed, handoff)
+    shared
+        .read(|state| {
+            let Some(run) = state.runtime.runs.get(id) else {
+                return Decision::Continue;
+            };
+            let handoff = run
+                .attempts
+                .last()
+                .filter(|live| live.workspace_id == attempt.workspace_id)
+                .and_then(|live| Some((live, live.turn_mailbox.as_ref()?.accepted()?)))
+                .map(|(live, h)| reply(requested(run), &live.activity, h.progress.as_deref()));
+            decide(deadline(state, run, attempt), elapsed, handoff)
+        })
+        .unwrap_or(Decision::Continue)
 }
 /// An operator asked for this turn and reads its reply in the chat; a wake,
 /// delegation or agent message has no one waiting on its wording.
@@ -119,24 +118,28 @@ pub fn reply(requested: bool, activity: &[crate::usage::Activity], progress: Opt
 /// services are separate resources and intentionally survive a model yield.
 pub fn stop(
     isolation: &dyn control_isolation::Isolation,
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    bridge: Option<(&Store, &str)>,
     attempt: &Attempt,
 ) -> Result<(), &'static str> {
     let mut identity = attempt.clone();
     if let Some((shared, id)) = bridge {
-        let state = shared.lock().map_err(|_| "State unavailable while stopping attempt")?;
-        let live = state
-            .runtime
-            .runs
-            .get(id)
-            .and_then(|r| r.attempts.last())
-            .filter(|a| a.workspace_id == attempt.workspace_id)
-            .ok_or("Attempt generation changed while stopping")?;
-        identity.command_jobs = live
-            .command_jobs
-            .iter()
-            .map(crate::command_jobs::Job::identity)
-            .collect();
+        shared
+            .read(|state| -> Result<(), &str> {
+                let live = state
+                    .runtime
+                    .runs
+                    .get(id)
+                    .and_then(|r| r.attempts.last())
+                    .filter(|a| a.workspace_id == attempt.workspace_id)
+                    .ok_or("Attempt generation changed while stopping")?;
+                identity.command_jobs = live
+                    .command_jobs
+                    .iter()
+                    .map(crate::command_jobs::Job::identity)
+                    .collect();
+                Ok(())
+            })
+            .map_err(|_| "State unavailable while stopping attempt")??;
     }
     crate::lifecycle::stop_attempt(isolation, &identity)
 }

@@ -25,7 +25,7 @@ fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering(
         .map(|chat| (chat.revision, chat.activity_order))
         .collect();
     let service = state.services[0].clone();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     update(
         &shared,
         &service,
@@ -38,7 +38,7 @@ fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering(
     )
     .unwrap();
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         assert!(state.chats[0].revision > before[0].0);
         assert!(state.chats[1].revision > before[1].0);
         assert_eq!(state.chats[2].revision, before[2].0);
@@ -76,7 +76,7 @@ fn live_command_evidence_reaches_parent_and_terminal_clients_without_reordering(
         false,
     )
     .unwrap();
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&*state).unwrap()).unwrap();
     let event = activity(&restored, &run).next().unwrap();
     assert_eq!(event.text, "printf '<progress>'");
@@ -118,7 +118,7 @@ fn unchanged_samples_do_not_refresh_chat_and_parent_cycles_terminate() {
     let chat = state.chats[0].id.clone();
     state.chats[0].parent_chat = Some(chat);
     let revision = state.chats[0].revision;
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     update(
         &shared,
         &service,
@@ -127,7 +127,7 @@ fn unchanged_samples_do_not_refresh_chat_and_parent_cycles_terminate() {
         false,
     )
     .unwrap();
-    assert_eq!(shared.lock().unwrap().chats[0].revision, revision);
+    assert_eq!(shared.guard().unwrap().chats[0].revision, revision);
     update(
         &shared,
         &service,
@@ -136,7 +136,7 @@ fn unchanged_samples_do_not_refresh_chat_and_parent_cycles_terminate() {
         false,
     )
     .unwrap();
-    assert_eq!(shared.lock().unwrap().chats[0].revision, revision + 1);
+    assert_eq!(shared.guard().unwrap().chats[0].revision, revision + 1);
 }
 fn fixture() -> (State, String, NodeId, String) {
     let (mut state, run, _, time) = super::super::tests::fixture();
@@ -365,12 +365,12 @@ fn restart_never_replays_uncertain_execution_and_save_failure_rolls_back() {
     )
     .unwrap();
     state.services[0].executions[0].status = Status::Running;
-    let shared = Arc::new(Mutex::new(state));
-    let before = serde_json::to_vec(&*shared.lock().unwrap()).unwrap();
+    let shared = crate::store::Store::new(state);
+    let before = serde_json::to_vec(&*shared.guard().unwrap()).unwrap();
     assert!(recover(&shared, |_| Err(fail("disk full"))).is_err());
-    assert_eq!(serde_json::to_vec(&*shared.lock().unwrap()).unwrap(), before);
+    assert_eq!(serde_json::to_vec(&*shared.guard().unwrap()).unwrap(), before);
     recover(&shared, |_| Ok(())).unwrap();
-    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.lock().unwrap()).unwrap()).unwrap();
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&*shared.guard().unwrap()).unwrap()).unwrap();
     assert!(matches!(restored.services[0].resource.phase, Phase::Stopping { .. }));
     assert_eq!(restored.services[0].executions[0].status, Status::Interrupted);
     assert!(restored.services[0].executions[0].command.is_empty());
@@ -636,7 +636,7 @@ fn a_timed_out_probe_is_reaped_inside_a_service_that_keeps_running() {
     let (mut state, run, _, time) = crate::services::tests::fixture();
     crate::services::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
     let image = state.services[0].resource.image.as_str().to_owned();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let engine = Scripted::new(|call: &Call| match call {
         // The command outlives its client; the reaper finds nothing left.
         Call::Exec(spec) if spec.env.iter().any(|(name, _)| name == MARKER) => {
@@ -650,7 +650,7 @@ fn a_timed_out_probe_is_reaped_inside_a_service_that_keeps_running() {
     for _ in 0..3 {
         crate::services::drive(&shared, &engine, "node-a", time, |_| Ok(())).unwrap();
     }
-    let service = shared.lock().unwrap().services[0].clone();
+    let service = shared.guard().unwrap().services[0].clone();
     let container = service.resource.phase.container().expect("running").as_str().to_owned();
     let output = probe(&engine, &service, "sleep 60", "owner-a", Duration::from_millis(200)).unwrap();
     assert!(output.timed_out);

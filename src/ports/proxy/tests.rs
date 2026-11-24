@@ -17,7 +17,7 @@ fn echo() -> SocketAddr {
     address
 }
 /// A service with one approved egress grant to `upstream`, and its proxy key.
-fn approved(upstream: SocketAddr) -> (Arc<Mutex<State>>, Key) {
+fn approved(upstream: SocketAddr) -> (Store, Key) {
     let (mut state, run, _) = fixture();
     let input = Input {
         service_id: ResourceId::try_from("svc-a".to_owned()).unwrap(),
@@ -47,10 +47,10 @@ fn approved(upstream: SocketAddr) -> (Arc<Mutex<State>>, Key) {
     );
     approve(&mut state, &id, 60, true, Some(upstream), now(), |_| Ok(())).unwrap();
     let key = Key::of(&state.ports[0]);
-    (Arc::new(Mutex::new(state)), key)
+    (crate::store::Store::new(state), key)
 }
 /// Sends `request` through the proxy handler and returns the client end.
-fn proxy(shared: &Arc<Mutex<State>>, key: &Key, request: &str) -> (TcpStream, JoinHandle<()>) {
+fn proxy(shared: &Store, key: &Key, request: &str) -> (TcpStream, JoinHandle<()>) {
     let (mut client, server) = pair().unwrap();
     let (shared, key) = (shared.clone(), key.clone());
     let task = thread::spawn(move || {
@@ -167,13 +167,13 @@ fn revoked_grants_refuse_new_connects_and_close_open_tunnels() {
     let (mut open, task) = proxy(&shared, &key, &format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n"));
     let established = "HTTP/1.1 200 Connection established\r\n\r\n";
     assert_eq!(read_exactly(&mut open, established.len()), established);
-    shared.lock().unwrap().ports[0].status = Status::Stopping;
+    shared.guard().unwrap().ports[0].status = Status::Stopping;
     let (mut refused, _) = proxy(&shared, &key, &format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n"));
     assert!(response(&mut refused).starts_with("HTTP/1.1 403"));
     // The open tunnel follows the port relay: revocation closes it.
     assert_eq!(response(&mut open), "");
     task.join().unwrap();
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert!(grants(PortAuthority::of(&state), &key, now()).next().is_none());
     assert!(
         env(&state.ports, &state.services[0]).is_empty(),
@@ -184,7 +184,7 @@ fn revoked_grants_refuse_new_connects_and_close_open_tunnels() {
 #[test]
 fn proxy_settings_and_usage_appear_only_with_approved_egress() {
     let (shared, _) = approved(echo());
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     let service = &state.services[0];
     let names = env(&state.ports, service)
         .iter()
@@ -277,7 +277,7 @@ impl Drop for Relay {
     }
 }
 /// A client through the proxy session, tunnelled to `upstream`.
-fn tunnelled(relay: &Relay, shared: &Arc<Mutex<State>>, key: &Key, upstream: SocketAddr) -> TcpStream {
+fn tunnelled(relay: &Relay, shared: &Store, key: &Key, upstream: SocketAddr) -> TcpStream {
     let (shared, key) = (shared.clone(), key.clone());
     let mut client =
         relay.connect(move |incoming, link| session(&shared, &key, &AtomicBool::new(false), incoming, link));

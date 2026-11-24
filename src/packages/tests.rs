@@ -71,8 +71,8 @@ fn request(repo: &Path) -> Import {
         ..Import::default()
     }
 }
-fn shared() -> Arc<Mutex<State>> {
-    Arc::new(Mutex::new(State::default()))
+fn shared() -> Store {
+    crate::store::Store::new(State::default())
 }
 /// A running chat run whose captured context names `packages`.
 fn running(state: &mut State, packages: Vec<control_context::PackageInput>) -> String {
@@ -133,7 +133,7 @@ fn operator_import_admits_an_immutable_tagged_version_with_provenance() {
         fs::read_to_string(version.join("tree/client/gateway.cjs")).unwrap(),
         "module.exports = {};\n"
     );
-    assert_eq!(shared.lock().unwrap().packages.len(), 2);
+    assert_eq!(shared.guard().unwrap().packages.len(), 2);
     // The source repository is only read.
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
 }
@@ -173,7 +173,7 @@ fn import_rejects_unsafe_trees_and_rolls_back_a_failed_save() {
         },
         "excluded",
     );
-    assert!(shared.lock().unwrap().packages.is_empty());
+    assert!(shared.guard().unwrap().packages.is_empty());
     assert!(
         fs::read_dir(store.join("mc263-client/versions"))
             .unwrap()
@@ -250,7 +250,7 @@ fn import_rejects_unsafe_trees_and_rolls_back_a_failed_save() {
 
     // A failed checkpoint admits nothing and removes the version and its tag.
     assert!(import_at(&store, &shared, request(&repo), |_| Err(io::Error::other("full"))).is_err());
-    assert!(shared.lock().unwrap().packages.is_empty());
+    assert!(shared.guard().unwrap().packages.is_empty());
     assert!(!store.join("mc263-client/versions/1").exists());
     assert!(git(&store.join("mc263-client/repository.git"), &["tag"]).is_empty());
     assert_eq!(
@@ -304,7 +304,7 @@ fn revocation_is_terminal_and_removes_the_version_from_new_contexts_and_attempts
     let store = temp.0.join("store");
     let shared = shared();
     let v1 = import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap();
-    let mut state = shared.lock().unwrap();
+    let mut state = shared.guard().unwrap();
     let admitted = inputs(&state.packages);
     let run = running(&mut state, admitted);
     assert_eq!(planned_in(&state, &run), vec![("mc263-client".to_string(), 1)]);
@@ -339,7 +339,7 @@ fn workers_discover_only_captured_packages_and_read_them_as_evidence() {
     let shared = shared();
     import_at(&store, &shared, request(&repo), |_| Ok(())).unwrap();
     let (opted, plain) = {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.guard().unwrap();
         let admitted = inputs(&state.packages);
         (running(&mut state, admitted), running(&mut state, Vec::new()))
     };
@@ -365,7 +365,7 @@ fn workers_discover_only_captured_packages_and_read_them_as_evidence() {
     );
     assert!(call(&plain, "control_package_read", json!({"name":"mc263-client"})).is_err());
 
-    let manifest = shared.lock().unwrap().packages[0].clone();
+    let manifest = shared.guard().unwrap().packages[0].clone();
     let page = read_page(
         &store,
         &manifest,
@@ -435,7 +435,7 @@ fn lenses_opt_runs_in_and_the_prompt_frames_packages_as_evidence() {
     let repo = repository(&temp);
     let shared = shared();
     import_at(&temp.0.join("store"), &shared, request(&repo), |_| Ok(())).unwrap();
-    let mut state = shared.lock().unwrap();
+    let mut state = shared.guard().unwrap();
     let mut fields = std::collections::HashMap::new();
     fields.insert("id".to_string(), "minecraft-tools".to_string());
     fields.insert("name".to_string(), "Minecraft tools".to_string());

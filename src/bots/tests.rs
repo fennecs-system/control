@@ -919,7 +919,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
     assert_eq!(pending_count(&state, &parent), 0);
     assert!(decide(&mut state, id, true, Some(&parent), Now(0)).is_err());
     state.chats[parent_index].actor = identity::Actor::LocalOperator;
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let payload = format!("id={id}&return_chat={parent}&allow=yes&response=json");
     let mut response = Vec::new();
     http_with_save(
@@ -931,7 +931,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
         |_| Err(io::Error::other("full")),
     );
     assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 400"));
-    assert_eq!(pending_count(&shared.lock().unwrap(), &parent), 1);
+    assert_eq!(pending_count(&shared.guard().unwrap(), &parent), 1);
     let mut response = Vec::new();
     http_with_save(
         &mut response,
@@ -942,7 +942,7 @@ fn descendant_bot_requests_reach_ancestors_and_fence_other_actors_and_trees() {
         |_| Ok(()),
     );
     assert!(String::from_utf8(response).unwrap().starts_with("HTTP/1.1 200"));
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert!(defined(&state, &grandchild));
     assert_eq!(pending_count(&state, &parent), 0);
 }
@@ -1159,7 +1159,7 @@ fn the_chat_panel_route_decides_and_rolls_back_failed_saves() {
         .as_str()
         .unwrap()
         .to_owned();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let body = format!("id={id}&return_chat={parent}&allow=yes&response=json");
     let mut out = Vec::new();
     assert!(http_with_save(
@@ -1172,13 +1172,13 @@ fn the_chat_panel_route_decides_and_rolls_back_failed_saves() {
     ));
     assert!(String::from_utf8_lossy(&out).starts_with("HTTP/1.1 400"));
     assert!(
-        !defined(&shared.lock().unwrap(), &child),
+        !defined(&shared.guard().unwrap(), &child),
         "a failed save leaves no bot behind"
     );
     let mut out = Vec::new();
     http_with_save(&mut out, &shared, "POST", "/tools/bots", body.as_bytes(), |_| Ok(()));
     assert!(String::from_utf8_lossy(&out).contains("\"ok\":true"));
-    assert!(defined(&shared.lock().unwrap(), &child));
+    assert!(defined(&shared.guard().unwrap(), &child));
     let mut out = Vec::new();
     http_with_save(
         &mut out,

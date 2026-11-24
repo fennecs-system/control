@@ -8,10 +8,8 @@ mod ops;
 mod policy;
 pub(crate) mod salience;
 mod tools;
-use crate::{
-    State,
-    watch_frame::{Event, Frame},
-};
+use crate::store::Store;
+use crate::watch_frame::{Event, Frame};
 pub use policy::WakePolicy;
 pub use salience::Salience;
 use serde::{Deserialize, Serialize};
@@ -339,9 +337,8 @@ fn followers() -> &'static Mutex<HashMap<String, Follower>> {
 /// Keeps one follower per active watch on a running service and stops the
 /// rest. Called from the worker loop; spawning and engine calls happen off the
 /// state lock.
-pub(crate) fn reconcile(shared: &Arc<Mutex<State>>) {
-    let wanted = {
-        let Ok(state) = shared.lock() else { return };
+pub(crate) fn reconcile(shared: &Store) {
+    let Ok(wanted) = shared.read(|state| {
         state
             .watches
             .iter()
@@ -355,6 +352,8 @@ pub(crate) fn reconcile(shared: &Arc<Mutex<State>>) {
             })
             .map(|watch| watch.id.clone())
             .collect::<Vec<_>>()
+    }) else {
+        return;
     };
     let Ok(mut running) = followers().lock() else { return };
     running.retain(|id, follower| {
@@ -412,17 +411,20 @@ pub(crate) fn discard(ids: &[String]) {
 }
 /// Runs the runner's `tail` from the watch's cursor, spooling each new frame
 /// and waking the worker loop. Restarts the tail with backoff until cancelled.
-fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mutex<Option<Child>>) {
+fn follow(shared: &Store, id: &str, cancel: &AtomicBool, slot: &Mutex<Option<Child>>) {
     let mut backoff = 1;
     while !cancel.load(Ordering::Relaxed) {
-        let target = shared.lock().ok().and_then(|state| {
-            let watch = state.watches.iter().find(|watch| watch.id == id && watch.active())?;
-            let service = state
-                .services
-                .iter()
-                .find(|service| service.resource.id.as_str() == watch.service)?;
-            Some((service.binding_snapshot(), watch.seen))
-        });
+        let target = shared
+            .read(|state| {
+                let watch = state.watches.iter().find(|watch| watch.id == id && watch.active())?;
+                let service = state
+                    .services
+                    .iter()
+                    .find(|service| service.resource.id.as_str() == watch.service)?;
+                Some((service.binding_snapshot(), watch.seen))
+            })
+            .ok()
+            .flatten();
         let Some((service, seen)) = target else { break };
         let isolation = crate::engine::isolation();
         let streamed = crate::services::exec_target(isolation, &service).and_then(|(container, user)| {
@@ -466,13 +468,16 @@ fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mute
                 let Some((frame, _)) = Frame::decode(frame_bytes) else {
                     continue;
                 };
-                let fresh = shared.lock().ok().and_then(|state| {
-                    state
-                        .watches
-                        .iter()
-                        .find(|watch| watch.id == id)
-                        .map(|watch| frame.seq > watch.seen)
-                });
+                let fresh = shared
+                    .read(|state| {
+                        state
+                            .watches
+                            .iter()
+                            .find(|watch| watch.id == id)
+                            .map(|watch| frame.seq > watch.seen)
+                    })
+                    .ok()
+                    .flatten();
                 match fresh {
                     None => break,
                     Some(false) => continue,
@@ -480,14 +485,20 @@ fn follow(shared: &Arc<Mutex<State>>, id: &str, cancel: &AtomicBool, slot: &Mute
                 }
                 // Spool before advancing the cursor, so a failed write is retried from it.
                 append(id, frame_bytes)?;
-                let Ok(mut state) = shared.lock() else { break };
-                let Some(watch) = state.watches.iter_mut().find(|watch| watch.id == id) else {
-                    break;
-                };
-                if watch.observe(&frame) {
-                    drop(state);
-                    crate::storage::changes().bump();
-                    any = true;
+                let observed = shared.write(|state| {
+                    state
+                        .watches
+                        .iter_mut()
+                        .find(|watch| watch.id == id)
+                        .map(|watch| watch.observe(&frame))
+                });
+                match observed {
+                    Ok(Some(true)) => {
+                        crate::storage::changes().bump();
+                        any = true;
+                    }
+                    Ok(Some(false)) => {}
+                    Ok(None) | Err(_) => break,
                 }
             }
             stop(slot);

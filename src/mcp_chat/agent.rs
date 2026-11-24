@@ -7,16 +7,13 @@
 //! operator endpoint's functions in process, one state lock per call.
 use super::{Remote, call};
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{
     State,
     tool_registry::{AttemptCall, AttemptTools},
 };
 use serde_json::{Value, json};
-use std::{
-    collections::HashSet,
-    io,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashSet, io};
 
 /// The chat tools an agent may call through `control_chat`.
 pub const TOOLS: [&str; 10] = [
@@ -50,7 +47,7 @@ const WRITES: [&str; 6] = [
 
 /// The operator endpoint limited to `own`'s subtree.
 pub(crate) struct Scoped<'a> {
-    pub shared: &'a Arc<Mutex<State>>,
+    pub shared: &'a Store,
     pub own: String,
 }
 impl Scoped<'_> {
@@ -64,107 +61,108 @@ impl Scoped<'_> {
 }
 impl Remote for Scoped<'_> {
     fn tool(&mut self, name: &str, arguments: Value) -> io::Result<Value> {
-        let mut state = self.shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        let team = self.team(&state);
-        let write = WRITES.contains(&name);
-        if !write && !READS.contains(&name) {
-            return Err(io::Error::other("Not available to agents."));
-        }
-        if let Some(id) = arguments["id"].as_str() {
-            if !team.contains(id) {
-                return Err(io::Error::other(
-                    "Only chats in your own task (your chat and the chats spawned below it).",
-                ));
+        self.shared.write(|state| {
+            let team = self.team(state);
+            let write = WRITES.contains(&name);
+            if !write && !READS.contains(&name) {
+                return Err(io::Error::other("Not available to agents."));
             }
-            if write && id == self.own {
-                return Err(io::Error::other(
-                    "Agents change the DMs they spawned, not their own chat.",
-                ));
-            }
-        }
-        // Only the commands chat_model and chat_cancel build; never a decision.
-        let command = arguments["message"]
-            .as_str()
-            .map(str::trim_start)
-            .filter(|m| m.starts_with('/'));
-        if command.is_some_and(|m| {
-            !["/model", "/cancel"]
-                .iter()
-                .any(|c| m == *c || m.starts_with(&format!("{c} ")))
-        }) {
-            return Err(io::Error::other("Agents send plain text, /model or /cancel only."));
-        }
-        if name == "control.chat.create" && team.len() >= MAX_TEAM {
-            return Err(io::Error::other(format!("This task already has {MAX_TEAM} chats.")));
-        }
-        let response = crate::session_http::rpc(
-            &mut state,
-            &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}),
-        );
-        let result = &response["result"];
-        if result["isError"] == true {
-            return Err(io::Error::other(
-                result["content"][0]["text"].as_str().unwrap_or("Tool request failed."),
-            ));
-        }
-        let mut data = result["structuredContent"]["data"].clone();
-        match name {
-            // A DM an agent creates is its own child, so it stays in its task.
-            "control.chat.create" => {
-                let id = data["id"]
-                    .as_str()
-                    .ok_or_else(|| io::Error::other("Invalid chat response."))?
-                    .to_owned();
-                let session = state
-                    .chats
-                    .iter_mut()
-                    .find(|s| s.id == id)
-                    .ok_or_else(|| io::Error::other("Chat not found."))?;
-                session.parent_chat = Some(self.own.clone());
-                session.revision = session.revision.saturating_add(1);
-                crate::storage::save(&state)?;
-                data["parent_chat"] = json!(self.own);
-            }
-            "control.chats.list" => {
-                if let Some(rows) = data.as_array_mut() {
-                    rows.retain(|row| row["id"].as_str().is_some_and(|id| team.contains(id)));
+            if let Some(id) = arguments["id"].as_str() {
+                if !team.contains(id) {
+                    return Err(io::Error::other(
+                        "Only chats in your own task (your chat and the chats spawned below it).",
+                    ));
+                }
+                if write && id == self.own {
+                    return Err(io::Error::other(
+                        "Agents change the DMs they spawned, not their own chat.",
+                    ));
                 }
             }
-            // One group for this task, holding only its own chats' requests.
-            "control.requests.list" => {
-                let services = state
-                    .services
+            // Only the commands chat_model and chat_cancel build; never a decision.
+            let command = arguments["message"]
+                .as_str()
+                .map(str::trim_start)
+                .filter(|m| m.starts_with('/'));
+            if command.is_some_and(|m| {
+                !["/model", "/cancel"]
                     .iter()
-                    .filter(|s| team.contains(s.resource.owner.chat.as_str()))
-                    .map(|s| s.resource.id.as_str().to_owned())
-                    .collect::<HashSet<_>>();
-                let mine = |item: &Value| {
-                    item["chat_id"].as_str().is_some_and(|c| team.contains(c))
-                        || item["service_id"].as_str().is_some_and(|s| services.contains(s))
-                };
-                let mut group = json!({"chat_id":self.own});
-                for key in [
-                    "pending_questions",
-                    "pending_bots",
-                    "pending_ports",
-                    "pending_notices",
-                    "pending_folders",
-                    "pending_knowledge",
-                ] {
-                    group[key] = json!(
-                        data.as_array()
-                            .into_iter()
-                            .flatten()
-                            .flat_map(|g| g[key].as_array().into_iter().flatten())
-                            .filter(|item| mine(item))
-                            .collect::<Vec<_>>()
-                    );
-                }
-                data = json!([group]);
+                    .any(|c| m == *c || m.starts_with(&format!("{c} ")))
+            }) {
+                return Err(io::Error::other("Agents send plain text, /model or /cancel only."));
             }
-            _ => {}
-        }
-        Ok(data)
+            if name == "control.chat.create" && team.len() >= MAX_TEAM {
+                return Err(io::Error::other(format!("This task already has {MAX_TEAM} chats.")));
+            }
+            let response = crate::session_http::rpc(
+                state,
+                &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}),
+            );
+            let result = &response["result"];
+            if result["isError"] == true {
+                return Err(io::Error::other(
+                    result["content"][0]["text"].as_str().unwrap_or("Tool request failed."),
+                ));
+            }
+            let mut data = result["structuredContent"]["data"].clone();
+            match name {
+                // A DM an agent creates is its own child, so it stays in its task.
+                "control.chat.create" => {
+                    let id = data["id"]
+                        .as_str()
+                        .ok_or_else(|| io::Error::other("Invalid chat response."))?
+                        .to_owned();
+                    let session = state
+                        .chats
+                        .iter_mut()
+                        .find(|s| s.id == id)
+                        .ok_or_else(|| io::Error::other("Chat not found."))?;
+                    session.parent_chat = Some(self.own.clone());
+                    session.revision = session.revision.saturating_add(1);
+                    crate::storage::save(state)?;
+                    data["parent_chat"] = json!(self.own);
+                }
+                "control.chats.list" => {
+                    if let Some(rows) = data.as_array_mut() {
+                        rows.retain(|row| row["id"].as_str().is_some_and(|id| team.contains(id)));
+                    }
+                }
+                // One group for this task, holding only its own chats' requests.
+                "control.requests.list" => {
+                    let services = state
+                        .services
+                        .iter()
+                        .filter(|s| team.contains(s.resource.owner.chat.as_str()))
+                        .map(|s| s.resource.id.as_str().to_owned())
+                        .collect::<HashSet<_>>();
+                    let mine = |item: &Value| {
+                        item["chat_id"].as_str().is_some_and(|c| team.contains(c))
+                            || item["service_id"].as_str().is_some_and(|s| services.contains(s))
+                    };
+                    let mut group = json!({"chat_id":self.own});
+                    for key in [
+                        "pending_questions",
+                        "pending_bots",
+                        "pending_ports",
+                        "pending_notices",
+                        "pending_folders",
+                        "pending_knowledge",
+                    ] {
+                        group[key] = json!(
+                            data.as_array()
+                                .into_iter()
+                                .flatten()
+                                .flat_map(|g| g[key].as_array().into_iter().flatten())
+                                .filter(|item| mine(item))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    data = json!([group]);
+                }
+                _ => {}
+            }
+            Ok(data)
+        })?
     }
 }
 
@@ -181,8 +179,8 @@ impl AttemptTools for Tools {
             "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_chat"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_chat"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _name: &str, args: &Value) -> io::Result<Value> {
         if !control::permissions::read().agent_chat_tools {
@@ -194,8 +192,7 @@ impl AttemptTools for Tools {
             .as_str()
             .filter(|tool| TOOLS.contains(tool))
             .ok_or_else(|| io::Error::other("tool must be one of the chat tools."))?;
-        let own = {
-            let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
+        let own = cx.host.0.read(|state| {
             let run = state
                 .runtime
                 .runs
@@ -211,8 +208,8 @@ impl AttemptTools for Tools {
             }
             run.chat_id
                 .clone()
-                .ok_or_else(|| io::Error::other("A chat is required"))?
-        };
+                .ok_or_else(|| io::Error::other("A chat is required"))
+        })??;
         let arguments = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
         let text = call(
             &mut Scoped { shared: cx.host.0, own },

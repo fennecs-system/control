@@ -691,8 +691,8 @@ impl AttemptTools for Tools {
             }),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(name, "control_intel_brief" | "control_operator_notify")
+    fn names(&self) -> &'static [&'static str] {
+        &["control_intel_brief", "control_operator_notify"]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         execute(cx.host, &cx.attempt, name, args)
@@ -712,79 +712,80 @@ struct NotifyInput {
 }
 
 fn execute(host: &LocalHost<'_>, attempt: &AttemptRef<'_>, name: &str, args: &Value) -> io::Result<Value> {
-    let mut state = host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
-    let run = state
-        .runtime
-        .runs
-        .get(attempt.run)
-        .filter(|run| {
-            run.status == RunStatus::Running
-                && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
-        })
-        .ok_or_else(|| io::Error::other("Attempt is not active"))?;
-    crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
-    // Node visibility and operator escalation are the run's standing.
-    let standing = crate::personas::of(&state.bots, run);
-    let judge = standing.read_only();
-    let chat = run
-        .chat_id
-        .clone()
-        .ok_or_else(|| io::Error::other("A chat is required"))?;
-    let antibody = standing.antibody() && state.bots.antibody(&chat);
-    match name {
-        "control_intel_brief" => {
-            let input = serde_json::from_value::<BriefInput>(args.clone())
-                .map_err(|_| io::Error::other("Expected an optional chat_id"))?;
-            let tree = Tree::new(&state);
-            let scope = match (input.chat_id.as_deref(), antibody) {
-                (None, true) => None,
-                (None, false) => Some(chat.as_str()),
-                (Some(other), true) => Some(other),
-                (Some(other), false) if tree.root(other) == tree.root(&chat) => Some(other),
-                (Some(_), false) => {
+    host.0.write(|state| {
+        let run = state
+            .runtime
+            .runs
+            .get(attempt.run)
+            .filter(|run| {
+                run.status == RunStatus::Running
+                    && run.attempts.last().and_then(|a| a.workspace_id.as_deref()) == Some(attempt.generation)
+            })
+            .ok_or_else(|| io::Error::other("Attempt is not active"))?;
+        crate::identity::authorize(&run.actor, run.action).map_err(io::Error::other)?;
+        // Node visibility and operator escalation are the run's standing.
+        let standing = crate::personas::of(&state.bots, run);
+        let judge = standing.read_only();
+        let chat = run
+            .chat_id
+            .clone()
+            .ok_or_else(|| io::Error::other("A chat is required"))?;
+        let antibody = standing.antibody() && state.bots.antibody(&chat);
+        match name {
+            "control_intel_brief" => {
+                let input = serde_json::from_value::<BriefInput>(args.clone())
+                    .map_err(|_| io::Error::other("Expected an optional chat_id"))?;
+                let tree = Tree::new(state);
+                let scope = match (input.chat_id.as_deref(), antibody) {
+                    (None, true) => None,
+                    (None, false) => Some(chat.as_str()),
+                    (Some(other), true) => Some(other),
+                    (Some(other), false) if tree.root(other) == tree.root(&chat) => Some(other),
+                    (Some(_), false) => {
+                        return Err(io::Error::other(
+                            "Read the brief of your own team; only an approved antibody reads other teams",
+                        ));
+                    }
+                };
+                let at = now();
+                let markdown = brief(state, scope, at).map_err(io::Error::other)?;
+                Ok(json!({"date":date(at),"markdown":markdown}))
+            }
+            "control_operator_notify" => {
+                let input = serde_json::from_value::<NotifyInput>(args.clone())
+                    .map_err(|_| io::Error::other("Expected text and an optional team"))?;
+                // A lead (top-level chat) or an approved antibody may notify; a
+                // member asks its lead, and other judges only review.
+                let lead = state
+                    .chats
+                    .iter()
+                    .any(|session| session.id == chat && session.parent_chat.is_none());
+                if !standing.notifies() || (judge && !antibody) || (!judge && !lead) {
                     return Err(io::Error::other(
-                        "Read the brief of your own team; only an approved antibody reads other teams",
+                        "Only an approved antibody or a team's lead may notify the operator",
                     ));
                 }
-            };
-            let at = now();
-            let markdown = brief(&state, scope, at).map_err(io::Error::other)?;
-            Ok(json!({"date":date(at),"markdown":markdown}))
+                if !crate::chat::valid_id(attempt.nonce) {
+                    return Err(io::Error::other("Invalid request identity"));
+                }
+                let id = format!(
+                    "notice-{}",
+                    crate::bots::digest_id(&[attempt.run, attempt.generation, attempt.nonce])
+                );
+                let previous = state.bots.notices.clone();
+                let notice =
+                    notify(state, &chat, input.team.as_deref(), &input.text, &id, now()).map_err(io::Error::other)?;
+                if let Err(error) = crate::storage::save(state) {
+                    state.bots.notices = previous;
+                    return Err(error);
+                }
+                Ok(
+                    json!({"notice_id":notice.id,"status":"recorded","note":"Recorded. The operator's channels forward it once; a reply goes to your task tree's steering chat."}),
+                )
+            }
+            _ => Err(io::Error::other("Unknown intel tool")),
         }
-        "control_operator_notify" => {
-            let input = serde_json::from_value::<NotifyInput>(args.clone())
-                .map_err(|_| io::Error::other("Expected text and an optional team"))?;
-            // A lead (top-level chat) or an approved antibody may notify; a
-            // member asks its lead, and other judges only review.
-            let lead = state
-                .chats
-                .iter()
-                .any(|session| session.id == chat && session.parent_chat.is_none());
-            if !standing.notifies() || (judge && !antibody) || (!judge && !lead) {
-                return Err(io::Error::other(
-                    "Only an approved antibody or a team's lead may notify the operator",
-                ));
-            }
-            if !crate::chat::valid_id(attempt.nonce) {
-                return Err(io::Error::other("Invalid request identity"));
-            }
-            let id = format!(
-                "notice-{}",
-                crate::bots::digest_id(&[attempt.run, attempt.generation, attempt.nonce])
-            );
-            let previous = state.bots.notices.clone();
-            let notice =
-                notify(&mut state, &chat, input.team.as_deref(), &input.text, &id, now()).map_err(io::Error::other)?;
-            if let Err(error) = crate::storage::save(&state) {
-                state.bots.notices = previous;
-                return Err(error);
-            }
-            Ok(
-                json!({"notice_id":notice.id,"status":"recorded","note":"Recorded. The operator's channels forward it once; a reply goes to your task tree's steering chat."}),
-            )
-        }
-        _ => Err(io::Error::other("Unknown intel tool")),
-    }
+    })?
 }
 
 #[cfg(test)]

@@ -3,7 +3,6 @@ use control_context::{Audience, Definition, DocumentInput, Resolved};
 use std::{
     collections::HashMap,
     io::{self, Write},
-    sync::Mutex,
 };
 
 pub fn inputs(documents: &[crate::knowledge::Document]) -> Vec<DocumentInput> {
@@ -500,7 +499,7 @@ pub fn handle(
 /// disk. While storage is unavailable the edit is refused before it is applied;
 /// once staged it is not rolled back (others may already read it), and if
 /// storage fails meanwhile the answer says it is not saved yet.
-pub(crate) fn http(stream: &mut impl Write, state: &Mutex<State>, method: &str, path: &str, body: &[u8]) -> bool {
+pub(crate) fn http(stream: &mut impl Write, state: &crate::Store, method: &str, path: &str, body: &[u8]) -> bool {
     if path != "/dna/save" || method != "POST" {
         return false;
     }
@@ -512,13 +511,13 @@ pub(crate) fn http(stream: &mut impl Write, state: &Mutex<State>, method: &str, 
         NotSaved(String),
     }
     let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
-    let staged = state.lock().map(|mut state| {
+    let staged = state.write(|state| {
         // Refused before the edit is applied while storage cannot take it.
         if let crate::storage::Health::Degraded(unavailable) = crate::storage::health() {
             return Staged::NotSaved(unavailable.to_string());
         }
         let mut saving = None;
-        match save_with(&mut state, draft.clone(), |state| {
+        match save_with(state, draft.clone(), |state| {
             saving = Some(crate::storage::submit(state)?);
             Ok(())
         }) {
@@ -531,13 +530,7 @@ pub(crate) fn http(stream: &mut impl Write, state: &Mutex<State>, method: &str, 
                     )
                 },
             ),
-            Err(error) => Staged::Conflict(render(
-                Sources::of(&state),
-                &draft.id,
-                Some(&draft),
-                Some(&error),
-                false,
-            )),
+            Err(error) => Staged::Conflict(render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false)),
         }
     });
     let mut response = Vec::new();

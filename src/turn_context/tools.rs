@@ -178,16 +178,14 @@ impl AttemptTools for Tools {
             }),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(name, "control_turn_context" | "control_turn_handoff")
+    fn names(&self) -> &'static [&'static str] {
+        &["control_turn_context", "control_turn_handoff"]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        let mut state = cx
-            .host
+        cx.host
             .0
-            .lock()
-            .map_err(|_| err(format!("State unavailable. {OPERATOR_FIX}")))?;
-        handle(&mut state, &cx.attempt, name, args, crate::storage::save)
+            .write(|state| handle(state, &cx.attempt, name, args, crate::storage::save))
+            .map_err(|_| err(format!("State unavailable. {OPERATOR_FIX}")))?
     }
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

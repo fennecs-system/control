@@ -3,6 +3,7 @@
 //! immutable tree per admitted version. Lenses opt runs in; attempts get a
 //! private copy. Control never runs package code or setup on the host.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{
     State,
     identity::Actor,
@@ -15,7 +16,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 
 /// Admitted versions retained in node state, revoked ones included.
@@ -271,12 +272,12 @@ fn private_dir(path: &Path) -> io::Result<()> {
 
 /// Operator import. Git and file work run without the state lock; the index
 /// entry is checkpointed afterwards and its files removed if that save fails.
-pub(crate) fn import(shared: &Arc<Mutex<State>>, input: Import) -> io::Result<Manifest> {
+pub(crate) fn import(shared: &Store, input: Import) -> io::Result<Manifest> {
     import_at(&store()?, shared, input, crate::storage::save)
 }
 pub(crate) fn import_at(
     store: &Path,
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     input: Import,
     save: impl FnOnce(&State) -> io::Result<()>,
 ) -> io::Result<Manifest> {
@@ -390,7 +391,7 @@ pub(crate) fn import_at(
         return Err(io::Error::other(format!("{rev} is commit {commit}, not {expected}")));
     }
     let version = {
-        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+        let state = shared.guard()?;
         let versions = state.packages.iter().filter(|m| m.name == name);
         if let Some(existing) = versions.clone().find(|m| m.commit == commit) {
             if existing.revoked.is_some() {
@@ -545,7 +546,7 @@ pub(crate) fn import_at(
         ],
         "tag the version",
     )?;
-    let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+    let mut state = shared.guard()?;
     if state
         .packages
         .iter()
@@ -798,36 +799,33 @@ pub(crate) fn known(name: &str) -> bool {
     )
 }
 /// Operator calls; the HTTP adapter has already authenticated the operator.
-pub(crate) fn operator(shared: &Arc<Mutex<State>>, name: &str, args: &Value) -> io::Result<Value> {
+pub(crate) fn operator(shared: &Store, name: &str, args: &Value) -> io::Result<Value> {
     match name {
         "control.package.import" => {
             let input: Import = serde_json::from_value(args.clone())
                 .map_err(|_| io::Error::other("Expected name, path and optional manifest fields"))?;
             import(shared, input).map(|m| json!(m))
         }
-        "control.package.revoke" => {
-            let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+        "control.package.revoke" => shared.write(|state| {
             revoke(
-                &mut state,
+                state,
                 args["name"].as_str().unwrap_or(""),
                 args["version"].as_u64().unwrap_or(0),
                 args["reason"].as_str().unwrap_or(""),
                 crate::storage::save,
             )
             .map_err(io::Error::other)
-        }
+        })?,
         "control.packages.search" => {
-            let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-            search(state.packages.iter(), args, false).map_err(io::Error::other)
+            shared.read(|state| search(state.packages.iter(), args, false).map_err(io::Error::other))?
         }
         "control.package.read" => {
             let input = read_input(args).map_err(io::Error::other)?;
-            let manifest = {
-                let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+            let manifest = shared.read(|state| {
                 select(state.packages.iter(), &input)
                     .cloned()
-                    .ok_or_else(|| io::Error::other("Package not found"))?
-            };
+                    .ok_or_else(|| io::Error::other("Package not found"))
+            })??;
             read_page(&store()?, &manifest, &input, false)
         }
         _ => Err(io::Error::other("Unknown package tool")),
@@ -896,14 +894,14 @@ impl AttemptTools for Tools {
             }),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(name, "control_packages_search" | "control_package_read")
+    fn names(&self) -> &'static [&'static str] {
+        &["control_packages_search", "control_package_read"]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
-        let packages = {
-            let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
-            captured(&state.runtime.runs, &state.packages, cx.attempt.run)?
-        };
+        let packages = cx
+            .host
+            .0
+            .read(|state| captured(&state.runtime.runs, &state.packages, cx.attempt.run))??;
         if name == "control_packages_search" {
             return search(packages.iter(), args, true).map_err(io::Error::other);
         }

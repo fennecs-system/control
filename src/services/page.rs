@@ -2,13 +2,14 @@
 //! Engine queries run on a bounded snapshot outside the state lock, and only for
 //! containers whose identity was verified first.
 use super::*;
+use crate::store::Store;
 use std::{collections::HashSet, net::TcpStream, time::Instant};
 
 const RECENT_STOPPED: usize = 5;
 const PROCESSES: usize = 20;
 const BUDGET: Duration = Duration::from_secs(3);
 
-pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
+pub fn http(stream: &mut TcpStream, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     if path == "/tools/services/live" {
         let body = if method == "GET" {
             live(shared)
@@ -43,7 +44,7 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
     let back = return_chat.map_or("/tools/services".to_owned(), |chat| format!("/dm/{chat}"));
     // Per-card actions return to their card, not the top of the page.
     let place = match (method, return_chat, fields.get("id")) {
-        ("POST", None, Some(id)) => shared.lock().map(|state| nearby(&state, id)).unwrap_or_default(),
+        ("POST", None, Some(id)) => shared.read(|state| nearby(state, id)).unwrap_or_default(),
         _ => Vec::new(),
     };
     let result = match method {
@@ -57,10 +58,7 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
         "POST" => fields
             .get("id")
             .ok_or_else(|| fail("Missing service ID"))
-            .and_then(|id| {
-                let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-                stop(&mut state, id, now(), crate::storage::save)
-            })
+            .and_then(|id| shared.write(|state| stop(state, id, now(), crate::storage::save))?)
             .map(|()| None),
         _ => Err(fail("Use GET or POST")),
     };
@@ -74,7 +72,7 @@ pub fn http(stream: &mut TcpStream, shared: &Arc<Mutex<State>>, method: &str, pa
             control_http::Policy::Client,
         ),
         Ok(None) => {
-            let anchor = shared.lock().map(|state| fragment(&state, &place)).unwrap_or_default();
+            let anchor = shared.read(|state| fragment(state, &place)).unwrap_or_default();
             control_http::respond(
                 stream,
                 "303 See Other",
@@ -267,12 +265,8 @@ pub(crate) fn forget(
     Ok((keep, chat))
 }
 /// Records change under the lock; engine volume removal runs after it is released.
-fn clean_up(shared: &Arc<Mutex<State>>, id: Option<&str>) -> io::Result<()> {
-    let (keep, chat) = forget(
-        &mut *shared.lock().map_err(|_| fail("State unavailable"))?,
-        id,
-        crate::storage::save,
-    )?;
+fn clean_up(shared: &Store, id: Option<&str>) -> io::Result<()> {
+    let (keep, chat) = shared.write(|state| forget(state, id, crate::storage::save))??;
     let node = crate::config::node_id().map_err(fail)?;
     let (_, failures) = workspace::remove_unused(crate::engine::isolation(), &node, &keep, chat.as_deref());
     if failures.is_empty() {
@@ -302,9 +296,9 @@ struct Live {
 /// a new service), so a finished stop moves its card to the stopped list
 /// without a reload. Stopped services need no clean-up step: they leave the
 /// cards, hold no capacity, and old records are dropped automatically.
-fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
-    let state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let services = listed(&state);
+fn render(shared: &Store) -> io::Result<String> {
+    shared.read(|state| -> io::Result<String> {
+    let services = listed(state);
     let cards = services.iter().filter(|s| s.live()).map(card).collect::<String>();
     let compute = compute_panel(&state.services);
     let empty = if cards.is_empty() {
@@ -326,6 +320,7 @@ fn render(shared: &Arc<Mutex<State>>) -> io::Result<String> {
         ),
     );
     Ok(crate::web_assets::with_client(&page))
+    })?
 }
 /// Recent stopped services as compact rows. A DM's retained /workspace can be
 /// deleted from its newest stopped row once none of its services runs.
@@ -395,8 +390,8 @@ fn fragment(state: &State, nearby: &[String]) -> String {
         .unwrap_or_default()
 }
 /// Live usage per service ID as HTML fragments, read outside the state lock.
-fn live(shared: &Arc<Mutex<State>>) -> io::Result<String> {
-    let services = listed(&*shared.lock().map_err(|_| fail("State unavailable"))?);
+fn live(shared: &Store) -> io::Result<String> {
+    let services = shared.read(listed)?;
     let fragments = observe(&services)
         .iter()
         .map(|(id, live)| (id.clone(), Value::String(usage(live))))

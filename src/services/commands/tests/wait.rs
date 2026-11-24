@@ -5,7 +5,7 @@ use crate::runtime::RunStatus;
 use std::sync::mpsc;
 
 struct Fixture {
-    shared: Arc<Mutex<State>>,
+    shared: Store,
     run: String,
     node: NodeId,
     service: String,
@@ -17,7 +17,7 @@ fn waiting_fixture() -> Fixture {
     state.runtime.runs[0].attempts.last_mut().unwrap().started_unix = now();
     let snapshot = state.services[0].clone();
     Fixture {
-        shared: Arc::new(Mutex::new(state)),
+        shared: crate::store::Store::new(state),
         run,
         node,
         service,
@@ -27,7 +27,7 @@ fn waiting_fixture() -> Fixture {
 impl Fixture {
     fn submit(&self, nonce: &str, command: &str) -> Value {
         admit(
-            &mut self.shared.lock().unwrap(),
+            &mut self.shared.guard().unwrap(),
             &self.run,
             "attempt-a",
             nonce,
@@ -143,9 +143,9 @@ fn a_slow_command_falls_back_to_its_handle_and_zero_waits_return_at_once() {
     );
     let request: Input =
         serde_json::from_value(json!({"service_id":f.service,"command":"true","wait_seconds":31})).unwrap();
-    let before = f.shared.lock().unwrap().services[0].executions.len();
+    let before = f.shared.guard().unwrap().services[0].executions.len();
     assert!(exec(&f.shared, &f.run, "attempt-a", "too-long", &f.node, request).is_err());
-    assert_eq!(f.shared.lock().unwrap().services[0].executions.len(), before);
+    assert_eq!(f.shared.guard().unwrap().services[0].executions.len(), before);
     let default: Input = serde_json::from_value(json!({"service_id":f.service,"command":"true"})).unwrap();
     assert_eq!(default.wait_seconds, DEFAULT_WAIT_SECONDS);
 }
@@ -175,7 +175,7 @@ fn shutdown_run_cancellation_and_the_turn_deadline_end_a_wait() {
     let value = std::thread::scope(|scope| {
         let waiter = scope.spawn(|| f.wait(admitted.clone(), Duration::from_secs(20), &CancelToken::new()));
         std::thread::sleep(Duration::from_millis(50));
-        f.shared.lock().unwrap().runtime.runs[0].status = RunStatus::Cancelling;
+        f.shared.guard().unwrap().runtime.runs[0].status = RunStatus::Cancelling;
         waiter.join().unwrap()
     });
     assert!(started.elapsed() < RECHECK * 3, "{:?}", started.elapsed());
@@ -183,11 +183,11 @@ fn shutdown_run_cancellation_and_the_turn_deadline_end_a_wait() {
         (value["execution_id"].clone(), value["status"].as_str()),
         (admitted["execution_id"].clone(), Some("requested"))
     );
-    f.shared.lock().unwrap().runtime.runs[0].status = RunStatus::Running;
+    f.shared.guard().unwrap().runtime.runs[0].status = RunStatus::Running;
 
     // A wait never outlasts the attempt's deadline (less a reply margin).
     {
-        let mut state = f.shared.lock().unwrap();
+        let mut state = f.shared.guard().unwrap();
         let attempt = state.runtime.runs[0].attempts.last_mut().unwrap();
         attempt.explicit_timeout_seconds = Some(60);
         attempt.started_unix = now() - 60 + DEADLINE_MARGIN + 1;
@@ -208,7 +208,7 @@ fn retries_during_and_after_a_wait_return_the_same_execution() {
         // The retry arrives while the first call still waits: same identity, no new effect.
         let retry = f.submit("retry", "echo once");
         assert_eq!(retry["execution_id"], first["execution_id"]);
-        assert_eq!(f.shared.lock().unwrap().services[0].executions.len(), 1);
+        assert_eq!(f.shared.guard().unwrap().services[0].executions.len(), 1);
         let b = scope.spawn(|| f.wait(retry, Duration::from_secs(20), &CancelToken::new()));
         std::thread::sleep(Duration::from_millis(50));
         f.finish(&id(&first), "once\n");
@@ -224,11 +224,11 @@ fn retries_during_and_after_a_wait_return_the_same_execution() {
     let late = f.submit("retry", "echo once");
     assert_eq!(f.wait(late, Duration::from_secs(20), &CancelToken::new()), first_done);
     assert!(started.elapsed() < Duration::from_millis(100));
-    assert_eq!(f.shared.lock().unwrap().services[0].executions.len(), 1);
+    assert_eq!(f.shared.guard().unwrap().services[0].executions.len(), 1);
     // A wait never makes a reused identity with other arguments acceptable.
     assert!(
         admit(
-            &mut f.shared.lock().unwrap(),
+            &mut f.shared.guard().unwrap(),
             &f.run,
             "attempt-a",
             "retry",

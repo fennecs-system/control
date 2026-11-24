@@ -2,10 +2,10 @@
 //! attempt from an immutable checkpoint, never grants additional authority.
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, chat, identity, runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -314,26 +314,25 @@ pub struct Continuation {
 pub fn definition() -> Value {
     json!({"name":"control_design_ask","description":"Ask the user about a consequential architecture, design, scope or behavior choice: changing scope or the goal, giving up, new access, or anything irreversible. Do not ask which routine next step or diagnostic to run; choose it yourself and report. If you would take your own recommended option, take it instead of asking. Include 2–4 distinct, nonblank options of at most 200 characters each; optionally recommend a zero-based index into those options. This durably pauses this task and releases its worker; Control resumes from a safe checkpoint when the user answers. Correct a field validation error and retry this tool rather than replacing it with an untracked chat question. Do not use for routine sandbox edits, builds or tests. This is not permission escalation. After asking, stop work and await the user's answer.","inputSchema":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"options":{"type":"array","minItems":2,"maxItems":4,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200}},"recommended":{"type":"integer","minimum":0,"maximum":3,"description":"Zero-based index smaller than the number of options."}},"required":["question","options"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }
-pub fn requested(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
+pub fn requested(bridge: Option<(&Store, &str)>) -> bool {
     bridge.is_some_and(|(state, id)| {
-        state.lock().is_ok_and(|s| {
-            s.runtime.runs.get(id).is_some_and(|r| {
-                r.status == RunStatus::Running
-                    && (crate::delegation::pausing(r)
-                        || r.question.as_ref().is_some_and(|q| {
-                            q.pending()
-                                && r.attempts
-                                    .last()
-                                    .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
-                        }))
+        state
+            .read(|s| {
+                s.runtime.runs.get(id).is_some_and(|r| {
+                    r.status == RunStatus::Running
+                        && (crate::delegation::pausing(r)
+                            || r.question.as_ref().is_some_and(|q| {
+                                q.pending()
+                                    && r.attempts
+                                        .last()
+                                        .is_some_and(|a| a.workspace_id.as_deref() == Some(&q.generation))
+                            }))
+                })
             })
-        })
+            .unwrap_or(false)
     })
 }
-pub fn ask(state: &mut State, id: &str, nonce: &str, input: Input) -> Result<Value, &'static str> {
-    ask_with_save(state, id, nonce, input, crate::storage::save)
-}
-fn ask_with_save(
+pub(crate) fn ask_with_save(
     state: &mut State,
     id: &str,
     nonce: &str,

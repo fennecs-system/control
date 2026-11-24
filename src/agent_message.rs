@@ -3,6 +3,7 @@
 use crate::application::messages as operation;
 #[cfg(test)]
 use crate::runtime::RunKind;
+use crate::store::Store;
 #[cfg(test)]
 #[path = "agent_message/tests/drivers.rs"]
 mod drivers;
@@ -15,10 +16,7 @@ use control_core::resources::Phase;
 use control_core::resources::ResourceId;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{
-    io,
-    sync::{Arc, Mutex},
-};
+use std::io;
 
 pub(crate) mod digest;
 #[cfg(test)]
@@ -80,8 +78,8 @@ impl AttemptTools for Tools {
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
         })]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_agent_message"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_agent_message"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         run(cx.host, &cx.attempt, args)
@@ -125,16 +123,17 @@ fn run(ops: &dyn MessageOps, attempt: &AttemptRef<'_>, args: &Value) -> io::Resu
 
 /// The blocking driver owns the lock, clock, policy/config reads, persistence
 /// and dispatcher. The operation underneath receives only borrowed domain data.
-fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: MessageCall) -> io::Result<MessageResult> {
-    let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-    transact(
-        &mut state,
-        attempt,
-        call,
-        |run| crate::history::archive_run(run).map(|_| ()),
-        crate::storage::save,
-        crate::worker::wake,
-    )
+fn execute(shared: &Store, attempt: &AttemptRef<'_>, call: MessageCall) -> io::Result<MessageResult> {
+    shared.write(|state| {
+        transact(
+            state,
+            attempt,
+            call,
+            |run| crate::history::archive_run(run).map(|_| ()),
+            crate::storage::save,
+            crate::worker::wake,
+        )
+    })?
 }
 #[cfg(test)]
 fn handle(
