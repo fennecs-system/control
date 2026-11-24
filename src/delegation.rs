@@ -324,15 +324,7 @@ pub(crate) fn refusal(
     }
 }
 
-pub fn request(
-    state: &mut State,
-    id: &str,
-    nonce: &str,
-    input: Input,
-) -> Result<Value, std::borrow::Cow<'static, str>> {
-    request_with_save(state, id, nonce, input, crate::storage::save)
-}
-fn request_with_save(
+pub(crate) fn request_with_save(
     state: &mut State,
     id: &str,
     nonce: &str,

@@ -204,8 +204,8 @@ impl AttemptTools for Tools {
             "annotations": {"readOnlyHint": true, "openWorldHint": false}
         })]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_history_read"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_history_read"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         let read: Read =

@@ -132,17 +132,16 @@ impl AttemptTools for Tools {
         tools.push(copy::definition());
         tools
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "control_service_start"
-                | "control_service_attach"
-                | "control_service_status"
-                | "control_service_stop"
-                | "control_service_exec"
-                | "control_service_exec_status"
-                | "control_service_copy"
-        )
+    fn names(&self) -> &'static [&'static str] {
+        &[
+            "control_service_start",
+            "control_service_attach",
+            "control_service_status",
+            "control_service_stop",
+            "control_service_exec",
+            "control_service_exec_status",
+            "control_service_copy",
+        ]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         run(cx.host, &cx.attempt, name, args)

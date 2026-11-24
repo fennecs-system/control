@@ -78,8 +78,8 @@ impl AttemptTools for Tools {
             "annotations": {"readOnlyHint": true, "openWorldHint": false}
         })]
     }
-    fn known(&self, name: &str) -> bool {
-        name == NAME
+    fn names(&self) -> &'static [&'static str] {
+        &[NAME]
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;

@@ -178,8 +178,8 @@ impl AttemptTools for Tools {
             }),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(name, "control_turn_context" | "control_turn_handoff")
+    fn names(&self) -> &'static [&'static str] {
+        &["control_turn_context", "control_turn_handoff"]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         let mut state = cx

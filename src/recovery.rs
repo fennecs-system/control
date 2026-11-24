@@ -252,8 +252,8 @@ impl AttemptTools for Tools {
             "annotations": {"readOnlyHint": false, "openWorldHint": false}
         })]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_recovery"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_recovery"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         let input: Input = serde_json::from_value(args.clone())?;

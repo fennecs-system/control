@@ -496,8 +496,8 @@ impl AttemptTools for Tools {
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
         })]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_score_probe"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_score_probe"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _name: &str, args: &Value) -> io::Result<Value> {
         execute(cx.host, &cx.attempt, decode(args)?)
