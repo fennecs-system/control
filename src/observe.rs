@@ -804,8 +804,8 @@ impl AttemptTools for Tools {
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false}
         })]
     }
-    fn known(&self, name: &str) -> bool {
-        name == "control_observe_set"
+    fn names(&self) -> &'static [&'static str] {
+        &["control_observe_set"]
     }
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         let input = serde_json::from_value::<Input>(args.clone())

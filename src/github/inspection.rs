@@ -13,8 +13,8 @@ impl AttemptTools for Tools {
     fn definitions(&self) -> Vec<Value> {
         vec![definition(false), super::operations::definition(false)]
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(name, "control_github_read" | "control_github_write")
+    fn names(&self) -> &'static [&'static str] {
+        &["control_github_read", "control_github_write"]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         if name == "control_github_write" {

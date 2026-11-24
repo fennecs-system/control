@@ -69,6 +69,18 @@ rejected save restores the prior edits and sends no wake; reload does not replay
 acknowledged requests. Request grouping and rollback still live in those
 drivers.
 
+**Worker tool dispatch** (`src/worker_tools/`). `authority::admit` is the one
+check that the caller's run is running, authorized and on its current attempt.
+It returns the `Caller` token that handlers take instead of finding the run
+again. Each tool name has a table entry (`table.rs`): the run-level fences it
+passes and a handler whose kind (`kinds.rs`) fixes how it uses the state lock.
+`Pure` never sees state. `Read` builds its reply from an owned copy after
+release. `Write` mutates under the lock and checkpoints through the save the
+dispatcher passes. `External` and `Family` handlers work only after release.
+The brokers behind the table (rooms, spawning, delegation, design, knowledge and
+the attempt families) still re-check the run and roll back their own saves.
+`src/worker_tools/tests/characterisation.rs` pins every tool's answer.
+
 ## Alternate driver conformance
 
 The messages and room-notification operations also run under a test-only Tokio

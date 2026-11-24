@@ -896,8 +896,8 @@ impl AttemptTools for Tools {
             }),
         ]
     }
-    fn known(&self, name: &str) -> bool {
-        matches!(name, "control_packages_search" | "control_package_read")
+    fn names(&self) -> &'static [&'static str] {
+        &["control_packages_search", "control_package_read"]
     }
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         let packages = {
