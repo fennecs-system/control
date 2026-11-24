@@ -1560,4 +1560,4 @@ pub(crate) fn render_prompt_mode(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

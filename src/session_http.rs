@@ -588,6 +588,71 @@ pub(crate) const CHAT_PAGES: crate::Read<ChatPage, ChatView> = crate::Read {
         }
     },
 };
+/// `GET /dm/{id}/artifacts`, `/memory` and `/context`: what a DM's turns
+/// left behind. The view copies the Memory Tree and locates the artifacts
+/// and Control input in state; their files are read after the lock is
+/// released.
+pub(crate) struct FilePage {
+    id: String,
+    query: std::collections::HashMap<String, String>,
+    kind: FileKind,
+}
+enum FileKind {
+    Artifacts,
+    Memory,
+    Context,
+}
+impl FilePage {
+    pub(crate) fn of(method: &str, path: &str, query: &std::collections::HashMap<String, String>) -> Option<Self> {
+        let route = path.strip_prefix("/dm/").filter(|_| method == "GET")?;
+        let (id, operation) = route.split_once('/')?;
+        let kind = match operation {
+            "artifacts" => FileKind::Artifacts,
+            "memory" => FileKind::Memory,
+            "context" => FileKind::Context,
+            _ => return None,
+        };
+        chat::valid_id(id).then(|| Self {
+            id: id.to_owned(),
+            query: query.clone(),
+            kind,
+        })
+    }
+}
+pub(crate) enum Located {
+    Artifacts(Result<crate::artifacts::Page, &'static str>),
+    Memory(Result<Box<crate::compaction::tree::Overview>, &'static str>),
+    Context(std::io::Result<crate::turn_context::Trace>),
+}
+pub(crate) const FILE_PAGES: crate::Read<FilePage, Located> = crate::Read {
+    view: |state, FilePage { id, query, kind }| match kind {
+        FileKind::Artifacts => Located::Artifacts(crate::artifacts::Page::of(state, &id, &query)),
+        FileKind::Memory => Located::Memory(crate::compaction::overview(state, &id, &query).map(Box::new)),
+        FileKind::Context => Located::Context(crate::turn_context::Trace::of(state, &id, &query)),
+    },
+    render: |located| {
+        let html = match located {
+            Located::Artifacts(page) => page.and_then(|page| page.read()).map_err(str::to_owned),
+            Located::Memory(overview) => overview.and_then(|overview| overview.render()).map_err(str::to_owned),
+            Located::Context(trace) => trace.and_then(|trace| trace.read()).map_err(|error| error.to_string()),
+        };
+        let (status, mime, body) = match html {
+            Ok(html) => (
+                "200 OK",
+                "text/html; charset=utf-8",
+                crate::shell("artifact-page", &html),
+            ),
+            Err(message) => ("404 Not Found", "text/plain", message),
+        };
+        crate::Reply {
+            status,
+            mime,
+            body,
+            extra: String::new(),
+            policy: control_http::Policy::Embedded,
+        }
+    },
+};
 
 /// `GET /dms`: the New DM page, or the DM the browser remembers.
 pub(crate) struct Dms {
@@ -771,6 +836,10 @@ pub fn handle(
         let _ = CHAT_PAGES.reply(state, page).write(stream);
         return true;
     }
+    if let Some(page) = FilePage::of(method, path, &crate::fields(query)) {
+        let _ = FILE_PAGES.reply(state, page).write(stream);
+        return true;
+    }
     let (id, operation) = route.split_once('/').unwrap_or((route, ""));
     if !chat::valid_id(id) {
         let _ = control_http::respond(
@@ -810,63 +879,6 @@ pub fn handle(
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
         send_message(stream, state, id, lens, header, &fields, storage::save);
-    } else if method == "GET" && operation == "artifacts" {
-        let _ = match crate::artifacts::render(state, id, &crate::fields(query)) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                crate::shell("artifact-page", &html).as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(message) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                message.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
-    } else if method == "GET" && operation == "memory" {
-        let _ = match crate::compaction::render(state, id, query) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                crate::shell("artifact-page", &html).as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(error) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                error.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
-    } else if method == "GET" && operation == "context" {
-        let _ = match crate::turn_context::view(state, id, &crate::fields(query)) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                crate::shell("artifact-page", &html).as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(error) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                error.to_string().as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
     } else {
         let _ = control_http::respond(
             stream,

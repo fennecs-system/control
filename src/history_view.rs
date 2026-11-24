@@ -323,6 +323,19 @@ fn key(run: &Run) -> &str {
         .filter(|id| crate::chat::valid_id(id))
         .unwrap_or(OUTSIDE)
 }
+/// Whether a run's [`key`] is `dm`, with the id check done once for `dm`
+/// instead of a byte scan of every run's chat id: a valid chat id is its own
+/// key, so only [`OUTSIDE`] and invalid ids need [`key`].
+fn in_dm(dm: &str) -> impl Fn(&Run) -> bool + '_ {
+    let chat = dm != OUTSIDE && crate::chat::valid_id(dm);
+    move |run| {
+        if chat {
+            run.chat_id.as_deref() == Some(dm)
+        } else {
+            key(run) == dm
+        }
+    }
+}
 
 /// A DM row: the chat (none for [`OUTSIDE`]) and its callsign.
 struct Row<'a> {
@@ -531,12 +544,13 @@ impl Turn {
 impl Turns {
     /// One page of `dm`'s turns matching `filter`, newest first.
     fn of(texts: &mut Texts, state: &State, dm: &str, filter: &Filter) -> Self {
+        let in_dm = in_dm(dm);
         let mut runs = state
             .runtime
             .runs
             .iter()
             .rev()
-            .filter(|run| key(run) == dm && filter.matches(run));
+            .filter(|run| in_dm(run) && filter.matches(run));
         if let Some(before) = filter.before.as_deref() {
             // An unknown cursor starts at the newest turn.
             let mut skipped = runs.clone();

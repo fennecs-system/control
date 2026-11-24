@@ -1,0 +1,55 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 7259
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><meta name="darkreader-lock"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Control</title><link rel="stylesheet" href="/style.css"><link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>
+<body>
+<aside class="sidebar">
+  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true">⌘</span>CONTROL<span class="version">/ 0.1</span></a>
+  <div class="workspace"><span class="dot"></span><div>Local workspace<small>control.local</small></div></div>
+  <div class="nav-label">WORKSPACE</div>
+  <nav aria-label="Workspace"><a href='/dms' aria-current='page'><span aria-hidden='true'>⌁</span><span>DMs</span></a><a href='/?view=agents'><span aria-hidden='true'>⌁</span><span>Bots</span></a><a href='/knowledge'><span aria-hidden='true'>▤</span><span>Knowledge</span></a><a href='/?view=rooms'><span aria-hidden='true'>#</span><span>Rooms</span></a><a href='/?view=tools'><span aria-hidden='true'>⊞</span><span>Tools</span></a><a href='/dna'><span aria-hidden='true'>◈</span><span>DNA</span></a><a href='/personas'><span aria-hidden='true'>◇</span><span>Personas</span></a><a href='/?view=monitor'><span aria-hidden='true'>▥</span><span>Usage</span></a><a href='/?view=manage'><span aria-hidden='true'>⚙</span><span>Manage</span></a></nav>
+  <div class="sidebar-bottom"><div class="profile"><span class="avatar">OP</span><div>Operator<small>Local access</small></div></div></div>
+</aside>
+<div class="shell">
+  <header><div class="header-left"><a class="new-chat-link" href="/dms?new=1"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>New DM</a><span class="header-context"></span></div><div class="header-right"><a class="node-link" href="/?view=nodes"><span class="node-indicator" aria-hidden="true"></span>Local</a></div></header>
+  <div class="body-grid "><main><section class='memory-tree'><span class='eyebrow'>DM / MEMORY TREE</span><h2>Memory Tree</h2><p class='mt-links'><a href='/dm/c-100-0'>Return to DM</a> · <a href='/?view=providers'>Memory Tree model and window settings</a> · <a href='/dm/c-100-0/compaction/read'>Read retained evidence</a></p><p class='mt-stats'>4 entries · 0 summary blocks · 0 pending · 4 verbatim · compactor off </p><div class='mt-legend' aria-label='Legend'><span><i class='mt-sw mt-sw-sum'></i>Summary</span><span><i class='mt-sw mt-sw-rev'></i>Operator revision</span><span><i class='mt-sw mt-sw-pending'></i>Not summarised yet</span><span><i class='mt-sw mt-sw-entry'></i>Verbatim entry</span><span><i class='mt-sw mt-sw-pin'></i>Pinned</span><span><i class='mt-sw mt-sw-drop'></i>Dropped from agent view</span></div><div class='mt-visual' tabindex='0' role='region' aria-label='Memory Tree diagram; scroll horizontally on small screens'><svg class='mt-svg' xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 250' role='img' aria-labelledby='mt-title'><title id='mt-title'>Memory Tree: 4 blocks covering 4 entries</title><text x='20' y='22' class='mt-label'>SELECTED HISTORY · WHAT THE NEXT TURN STARTS FROM</text><path class='mt-fan mt-fan-entry' d='M20.0 104 L256.2 104 L260.0 166 L20.0 166 Z'/><a href='/dm/c-100-0/memory/node?entry=0' target='memory-detail'><title>Entry 0 · verbatim</title><rect class='mt-entry' x='20.0' y='36' width='236.2' height='68' rx='5'/><text x='138.1' y='75' class='mt-text' text-anchor='middle'>0</text></a><rect class='mt-seg-entry' x='20.0' y='166' width='240.0' height='14'/><path class='mt-fan mt-fan-entry' d='M261.2 104 L497.5 104 L500.0 166 L260.0 166 Z'/><a href='/dm/c-100-0/memory/node?entry=1' target='memory-detail'><title>Entry 1 · verbatim</title><rect class='mt-entry' x='261.2' y='36' width='236.2' height='68' rx='5'/><text x='379.4' y='75' class='mt-text' text-anchor='middle'>1</text></a><rect class='mt-seg-entry' x='260.0' y='166' width='240.0' height='14'/><path class='mt-fan mt-fan-entry' d='M502.5 104 L738.8 104 L740.0 166 L500.0 166 Z'/><a href='/dm/c-100-0/memory/node?entry=2' target='memory-detail'><title>Entry 2 · verbatim</title><rect class='mt-entry' x='502.5' y='36' width='236.2' height='68' rx='5'/><text x='620.6' y='75' class='mt-text' text-anchor='middle'>2</text></a><rect class='mt-seg-entry' x='500.0' y='166' width='240.0' height='14'/><path class='mt-fan mt-fan-entry' d='M743.8 104 L980.0 104 L980.0 166 L740.0 166 Z'/><a href='/dm/c-100-0/memory/node?entry=3' target='memory-detail'><title>Entry 3 · verbatim</title><rect class='mt-entry' x='743.8' y='36' width='236.2' height='68' rx='5'/><text x='861.9' y='75' class='mt-text' text-anchor='middle'>3</text></a><rect class='mt-seg-entry' x='740.0' y='166' width='240.0' height='14'/><text x='20.0' y='200' class='mt-small' text-anchor='start'>0</text><text x='260.0' y='200' class='mt-small' text-anchor='middle'>1</text><text x='500.0' y='200' class='mt-small' text-anchor='middle'>2</text><text x='740.0' y='200' class='mt-small' text-anchor='middle'>3</text><text x='980.0' y='200' class='mt-small' text-anchor='end'>4</text><text x='20' y='232' class='mt-label'>RETAINED JOURNAL · 4 ENTRIES · LINEAR POSITIONS →</text></svg></div><p class='mt-hint'>Older history folds into aligned summary blocks (level L covers 2<sup>L</sup> entries); recent entries stay verbatim. Select a block to expand its children, summary, versions and source; regenerate with an emphasis, pin or drop entries there. Ranges are zero-based and end-exclusive. Summaries are untrusted evidence; the original journal is never rewritten.</p><iframe class='mt-detail' name='memory-detail' title='Memory Tree block detail' src='/dm/c-100-0/memory/node'></iframe><details class='mt-meta'><summary>Raw Memory Tree metadata</summary><pre>{
+  &quot;current_entries&quot;: 4,
+  &quot;enabled_for_chat&quot;: false,
+  &quot;error&quot;: null,
+  &quot;limits&quot;: {
+    &quot;resident_views&quot;: 16,
+    &quot;source_page_bytes&quot;: 1048576,
+    &quot;source_page_entries&quot;: 64
+  },
+  &quot;memory_tree&quot;: null,
+  &quot;model&quot;: null,
+  &quot;nodes&quot;: [],
+  &quot;notice&quot;: &quot;Summaries are derived untrusted evidence. Raw history is retained. Missing/invalid summaries use the existing history view.&quot;,
+  &quot;pending&quot;: false,
+  &quot;policy&quot;: &quot;off&quot;,
+  &quot;regenerating&quot;: null,
+  &quot;regeneration_error&quot;: null,
+  &quot;settings&quot;: {
+    &quot;chats&quot;: [
+      &quot;c-100-0&quot;
+    ],
+    &quot;enabled&quot;: false,
+    &quot;history_bytes&quot;: 20000,
+    &quot;leaf_entries&quot;: 4,
+    &quot;model&quot;: null,
+    &quot;recent_entries&quot;: 8
+  },
+  &quot;source_entries&quot;: null,
+  &quot;source_revision&quot;: null,
+  &quot;summary&quot;: &quot;Memory Tree off for this DM (off): 4 entries, none folded; /memory on [MODEL] opts in. /dm/c-100-0/memory&quot;,
+  &quot;turn_trees&quot;: []
+}</pre></details></section><div class="bottom-note"><span>⌘ CONTROL</span></div></main></div>
+</div>
+</body></html>

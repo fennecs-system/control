@@ -720,49 +720,65 @@ pub(crate) fn input(attempt: &Attempt) -> io::Result<Option<String>> {
         .map(|p| p.map(|p| p.text))
 }
 
-pub(crate) fn view(
-    state: &State,
-    chat: &str,
-    fields: &std::collections::HashMap<String, String>,
-) -> io::Result<String> {
-    let viewer = state
-        .chats
-        .iter()
-        .find(|c| c.id == chat)
-        .ok_or_else(|| io::Error::other("Chat not found"))?;
-    let run = fields
-        .get("run")
-        .and_then(|id| {
-            state.runtime.runs.get(id).filter(|r| {
-                r.actor == viewer.actor
-                    && r.chat_id
-                        .as_deref()
-                        .is_some_and(|id| crate::chat::Lineage::of(&state.chats).within(id, chat))
+/// The Control input an attempt of a DM's conversation captured, located
+/// under the state lock. [`Trace::read`] reads it from disk after release.
+pub(crate) struct Trace {
+    reference: TraceRef,
+    /// Zero-based.
+    attempt: usize,
+}
+impl Trace {
+    pub(crate) fn of(
+        state: &State,
+        chat: &str,
+        fields: &std::collections::HashMap<String, String>,
+    ) -> io::Result<Self> {
+        let viewer = state
+            .chats
+            .iter()
+            .find(|c| c.id == chat)
+            .ok_or_else(|| io::Error::other("Chat not found"))?;
+        let run = fields
+            .get("run")
+            .and_then(|id| {
+                state.runtime.runs.get(id).filter(|r| {
+                    r.actor == viewer.actor
+                        && r.chat_id
+                            .as_deref()
+                            .is_some_and(|id| crate::chat::Lineage::of(&state.chats).within(id, chat))
+                })
             })
+            .ok_or_else(|| io::Error::other("Context trace is outside this conversation"))?;
+        let attempt = fields
+            .get("attempt")
+            .and_then(|s| s.parse::<usize>().ok())
+            .and_then(|i| i.checked_sub(1))
+            .ok_or_else(|| io::Error::other("Choose a valid attempt number"))?;
+        let reference = run
+            .attempts
+            .get(attempt)
+            .and_then(|a| a.context_trace.as_deref())
+            .ok_or_else(|| io::Error::other("This attempt has no captured Control input"))?;
+        Ok(Self {
+            reference: reference.clone(),
+            attempt,
         })
-        .ok_or_else(|| io::Error::other("Context trace is outside this conversation"))?;
-    let index = fields
-        .get("attempt")
-        .and_then(|s| s.parse::<usize>().ok())
-        .and_then(|i| i.checked_sub(1))
-        .ok_or_else(|| io::Error::other("Choose a valid attempt number"))?;
-    let reference = run
-        .attempts
-        .get(index)
-        .and_then(|a| a.context_trace.as_ref())
-        .ok_or_else(|| io::Error::other("This attempt has no captured Control input"))?;
-    let context = read(reference)?;
-    let budget =
-        serde_json::to_string_pretty(&serde_json::json!({"capacity":context.capacity,"sections":context.sections}))
-            .map_err(io::Error::other)?;
-    Ok(format!(
-        "<h2>Control input</h2><p class='muted'>Projection {} · {} UTF-8 bytes · attempt {}</p><details><summary>Capacity and evidence selection</summary><pre>{}</pre></details><pre class='tool-output'>{}</pre>",
-        context.version,
-        context.text.len(),
-        index + 1,
-        crate::escape(&budget),
-        crate::escape(&context.text)
-    ))
+    }
+    /// Reads the trace and renders it.
+    pub(crate) fn read(&self) -> io::Result<String> {
+        let context = read(&self.reference)?;
+        let budget =
+            serde_json::to_string_pretty(&serde_json::json!({"capacity":context.capacity,"sections":context.sections}))
+                .map_err(io::Error::other)?;
+        Ok(format!(
+            "<h2>Control input</h2><p class='muted'>Projection {} · {} UTF-8 bytes · attempt {}</p><details><summary>Capacity and evidence selection</summary><pre>{}</pre></details><pre class='tool-output'>{}</pre>",
+            context.version,
+            context.text.len(),
+            self.attempt + 1,
+            crate::escape(&budget),
+            crate::escape(&context.text)
+        ))
+    }
 }
 
 /// Called under the node lock at startup. A failed checkpoint may have renamed

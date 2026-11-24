@@ -787,23 +787,42 @@ fn auto_approve(
         })
         .ok()?
 }
-/// Open ports, one line each, for the Permissions page.
-pub(crate) fn overview(ports: &[Port], decisions: &[crate::auto_approval::Record]) -> Vec<String> {
+/// Open ports for the Permissions page, copied out of state.
+pub(crate) fn overview(ports: &[Port], decisions: &[crate::auto_approval::Record]) -> Vec<Open> {
     ports
         .iter()
         .filter(|p| p.status != Status::Stopped)
-        .map(|p| {
-            let auto = crate::auto_approval::rule(decisions, p.id.as_str())
-                .map(|rule| format!(" <span class='tag'>auto · {}</span>", crate::escape(&rule)))
-                .unwrap_or_default();
-            format!(
-                "<p>{} · {} · {:?}{auto}</p>",
-                crate::escape(&p.name.0),
-                route(ports, p),
-                p.status
-            )
+        .map(|p| Open {
+            name: p.name.0.clone(),
+            route: Route::of(ports, p),
+            status: p.status,
+            rule: crate::auto_approval::rule(decisions, p.id.as_str()),
         })
         .collect()
+}
+/// An open port as the Permissions page lists it.
+pub(crate) struct Open {
+    name: String,
+    route: Route,
+    status: Status,
+    /// The automatic approval's rule, when the policy decided it.
+    rule: Option<String>,
+}
+impl Open {
+    /// One line.
+    pub(crate) fn render(&self) -> String {
+        let auto = self
+            .rule
+            .as_ref()
+            .map(|rule| format!(" <span class='tag'>auto · {}</span>", crate::escape(rule)))
+            .unwrap_or_default();
+        format!(
+            "<p>{} · {} · {:?}{auto}</p>",
+            crate::escape(&self.name),
+            self.route.render(),
+            self.status
+        )
+    }
 }
 pub fn http(stream: &mut impl Write, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     http_with_save(stream, shared, method, path, body, crate::storage::save)

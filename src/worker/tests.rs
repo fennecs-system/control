@@ -2285,4 +2285,4 @@ fn a_local_turn_stopped_at_its_step_cap_leaves_a_host_checkpoint() {
     );
 }
 #[path = "tests/attempts.rs"]
-mod attempts;
+pub(crate) mod attempts;
