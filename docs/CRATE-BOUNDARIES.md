@@ -38,6 +38,7 @@ generic invariant that existing interfaces cannot express.
 | `control-agent` | The agent backend interface: the `Agent` trait and its facts, a turn's typed inputs (`Turn`, `Granted`), the host context traits (`Host`, `Events`, `Node`), the `Outcome` and `Failure` a turn returns with their status and wording, and `cli`: what the CLI backends whose only tools are Control's share (base container, isolation probe, supervised turn). Also the child-process waiter and mailbox wake those use. No application state. |
 | `control-inject` | The pure core of the key-injecting relay: a request head parsed once into typed parts, each backend's `InjectionRule` (fixed origin, route allow-list, key header), the per-attempt `AttemptCap` and its placeholder, `plan` returning the outbound head with a slot for the key, and the relay's budget and audit retention. `std` only; no I/O, clock or key. |
 | `control-codex`, `control-claude`, `control-grok`, `control-antigravity` | One agent backend each: its containers and launch arguments, decoder wiring, probe, text call, turn and `control ID login\|check`, and its `KeyDelivery` (its `control-inject` rule). Depend only on `control-agent`, `control-ai`, `control-inject`, `control-isolation`, `control-context` (and Codex on `control-effect`); only the root links them. |
+| `control-local` | The local endpoint backend (`Local`) and the host-free decisions of its tool loop: worker tools as function tools, result text and host notes in the transcript, the token estimate and context reserve, the system prompt, adaptive thinking and per-call metering. Depends only on `control-agent`, `control-ai`, `control-isolation`; only the root links it. The loop itself still runs in the root (see Agent backends). |
 
 The `control` library (`src/lib.rs`) keeps only build information and the
 operator's permission policy, which the server alone uses. Discord follows typed
@@ -79,9 +80,10 @@ dispatch from it. What a backend supplies is the `Agent` trait in
 `control-agent`: identity and default model, where its image is pinned, how
 its login is checked, the offline isolation probe, the bounded text call and
 its decoder, who runs a turn's tool loop (`runs`), and the facts listed below.
-`control-codex`, `control-claude`, `control-grok` and `control-antigravity`
-each implement it in their own crate; the local endpoint's implementation is
-still `src/local_agent.rs`. `worker::execute` prepares the workspace, renders
+`control-codex`, `control-claude`, `control-grok`, `control-antigravity` and
+`control-local` each implement it in their own crate. The local endpoint's
+loop (`Runs::Control`) still runs in the root, `src/local_agent.rs`.
+`worker::execute` prepares the workspace, renders
 the prompt and dispatches once through the trait.
 
 A CLI turn (`Turns::turn`) receives a `Turn` of typed values (attempt id,
@@ -116,12 +118,44 @@ root depends on a backend crate.
 
 Still open:
 
-- The local endpoint's crate (`control-local`). Its loop (`local_agent::run`,
-  `context`, `thinking`) already works through its own `Host` trait, but its
-  nudge texts share `worker_tools::nudges` with the host, its tests use the
-  tool registry, personas and toolbox, and its host (`Live`, `execute`) reads
-  the endpoint registry, the chat's compactor, bot continuation, the turn
-  inbox, observations and recall from `State`.
+- The local endpoint's loop. `control-local` holds the backend and the
+  loop's host-free decisions, but `local_agent::run` and its step lens
+  (`local_agent/context.rs`) stay in the root because what they ask of the
+  host is the loop's own `Host` trait (`src/local_agent.rs:98`), which no
+  `control-agent` type carries; moving that trait into `control-local`
+  would give one backend a host interface the others lack. What it reaches
+  for:
+  - worker tools: `tools`/`call` (`:99`, `:101`) go straight to
+    `worker_tools::local_rpc` (`:584`, `:598`) where CLIs pump a mailbox;
+  - model transport: `model` (`:103`, `:636`) is `model_calls::post_json`
+    on the endpoint from the registry (`providers::endpoint`,
+    `providers::agent_capable`, `:753`–`:756`);
+  - compaction and recall: `summarize` (`:106`, `:644`) on the chat's
+    compactor (`compaction::compactor_for`, `:774`), `retain` (`:135`,
+    `:692`) into the conversation's summary tree, and
+    `compaction::target_words` (`context.rs:482`);
+  - per-step context: `observation` (`:119`, `:666`, refreshed each step,
+    where `Host::observed` runs once), `inbox` (`:124`, `:677`) and
+    `continues` (`:112`, `:669`, bot continuation);
+  - endings: `step_limit` (`:110`, `:663`) and `reasoned` (`:129`, `:689`)
+    set the attempt's termination and host-checkpoint reasoning (`:830`);
+  - settings: `local_agent_steps` (`:898`), resumption and the managed flag
+    read from `State` in `execute` (`:740`);
+  - texts shared with the host: `worker_tools::nudges` (`:259`–`:339`) and
+    `worker_tools::deferred::SEARCH` (`:154`).
+
+  `record` and `metered` already map onto `Events::activity` and
+  `Events::usage`, `poll` onto `Host::poll`, `cancelled` and
+  `design_requested`, and the container stop (`:883`) onto `Host::stop`.
+  Proposed interface, so `Local` implements `Turns` like the CLIs and
+  `Runs::Control` goes: `Host::serve(request) -> response` (one worker MCP
+  request without a mailbox, usable by any in-process bridge);
+  `Host::summarize` and `Host::retain` (host compaction and recall, open to
+  any backend that compacts in-turn); `Host::observed` and an inbox read
+  per step rather than once; a `Failure::StepLimit` carrying the cut-off
+  reasoning; and the endpoint, its compactor's limits, the step cap and
+  `resumed` as typed `Turn` fields, with the endpoint transport moving into
+  `control-local`. The nudge texts would move to `control-context`.
 - Prompt rendering (`turn_context.rs`) uses the root `identity::Workspace`;
   it stays with the host, which hands a backend the rendered prompt.
 - Endpoint selection still asks whether a model is the local kind

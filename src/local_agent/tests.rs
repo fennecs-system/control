@@ -733,7 +733,7 @@ fn worker_tool_schemas_fit_the_declared_overhead_reserve() {
             println!("{role:?} improve={improve}: core {estimate} tokens, every callable tool {all} tokens");
             // The reserve covers the role core, schemas loaded during the turn and one exchange.
             assert!(
-                estimate <= CORE_TOKENS,
+                estimate <= control_local::CORE_TOKENS,
                 "core schemas need {estimate} tokens; raise CORE_TOKENS"
             );
             // Names and parameter schemas are passed through unchanged.

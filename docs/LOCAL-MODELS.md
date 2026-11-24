@@ -745,7 +745,7 @@ loaded until it ends.
 Each text-model entry has a **Thinking in agent turns** level (`thinking` in
 `model.json`): `off`, `minimal` (128 tokens), `low` (512), `medium` (1536, the
 default) or `high` (4096). Each step adapts around it
-(`src/local_agent/thinking.rs`):
+(`crates/local/src/thinking.rs`):
 
 - one level higher on the first step, after a failed or malformed tool call (a
   refused handoff included) and after an in-turn compaction;

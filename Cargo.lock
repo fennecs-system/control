@@ -164,6 +164,7 @@ dependencies = [
  "control-inject",
  "control-isolation",
  "control-journal",
+ "control-local",
  "control-mcp",
  "control-tui",
  "control-url-names",
@@ -387,6 +388,16 @@ version = "0.1.0"
 dependencies = [
  "control-comonad",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "control-local"
+version = "0.1.0"
+dependencies = [
+ "control-agent",
+ "control-ai",
+ "control-isolation",
  "serde_json",
 ]
 

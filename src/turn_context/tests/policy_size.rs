@@ -218,15 +218,19 @@ fn wake_policy_is_a_short_core_with_guidance_on_demand() {
     let team = team();
     let sizes = sizes(&team);
     let ids = [&team.lead, &team.member, &team.advisor];
-    let report = sizes.iter().zip(ids).map(|((role, policy, total), id)| {
-        let (before, after, index) = tool_bytes(&team, id, false);
-        let (shell_before, shell_after, _) = tool_bytes(&team, id, true);
-        serde_json::json!({"role":role,"policy_bytes":policy,"index_bytes":index,"wake_bytes":total,
+    let report = sizes
+        .iter()
+        .zip(ids)
+        .map(|((role, policy, total), id)| {
+            let (before, after, index) = tool_bytes(&team, id, false);
+            let (shell_before, shell_after, _) = tool_bytes(&team, id, true);
+            serde_json::json!({"role":role,"policy_bytes":policy,"index_bytes":index,"wake_bytes":total,
             "tool_bytes_before":before,"tool_bytes_after":after,
-            "tool_tokens_before":crate::local_agent::tokens(before),"tool_tokens_after":crate::local_agent::tokens(after),
+            "tool_tokens_before":control_local::tokens(before),"tool_tokens_after":control_local::tokens(after),
             "shell_tool_bytes_before":shell_before,"shell_tool_bytes_after":shell_after,
             "wake_plus_tools_before":total - index + before,"wake_plus_tools_after":total + after})
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     println!("{}", serde_json::json!({"roles":report}));
     if std::env::var_os("CONTROL_PRINT_POLICY").is_some() {
         println!("{}", project(&team.state, &team.member).unwrap().text);
@@ -457,14 +461,14 @@ fn dump_prompt_sections() {
     );
     write(
         "tools-local.json",
-        &serde_json::to_string(&crate::local_agent::functions(&deferred::listed(&deferred::Facts {
+        &serde_json::to_string(&control_local::functions(&deferred::listed(&deferred::Facts {
             shell: true,
             local: true,
             ..facts
         })))
         .unwrap(),
     );
-    write("system-local.txt", crate::local_agent::SYSTEM);
+    write("system-local.txt", control_local::SYSTEM);
     let [(first, _), (second, _)] = consecutive_member_wakes(&mut team);
     let shared = common_prefix(&first, &second);
     write("wake1.txt", &first);
