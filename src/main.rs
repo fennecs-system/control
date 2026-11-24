@@ -277,16 +277,39 @@ fn public_render(state: &State, query: &HashMap<String, String>, lens: &str) -> 
         .map(String::as_str)
         .unwrap_or("general");
     if view == "agents" {
-        return render_with_content(
-            state,
-            view,
-            lens,
-            channel,
-            Some(bots::page(state, &graveyard::Query::from(query))),
-        );
+        return shell(view, &bots::page(state, &graveyard::Query::from(query)));
     }
     render(state, view, lens, channel)
 }
+/// `GET /?view=agents`, the Bots page, served by [`BOTS_PAGE`].
+struct BotsPage {
+    query: graveyard::Query,
+    /// A lens the request chose, which the response remembers in a cookie.
+    lens: Option<String>,
+}
+impl BotsPage {
+    fn of(method: &str, path: &str, query: &HashMap<String, String>) -> Option<Self> {
+        (method == "GET" && path == "/" && query.get("view").is_some_and(|view| view == "agents")).then(|| Self {
+            query: graveyard::Query::from(query),
+            lens: query.get("lens").cloned(),
+        })
+    }
+}
+const BOTS_PAGE: Read<BotsPage, (bots::Page, String)> = Read {
+    view: |state, BotsPage { query, lens }| {
+        let cookie = lens.map_or_else(String::new, |lens| {
+            lens_ui::cookie(lens_ui::selected(&state.lens_library, "", Some(&lens)))
+        });
+        (bots::Page::of(state, &query), cookie)
+    },
+    render: |(page, cookie)| Reply {
+        status: "200 OK",
+        mime: "text/html; charset=utf-8",
+        body: web_assets::with_client(&shell("agents", &page.render())),
+        extra: cookie,
+        policy: control_http::Policy::Client,
+    },
+};
 /// `GET /` with its response policy. The Bots page's process tree is a
 /// pan/zoom canvas run by the Rust/WASM client, which also refreshes the
 /// Models page's live server statistics; other views run no script.
@@ -613,6 +636,39 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>, access: Arc<access::A
         read_response(&mut stream, &state, &session_http::CHAT_PAGES, page);
         return;
     }
+    if let Some(page) = BotsPage::of(method, path, &query) {
+        read_response(&mut stream, &state, &BOTS_PAGE, page);
+        return;
+    }
+    if method == "GET" && path == "/dms" {
+        let lens = lens_ui::requested(&header, query.get("lens").map(String::as_str)).to_owned();
+        let dms = session_http::Dms::of(&query, &header, lens);
+        read_response(&mut stream, &state, &session_http::DMS, dms);
+        return;
+    }
+    if method == "GET" && path == history_view::PATH {
+        read_response(
+            &mut stream,
+            &state,
+            &history_view::HISTORY,
+            history_view::Filter::from(&query),
+        );
+        return;
+    }
+    if method == "GET" && path == "/bots/history/turns" {
+        read_response(
+            &mut stream,
+            &state,
+            &history_view::DM_TURNS,
+            history_view::Filter::from(&query),
+        );
+        return;
+    }
+    if method == "GET" && path == "/bots/graveyard" {
+        let page = graveyard::Query::from(&query);
+        read_response(&mut stream, &state, &graveyard::NEXT_PAGE, page);
+        return;
+    }
     state_response(&mut stream, &state, |mut stream, state| {
         let lens = lens_ui::selected(&state.lens_library, &header, query.get("lens").map(String::as_str));
         if method == "POST" && path == "/lens" {
@@ -857,7 +913,12 @@ impl<Q, V: 'static> Read<Q, V> {
 }
 // Not inlined, so profiles can tell its wait for the state lock from rendering.
 #[inline(never)]
-fn read_response<Q, V: 'static>(stream: &mut impl Write, state: &Mutex<State>, route: &Read<Q, V>, request: Q) {
+pub(crate) fn read_response<Q, V: 'static>(
+    stream: &mut impl Write,
+    state: &Mutex<State>,
+    route: &Read<Q, V>,
+    request: Q,
+) {
     // The guard is dropped as soon as the view is copied.
     let view = state.lock().map(|state| (route.view)(&state, request));
     let mut response = Vec::new();

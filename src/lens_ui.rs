@@ -15,7 +15,12 @@ pub fn title(value: &str) -> &str {
     }
 }
 pub fn selected<'a>(library: &control_context::Library, header: &'a str, query: Option<&'a str>) -> &'a str {
-    let candidate = query.map(normalize).unwrap_or_else(|| {
+    known(library, requested(header, query))
+}
+/// The lens a request names, in its query or else its cookie. It reads no
+/// state, so a route can take it before locking.
+pub fn requested<'a>(header: &'a str, query: Option<&'a str>) -> &'a str {
+    query.map(normalize).unwrap_or_else(|| {
         header
             .lines()
             .filter_map(|line| line.split_once(':'))
@@ -25,7 +30,10 @@ pub fn selected<'a>(library: &control_context::Library, header: &'a str, query: 
             .find(|(name, _)| *name == "control_lens")
             .map(|(_, value)| normalize(value))
             .unwrap_or("none")
-    });
+    })
+}
+/// `candidate` when the library has it, else no lens.
+pub fn known<'a>(library: &control_context::Library, candidate: &'a str) -> &'a str {
     if library.get(candidate).is_some() {
         candidate
     } else {

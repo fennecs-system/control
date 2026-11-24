@@ -201,17 +201,17 @@ const REVIVE: &str = "Open its DM. Typing there revives it: your message starts 
 /// One headstone: the shared fennec skull, the name linking to its DM, why it
 /// stopped, the day it stopped and a revive link. The objective, kind and
 /// exact stop time are tooltips, so every stone keeps the same height.
-fn row(grave: &Grave<'_>) -> String {
-    let id = escape(&grave.chat.id);
-    let name = escape(&grave.name);
-    let objective = clip(&grave.chat.title, 120);
-    let kind = if grave.bot { "bot" } else { "agent" };
+fn row(stone: &Stone) -> String {
+    let id = escape(&stone.id);
+    let name = escape(&stone.name);
+    let objective = &stone.objective;
+    let kind = if stone.bot { "bot" } else { "agent" };
     let about = if objective.is_empty() {
         format!("{name} ({kind}) · no objective recorded")
     } else {
-        format!("{name} ({kind}) · {}", escape(&objective))
+        format!("{name} ({kind}) · {}", escape(objective))
     };
-    let date = grave.stopped.map_or_else(
+    let date = stone.stopped.map_or_else(
         || "<span class='grave-when'>never ran</span>".to_owned(),
         |seconds| {
             format!(
@@ -221,7 +221,7 @@ fn row(grave: &Grave<'_>) -> String {
             )
         },
     );
-    let reason = grave.reason.label();
+    let reason = stone.reason.label();
     format!(
         "<li class='grave' data-reason='{reason}'><svg class='grave-skull' viewBox='0 0 64 64' aria-hidden='true'><use href='#{SKULL}'/></svg><a class='grave-name' href='/dm/{id}' title='{about}'>{name}</a><span class='grave-reason'>{reason}</span>{date}<a class='grave-revive' href='/dm/{id}' title='{REVIVE}'>revive ↗</a></li>"
     )
@@ -231,23 +231,64 @@ fn row(grave: &Grave<'_>) -> String {
 /// scroll loader swaps in for the previous slot. Stones reference the skull
 /// symbol [`render`] defined, and the CSS stagger depends only on a stone's
 /// position in the list, so appended pages continue the layout.
+#[cfg(test)]
 pub fn rows(graves: &[Grave<'_>], query: &Query) -> String {
-    let (rows, next) = page(graves, query);
-    let mut html = String::with_capacity(rows.len() * 420 + 200);
-    for grave in rows {
-        html.push_str(&row(grave));
+    Stones::of(graves, query).render()
+}
+/// One page of headstones and the next page's cursor, copied out of state so
+/// the rows can be rendered after the state lock is released.
+pub struct Stones {
+    rows: Vec<Stone>,
+    /// The last row's chat and how many rows follow this page.
+    next: Option<(String, usize)>,
+    search: String,
+}
+/// What one headstone shows.
+struct Stone {
+    id: String,
+    name: String,
+    /// The objective as the tooltip shows it.
+    objective: String,
+    bot: bool,
+    reason: Reason,
+    stopped: Option<u64>,
+}
+impl Stones {
+    pub fn of(graves: &[Grave<'_>], query: &Query) -> Self {
+        let (rows, next) = page(graves, query);
+        Self {
+            rows: rows
+                .iter()
+                .map(|grave| Stone {
+                    id: grave.chat.id.clone(),
+                    name: grave.name.clone().into_owned(),
+                    objective: clip(&grave.chat.title, 120),
+                    bot: grave.bot,
+                    reason: grave.reason,
+                    stopped: grave.stopped,
+                })
+                .collect(),
+            next: next.map(|(id, remaining)| (id.to_owned(), remaining)),
+            search: query.search.clone(),
+        }
     }
-    if let Some((next, remaining)) = next {
-        let fetch = link("/bots/graveyard", &[("older", next), ("q", &query.search)]);
-        let page = link("/", &[("view", "agents"), ("older", next), ("q", &query.search)]);
-        html.push_str(&format!(
-            "<li class='graveyard-more' data-more='{}'><a href='{}#graveyard'>Show {} more ↓</a></li>",
-            escape(&fetch),
-            escape(&page),
-            PAGE.min(remaining)
-        ));
+    pub fn render(&self) -> String {
+        let mut html = String::with_capacity(self.rows.len() * 420 + 200);
+        for stone in &self.rows {
+            html.push_str(&row(stone));
+        }
+        if let Some((next, remaining)) = &self.next {
+            let fetch = link("/bots/graveyard", &[("older", next), ("q", &self.search)]);
+            let page = link("/", &[("view", "agents"), ("older", next), ("q", &self.search)]);
+            html.push_str(&format!(
+                "<li class='graveyard-more' data-more='{}'><a href='{}#graveyard'>Show {} more ↓</a></li>",
+                escape(&fetch),
+                escape(&page),
+                PAGE.min(*remaining)
+            ));
+        }
+        html
     }
-    html
 }
 
 /// The fennec fox skull's symbol id. [`render`] defines it once per page;
@@ -267,37 +308,66 @@ const SKULL_SYMBOL: &str = "<svg class='svg-defs' aria-hidden='true' focusable='
 /// The graveyard: the ground beneath the live task trees on the Bots page,
 /// with the dead bots' headstones (the page selected by `query`, whose search
 /// the page's one search box sets).
+#[cfg(test)]
 pub fn render(state: &State, query: &Query) -> String {
-    let graves = dead(state, &query.search);
-    let total = graves.len();
-    let found = if query.search.is_empty() {
-        format!(
-            "{total} dead {} · newest first",
-            if total == 1 { "bot" } else { "bots" }
-        )
-    } else {
-        format!(
-            "{total} dead {} for “{}”",
-            if total == 1 { "match" } else { "matches" },
-            escape(&query.search)
-        )
-    };
-    let list = if graves.is_empty() {
-        format!(
-            "<p class='graveyard-empty'>{}</p>",
-            if query.search.is_empty() {
-                "No dead bots. Stopped bots and finished agents rest here."
-            } else {
-                "No dead bots match that search."
-            }
-        )
-    } else {
-        format!("<ol class='graveyard-grid'>{}</ol>", rows(&graves, query))
-    };
-    format!(
-        "<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'>{SKULL_SYMBOL}<div class='graveyard-ground'><h2 id='graveyard-title'>Graveyard</h2><span>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></span><a href='/bots/history'>Full history ↗</a></div>{list}</section>"
-    )
+    Yard::of(state, query).render()
 }
+/// What the graveyard shows: how many dead chats match, and one page of them.
+pub struct Yard {
+    total: usize,
+    stones: Stones,
+}
+impl Yard {
+    pub fn of(state: &State, query: &Query) -> Self {
+        let graves = dead(state, &query.search);
+        Self {
+            total: graves.len(),
+            stones: Stones::of(&graves, query),
+        }
+    }
+    pub fn render(&self) -> String {
+        let (total, search) = (self.total, &self.stones.search);
+        let found = if search.is_empty() {
+            format!(
+                "{total} dead {} · newest first",
+                if total == 1 { "bot" } else { "bots" }
+            )
+        } else {
+            format!(
+                "{total} dead {} for “{}”",
+                if total == 1 { "match" } else { "matches" },
+                escape(search)
+            )
+        };
+        let list = if total == 0 {
+            format!(
+                "<p class='graveyard-empty'>{}</p>",
+                if search.is_empty() {
+                    "No dead bots. Stopped bots and finished agents rest here."
+                } else {
+                    "No dead bots match that search."
+                }
+            )
+        } else {
+            format!("<ol class='graveyard-grid'>{}</ol>", self.stones.render())
+        };
+        format!(
+            "<section class='graveyard' id='graveyard' aria-labelledby='graveyard-title'>{SKULL_SYMBOL}<div class='graveyard-ground'><h2 id='graveyard-title'>Graveyard</h2><span>{found}. <span title='{REVIVE}'>Typing in a dead bot's DM revives it.</span></span><a href='/bots/history'>Full history ↗</a></div>{list}</section>"
+        )
+    }
+}
+
+/// `GET /bots/graveyard`: the scroll loader's next page, rows only.
+pub(crate) const NEXT_PAGE: crate::Read<Query, Stones> = crate::Read {
+    view: |state, query| Stones::of(&dead(state, &query.search), &query),
+    render: |stones| crate::Reply {
+        status: "200 OK",
+        mime: "text/html; charset=utf-8",
+        body: stones.render(),
+        extra: String::new(),
+        policy: control_http::Policy::Embedded,
+    },
+};
 
 #[cfg(test)]
 mod tests;

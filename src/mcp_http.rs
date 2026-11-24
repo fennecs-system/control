@@ -50,6 +50,13 @@ pub(crate) fn handle(
         };
         return true;
     }
+    if let Some(call) = request
+        .as_ref()
+        .and_then(|request| ReadCall::of(method, version, request))
+    {
+        crate::read_response(stream, shared, &READ_TOOLS, call);
+        return true;
+    }
     crate::state_response(stream, shared, |stream, state| {
         locked(stream, state, method, version, request.as_ref())
     });
@@ -90,6 +97,78 @@ fn unlocked(shared: &Arc<Mutex<State>>, version: Option<&str>, request: &Value) 
         _ => return None,
     })
 }
+
+/// An operator MCP call that only reads state and passes every check
+/// `locked` and `control_mcp::serve` make, so its reply is a tool result.
+pub(crate) struct ReadCall {
+    id: Value,
+    tool: ReadTool,
+}
+enum ReadTool {
+    Chats,
+    /// The chat id argument, or why it is refused.
+    Chat(Result<String, &'static str>),
+}
+impl ReadCall {
+    fn of(method: &str, version: Option<&str>, request: &Value) -> Option<Self> {
+        let checked = method == "POST"
+            && version.is_none_or(control_mcp::supported)
+            && !control_mcp::is_notification(request)
+            && control_mcp::is_v2(request);
+        let call = control_mcp::call(request).filter(|_| checked)?;
+        let tool = match call.name {
+            "control.chats.list" => ReadTool::Chats,
+            "control.chat.read" => ReadTool::Chat(crate::chat::chat_id(call.arguments).map(str::to_owned)),
+            _ => return None,
+        };
+        Some(Self {
+            id: control_mcp::id(request).clone(),
+            tool,
+        })
+    }
+}
+/// What a read call answers with, copied out of state.
+pub(crate) struct ReadResult {
+    id: Value,
+    data: Result<ReadData, &'static str>,
+}
+enum ReadData {
+    Chats(crate::chat::Listing),
+    Chat(Value),
+}
+/// The read tools: what they answer is copied under the lock and encoded after it.
+const READ_TOOLS: crate::Read<ReadCall, ReadResult> = crate::Read {
+    view: |state, ReadCall { id, tool }| ReadResult {
+        id,
+        data: match tool {
+            ReadTool::Chats => Ok(ReadData::Chats(crate::chat::Listing::of(state))),
+            ReadTool::Chat(chat) => chat
+                .and_then(|chat| crate::chat::detail(state, &chat))
+                .map(ReadData::Chat),
+        },
+    },
+    render: |ReadResult { id, data }| {
+        // Plain data with string keys: encoding cannot fail.
+        let raw = |data: ReadData| {
+            match data {
+                ReadData::Chats(listing) => serde_json::value::to_raw_value(&listing),
+                ReadData::Chat(chat) => serde_json::value::to_raw_value(&chat),
+            }
+            .expect("read tool data encodes")
+        };
+        let body = match data {
+            Ok(data) => control_mcp::data_reply(&id, &raw(data)),
+            Err(message) => control_mcp::tool_error(&id, message).to_string(),
+        };
+        crate::Reply {
+            status: "200 OK",
+            mime: "application/json",
+            body,
+            extra: String::new(),
+            policy: Policy::Embedded,
+        }
+    },
+};
 
 /// The operator MCP under the state lock, with its own HTTP checks.
 fn locked(stream: &mut Vec<u8>, state: &mut State, method: &str, version: Option<&str>, request: Option<&Value>) {

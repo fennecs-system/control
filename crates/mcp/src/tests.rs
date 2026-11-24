@@ -391,3 +391,23 @@ fn initialize_keeps_a_supported_client_version_and_otherwise_answers_the_latest(
     assert_eq!(negotiate(None), LATEST);
     assert!(supported("2025-03-26") && !supported("2024-01-01"));
 }
+
+#[test]
+fn a_data_reply_encodes_as_the_reply_built_from_values() {
+    let values = [
+        json!(null),
+        json!([]),
+        json!([{"title":"Say \"hi\" <&> λ\n\t\u{1}","n":-3,"ok":true,"nested":{"b":[1.5,null],"a":"z"}}]),
+        json!({"id":"c-1","z":{},"a":[[]]}),
+    ];
+    for id in [json!(7), json!("read-1"), json!(null)] {
+        for value in &values {
+            let raw = serde_json::value::to_raw_value(value).unwrap();
+            assert_eq!(
+                data_reply(&id, &raw),
+                reply(&id, data(value)).to_string(),
+                "{id} {value}"
+            );
+        }
+    }
+}

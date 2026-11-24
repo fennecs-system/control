@@ -436,8 +436,29 @@ pub(crate) const ZOOM_SLOT: &str = "<div class='canvas-controls' data-canvas-con
 /// The SVG drawing, or None when no task tree has a bot, service or active turn
 /// (that `search` matches, when it is not empty). Matched chats are marked
 /// `pt-match`; the rest of a searched drawing is dimmed.
+#[cfg(test)]
 pub(crate) fn render(state: &State, search: &str) -> Option<String> {
-    let trees = forest(state, search);
+    Forest::of(state, search).render()
+}
+/// The trees a page draws, copied out of state: what [`render`] reads, so the
+/// drawing can be laid out after the state lock is released.
+pub(crate) struct Forest {
+    trees: Vec<Tree>,
+    searching: bool,
+}
+impl Forest {
+    pub(crate) fn of(state: &State, search: &str) -> Self {
+        Self {
+            trees: forest(state, search),
+            searching: !search.is_empty(),
+        }
+    }
+    /// The drawing, or None without trees (see [`render`]).
+    pub(crate) fn render(&self) -> Option<String> {
+        draw(&self.trees, self.searching)
+    }
+}
+fn draw(trees: &[Tree], searching: bool) -> Option<String> {
     if trees.is_empty() {
         return None;
     }
@@ -507,7 +528,7 @@ pub(crate) fn render(state: &State, search: &str) -> Option<String> {
     Some(format!(
         "<div class='process-tree' id='process-tree' role='region' aria-label='Process tree' tabindex='0' data-canvas='ground' data-levels='{}'><svg{} preserveAspectRatio='xMidYMax meet' role='img' aria-label='Task trees: steering chats, agents, bots, services and processes' viewBox='-2 -2 {:.0} {:.0}'>{body}</svg></div>",
         levels.min(6),
-        if search.is_empty() { "" } else { " class='searching'" },
+        if searching { " class='searching'" } else { "" },
         width + 4.0,
         height + 4.0
     ))

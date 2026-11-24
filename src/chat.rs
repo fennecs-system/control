@@ -98,31 +98,58 @@ pub fn landing(state: &State, lens: &str, topic: Option<&str>) -> String {
     landing_mode(state, lens, topic, false)
 }
 pub fn landing_mode(state: &State, lens: &str, topic: Option<&str>, improve: bool) -> String {
-    let discussion = topic
-        .and_then(design_topic)
-        .filter(|_| identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok());
-    let (context, mut draft) = discussion
-        .map(|(_, label)| {
-            (
-                format!("<p class='muted'>Discussing the design of {label}.</p>"),
-                format!("Let’s discuss the design of {label}."),
-            )
-        })
-        .unwrap_or_default();
-    if improve && identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok() {
-        draft = format!("/improve {draft}");
+    Landing::of(state, lens, topic, improve).render()
+}
+/// What the New DM page shows, copied out of state so it renders after the
+/// state lock is released.
+pub struct Landing {
+    picker: crate::navigation::Picker,
+    /// Gene ids and names, alternating.
+    genes: crate::texts::Texts,
+    /// The browser's lens when the library has it: the gene shown chosen.
+    lens: Option<String>,
+    /// The design topic being discussed: its key and label.
+    discussion: Option<(&'static str, &'static str)>,
+    /// Whether the draft starts with `/improve`.
+    improve: bool,
+    /// What the local operator may do: run tasks, and improve Control.
+    task: bool,
+    may_improve: bool,
+}
+impl Landing {
+    pub fn of(state: &State, lens: &str, topic: Option<&str>, improve: bool) -> Self {
+        let may_improve = identity::authorize(&Actor::LocalOperator, Action::Improve).is_ok();
+        Self {
+            picker: crate::navigation::Picker::of(&state.chats, ""),
+            genes: crate::lens_library::names(&state.lens_library),
+            lens: state.lens_library.get(lens).map(|_| lens.to_owned()),
+            discussion: topic.and_then(design_topic).filter(|_| may_improve),
+            improve: improve && may_improve,
+            task: identity::authorize(&Actor::LocalOperator, Action::Task).is_ok(),
+            may_improve,
+        }
     }
-    let mut html = format!(
-        "<section class='conversation'><div class='conversation-heading'>{}<h2>New DM</h2></div>",
-        crate::navigation::Picker::of(&state.chats, "").button()
-    );
-    let selected = if state.lens_library.get(lens).is_some() {
-        vec![lens.into()]
-    } else {
-        Vec::new()
-    };
-    html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu(&Actor::LocalOperator),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&crate::lens_library::names(&state.lens_library),&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
-    html
+    pub fn render(&self) -> String {
+        let discussion = self.discussion;
+        let (context, mut draft) = discussion
+            .map(|(_, label)| {
+                (
+                    format!("<p class='muted'>Discussing the design of {label}.</p>"),
+                    format!("Let’s discuss the design of {label}."),
+                )
+            })
+            .unwrap_or_default();
+        if self.improve {
+            draft = format!("/improve {draft}");
+        }
+        let mut html = format!(
+            "<section class='conversation'><div class='conversation-heading'>{}<h2>New DM</h2></div>",
+            self.picker.button()
+        );
+        let selected = self.lens.iter().cloned().collect::<Vec<_>>();
+        html.push_str(&format!("<div class='conversation-empty'><h1>What are we working on?</h1>{context}</div><form class='conversation-composer' id='chat-list-new' method='post' action='/dms'><textarea name='message' rows='3' aria-label='First message' placeholder='Message Control…'>{}</textarea>{}{}<div class='composer-footer'>{}<div class='room-tabs' role='radiogroup' aria-label='Room'><label class='room-tab'><input type='radio' name='room' value='' checked><span>No room</span></label>{rooms}</div><button class='send-message' aria-label='Send message'>↑</button></div></form></section>",escape(&draft),command_menu_for(self.task, self.may_improve),discussion.map(|(key,_)|format!("<input type='hidden' name='design_context' value='{key}'>")).unwrap_or_default(),crate::lens_library::choices(&self.genes,&selected,"chat-list-new"),rooms=crate::rooms::NAMES.iter().map(|room|format!("<label class='room-tab'><input type='radio' name='room' value='{room}'><span>#{room}</span></label>")).collect::<String>()));
+        html
+    }
 }
 /// Re-show a rejected composer submission: escaped error above the form and the draft restored.
 pub fn rejected(page: &str, error: &str, draft: &str) -> String {
@@ -255,6 +282,7 @@ impl FollowUp {
         Ok(run)
     }
 }
+#[cfg(test)]
 fn command_menu(actor: &Actor) -> String {
     command_menu_for(
         identity::authorize(actor, Action::Task).is_ok(),
@@ -1104,18 +1132,76 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
     })
 }
 pub fn list(state: &State) -> Value {
-    let decision_revision = crate::design::decision_revision(state);
-    let port_revision = crate::ports::decision_revision(&state.ports);
-    let bot_revision = crate::bots::decision_revision(state);
-    let callsigns = crate::callsigns::all(&state.chats);
-    let status = statuses(state);
-    let held = held_chats(state);
-    json!(crate::conversations::ordered(&state.chats).into_iter().map(|entry| {
-        let s=entry.session;
-        let mut row = json!({"id":s.id,"title":crate::callsigns::label(s,callsigns[entry.position]),"lens":s.lens,"lenses":selected_lenses(s),"persona":s.persona,"revision":s.revision,"messages":s.messages.len(),"parent_chat":entry.parent,"depth":entry.depth,"activity_order":s.activity_order,"decision_revision":decision_revision,"port_revision":port_revision,"bot_revision":bot_revision,"status":status(s),"mode":if s.improve_mode {"improve"} else {"chat"},"project_pending":s.project.as_ref().is_some_and(|p|p.pending)});
-        if let Some(reason) = held.get(s.id.as_str()) { row["held"] = json!(reason); }
-        row
-    }).collect::<Vec<_>>())
+    serde_json::to_value(Listing::of(state)).unwrap_or_default()
+}
+/// `control.chats.list`: each visible chat's row, copied out of state so the
+/// reply can be encoded after the state lock is released (`crate::Read`).
+#[derive(serde::Serialize)]
+#[serde(transparent)]
+pub struct Listing(Vec<Listed>);
+/// One row. Fields are in the order `serde_json::Map` sorts its keys, so the
+/// typed encoding is byte for byte the one the row had as a `Value`.
+#[derive(serde::Serialize)]
+pub struct Listed {
+    activity_order: u64,
+    bot_revision: u64,
+    decision_revision: u64,
+    depth: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held: Option<String>,
+    id: String,
+    lens: Option<String>,
+    lenses: Vec<String>,
+    messages: usize,
+    mode: &'static str,
+    parent_chat: Option<String>,
+    persona: Option<String>,
+    port_revision: u64,
+    project_pending: bool,
+    revision: u64,
+    #[serde(serialize_with = "status_or_idle")]
+    status: Option<RunStatus>,
+    title: String,
+}
+fn status_or_idle<S: serde::Serializer>(status: &Option<RunStatus>, out: S) -> Result<S::Ok, S::Error> {
+    out.serialize_str(status.as_ref().map_or("idle", RunStatus::as_str))
+}
+impl Listing {
+    pub fn of(state: &State) -> Self {
+        let decision_revision = crate::design::decision_revision(state);
+        let port_revision = crate::ports::decision_revision(&state.ports);
+        let bot_revision = crate::bots::decision_revision(state);
+        let callsigns = crate::callsigns::all(&state.chats);
+        let status = statuses(state);
+        let held = held_chats(state);
+        Self(
+            crate::conversations::ordered(&state.chats)
+                .into_iter()
+                .map(|entry| {
+                    let s = entry.session;
+                    Listed {
+                        activity_order: s.activity_order,
+                        bot_revision,
+                        decision_revision,
+                        depth: entry.depth,
+                        held: held.get(s.id.as_str()).cloned(),
+                        id: s.id.clone(),
+                        lens: s.lens.clone(),
+                        lenses: selected_lenses(s),
+                        messages: s.messages.len(),
+                        mode: if s.improve_mode { "improve" } else { "chat" },
+                        parent_chat: entry.parent.map(str::to_owned),
+                        persona: s.persona.clone(),
+                        port_revision,
+                        project_pending: s.project.as_ref().is_some_and(|p| p.pending),
+                        revision: s.revision,
+                        status: status(s).cloned(),
+                        title: crate::callsigns::label(s, callsigns[entry.position]).into_owned(),
+                    }
+                })
+                .collect(),
+        )
+    }
 }
 /// Each chat's first queued run its account holds, in the hold's words.
 fn held_chats(state: &State) -> std::collections::HashMap<&str, String> {
@@ -1139,7 +1225,8 @@ fn held_chats(state: &State) -> std::collections::HashMap<&str, String> {
 /// A chat's run status for listings: its most pressing unfinished run
 /// (running, waiting, cancelling, queued), else its latest message's run
 /// status, else `idle`. One pass over the runs, whatever the chat count.
-fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
+/// `None` is idle.
+fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> Option<&'a RunStatus> + 'a {
     let rank = |status: &RunStatus| match status {
         RunStatus::Queued => Some(0),
         RunStatus::Cancelling => Some(1),
@@ -1153,31 +1240,33 @@ fn statuses<'a>(state: &'a State) -> impl Fn(&Session) -> &'a str + 'a {
         | RunStatus::Continued
         | RunStatus::Unrecognised(_) => None,
     };
-    let mut active: std::collections::HashMap<&str, &RunStatus> = std::collections::HashMap::new();
-    let mut by_run = std::collections::HashMap::new();
-    for run in state.runtime.runs.iter() {
-        by_run.insert(run.id().as_str(), &run.status);
-        if let (Some(chat), Some(r)) = (run.chat_id.as_deref(), rank(&run.status)) {
-            let current = active.entry(chat).or_insert(&run.status);
-            if rank(current) < Some(r) {
-                *current = &run.status;
-            }
-        }
-    }
+    let active = state
+        .runtime
+        .runs
+        .iter()
+        .filter_map(|run| Some((run.chat_id.as_deref()?, &run.status, rank(&run.status)?)))
+        .fold(
+            std::collections::HashMap::<&str, &RunStatus>::new(),
+            |mut active, (chat, status, r)| {
+                let current = active.entry(chat).or_insert(status);
+                if rank(current) < Some(r) {
+                    *current = status;
+                }
+                active
+            },
+        );
+    // The latest message's run comes from the run ledger's index.
+    let runs = &state.runtime.runs;
     move |session: &Session| {
-        active
-            .get(session.id.as_str())
-            .copied()
-            .or_else(|| {
-                session
-                    .messages
-                    .iter()
-                    .rev()
-                    .find_map(|m| m.run_id.as_deref())
-                    .and_then(|run| by_run.get(run).copied())
-            })
-            .map(RunStatus::as_str)
-            .unwrap_or("idle")
+        active.get(session.id.as_str()).copied().or_else(|| {
+            session
+                .messages
+                .iter()
+                .rev()
+                .find_map(|m| m.run_id.as_deref())
+                .and_then(|run| runs.get(run))
+                .map(|run| &run.status)
+        })
     }
 }
 /// Folder (`/open`) requests awaiting the operator in `root`'s same-actor
@@ -1375,7 +1464,7 @@ pub fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, C
         _ => fixed_tool(state, name, arguments).map_err(Into::into),
     }
 }
-fn chat_id(arguments: &Value) -> Result<&str, &'static str> {
+pub(crate) fn chat_id(arguments: &Value) -> Result<&str, &'static str> {
     arguments["id"]
         .as_str()
         .filter(|s| valid_id(s))

@@ -109,6 +109,24 @@ pub fn text(text: &str) -> Value {
 pub fn data(value: &Value) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":{"data":value},"isError":false})
 }
+/// The encoded `reply(id, data(value))` for data already encoded once, so a
+/// large result is neither rebuilt as a `Value` nor copied for its text.
+/// `RawValue` holds valid JSON, so the envelope cannot be malformed.
+pub fn data_reply(id: &Value, data: &serde_json::value::RawValue) -> String {
+    let data = data.get();
+    let text = serde_json::to_string(data).expect("a string always encodes");
+    // Keys in `serde_json::Map` order, as `reply(..).to_string()` writes them.
+    [
+        "{\"id\":",
+        &id.to_string(),
+        ",\"jsonrpc\":\"2.0\",\"result\":{\"content\":[{\"text\":",
+        &text,
+        ",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"data\":",
+        data,
+        "}}}",
+    ]
+    .concat()
+}
 /// A failed tool result. MCP reports tool execution and argument validation
 /// failures as results the model can read and correct; Codex never correlates
 /// a JSON-RPC error with its pending call, so the call would hang instead.

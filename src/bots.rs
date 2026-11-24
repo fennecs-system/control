@@ -695,31 +695,53 @@ fn forest(tree: Option<String>, search: &str) -> String {
 /// the live task trees above and the graveyard (the page `query` selects) on
 /// the ground beneath them, then queued turns.
 pub(crate) fn page(state: &State, query: &crate::graveyard::Query) -> String {
-    let clear = if query.search.is_empty() {
-        ""
-    } else {
-        "<a href='/?view=agents'>Clear</a>"
-    };
-    let search = format!(
-        "<form class='bots-search' method='get' action='/' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{}' placeholder='Search live and dead bots by name or objective' aria-label='Search live and dead bots by name or objective'><button>Search</button>{clear}</form>",
-        crate::escape(&query.search),
-        crate::graveyard::QUERY_CHARS,
-    );
-    let tree = crate::process_tree::render(state, &query.search);
-    let zoom = if tree.is_some() {
-        crate::process_tree::ZOOM_SLOT
-    } else {
-        ""
-    };
-    let mut html = format!(
-        "<div class='section-heading'><h2>Bots</h2></div>{}<div class='bots-scene'>{}{}</div><p class='muted tiny'>{}</p>",
-        crate::navigation::bots_toolbar(false, &search, zoom),
-        forest(tree, &query.search),
-        crate::graveyard::render(state, query),
-        crate::process_tree::LEGEND,
-    );
-    html.push_str(&state.runtime.render("agents", "").unwrap_or_default());
-    html
+    Page::of(state, query).render()
+}
+/// What the Bots page shows, copied out of state in one critical section so
+/// the page renders after the state lock is released.
+pub(crate) struct Page {
+    search: String,
+    forest: crate::process_tree::Forest,
+    graveyard: crate::graveyard::Yard,
+    /// The runtime's queued-turns panel, still rendered while state is read.
+    queued: String,
+}
+impl Page {
+    pub(crate) fn of(state: &State, query: &crate::graveyard::Query) -> Self {
+        Self {
+            search: query.search.clone(),
+            forest: crate::process_tree::Forest::of(state, &query.search),
+            graveyard: crate::graveyard::Yard::of(state, query),
+            queued: state.runtime.render("agents", "").unwrap_or_default(),
+        }
+    }
+    pub(crate) fn render(&self) -> String {
+        let clear = if self.search.is_empty() {
+            ""
+        } else {
+            "<a href='/?view=agents'>Clear</a>"
+        };
+        let search = format!(
+            "<form class='bots-search' method='get' action='/' role='search'><input type='hidden' name='view' value='agents'><input type='search' name='q' value='{}' maxlength='{}' placeholder='Search live and dead bots by name or objective' aria-label='Search live and dead bots by name or objective'><button>Search</button>{clear}</form>",
+            crate::escape(&self.search),
+            crate::graveyard::QUERY_CHARS,
+        );
+        let tree = self.forest.render();
+        let zoom = if tree.is_some() {
+            crate::process_tree::ZOOM_SLOT
+        } else {
+            ""
+        };
+        let mut html = format!(
+            "<div class='section-heading'><h2>Bots</h2></div>{}<div class='bots-scene'>{}{}</div><p class='muted tiny'>{}</p>",
+            crate::navigation::bots_toolbar(false, &search, zoom),
+            forest(tree, &self.search),
+            self.graveyard.render(),
+            crate::process_tree::LEGEND,
+        );
+        html.push_str(&self.queued);
+        html
+    }
 }
 
 /// `/bot on [every N]`, `/bot off`, `/bot pause` and `/bot resume`. Reached only
