@@ -582,13 +582,16 @@ pub fn tool(state: &crate::State, name: &str, args: &serde_json::Value) -> Resul
     if name != TOOLS[1] {
         return Err("Unknown artifact tool");
     }
-    let id = args
-        .artifact
-        .as_deref()
+    preview(&ids, args.artifact.as_deref(), args.path.as_deref())
+}
+/// One published file's text, read from disk.
+fn preview(ids: &[&str], artifact: Option<&str>, path: Option<&str>) -> Result<serde_json::Value, &'static str> {
+    use serde_json::json;
+    let id = artifact
         .filter(|id| ids.contains(id))
         .ok_or("Artifact does not belong to this chat")?;
     let manifest = manifest(id).map_err(|_| "Artifact unavailable or invalid")?;
-    let path = args.path.as_deref().ok_or("Select an artifact file")?;
+    let path = path.ok_or("Select an artifact file")?;
     let bytes = read(&manifest, path).map_err(|_| "Artifact unavailable, unsafe or changed since publication")?;
     let text = std::str::from_utf8(&bytes)
         .ok()
@@ -626,18 +629,39 @@ fn visible_outputs<'a>(
         })
         .collect()
 }
-pub fn render(
-    state: &crate::State,
-    chat: &str,
-    args: &std::collections::HashMap<String, String>,
-) -> Result<String, &'static str> {
+/// A DM's artifacts page as state decides it: the chat's published
+/// outputs and the request's choice. Its manifests and files are read
+/// after the state lock.
+pub(crate) struct Page {
+    chat: String,
+    /// What `published` lists, in its order.
+    ids: Vec<String>,
+    artifact: Option<String>,
+    file: Option<String>,
+}
+impl Page {
+    pub(crate) fn of(
+        state: &crate::State,
+        chat: &str,
+        args: &std::collections::HashMap<String, String>,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            chat: chat.to_owned(),
+            ids: published(state, chat)?.into_iter().map(str::to_owned).collect(),
+            artifact: args.get("artifact").cloned(),
+            file: args.get("file").cloned(),
+        })
+    }
+    /// Reads the outputs' manifests and the chosen file, then renders.
+    pub(crate) fn read(&self) -> Result<String, &'static str> {
+        let ids = self.ids.iter().map(String::as_str).collect::<Vec<_>>();
+        render(&self.chat, &ids, self.artifact.as_deref(), self.file.as_deref())
+    }
+}
+fn render(chat: &str, ids: &[&str], artifact: Option<&str>, file: Option<&str>) -> Result<String, &'static str> {
     use crate::escape;
-    let ids = published(state, chat)?;
     let outputs = visible_outputs(ids.iter().copied(), manifest).map_err(|_| "Artifact unavailable or invalid")?;
-    let selected = args
-        .get("artifact")
-        .map(String::as_str)
-        .or_else(|| outputs.last().map(|output| output.id.as_str()));
+    let selected = artifact.or_else(|| outputs.last().map(|output| output.id.as_str()));
     let mut html = format!(
         "<section class='artifacts'><div class='section-heading'><h2>Artifacts</h2><a href='/dm/{chat}'>Back to DM ↗</a></div>"
     );
@@ -656,7 +680,6 @@ pub fn render(
         ));
     }
     html.push_str("</nav><div class='artifact-layout'><nav class='artifact-files' aria-label='Artifact files'>");
-    let file = args.get("file").map(String::as_str);
     for entry in &manifest.files {
         html.push_str(&format!(
             "<a href='/dm/{chat}/artifacts?artifact={id}&amp;file={}'{}>{}</a>",
@@ -672,11 +695,7 @@ pub fn render(
     html.push_str("</nav><div class='artifact-viewer'>");
     if let Some(path) = file {
         html.push_str(&format!("<h3>{}</h3>", escape(path)));
-        match tool(
-            state,
-            TOOLS[1],
-            &serde_json::json!({"id":chat,"artifact":id,"path":path}),
-        ) {
+        match preview(ids, Some(id), Some(path)) {
             Ok(value) => {
                 if value["truncated"] == true {
                     html.push_str("<p class='muted'>Preview truncated.</p>");

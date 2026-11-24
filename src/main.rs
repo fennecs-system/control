@@ -809,6 +809,10 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         read_response(&mut stream, &state, &session_http::CHAT_PAGES, page);
         return;
     }
+    if let Some(page) = session_http::FilePage::of(method, path, &query) {
+        read_response(&mut stream, &state, &session_http::FILE_PAGES, page);
+        return;
+    }
     if let Some(page) = BotsPage::of(method, path, &query) {
         read_response(&mut stream, &state, &BOTS_PAGE, page);
         return;

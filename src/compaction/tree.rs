@@ -29,14 +29,32 @@ pub(super) enum Kind {
     /// Several older verbatim entries drawn as one cell.
     Entries,
 }
-pub(super) struct Cell<'a> {
+pub(super) struct Cell {
     pub start: u64,
     pub end: u64,
     pub level: u32,
     pub kind: Kind,
-    node: Option<&'a ViewNode>,
+    node: Option<Facts>,
 }
-impl Cell<'_> {
+/// What the overview shows of a summarised block: its size and age, not its text.
+#[derive(Clone, Copy)]
+struct Facts {
+    output_tokens: Option<u64>,
+    bytes: usize,
+    input_bytes: usize,
+    created_unix: u64,
+}
+impl From<&ViewNode> for Facts {
+    fn from(node: &ViewNode) -> Self {
+        Self {
+            output_tokens: node.response.tokens.map(|t| t.output_tokens),
+            bytes: node.response.text.len(),
+            input_bytes: node.input_bytes,
+            created_unix: node.created_unix,
+        }
+    }
+}
+impl Cell {
     fn block(&self) -> Block {
         Block {
             start: self.start,
@@ -46,7 +64,7 @@ impl Cell<'_> {
 }
 
 /// The cut the next turn starts from, oldest first, with bounded verbatim cells.
-pub(super) fn cells<'a>(view: Option<&'a View>, len: usize, recent: u64) -> Vec<Cell<'a>> {
+pub(super) fn cells(view: Option<&View>, len: usize, recent: u64) -> Vec<Cell> {
     let view = view.filter(|v| v.count <= len);
     let covered = view.map_or(len, |v| v.count) as u64;
     let mut cells: Vec<Cell> = cut(covered, recent)
@@ -55,6 +73,7 @@ pub(super) fn cells<'a>(view: Option<&'a View>, len: usize, recent: u64) -> Vec<
                 v.nodes
                     .iter()
                     .find(|n| n.start == block.start && n.level == block.level)
+                    .map(Facts::from)
             });
             let kind = if block.is_item() {
                 Kind::Entry
@@ -102,10 +121,10 @@ pub(super) fn cells<'a>(view: Option<&'a View>, len: usize, recent: u64) -> Vec<
     cells
 }
 
-fn tokens(node: &ViewNode) -> String {
-    match node.response.tokens {
-        Some(t) => format!("{} tok", compact(t.output_tokens)),
-        None => format!("{} B", compact(node.response.text.len() as u64)),
+fn tokens(node: &Facts) -> String {
+    match node.output_tokens {
+        Some(t) => format!("{} tok", compact(t)),
+        None => format!("{} B", compact(node.bytes as u64)),
     }
 }
 fn compact(n: u64) -> String {
@@ -210,12 +229,12 @@ pub(super) fn svg(
             Kind::Entry => format!("Entry {range} · verbatim"),
             Kind::Entries => format!("Entries {range} · {} verbatim entries", cell.end - cell.start),
         };
-        if let Some(node) = cell.node {
+        if let Some(node) = &cell.node {
             let _ = write!(
                 title,
                 " · {} · {} summary bytes from {} input bytes · model {model} · {}",
                 tokens(node),
-                node.response.text.len(),
+                node.bytes,
                 node.input_bytes,
                 when(node.created_unix)
             );
@@ -252,7 +271,7 @@ pub(super) fn svg(
                     format!(
                         "L{}·{}{}",
                         cell.level,
-                        tokens(n),
+                        tokens(&n),
                         revised.map(|r| format!("·r{}", r.id)).unwrap_or_default()
                     )
                 })
@@ -340,75 +359,105 @@ fn parse_block(text: &str) -> Option<Block> {
         .then_some(block)
 }
 
-/// The overview page (inside the app frame). Pure and in-memory.
-pub(super) fn overview(
-    state: &State,
-    session: &crate::chat::Session,
-    query: &HashMap<String, String>,
-    metadata: &str,
-) -> String {
-    let memory = &state.runtime.compaction;
-    let chat = session.id.as_str();
-    let len = session.messages.len();
-    let none = Edits::default();
-    let edits = session.memory.as_deref().unwrap_or(&none);
-    let view = memory.views.get(chat).filter(|v| v.actor == session.actor);
-    let cells = cells(view, len, memory.settings.recent_entries);
-    let model = compactor_for(state, session).map(|m| m.id.clone());
-    let focus = query
-        .get("block")
-        .and_then(|b| parse_block(b))
-        .map(|b| (b.start, b.level))
-        .or_else(|| query.get("entry").and_then(|e| e.parse::<u64>().ok()).map(|e| (e, 0)));
-    let detail = match (
-        query.get("block").and_then(|b| parse_block(b)),
-        query.get("entry").and_then(|e| e.parse::<u64>().ok()),
-    ) {
-        (Some(b), _) => format!("{}/node?block={}.{}", memory_url(chat), b.start, b.level),
-        (None, Some(e)) => format!("{}/node?entry={e}", memory_url(chat)),
-        _ => format!("{}/node", memory_url(chat)),
-    };
-    let summaries = cells.iter().filter(|c| c.kind == Kind::Summary).count();
-    let pending = cells.iter().filter(|c| c.kind == Kind::Pending).count();
-    let verbatim: u64 = cells
-        .iter()
-        .filter(|c| matches!(c.kind, Kind::Entry | Kind::Entries))
-        .map(|c| c.end - c.start)
-        .sum();
-    let status = if memory.pending.as_ref().is_some_and(|(id, ..)| id == chat) {
-        "<span class='mt-badge'>compacting…</span>".to_owned()
-    } else if let Some(error) = memory.errors.get(chat) {
-        format!(
-            "<span class='mt-badge mt-warn' title='{}'>last compaction failed</span>",
-            esc(error)
-        )
-    } else {
-        String::new()
-    };
-    let surgery = match (&memory.surgery, memory.surgery_errors.get(chat)) {
-        (Some((id, b)), _) if id == chat => format!(
-            "<p class='mt-note'>Regenerating the summary of entries {}–{}… Reload to see the new revision.</p>",
-            b.start,
-            b.end()
-        ),
-        (_, Some(error)) => format!(
-            "<p class='mt-note mt-warn'>Last regeneration failed: {}</p>",
-            esc(error)
-        ),
-        _ => String::new(),
-    };
-    let edited = if edits.log.is_empty() {
-        String::new()
-    } else {
-        format!(
-            " · <a href='{}/node' target='memory-detail'>{} operator edit{}</a>",
-            memory_url(chat),
-            edits.log.len(),
-            if edits.log.len() == 1 { "" } else { "s" }
-        )
-    };
-    format!(
-        "<section class='memory-tree'><span class='eyebrow'>DM / MEMORY TREE</span><h2>Memory Tree</h2>\
+/// The overview page (inside the app frame), copied out of state so it
+/// renders after the state lock. In-memory only.
+pub(crate) struct Overview {
+    chat: String,
+    len: usize,
+    edits: Edits,
+    cells: Vec<Cell>,
+    /// The compactor serving the chat.
+    model: Option<String>,
+    /// The model of the published view, when there is one.
+    view_model: Option<String>,
+    focus: Option<(u64, u32)>,
+    detail: String,
+    compacting: bool,
+    error: Option<String>,
+    /// The chat's block being regenerated.
+    regenerating: Option<Block>,
+    regeneration_error: Option<String>,
+    /// `turn::listing`, for the step-tree links.
+    turns: serde_json::Value,
+    /// `compaction::status`.
+    metadata: serde_json::Value,
+}
+impl Overview {
+    pub(super) fn of(
+        state: &State,
+        session: &crate::chat::Session,
+        query: &HashMap<String, String>,
+        metadata: serde_json::Value,
+    ) -> Self {
+        let memory = &state.runtime.compaction;
+        let chat = session.id.as_str();
+        let len = session.messages.len();
+        let view = memory.views.get(chat).filter(|v| v.actor == session.actor);
+        let block = query.get("block").and_then(|b| parse_block(b));
+        let entry = query.get("entry").and_then(|e| e.parse::<u64>().ok());
+        Self {
+            chat: chat.to_owned(),
+            len,
+            edits: session.memory.as_deref().cloned().unwrap_or_default(),
+            cells: cells(view, len, memory.settings.recent_entries),
+            model: compactor_for(state, session).map(|m| m.id.clone()),
+            view_model: view.map(|v| v.model.clone()),
+            focus: block.map(|b| (b.start, b.level)).or_else(|| entry.map(|e| (e, 0))),
+            detail: match (block, entry) {
+                (Some(b), _) => format!("{}/node?block={}.{}", memory_url(chat), b.start, b.level),
+                (None, Some(e)) => format!("{}/node?entry={e}", memory_url(chat)),
+                _ => format!("{}/node", memory_url(chat)),
+            },
+            compacting: memory.pending.as_ref().is_some_and(|(id, ..)| id == chat),
+            error: memory.errors.get(chat).cloned(),
+            regenerating: memory.surgery.as_ref().filter(|(id, _)| id == chat).map(|(_, b)| *b),
+            regeneration_error: memory.surgery_errors.get(chat).cloned(),
+            turns: super::turn::listing(memory, chat, &session.actor),
+            metadata,
+        }
+    }
+    pub(crate) fn render(&self) -> Result<String, &'static str> {
+        let metadata = serde_json::to_string_pretty(&self.metadata).map_err(|_| "Cannot render compaction metadata")?;
+        let (chat, len, cells, edits) = (self.chat.as_str(), self.len, &self.cells, &self.edits);
+        let summaries = cells.iter().filter(|c| c.kind == Kind::Summary).count();
+        let pending = cells.iter().filter(|c| c.kind == Kind::Pending).count();
+        let verbatim: u64 = cells
+            .iter()
+            .filter(|c| matches!(c.kind, Kind::Entry | Kind::Entries))
+            .map(|c| c.end - c.start)
+            .sum();
+        let status = match (self.compacting, &self.error) {
+            (true, _) => "<span class='mt-badge'>compacting…</span>".to_owned(),
+            (false, Some(error)) => format!(
+                "<span class='mt-badge mt-warn' title='{}'>last compaction failed</span>",
+                esc(error)
+            ),
+            (false, None) => String::new(),
+        };
+        let surgery = match (self.regenerating, &self.regeneration_error) {
+            (Some(b), _) => format!(
+                "<p class='mt-note'>Regenerating the summary of entries {}–{}… Reload to see the new revision.</p>",
+                b.start,
+                b.end()
+            ),
+            (None, Some(error)) => format!(
+                "<p class='mt-note mt-warn'>Last regeneration failed: {}</p>",
+                esc(error)
+            ),
+            (None, None) => String::new(),
+        };
+        let edited = if edits.log.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " · <a href='{}/node' target='memory-detail'>{} operator edit{}</a>",
+                memory_url(chat),
+                edits.log.len(),
+                if edits.log.len() == 1 { "" } else { "s" }
+            )
+        };
+        Ok(format!(
+            "<section class='memory-tree'><span class='eyebrow'>DM / MEMORY TREE</span><h2>Memory Tree</h2>\
 <p class='mt-links'><a href='{}'>Return to DM</a> · <a href='/?view=providers'>Memory Tree model and window settings</a> · <a href='{}'>Read retained evidence</a></p>\
 <p class='mt-stats'>{len} entries · {summaries} summary block{} · {pending} pending · {verbatim} verbatim · compactor {} {status}{edited}</p>{surgery}\
 <div class='mt-legend' aria-label='Legend'><span><i class='mt-sw mt-sw-sum'></i>Summary</span><span><i class='mt-sw mt-sw-rev'></i>Operator revision</span><span><i class='mt-sw mt-sw-pending'></i>Not summarised yet</span><span><i class='mt-sw mt-sw-entry'></i>Verbatim entry</span><span><i class='mt-sw mt-sw-pin'></i>Pinned</span><span><i class='mt-sw mt-sw-drop'></i>Dropped from agent view</span></div>\
@@ -416,15 +465,23 @@ pub(super) fn overview(
 <p class='mt-hint'>Older history folds into aligned summary blocks (level L covers 2<sup>L</sup> entries); recent entries stay verbatim. Select a block to expand its children, summary, versions and source; regenerate with an emphasis, pin or drop entries there. Ranges are zero-based and end-exclusive. Summaries are untrusted evidence; the original journal is never rewritten.</p>\
 <iframe class='mt-detail' name='memory-detail' title='Memory Tree block detail' src='{}'></iframe>{}\
 <details class='mt-meta'><summary>Raw Memory Tree metadata</summary><pre>{}</pre></details></section>",
-        esc(&crate::url_names::dm(chat)),
-        esc(&evidence_url(chat)),
-        if summaries == 1 { "" } else { "s" },
-        esc(model.as_deref().unwrap_or("off")),
-        svg(chat, &cells, len, edits, view.map_or("?", |v| v.model.as_str()), focus),
-        esc(&detail),
-        super::turn::section(&state.runtime.compaction, session),
-        esc(metadata),
-    )
+            esc(&crate::url_names::dm(chat)),
+            esc(&evidence_url(chat)),
+            if summaries == 1 { "" } else { "s" },
+            esc(self.model.as_deref().unwrap_or("off")),
+            svg(
+                chat,
+                cells,
+                len,
+                edits,
+                self.view_model.as_deref().unwrap_or("?"),
+                self.focus
+            ),
+            esc(&self.detail),
+            super::turn::section(chat, &self.turns),
+            esc(&metadata),
+        ))
+    }
 }
 
 /// What a detail page needs, captured under the lock.
