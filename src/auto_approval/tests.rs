@@ -379,7 +379,7 @@ fn decisions_are_recorded_with_the_policy_as_decider_and_rate_limited_notices() 
         quiet.bots.notices.is_empty() && quiet.auto_decisions.len() == 1,
         "notices can be switched off"
     );
-    let html = overview(&quiet);
+    let html = Overview::of(&quiet).render();
     assert!(
         html.contains("Running now") && html.contains("bot-in-task-limits") && html.contains("persistent bot"),
         "{html}"

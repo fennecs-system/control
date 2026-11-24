@@ -320,7 +320,10 @@ struct OperatorPage {
     lens: String,
     /// The UTC day that ends the Usage page's activity grid.
     today: u64,
-    /// A page that reads files and no state, rendered before locking.
+    /// The time the Models page's cooling accounts count from.
+    now: accounts::UnixSeconds,
+    /// A page, or the Permissions form, that reads files and no state,
+    /// rendered before locking.
     unlocked: Option<String>,
 }
 impl OperatorPage {
@@ -329,7 +332,9 @@ impl OperatorPage {
             query: query.clone(),
             lens: lens_ui::requested(header, query.get("lens").map(String::as_str)).to_owned(),
             today: usage::today(),
+            now: providers::accounts::now(),
             unlocked: match query.get("view").map(String::as_str) {
+                Some("authority") => Some(permissions_page::form()),
                 Some("discord-access") => Some(runtime::discord_access()),
                 Some("integrations") => Some(runtime::integrations()),
                 _ => None,
@@ -354,14 +359,14 @@ enum Content {
         page: usage::Page,
         today: u64,
     },
-    /// The permissions part is still rendered while state is read.
-    Authority(String, collective::Page),
+    /// The Permissions form (rendered before locking), the rest of the
+    /// Permissions page and the access requests.
+    Authority(String, permissions_page::Page, collective::Page),
     Collective(collective::Page),
-    /// Still rendered while state is read.
-    Providers(String),
+    /// Its logins are checked after the state lock.
+    Providers(providers::Page),
     Tools(tool_catalog::Search),
-    /// Still rendered while state is read.
-    Knowledge(String),
+    Knowledge(knowledge::Page),
     Rooms(rooms::Page),
     /// Content that reads no state.
     Fixed(String),
@@ -370,11 +375,15 @@ impl Content {
     fn render(self) -> String {
         match self {
             Self::Usage { page, today } => page.render(today),
-            Self::Authority(permissions, requests) => format!("{permissions}{}", requests.render()),
+            Self::Authority(form, permissions, requests) => {
+                format!("{form}{}{}", permissions.render(), requests.render())
+            }
             Self::Collective(page) => page.render(),
             Self::Tools(search) => search.render(),
             Self::Rooms(page) => page.render(),
-            Self::Providers(html) | Self::Knowledge(html) | Self::Fixed(html) => html,
+            Self::Providers(page) => page.sign_ins().render(),
+            Self::Knowledge(page) => page.render(),
+            Self::Fixed(html) => html,
         }
     }
 }
@@ -385,6 +394,7 @@ const OPERATOR_PAGES: Read<OperatorPage, Operator> = Read {
                query,
                lens,
                today,
+               now,
                unlocked,
            }| {
         if query.get("view").is_some_and(|view| view == "evolution") {
@@ -409,14 +419,18 @@ const OPERATOR_PAGES: Read<OperatorPage, Operator> = Read {
             .map(String::as_str)
             .unwrap_or("general");
         let content = match view {
-            "authority" => Content::Authority(permissions_page::render(state), state.collective.access()),
+            "authority" => Content::Authority(
+                unlocked.unwrap_or_default(),
+                permissions_page::Page::of(state),
+                state.collective.access(),
+            ),
             "knowledge-review" => Content::Collective(state.collective.review()),
-            "providers" => Content::Providers(providers::render(&state.runtime)),
+            "providers" => Content::Providers(providers::Page::of(&state.runtime, now)),
             "tools" => Content::Tools(tool_catalog::Search::of(
                 state,
                 if channel == "general" { "" } else { channel },
             )),
-            "editor" | "knowledge" => Content::Knowledge(knowledge::render(
+            "editor" | "knowledge" => Content::Knowledge(knowledge::Page::of(
                 &state.documents,
                 &state.collective,
                 if view == "editor" { "scratchpad" } else { "" },
@@ -830,6 +844,10 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     }
     if let Some(page) = OperatorPage::of(method, path, &query, &header) {
         read_response(&mut stream, &state, &OPERATOR_PAGES, page);
+        return;
+    }
+    if method == "GET" && path == "/knowledge" {
+        read_response(&mut stream, &state, &knowledge::PAGE, knowledge::Request::from(&query));
         return;
     }
     if lens_library::http(
