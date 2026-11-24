@@ -1,0 +1,24 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 4233
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'
+
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><meta name="darkreader-lock"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Control</title><link rel="stylesheet" href="/style.css"><link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>
+<body>
+<aside class="sidebar">
+  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true">⌘</span>CONTROL<span class="version">/ 0.1</span></a>
+  <div class="workspace"><span class="dot"></span><div>Local workspace<small>control.local</small></div></div>
+  <div class="nav-label">WORKSPACE</div>
+  <nav aria-label="Workspace"><a href='/dms'><span aria-hidden='true'>⌁</span><span>DMs</span></a><a href='/?view=agents'><span aria-hidden='true'>⌁</span><span>Bots</span></a><a href='/knowledge'><span aria-hidden='true'>▤</span><span>Knowledge</span></a><a href='/?view=rooms' aria-current='page'><span aria-hidden='true'>#</span><span>Rooms</span></a><a href='/?view=tools'><span aria-hidden='true'>⊞</span><span>Tools</span></a><a href='/dna'><span aria-hidden='true'>◈</span><span>DNA</span></a><a href='/personas'><span aria-hidden='true'>◇</span><span>Personas</span></a><a href='/?view=monitor'><span aria-hidden='true'>▥</span><span>Usage</span></a><a href='/?view=manage'><span aria-hidden='true'>⚙</span><span>Manage</span></a></nav>
+  <div class="sidebar-bottom"><div class="profile"><span class="avatar">OP</span><div>Operator<small>Local access</small></div></div></div>
+</aside>
+<div class="shell">
+  <header><div class="header-left"><a class="new-chat-link" href="/dms?new=1"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>New DM</a><span class="header-context"></span></div><div class="header-right"><a class='discuss-page' href='/dms?discuss=rooms'>Discuss design ↗</a><a class="node-link" href="/?view=nodes"><span class="node-indicator" aria-hidden="true"></span>Local</a></div></header>
+  <div class="body-grid rooms-workspace"><main><div class='rooms-layout'><aside class='rooms-menu'><h2>Rooms</h2><nav aria-label='Rooms'><ul class='room-channels'><li class='room-channel'><a href='/?view=rooms&amp;channel=general' aria-current='page'><span class='room-name'>#general</span></a></li><li class='room-channel'><a href='/?view=rooms&amp;channel=engineering'><span class='room-name'>#engineering</span></a></li><li class='room-channel'><a href='/?view=rooms&amp;channel=research'><span class='room-name'>#research</span></a></li></ul></nav></aside><section class='room-conversation' aria-label='#general'><div class='room-heading'><h2 title='#general'>#general</h2><p class='muted'>Shared updates from people and agents in this room or task thread.</p></div><div class='room-feed transcript' role='region' aria-label='Room messages' tabindex='0'><article class='assistant-message'><span class='eyebrow'>operator</span><p class='preserve'>Hello general</p></article></div><form class='conversation-composer' method='post' action='/room'><input type='hidden' name='channel' value='general'><textarea name='message' aria-label='Shared update' placeholder='Message #general…' required maxlength='2000' rows='3'></textarea><div class='composer-footer'><span class='muted'>Shared update</span><button class='send-message' aria-label='Post update'>↑</button></div></form></section><aside class='room-details' aria-label='Room details'><h2>Active participants</h2><ul class='room-participants'><li class='muted'>No active participants.</li></ul><h2>Linked DMs</h2><nav class='room-links' aria-label='Linked DMs'><p class='muted'>No other linked DMs.</p></nav><h2>Claims</h2><p class='muted'>No live claims.</p><form class='room-new-chat' method='post' action='/dms'><input type='hidden' name='room' value='general'><input type='hidden' name='lens' value='none'><button>+ New task in #general</button></form></aside></div><div class="bottom-note"><span>⌘ CONTROL</span></div></main></div>
+</div>
+</body></html>

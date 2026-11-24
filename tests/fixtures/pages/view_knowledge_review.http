@@ -1,0 +1,24 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 3456
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'
+
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><meta name="darkreader-lock"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Control</title><link rel="stylesheet" href="/style.css"><link rel='stylesheet' href='/collective.css'><link rel='stylesheet' href='/runtime.css'><link rel='stylesheet' href='/workspace.css'><link rel='stylesheet' href='/navigation.css'></head>
+<body>
+<aside class="sidebar">
+  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true">⌘</span>CONTROL<span class="version">/ 0.1</span></a>
+  <div class="workspace"><span class="dot"></span><div>Local workspace<small>control.local</small></div></div>
+  <div class="nav-label">WORKSPACE</div>
+  <nav aria-label="Workspace"><a href='/dms'><span aria-hidden='true'>⌁</span><span>DMs</span></a><a href='/?view=agents'><span aria-hidden='true'>⌁</span><span>Bots</span></a><a href='/knowledge'><span aria-hidden='true'>▤</span><span>Knowledge</span></a><a href='/?view=rooms'><span aria-hidden='true'>#</span><span>Rooms</span></a><a href='/?view=tools'><span aria-hidden='true'>⊞</span><span>Tools</span></a><a href='/dna'><span aria-hidden='true'>◈</span><span>DNA</span></a><a href='/personas'><span aria-hidden='true'>◇</span><span>Personas</span></a><a href='/?view=monitor'><span aria-hidden='true'>▥</span><span>Usage</span></a><a href='/?view=manage'><span aria-hidden='true'>⚙</span><span>Manage</span></a></nav>
+  <div class="sidebar-bottom"><div class="profile"><span class="avatar">OP</span><div>Operator<small>Local access</small></div></div></div>
+</aside>
+<div class="shell">
+  <header><div class="header-left"><a class="new-chat-link" href="/dms?new=1"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>New DM</a><span class="header-context"></span></div><div class="header-right"><a class="node-link" href="/?view=nodes"><span class="node-indicator" aria-hidden="true"></span>Local</a></div></header>
+  <div class="body-grid "><main><span class='eyebrow'>KNOWLEDGE</span><h2>Review knowledge</h2><p class='muted'>Check the evidence before accepting a claim.</p><article class='record'><span class='tag'>pending</span><h3>Pending &lt;claim&gt;</h3><dl><dt>Evidence</dt><dd>Logs &amp; traces</dd><dt>Scope</dt><dd>Node</dd><dt>Recheck when</dt><dd>Weekly</dd></dl><form method='post' action='/review' class='actions'><input type='hidden' name='id' value='0'><button class='primary' name='decision' value='accepted'>Accept entry</button><button name='decision' value='rejected'>Reject</button></form></article><article class='record'><span class='tag'>accepted</span><h3>Accepted claim</h3><dl><dt>Evidence</dt><dd>Tests</dd><dt>Scope</dt><dd>All</dd><dt>Recheck when</dt><dd>Never</dd></dl></article><h3 class='form-title'>New entry</h3><form method='post' action='/propose'><label>Claim · up to 280 characters<input name='claim' required maxlength='280'></label><label>Evidence or source<input name='evidence' required maxlength='1000'></label><label>Scope<input name='scope' required maxlength='300'></label><label>Recheck when<input name='validity' required maxlength='300'></label><button class='primary'>Submit for review ↗</button></form><div class="bottom-note"><span>⌘ CONTROL</span></div></main></div>
+</div>
+</body></html>
