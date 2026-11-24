@@ -366,80 +366,196 @@ fn local(runtime: &crate::runtime::Runtime) -> impl Iterator<Item = &crate::mode
     runtime.compaction.models.iter().filter(|m| m.cli.is_none())
 }
 
+/// The Models page, copied out of state so it renders after the state lock.
+pub(crate) struct Page {
+    backend: crate::backend::Backend,
+    /// The default model (`Runtime::configured_model`).
+    model: String,
+    /// The saved agent models, each with its backend's default account.
+    saved: Vec<(Model, crate::accounts::AccountName)>,
+    /// Every hosted backend's accounts, each with its backend's default account.
+    accounts: Vec<(Account, crate::accounts::AccountName)>,
+    /// The cooling accounts' notes.
+    notes: Vec<accounts::Note>,
+    endpoints: Vec<crate::model_calls::Endpoint>,
+    settings: crate::compaction::Settings,
+}
+type Account = crate::accounts::Account<crate::backend::Backend>;
+impl Page {
+    pub(crate) fn of(runtime: &crate::runtime::Runtime, now: crate::accounts::UnixSeconds) -> Self {
+        Self {
+            backend: runtime.backend,
+            model: runtime.configured_model(),
+            saved: configured(runtime)
+                .into_iter()
+                .map(|entry| {
+                    let account = runtime.accounts.default_name(entry.backend);
+                    (entry, account)
+                })
+                .collect(),
+            accounts: crate::backend::Backend::hosted()
+                .flat_map(|backend| {
+                    let default = runtime.accounts.default_name(backend);
+                    runtime
+                        .accounts
+                        .of(backend)
+                        .map(move |account| (account, default.clone()))
+                })
+                .collect(),
+            notes: accounts::notes(runtime, now),
+            endpoints: runtime.compaction.models.clone(),
+            settings: runtime.compaction.settings.clone(),
+        }
+    }
+    /// Whether each account has a login, and for an API key how it reaches
+    /// turns. This reads the login files and `permissions.json`, so the
+    /// server calls it after the state lock. It shows presence only.
+    pub(crate) fn sign_ins(self) -> Checked {
+        let logins = self
+            .accounts
+            .iter()
+            .map(
+                |(account, _)| match (crate::logins::locate(account).is_ok(), account.kind) {
+                    (true, crate::accounts::AccountKind::ApiKey) => {
+                        Login::Key(crate::ports::key_relay::decision(account.id.backend).describe())
+                    }
+                    (true, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
+                        Login::SignedIn
+                    }
+                    (false, _) => Login::Missing,
+                },
+            )
+            .collect();
+        Checked { page: self, logins }
+    }
+}
+/// The Models page with each account's login checked: what it renders from.
+pub(crate) struct Checked {
+    page: Page,
+    /// One per account, in order.
+    logins: Vec<Login>,
+}
+enum Login {
+    Missing,
+    SignedIn,
+    /// An API key is saved; how it reaches turns.
+    Key(String),
+}
 pub fn render(runtime: &crate::runtime::Runtime) -> String {
-    // While this page is open its client reads each local server's statistics
-    // every few seconds; a closed or hidden page reads nothing.
-    let live = if local(runtime).next().is_some() {
-        " data-live-src='/providers/live' data-live-every='5'"
-    } else {
-        ""
-    };
-    let mut html = format!(
-        "<div class='providers-page'{live}><h2>Models &amp; providers</h2><p id='saved' class='provider-saved save-confirmation' role='status'>Saved.</p><section class='provider-section' aria-labelledby='agent-models-heading'><h3 id='agent-models-heading'>Agent models</h3><p class='provider-description'>Select the default for new DMs and spawned agents.</p><h4 class='model-group'>Integrations</h4><div class='model-list' aria-label='Integration models'>"
-    );
-    for entry in configured(runtime) {
-        let model = crate::escape(&entry.model);
-        let id = entry.backend.id();
-        let label = entry.backend.label();
-        let selected = entry.backend == runtime.backend && entry.model == runtime.configured_model();
-        // The default runs on its backend's default account; name it when it is not the implicit one.
-        let account = runtime.accounts.default_name(entry.backend);
-        let marker = match (selected, account.is_implicit()) {
-            (false, _) => String::new(),
-            (true, true) => DEFAULT_MARK.to_owned(),
-            (true, false) => format!("<span class='model-default'>Default · {id}+{account}</span>"),
+    Page::of(runtime, accounts::now()).sign_ins().render()
+}
+impl Checked {
+    pub(crate) fn render(&self) -> String {
+        let page = &self.page;
+        // While this page is open its client reads each local server's statistics
+        // every few seconds; a closed or hidden page reads nothing.
+        let live = if page.endpoints.iter().any(|m| m.cli.is_none()) {
+            " data-live-src='/providers/live' data-live-every='5'"
+        } else {
+            ""
         };
-        let capacity = entry.capacity;
-        html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{model}'>{model}</span><span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary aria-label='Edit {label} model {model}'>Edit</summary><div class='model-edit-body'><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model ID<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Save model</button></form>"));
-        html.push_str(&format!("<form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><h4>Context capacity</h4><p class='provider-description'>Leave context tokens empty to use the provider policy. Instructions that cannot fit are reported, never truncated.</p><div class='provider-fields'><label>Context tokens<input name='context_tokens' type='number' min='1' placeholder='Unknown' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool token reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label></div><p class='provider-description'>Input bytes conservatively count as tokens.</p><button class='primary'>Save capacity</button></form></div></details></section>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));
+        let mut html = format!(
+            "<div class='providers-page'{live}><h2>Models &amp; providers</h2><p id='saved' class='provider-saved save-confirmation' role='status'>Saved.</p><section class='provider-section' aria-labelledby='agent-models-heading'><h3 id='agent-models-heading'>Agent models</h3><p class='provider-description'>Select the default for new DMs and spawned agents.</p><h4 class='model-group'>Integrations</h4><div class='model-list' aria-label='Integration models'>"
+        );
+        for (entry, account) in &page.saved {
+            let model = crate::escape(&entry.model);
+            let id = entry.backend.id();
+            let label = entry.backend.label();
+            let selected = entry.backend == page.backend && entry.model == page.model;
+            // The default runs on its backend's default account; name it when it is not the implicit one.
+            let marker = match (selected, account.is_implicit()) {
+                (false, _) => String::new(),
+                (true, true) => DEFAULT_MARK.to_owned(),
+                (true, false) => format!("<span class='model-default'>Default · {id}+{account}</span>"),
+            };
+            let capacity = entry.capacity;
+            html.push_str(&format!("<section class='model-row'><form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span><span class='model-name'><span class='model-id' title='{model}'>{model}</span><span class='model-provider'>{label}</span></span>{marker}</button></form><details class='model-edit'><summary aria-label='Edit {label} model {model}'>Edit</summary><div class='model-edit-body'><form method='post' action='/providers'><input type='hidden' name='action' value='edit'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='old_model' value='{model}'><label>Model ID<input name='model' required maxlength='100' value='{model}' spellcheck='false' autocapitalize='none'></label><button class='primary'>Save model</button></form>"));
+            html.push_str(&format!("<form class='model-capacity' method='post' action='/providers'><input type='hidden' name='action' value='capacity'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='model' value='{model}'><h4>Context capacity</h4><p class='provider-description'>Leave context tokens empty to use the provider policy. Instructions that cannot fit are reported, never truncated.</p><div class='provider-fields'><label>Context tokens<input name='context_tokens' type='number' min='1' placeholder='Unknown' value='{}'></label><label>Output token reserve<input name='output_tokens' type='number' min='1' value='{}'></label><label>Provider/tool token reserve<input name='overhead_tokens' type='number' min='0' value='{}'></label></div><p class='provider-description'>Input bytes conservatively count as tokens.</p><button class='primary'>Save capacity</button></form></div></details></section>",capacity.map(|c|c.context_tokens.to_string()).unwrap_or_default(),capacity.map_or(2048,|c|c.output_tokens),capacity.map_or(4096,|c|c.overhead_tokens)));
+        }
+        html.push_str("</div>");
+        html.push_str(&self.accounts());
+        // Every local endpoint that serves tool calls runs agent turns too: it is
+        // listed with the same one-click default, and its connection is edited here only.
+        html.push_str("<h4 class='model-group'>Local</h4><div class='model-list' aria-label='Local models'>");
+        let (agents, summaries): (Vec<_>, Vec<_>) = page.endpoints.iter().partition(|m| m.cli.is_none() && m.tools);
+        if agents.is_empty() {
+            html.push_str("<p class='provider-empty'>No local model serves tool calls yet.</p>");
+        }
+        for model in &agents {
+            html.push_str(&endpoint_row(page, model));
+        }
+        // One form for every hosted backend, so the list does not grow with them.
+        html.push_str("</div><details class='model-add'><summary>+ New model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='add'><h4>Integration</h4><div class='provider-fields'><label>Provider<select name='provider'>");
+        for backend in crate::backend::Backend::hosted() {
+            html.push_str(&format!(
+                "<option value='{}'>{}</option>",
+                backend.id(),
+                backend.label()
+            ));
+        }
+        let examples = crate::backend::Backend::hosted()
+            .map(|backend| crate::escape(&backend.default_model()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        html.push_str(&format!("</select></label><label>Model ID<input name='model' required maxlength='100' placeholder='{examples}' spellcheck='false' autocapitalize='none'></label></div><button class='primary'>Add model</button></form>"));
+        html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><h4>Local endpoint</h4>{}<button class='primary'>Add local model</button></form></details></section>", text_fields(None, true)));
+        // Entries that cannot run agent turns: summaries and text generation only.
+        html.push_str(&format!("<section class='provider-section' aria-labelledby='summary-models-heading'><details class='model-add summary-models'><summary id='summary-models-heading'>Summary models ({})</summary><p class='provider-description'>Summaries and <code>control_model_generate</code> only; a local endpoint that serves tool calls is listed under Agent models.</p><div class='model-list' aria-label='Summary models'>", summaries.len()));
+        for model in &summaries {
+            html.push_str(&endpoint_row(page, model));
+        }
+        html.push_str(&format!("</div><form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><h4>New summary model</h4>{}<button class='primary'>Add summary model</button></form></details></section>", text_fields(None, false)));
+        html.push_str(&render_memory(page));
+        html.push_str("</div>");
+        html
     }
-    html.push_str("</div>");
-    html.push_str(&render_accounts(runtime));
-    // Every local endpoint that serves tool calls runs agent turns too: it is
-    // listed with the same one-click default, and its connection is edited here only.
-    html.push_str("<h4 class='model-group'>Local</h4><div class='model-list' aria-label='Local models'>");
-    let (agents, summaries): (Vec<_>, Vec<_>) = runtime
-        .compaction
-        .models
-        .iter()
-        .partition(|m| m.cli.is_none() && m.tools);
-    if agents.is_empty() {
-        html.push_str("<p class='provider-empty'>No local model serves tool calls yet.</p>");
+    /// The Integrations group's account rows: each backend's accounts with
+    /// their kind, whether a login is present, and the command that signs
+    /// one in. Metadata only.
+    fn accounts(&self) -> String {
+        let rows: String = self
+            .page
+            .accounts
+            .iter()
+            .zip(&self.logins)
+            .map(|((account, default), login)| {
+                let name = &account.id.name;
+                let backend = account.id.backend;
+                let id = backend.id();
+                let cooling = self.page.notes.iter().find(|note| note.backend == backend && note.account == *name).map(|note| {
+                    format!("<form method='post' action='/providers'><input type='hidden' name='action' value='account-clear'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='account' value='{name}'><span class='provider-description'>{}</span> <button class='provider-secondary'>Clear</button></form>", crate::escape(&note.note))
+                });
+                format!(
+                    "<tr><td><code>{id}+{name}</code>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    if name == default { " <span class='model-default'>Default</span>" } else { "" },
+                    account.kind.as_str(),
+                    match (login, account.kind) {
+                        (Login::Key(delivery), _) => format!("Key saved · {}", crate::escape(delivery)),
+                        (Login::Missing, crate::accounts::AccountKind::ApiKey) => "No key yet".to_owned(),
+                        (Login::SignedIn, _) => "Signed in".to_owned(),
+                        (Login::Missing, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
+                            "No login yet".to_owned()
+                        }
+                    },
+                    match (account.enabled, cooling) {
+                        (false, _) => "Disabled".to_owned(),
+                        (true, Some(cooling)) => cooling,
+                        (true, None) => "Enabled".to_owned(),
+                    },
+                    crate::escape(&crate::logins::sign_in_command(account))
+                )
+            })
+            .collect();
+        format!(
+            "<h4 class='model-group'>Accounts</h4><p class='provider-description'>Select one with <code>backend+account:model</code>. Add one with <code>control accounts add BACKEND NAME</code>, or <code>--kind api-key</code> for an API key, which bills per use.</p><table class='persona-table provider-accounts'><thead><tr><th>Account</th><th>Kind</th><th>Login</th><th>State</th><th>Sign in with</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
     }
-    for model in &agents {
-        html.push_str(&endpoint_row(runtime, model));
-    }
-    // One form for every hosted backend, so the list does not grow with them.
-    html.push_str("</div><details class='model-add'><summary>+ New model</summary><form method='post' action='/providers'><input type='hidden' name='action' value='add'><h4>Integration</h4><div class='provider-fields'><label>Provider<select name='provider'>");
-    for backend in crate::backend::Backend::hosted() {
-        html.push_str(&format!(
-            "<option value='{}'>{}</option>",
-            backend.id(),
-            backend.label()
-        ));
-    }
-    let examples = crate::backend::Backend::hosted()
-        .map(|backend| crate::escape(&backend.default_model()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    html.push_str(&format!("</select></label><label>Model ID<input name='model' required maxlength='100' placeholder='{examples}' spellcheck='false' autocapitalize='none'></label></div><button class='primary'>Add model</button></form>"));
-    html.push_str(&format!("<form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><h4>Local endpoint</h4>{}<button class='primary'>Add local model</button></form></details></section>", text_fields(None, true)));
-    // Entries that cannot run agent turns: summaries and text generation only.
-    html.push_str(&format!("<section class='provider-section' aria-labelledby='summary-models-heading'><details class='model-add summary-models'><summary id='summary-models-heading'>Summary models ({})</summary><p class='provider-description'>Summaries and <code>control_model_generate</code> only; a local endpoint that serves tool calls is listed under Agent models.</p><div class='model-list' aria-label='Summary models'>", summaries.len()));
-    for model in &summaries {
-        html.push_str(&endpoint_row(runtime, model));
-    }
-    html.push_str(&format!("</div><form method='post' action='/providers'><input type='hidden' name='action' value='text-add'><h4>New summary model</h4>{}<button class='primary'>Add summary model</button></form></details></section>", text_fields(None, false)));
-    html.push_str(&render_memory(runtime));
-    html.push_str("</div>");
-    html
 }
 const DEFAULT_MARK: &str = "<span class='model-default'>Default</span>";
 /// One endpoint entry as a compact row: an agent-capable local endpoint leads
 /// with the default control, any other entry with its name; everything else
 /// (statistics, limits, revision, connection, removal) is behind Edit.
-fn endpoint_row(runtime: &crate::runtime::Runtime, model: &crate::model_calls::Endpoint) -> String {
-    let memory = &runtime.compaction;
+fn endpoint_row(page: &Page, model: &crate::model_calls::Endpoint) -> String {
     let id = crate::escape(&model.id);
     let adapter = model.cli.map_or("Local endpoint", |backend| backend.label());
     let place = if model.cli.is_none() {
@@ -447,7 +563,7 @@ fn endpoint_row(runtime: &crate::runtime::Runtime, model: &crate::model_calls::E
     } else {
         crate::escape(&model.model)
     };
-    let compactor = if memory.settings.enabled && memory.settings.model.as_deref() == Some(model.id.as_str()) {
+    let compactor = if page.settings.enabled && page.settings.model.as_deref() == Some(model.id.as_str()) {
         "<span class='model-default'>Compactor</span>"
     } else {
         ""
@@ -456,7 +572,7 @@ fn endpoint_row(runtime: &crate::runtime::Runtime, model: &crate::model_calls::E
         "<span class='model-name'><span class='model-id' title='{id}'>{id}</span><span class='model-provider'>{adapter} · {place}</span></span>"
     );
     let head = if model.cli.is_none() && model.tools {
-        let selected = runtime.backend == crate::backend::Backend::Local && runtime.configured_model() == model.id;
+        let selected = page.backend == crate::backend::Backend::Local && page.model == model.id;
         format!(
             "<form method='post' action='/providers'><input type='hidden' name='action' value='select'><input type='hidden' name='provider' value='{}'><input type='hidden' name='model' value='{id}'><button class='model-choice' aria-pressed='{selected}'><span class='model-dot' aria-hidden='true'></span>{name}{compactor}{}</button></form>",
             crate::backend::Backend::Local.id(),
@@ -682,16 +798,15 @@ fn text_fields(model: Option<&crate::model_calls::Endpoint>, local: bool) -> Str
     }
     html
 }
-fn render_memory(runtime: &crate::runtime::Runtime) -> String {
-    let memory = &runtime.compaction;
+fn render_memory(page: &Page) -> String {
     let mut html = String::new();
     html.push_str("<section class='provider-section' aria-labelledby='compaction-heading'><h3 id='compaction-heading'>Memory Tree model</h3><p class='provider-description'>Zipper-style memory: recent turns stay verbatim at the focus, older history folds into fixed summary blocks that get coarser with distance. Opt in per DM; originals stay recallable in the Memory Tree.</p><form class='compaction-settings' method='post' action='/providers'><input type='hidden' name='action' value='compaction'>");
-    html.push_str(&format!("<label class='summary-toggle'><input name='enabled' type='checkbox'{}><span><strong>Automatic summaries</strong><small>Use Control compaction for the DMs listed below.</small></span></label><div class='provider-fields'><label>Summary model<select name='model'><option value=''>Select a summary model</option>",if memory.settings.enabled {" checked"}else{""}));
-    for model in &memory.models {
+    html.push_str(&format!("<label class='summary-toggle'><input name='enabled' type='checkbox'{}><span><strong>Automatic summaries</strong><small>Use Control compaction for the DMs listed below.</small></span></label><div class='provider-fields'><label>Summary model<select name='model'><option value=''>Select a summary model</option>",if page.settings.enabled {" checked"}else{""}));
+    for model in &page.endpoints {
         html.push_str(&format!(
             "<option value='{}'{}>{}</option>",
             crate::escape(&model.id),
-            if Some(&model.id) == memory.settings.model.as_ref() {
+            if Some(&model.id) == page.settings.model.as_ref() {
                 " selected"
             } else {
                 ""
@@ -699,8 +814,8 @@ fn render_memory(runtime: &crate::runtime::Runtime) -> String {
             crate::escape(&model.id)
         ));
     }
-    html.push_str(&format!("</select></label><label>DMs to summarize<input name='chats' maxlength='8192' placeholder='c-example c-another' value='{}'><small>Space-separated DM IDs. Empty means none.</small></label></div>",crate::escape(&memory.settings.chats.join(" "))));
-    html.push_str(&format!("<details class='compaction-advanced'><summary>Advanced window settings</summary><div class='provider-fields'><label>Recent entries kept verbatim<input name='recent_entries' type='number' min='1' max='128' value='{}'></label><label>Leaf chunk entries (power of two)<input name='leaf_entries' type='number' min='1' max='64' value='{}'></label><label>History byte budget<input name='history_bytes' type='number' min='1024' max='262144' value='{}'></label></div><p class='provider-description'>Input is conservatively byte-bounded using declared context/output limits. Requests exceeding capacity fail visibly.</p></details><p class='provider-description'>Inspect and edit a DM's Memory Tree at <code>/dm/ID/memory</code>, or use <code>/compact</code> in the TUI.</p><div class='provider-actions'><button class='primary'>Save compaction settings</button></div></form></section>", memory.settings.recent_entries,memory.settings.leaf_entries,memory.settings.history_bytes));
+    html.push_str(&format!("</select></label><label>DMs to summarize<input name='chats' maxlength='8192' placeholder='c-example c-another' value='{}'><small>Space-separated DM IDs. Empty means none.</small></label></div>",crate::escape(&page.settings.chats.join(" "))));
+    html.push_str(&format!("<details class='compaction-advanced'><summary>Advanced window settings</summary><div class='provider-fields'><label>Recent entries kept verbatim<input name='recent_entries' type='number' min='1' max='128' value='{}'></label><label>Leaf chunk entries (power of two)<input name='leaf_entries' type='number' min='1' max='64' value='{}'></label><label>History byte budget<input name='history_bytes' type='number' min='1024' max='262144' value='{}'></label></div><p class='provider-description'>Input is conservatively byte-bounded using declared context/output limits. Requests exceeding capacity fail visibly.</p></details><p class='provider-description'>Inspect and edit a DM's Memory Tree at <code>/dm/ID/memory</code>, or use <code>/compact</code> in the TUI.</p><div class='provider-actions'><button class='primary'>Save compaction settings</button></div></form></section>", page.settings.recent_entries,page.settings.leaf_entries,page.settings.history_bytes));
     html
 }
 fn save_text(
@@ -956,51 +1071,4 @@ pub(crate) fn clear_account(
     accounts::clear(runtime, backend, &name);
     crate::worker::wake();
     Ok(())
-}
-/// The Integrations group's account rows: each backend's accounts with their
-/// kind, whether a login is present, and the command that signs one in.
-/// Metadata only.
-fn render_accounts(runtime: &crate::runtime::Runtime) -> String {
-    let notes = accounts::notes(runtime, accounts::now());
-    let rows: String = crate::backend::Backend::hosted()
-        .flat_map(|backend| {
-            let default = runtime.accounts.default_name(backend);
-            runtime.accounts.of(backend).map(move |account| (backend, account, default.clone()))
-        })
-        .map(|(backend, account, default)| {
-            let name = &account.id.name;
-            let id = backend.id();
-            let signed_in = crate::logins::locate(&account).is_ok();
-            let cooling = notes.iter().find(|note| note.backend == backend && note.account == *name).map(|note| {
-                format!("<form method='post' action='/providers'><input type='hidden' name='action' value='account-clear'><input type='hidden' name='provider' value='{id}'><input type='hidden' name='account' value='{name}'><span class='provider-description'>{}</span> <button class='provider-secondary'>Clear</button></form>", crate::escape(&note.note))
-            });
-            format!(
-                "<tr><td><code>{id}+{name}</code>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                if *name == default { " <span class='model-default'>Default</span>" } else { "" },
-                account.kind.as_str(),
-                match (signed_in, account.kind) {
-                    (true, crate::accounts::AccountKind::ApiKey) => format!(
-                        "Key saved · {}",
-                        crate::escape(&crate::ports::key_relay::decision(backend).describe())
-                    ),
-                    (false, crate::accounts::AccountKind::ApiKey) => "No key yet".to_owned(),
-                    (true, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
-                        "Signed in".to_owned()
-                    }
-                    (false, crate::accounts::AccountKind::Subscription | crate::accounts::AccountKind::Cloud) => {
-                        "No login yet".to_owned()
-                    }
-                },
-                match (account.enabled, cooling) {
-                    (false, _) => "Disabled".to_owned(),
-                    (true, Some(cooling)) => cooling,
-                    (true, None) => "Enabled".to_owned(),
-                },
-                crate::escape(&crate::logins::sign_in_command(&account))
-            )
-        })
-        .collect();
-    format!(
-        "<h4 class='model-group'>Accounts</h4><p class='provider-description'>Select one with <code>backend+account:model</code>. Add one with <code>control accounts add BACKEND NAME</code>, or <code>--kind api-key</code> for an API key, which bills per use.</p><table class='persona-table provider-accounts'><thead><tr><th>Account</th><th>Kind</th><th>Login</th><th>State</th><th>Sign in with</th></tr></thead><tbody>{rows}</tbody></table>"
-    )
 }

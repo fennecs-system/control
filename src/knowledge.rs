@@ -216,90 +216,152 @@ pub fn render(
     selection: &str,
     saved: Option<u64>,
 ) -> String {
-    let doc = documents.iter().find(|d| d.id == selection).or_else(|| {
-        if ["", "general"].contains(&selection) {
-            documents.first()
-        } else {
-            None
+    Page::of(documents, collective, selection, saved).render()
+}
+/// A Knowledge page, copied out of state so it renders after the state lock.
+pub(crate) struct Page {
+    documents: Vec<Document>,
+    /// A document id, or a mode: `graph`, `review` or `new`.
+    selection: String,
+    /// The revision a save just confirmed.
+    saved: Option<u64>,
+    /// The review page, when that is the selection.
+    review: Option<crate::collective::Page>,
+}
+impl Page {
+    pub(crate) fn of(
+        documents: &[Document],
+        collective: &crate::collective::Collective,
+        selection: &str,
+        saved: Option<u64>,
+    ) -> Self {
+        Self {
+            documents: documents.to_vec(),
+            selection: selection.to_owned(),
+            saved,
+            review: (selection == "review").then(|| collective.review()),
         }
-    });
-    let mut html = String::from(
-        "<div class='section-heading knowledge-heading'><h2>Knowledge</h2><a class='primary add-note' href='/knowledge?mode=new' aria-label='Create a note'>＋ <span>New note</span></a></div><div class='tabs knowledge-tabs'><a href='/knowledge'>Documents</a><a href='/knowledge?mode=graph'>Graph</a><a href='/knowledge?mode=review'>Review</a></div><div class='knowledge-workspace'><aside class='note-files' aria-label='Notes'><span class='eyebrow'>DOCUMENTS</span>",
-    );
-    for note in documents {
-        html.push_str(&format!(
-            "<a href='/knowledge?doc={}'{}><span>▤</span> {}</a>",
-            escape(&note.id),
-            if doc.is_some_and(|d| d.id == note.id) {
-                " aria-current='page'"
+    }
+    pub(crate) fn render(&self) -> String {
+        let (documents, selection, saved) = (self.documents.as_slice(), self.selection.as_str(), self.saved);
+        let doc = documents.iter().find(|d| d.id == selection).or_else(|| {
+            if ["", "general"].contains(&selection) {
+                documents.first()
             } else {
-                ""
-            },
-            escape(&note.title)
-        ));
-    }
-    if documents.is_empty() {
-        html.push_str("<p class='muted'>No notes yet.</p>");
-    }
-    html.push_str("</aside><section class='knowledge-content'>");
-    if selection == "graph" {
-        html.push_str(&graph(documents));
-    } else if selection == "review" {
-        html.push_str(&collective.render("knowledge-review", "general").unwrap_or_default());
-    } else if selection == "new" || doc.is_some() || documents.is_empty() {
-        if let Some(doc) = doc
-            && saved == Some(doc.revision)
-        {
+                None
+            }
+        });
+        let mut html = String::from(
+            "<div class='section-heading knowledge-heading'><h2>Knowledge</h2><a class='primary add-note' href='/knowledge?mode=new' aria-label='Create a note'>＋ <span>New note</span></a></div><div class='tabs knowledge-tabs'><a href='/knowledge'>Documents</a><a href='/knowledge?mode=graph'>Graph</a><a href='/knowledge?mode=review'>Review</a></div><div class='knowledge-workspace'><aside class='note-files' aria-label='Notes'><span class='eyebrow'>DOCUMENTS</span>",
+        );
+        for note in documents {
             html.push_str(&format!(
-                "<div id='saved' class='save-confirmation' role='status'>✓ Saved {} · revision {}</div>",
-                escape(&doc.title),
-                doc.revision
+                "<a href='/knowledge?doc={}'{}><span>▤</span> {}</a>",
+                escape(&note.id),
+                if doc.is_some_and(|d| d.id == note.id) {
+                    " aria-current='page'"
+                } else {
+                    ""
+                },
+                escape(&note.title)
             ));
         }
-        html.push_str(&editor(doc, None));
-        if let Some(doc) = doc {
-            let outgoing = links(&doc.body);
-            let incoming: Vec<_> = documents
-                .iter()
-                .filter(|d| d.id != doc.id && links(&d.body).contains(&key(&doc.title)))
-                .collect();
-            if !outgoing.is_empty() || !incoming.is_empty() {
-                html.push_str("<div class='note-connections'><h3>Connections</h3>");
-                for target in outgoing {
-                    if let Some(note) = documents.iter().find(|d| key(&d.title) == target) {
+        if documents.is_empty() {
+            html.push_str("<p class='muted'>No notes yet.</p>");
+        }
+        html.push_str("</aside><section class='knowledge-content'>");
+        if selection == "graph" {
+            html.push_str(&graph(documents));
+        } else if selection == "review" {
+            html.push_str(
+                &self
+                    .review
+                    .as_ref()
+                    .map(crate::collective::Page::render)
+                    .unwrap_or_default(),
+            );
+        } else if selection == "new" || doc.is_some() || documents.is_empty() {
+            if let Some(doc) = doc
+                && saved == Some(doc.revision)
+            {
+                html.push_str(&format!(
+                    "<div id='saved' class='save-confirmation' role='status'>✓ Saved {} · revision {}</div>",
+                    escape(&doc.title),
+                    doc.revision
+                ));
+            }
+            html.push_str(&editor(doc, None));
+            if let Some(doc) = doc {
+                let outgoing = links(&doc.body);
+                let incoming: Vec<_> = documents
+                    .iter()
+                    .filter(|d| d.id != doc.id && links(&d.body).contains(&key(&doc.title)))
+                    .collect();
+                if !outgoing.is_empty() || !incoming.is_empty() {
+                    html.push_str("<div class='note-connections'><h3>Connections</h3>");
+                    for target in outgoing {
+                        if let Some(note) = documents.iter().find(|d| key(&d.title) == target) {
+                            html.push_str(&format!(
+                                "<a href='/knowledge?doc={}'>↗ {}</a>",
+                                escape(&note.id),
+                                escape(&note.title)
+                            ));
+                        } else {
+                            html.push_str(&format!("<span class='muted'>Unresolved · {}</span>", escape(&target)));
+                        }
+                    }
+                    for note in incoming {
                         html.push_str(&format!(
-                            "<a href='/knowledge?doc={}'>↗ {}</a>",
+                            "<a href='/knowledge?doc={}'>↙ Linked from {}</a>",
                             escape(&note.id),
                             escape(&note.title)
                         ));
-                    } else {
-                        html.push_str(&format!("<span class='muted'>Unresolved · {}</span>", escape(&target)));
                     }
+                    html.push_str("</div>");
                 }
-                for note in incoming {
-                    html.push_str(&format!(
-                        "<a href='/knowledge?doc={}'>↙ Linked from {}</a>",
-                        escape(&note.id),
-                        escape(&note.title)
-                    ));
-                }
-                html.push_str("</div>");
             }
+        } else {
+            html.push_str("<div class='empty'>Note not found. Choose one from the list.</div>");
         }
-    } else {
-        html.push_str("<div class='empty'>Note not found. Choose one from the list.</div>");
+        html.push_str("</section></div>");
+        let active = match selection {
+            "graph" => "/knowledge?mode=graph",
+            "review" => "/knowledge?mode=review",
+            _ => "/knowledge",
+        };
+        html.replace(
+            &format!("<a href='{active}'>"),
+            &format!("<a href='{active}' aria-current='page'>"),
+        )
     }
-    html.push_str("</section></div>");
-    let active = match selection {
-        "graph" => "/knowledge?mode=graph",
-        "review" => "/knowledge?mode=review",
-        _ => "/knowledge",
-    };
-    html.replace(
-        &format!("<a href='{active}'>"),
-        &format!("<a href='{active}' aria-current='page'>"),
-    )
 }
+/// `GET /knowledge`: a note, the graph, the review or a new note.
+pub(crate) struct Request {
+    selection: String,
+    saved: Option<u64>,
+}
+impl From<&HashMap<String, String>> for Request {
+    fn from(query: &HashMap<String, String>) -> Self {
+        Self {
+            selection: query
+                .get("doc")
+                .or_else(|| query.get("mode"))
+                .cloned()
+                .unwrap_or_default(),
+            saved: query.get("saved").and_then(|s| s.parse().ok()),
+        }
+    }
+}
+pub(crate) const PAGE: crate::Read<Request, Page> = crate::Read {
+    view: |state, Request { selection, saved }| Page::of(&state.documents, &state.collective, &selection, saved),
+    render: |page| crate::Reply {
+        status: "200 OK",
+        mime: "text/html; charset=utf-8",
+        body: crate::shell("knowledge-page", &page.render()),
+        extra: String::new(),
+        policy: control_http::Policy::Page,
+    },
+};
 pub fn handle(
     stream: &mut impl Write,
     state: &mut State,
@@ -355,24 +417,9 @@ pub fn handle(
         return true;
     }
     if path == "/knowledge" && method == "GET" {
-        let selection = query
-            .get("doc")
-            .or_else(|| query.get("mode"))
-            .map(String::as_str)
-            .unwrap_or("");
-        let saved = query.get("saved").and_then(|s| s.parse().ok());
-        let page = crate::shell(
-            "knowledge-page",
-            &render(&state.documents, &state.collective, selection, saved),
-        );
-        let _ = control_http::respond(
-            stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            page.as_bytes(),
-            "",
-            control_http::Policy::Page,
-        );
+        // The server serves this before taking the lock; a caller holding
+        // state gets the same bytes.
+        let _ = PAGE.reply(state, Request::from(query)).write(stream);
         return true;
     }
     if ["/knowledge/save", "/save"].contains(&path) && method == "POST" {

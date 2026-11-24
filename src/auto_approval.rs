@@ -277,74 +277,128 @@ fn when(unix: u64) -> String {
 }
 /// "Running now" and "Auto-approved recently" for the Permissions page:
 /// live services, open ports with their targets, persistent bots and the
-/// latest automatic decisions, as compact lines.
-pub(crate) fn overview(state: &State) -> String {
-    let link = |chat: &str| {
+/// latest automatic decisions, copied out of state to render as compact lines.
+pub(crate) struct Overview {
+    services: Vec<Service>,
+    ports: Vec<crate::ports::Open>,
+    bots: Vec<Link>,
+    /// The latest first.
+    decisions: Vec<(Record, Link)>,
+}
+/// A live service's line.
+struct Service {
+    id: String,
+    phase: &'static str,
+    label: String,
+    owner: Link,
+}
+/// A chat by the name the page shows.
+struct Link {
+    chat: String,
+    name: String,
+}
+impl Link {
+    fn of(state: &State, chat: &str) -> Self {
+        Self {
+            chat: chat.to_owned(),
+            name: crate::callsigns::name_or_id(&state.chats, chat).into_owned(),
+        }
+    }
+    fn render(&self) -> String {
         format!(
             "<a href='/dm/{}'>{}</a>",
-            crate::escape(chat),
-            crate::escape(&crate::callsigns::name_or_id(&state.chats, chat))
+            crate::escape(&self.chat),
+            crate::escape(&self.name)
         )
-    };
-    let services = state
-        .services
-        .iter()
-        .filter(|service| service.live())
-        .map(|service| {
-            format!(
-                "<p>{} · {} · {} · {}</p>",
-                crate::escape(service.resource.id.as_str()),
-                service.phase_name(),
-                crate::escape(&service.label()),
-                link(service.resource.owner.chat.as_str())
-            )
-        })
-        .collect::<Vec<_>>();
-    let ports = crate::ports::overview(&state.ports, &state.auto_decisions);
-    let bots = crate::bots::active(state)
-        .into_iter()
-        .map(|chat| format!("<p>{}</p>", link(chat)))
-        .collect::<Vec<_>>();
-    let lines = |items: &[String], empty: &str| {
-        if items.is_empty() {
-            format!("<p class='muted'>{empty}</p>")
-        } else {
-            items.concat()
+    }
+}
+impl Overview {
+    pub(crate) fn of(state: &State) -> Self {
+        Self {
+            services: state
+                .services
+                .iter()
+                .filter(|service| service.live())
+                .map(|service| Service {
+                    id: service.resource.id.as_str().to_owned(),
+                    phase: service.phase_name(),
+                    label: service.label(),
+                    owner: Link::of(state, service.resource.owner.chat.as_str()),
+                })
+                .collect(),
+            ports: crate::ports::overview(&state.ports, &state.auto_decisions),
+            bots: crate::bots::active(state)
+                .into_iter()
+                .map(|chat| Link::of(state, chat))
+                .collect(),
+            decisions: state
+                .auto_decisions
+                .iter()
+                .rev()
+                .take(SHOWN)
+                .map(|record| (record.clone(), Link::of(state, &record.chat)))
+                .collect(),
         }
-    };
-    let decisions = state
-        .auto_decisions
-        .iter()
-        .rev()
-        .take(SHOWN)
-        .map(|record| {
-            format!(
-                "<p><span class='tag'>{}</span> {} · rule {} · {} · {}</p>",
-                crate::escape(&record.kind),
-                crate::escape(&record.what),
-                crate::escape(&record.rule),
-                link(&record.chat),
-                when(record.unix)
-            )
-        })
-        .collect::<Vec<_>>();
-    format!(
-        "<h3 class='form-title'>Running now</h3><div class='metrics'><div><b>{}</b><span>SERVICES</span></div><div><b>{}</b><span>OPEN PORTS</span></div><div><b>{}</b><span>BOTS</span></div></div>\
-        <article class='record'><h3>Services</h3>{}</article><article class='record'><h3>Ports</h3>{}<p class='muted'><a href='/tools/ports'>Revoke on the TCP ports page ↗</a></p></article>\
-        <article class='record'><h3>Bots</h3>{}<p class='muted'>Stop a bot with /bot off in its DM.</p></article>\
-        <h3 class='form-title'>Auto-approved recently</h3>{}",
-        services.len(),
-        ports.len(),
-        bots.len(),
-        lines(&services, "No live services."),
-        lines(&ports, "No open ports."),
-        lines(&bots, "No persistent bots."),
-        if decisions.is_empty() {
-            "<div class='empty'>No automatic decisions yet.</div>".to_owned()
-        } else {
-            format!("<article class='record'>{}</article>", decisions.concat())
-        }
-    )
+    }
+    pub(crate) fn render(&self) -> String {
+        let services = self
+            .services
+            .iter()
+            .map(|service| {
+                format!(
+                    "<p>{} · {} · {} · {}</p>",
+                    crate::escape(&service.id),
+                    service.phase,
+                    crate::escape(&service.label),
+                    service.owner.render()
+                )
+            })
+            .collect::<Vec<_>>();
+        let ports = self.ports.iter().map(crate::ports::Open::render).collect::<Vec<_>>();
+        let bots = self
+            .bots
+            .iter()
+            .map(|chat| format!("<p>{}</p>", chat.render()))
+            .collect::<Vec<_>>();
+        let lines = |items: &[String], empty: &str| {
+            if items.is_empty() {
+                format!("<p class='muted'>{empty}</p>")
+            } else {
+                items.concat()
+            }
+        };
+        let decisions = self
+            .decisions
+            .iter()
+            .map(|(record, chat)| {
+                format!(
+                    "<p><span class='tag'>{}</span> {} · rule {} · {} · {}</p>",
+                    crate::escape(&record.kind),
+                    crate::escape(&record.what),
+                    crate::escape(&record.rule),
+                    chat.render(),
+                    when(record.unix)
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "<h3 class='form-title'>Running now</h3><div class='metrics'><div><b>{}</b><span>SERVICES</span></div><div><b>{}</b><span>OPEN PORTS</span></div><div><b>{}</b><span>BOTS</span></div></div>\
+            <article class='record'><h3>Services</h3>{}</article><article class='record'><h3>Ports</h3>{}<p class='muted'><a href='/tools/ports'>Revoke on the TCP ports page ↗</a></p></article>\
+            <article class='record'><h3>Bots</h3>{}<p class='muted'>Stop a bot with /bot off in its DM.</p></article>\
+            <h3 class='form-title'>Auto-approved recently</h3>{}",
+            services.len(),
+            ports.len(),
+            bots.len(),
+            lines(&services, "No live services."),
+            lines(&ports, "No open ports."),
+            lines(&bots, "No persistent bots."),
+            if decisions.is_empty() {
+                "<div class='empty'>No automatic decisions yet.</div>".to_owned()
+            } else {
+                format!("<article class='record'>{}</article>", decisions.concat())
+            }
+        )
+    }
 }
 
 #[cfg(test)]
