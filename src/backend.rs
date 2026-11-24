@@ -28,7 +28,7 @@ impl Backend {
             Self::Claude => &control_claude::Claude,
             Self::Grok => &control_grok::Grok,
             Self::Antigravity => &control_antigravity::Antigravity,
-            Self::Local => &crate::local_agent::Local,
+            Self::Local => &control_local::Local,
         }
     }
     pub(crate) fn named(id: &str) -> Option<Self> {

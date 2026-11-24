@@ -8,7 +8,7 @@ use std::process::Command;
 /// Each client-side crate, agent backend crate (and the root) with the only
 /// crates that may depend on it. Only the root links a backend, so no backend
 /// depends on another, on a client or on the root.
-const UPPER: [(&str, &[&str]); 9] = [
+const UPPER: [(&str, &[&str]); 10] = [
     ("control", &[]),
     ("control-client", &["control", "control-tui", "control-discord"]),
     ("control-tui", &["control"]),
@@ -17,6 +17,7 @@ const UPPER: [(&str, &[&str]); 9] = [
     ("control-claude", &["control"]),
     ("control-grok", &["control"]),
     ("control-antigravity", &["control"]),
+    ("control-local", &["control"]),
     (
         "control-agent",
         &[
@@ -25,6 +26,7 @@ const UPPER: [(&str, &[&str]); 9] = [
             "control-claude",
             "control-grok",
             "control-antigravity",
+            "control-local",
         ],
     ),
 ];
@@ -111,6 +113,7 @@ fn leaf_crates_and_clients_do_not_depend_upwards() {
         "control-claude",
         "control-grok",
         "control-antigravity",
+        "control-local",
     ]
     .iter()
     .for_each(|name| {

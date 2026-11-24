@@ -125,7 +125,7 @@ of 16 typical calls, 14 are core and the other two need one
 `control_tool_search` by name (`a_member_turn_needs_few_lookups`). A local turn
 loads an indexed tool on first use without a model step.
 
-**Local planning reserve.** `OVERHEAD_TOKENS` in `src/local_agent.rs` is 7,168:
+**Local planning reserve.** `OVERHEAD_TOKENS` in `crates/local/src/lib.rs` is 7,168:
 4,096 for core schemas, 2,048 for schemas loaded during the turn and 1,024 for
 the first exchange. The local loop estimates 3 bytes per token, so the reserve
 must cover that estimate even where a real tokenizer counts fewer
