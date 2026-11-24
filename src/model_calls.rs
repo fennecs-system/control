@@ -78,9 +78,13 @@ impl Endpoint {
     }
     /// Operator-declared identity plus what the server reported about itself.
     pub fn provenance(&self, served: &Served) -> serde_json::Value {
-        serde_json::json!({"id":self.id,"model":self.model,"revision":self.revision,
-            "adapter":self.cli.map_or("private-endpoint",|b|b.id()),
-            "served_model":served.model,"runtime_fingerprint":served.fingerprint})
+        control_ai::model::provenance(
+            &self.id,
+            &self.model,
+            &self.revision,
+            self.cli.map_or(control_local::ADAPTER, |b| b.id()),
+            served,
+        )
     }
 }
 
@@ -112,7 +116,7 @@ pub fn generate(
     let limits = endpoint.limits.narrowed(output_tokens)?;
     let target = endpoint.validate()?;
     if cancel() {
-        return Err(cancelled());
+        return Err(transport::cancelled());
     }
     let started = Instant::now();
     let mut url = match target {
@@ -156,37 +160,13 @@ pub fn generate(
         elapsed: started.elapsed(),
     })
 }
-/// One prepared chat-completions request to a private endpoint (agent tool loop).
-/// Same transport, size ceiling, timeout and cancellation as `generate`.
-pub fn post_json(
-    endpoint: &Endpoint,
-    body: &serde_json::Value,
-    cancel: &dyn Fn() -> bool,
-) -> io::Result<(serde_json::Value, Served)> {
-    let Target::Endpoint(mut url) = endpoint.validate()? else {
-        return Err(io::Error::other("Agent tool loops need a private endpoint"));
-    };
-    if cancel() {
-        return Err(cancelled());
-    }
-    url.set_path("/v1/chat/completions");
-    let body = serde_json::to_vec(body).map_err(io::Error::other)?;
-    let bytes = transport::post(&url, &body, Duration::from_secs(endpoint.timeout_seconds), cancel)?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| io::Error::other("Malformed model response"))?;
-    let served = control_ai::model::served(&value);
-    Ok((value, served))
-}
-fn cancelled() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled; no fallback was used")
-}
 
 mod cli;
 #[path = "../tools/compaction-eval/mod.rs"]
 mod evaluation;
 pub mod stats;
 pub mod tool;
-mod transport;
+use control_local::transport;
 pub enum Target {
     Endpoint(reqwest::Url),
     Cli(crate::backend::Backend),

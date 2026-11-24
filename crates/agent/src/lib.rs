@@ -67,7 +67,7 @@ pub trait Agent: Sync {
         max: usize,
         emit: &mut dyn FnMut(control_ai::Event),
     ) -> io::Result<control_ai::Output>;
-    /// Who runs the tool loop of a turn.
+    /// Who runs the tool loop of a turn, and the turn itself.
     fn runs(&self) -> Runs<'_>;
     /// Names it keeps in a workspace that are never published or shared.
     fn private_names(&self) -> &'static [&'static str] {
@@ -150,10 +150,10 @@ pub struct Login {
 pub enum Runs<'a> {
     /// The backend's own CLI, in a container the backend describes.
     Cli(&'a dyn Turns),
-    /// Control's own loop on a local endpoint.
-    Control,
+    /// Control's own loop (`control-local`), calling the turn's [`Endpoint`].
+    Control(&'a dyn Turns),
 }
-/// A backend whose CLI runs a whole turn.
+/// A backend's whole turn.
 pub trait Turns: Sync {
     fn turn(&self, turn: Turn<'_>, host: &mut dyn Host) -> Outcome;
 }
@@ -197,6 +197,42 @@ pub struct Turn<'a> {
     pub tools: bool,
     /// The login the host located for this turn.
     pub login: io::Result<Granted>,
+    /// The model server Control calls itself ([`Runs::Control`]); `None` for a
+    /// CLI, which reaches its own provider.
+    pub endpoint: Option<Endpoint>,
+    /// What one in-turn summary ([`Host::summarize`]) may take and give, for a
+    /// loop that compacts inside its turn; `None` without one.
+    pub compactor: Option<Compactor>,
+    /// The operator's model-step cap, for a loop that counts its steps.
+    pub steps: usize,
+    /// The turn resumes a cut-off one: the chat holds a host checkpoint, or
+    /// the run already had an attempt.
+    pub resumed: bool,
+}
+
+/// An operator-configured model server, resolved and validated by the host.
+#[derive(Clone, Debug)]
+pub struct Endpoint {
+    /// The registry entry, recorded beside what the server reports.
+    pub id: String,
+    pub model: String,
+    /// The operator-declared runtime and weights identity.
+    pub revision: String,
+    /// The validated private base URL, ending in `/v1`.
+    pub url: String,
+    pub timeout: Duration,
+    pub limits: control_ai::model::Limits,
+    /// The base thinking level of agent turns.
+    pub thinking: control_ai::model::Thinking,
+}
+
+/// The bounds of one in-turn summary request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Compactor {
+    /// Evidence bytes the compactor accepts besides its instructions.
+    pub input_bytes: usize,
+    /// The summary's target length, which ends it well inside the output limit.
+    pub words: usize,
 }
 
 /// How a turn ended.

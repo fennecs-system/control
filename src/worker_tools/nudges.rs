@@ -50,67 +50,11 @@ const DEPTH: usize = 64;
 pub(crate) fn deadline_threshold(limit: u64) -> u64 {
     (limit.saturating_mul(DEADLINE_SHARE_PERCENT) / 100).max(DEADLINE_FLOOR_SECONDS.min(limit / 2))
 }
-/// What a checkpoint must carry so findings outlive the turn and its compaction:
-/// the working notes are `control_turn_handoff`'s payload, and an omitted
-/// payload keeps the older notes.
-pub(crate) const NOTES: &str = "Record your key findings (facts, diagnoses) and current plan in its working notes, payload.findings and payload.next, so they survive compaction; an omitted payload keeps the older notes.";
-/// How a turn without a handoff keeps findings through in-turn compaction.
-pub(crate) const MARKS: &str = "Write key facts on lines starting Finding: and choices on lines starting Decision:; Control keeps those lines when it summarizes older steps.";
+use control_context::nudges::NOTES;
 pub(crate) fn deadline_text(remaining: u64) -> String {
     format!(
         "{remaining} s left in this turn: publish your checkpoint (control_turn_handoff) now and continue in a routine or the next turn. {NOTES}"
     )
-}
-/// The once-per-turn note when a local turn first shortens its older tool
-/// results: without it a model re-reads the files it lost, which are shortened
-/// again, instead of writing down what it needs.
-pub(crate) fn elision_text(kept: usize) -> String {
-    format!(
-        "Control now shortens tool results older than your last {kept} steps to save context, and a file read again is shortened again. {MARKS}"
-    )
-}
-/// What follows a turn that stops now. Only a persistent bot has a next turn:
-/// a chat that hands off without one simply ends, so the note must not promise
-/// a continuation.
-#[derive(Clone, Copy)]
-pub(crate) enum Next {
-    /// A persistent bot with the handoff tool: checkpoint and continue.
-    Turn,
-    /// The handoff tool without a bot yet, and one can be requested.
-    Unscheduled,
-    /// Nothing follows: finish.
-    Report,
-}
-impl Next {
-    pub(crate) fn of(handoff: bool, continues: bool, requestable: bool) -> Self {
-        match (handoff, continues, requestable) {
-            (true, true, _) => Self::Turn,
-            (true, false, true) => Self::Unscheduled,
-            _ => Self::Report,
-        }
-    }
-}
-const UNSCHEDULED: &str = "this chat has no next turn: before you hand off, request your persistent bot (control_bot_request) or delegate what remains; otherwise finish with a brief final report.";
-/// The once-per-turn note when a turn's context passes its threshold (local
-/// endpoints, where Control owns the transcript and measures its size).
-pub(crate) fn context_text(percent: u32, next: Next) -> String {
-    match next {
-        Next::Turn => format!(
-            "Context {percent}% full: publish your checkpoint (control_turn_handoff) and continue in the next turn. {NOTES} {MARKS}"
-        ),
-        Next::Unscheduled => format!("Context {percent}% full and {UNSCHEDULED} {NOTES} {MARKS}"),
-        Next::Report => format!("Context {percent}% full: finish with a brief final report soon. {MARKS}"),
-    }
-}
-/// The once-per-turn note when a local-model turn nears its model-step cap.
-pub(crate) fn steps_text(left: usize, next: Next) -> String {
-    match next {
-        Next::Turn => format!(
-            "{left} model steps left in this turn: publish your checkpoint (control_turn_handoff) and continue next turn. {NOTES}"
-        ),
-        Next::Unscheduled => format!("{left} model steps left in this turn and {UNSCHEDULED} {NOTES}"),
-        Next::Report => format!("{left} model steps left in this turn: finish with a brief final report now."),
-    }
 }
 pub(crate) fn steering_text(members: usize) -> String {
     format!("You are steering {members} active members: delegate this work to a member and end your turn.")

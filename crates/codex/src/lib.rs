@@ -651,6 +651,7 @@ fn execute(turn: Turn<'_>, host: &mut dyn Host) -> Outcome {
         started_unix,
         tools,
         login,
+        ..
     } = turn;
     let blocked = |m: &str| Failure::Blocked(m.to_owned());
     let failed = |m: &str| Failure::Failed(m.to_owned());
