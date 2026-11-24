@@ -99,11 +99,13 @@ Fault tests inject directory-sync failure and byte mismatches, and check
 shutdown, 503 and poison fencing in a child process. They are filesystem fault
 injections, not power-loss simulations.
 
-A writer thread per state directory (`control_journal::writer`) owns
-`state.json` and `state.log`. A save encodes and diffs under the state mutex,
-advances the diff base, queues the record and gets a ticket; the writer writes
-everything queued since its last write with one write and one sync (a
-compaction contains the lines queued before it). The bytes on disk are those
+One `control_journal::writer::Writer` per state directory owns `state.json`
+and `state.log`. A save encodes and diffs under the state mutex, advances the
+diff base, queues the record and gets a ticket. Waiting on it, a caller that
+finds nobody writing becomes the leader and writes everything queued so far on
+its own thread, with one write and one sync (a compaction contains the lines
+queued before it); callers arriving meanwhile are written by the next leader.
+There is no writer thread. The bytes on disk are those
 the synchronous path wrote (`storage::tests::log` pins them). `storage::save`
 waits for its ticket under the mutex, so its callers see no change.
 `storage::submit` returns before durability for callers that release the

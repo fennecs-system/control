@@ -244,9 +244,7 @@ fn adopt(directory: &Path, recovered: Recovered) -> bool {
         .filter_map(|i| log.read(i).ok().flatten())
         .map(|line| line.len() + 1)
         .sum();
-    let Ok(writer) = Writer::spawn(Files::new(directory, Some(log)), writer::retry_then_degrade) else {
-        return false;
-    };
+    let writer = Writer::new(Files::new(directory, Some(log)), writer::retry_then_degrade);
     published().lock().unwrap_or_else(PoisonError::into_inner).insert(
         directory.to_owned(),
         Published {
@@ -406,7 +404,7 @@ fn archived(directory: &Path) -> archive::Archive {
 
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
 /// directory sync; only success wakes state-change subscribers. The caller
-/// waits under its lock while the writer thread does the I/O; [`submit`] is
+/// waits under its lock (writing itself when nobody else is); [`submit`] is
 /// the variant that waits after releasing it.
 ///
 /// A checkpoint persists only what changed since the last one: one line of
@@ -540,8 +538,7 @@ fn stage<T>(
     let current = match all.entry(directory.to_owned()) {
         Entry::Occupied(current) => current.into_mut(),
         Entry::Vacant(vacant) => vacant.insert(Published {
-            writer: Writer::spawn(Files::new(directory, None), writer::retry_then_degrade)
-                .map_err(CheckpointError::NotReplaced)?,
+            writer: Writer::new(Files::new(directory, None), writer::retry_then_degrade),
             log_bytes: 0,
             base: None,
         }),

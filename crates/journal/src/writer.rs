@@ -1,20 +1,22 @@
-//! One thread owns a store's files; callers stage records and wait for them.
+//! Group commit for a store's files, led by the callers themselves.
 //!
 //! A caller encodes and diffs under its own lock, hands the resulting
-//! [`Record`] to the [`Writer`] and gets a ticket. The writer drains every
-//! record queued since its last write and makes them durable together: lines
-//! with one write and one sync, so N waiting callers share one sync instead of
-//! paying N in turn. There is no batching window: a record that arrives while
-//! the disk is idle is written at once.
+//! [`Record`] to the [`Writer`] and gets a ticket. Waiting on the ticket, a
+//! caller that finds nobody writing becomes the leader: it takes every record
+//! queued so far and writes them on its own thread, lines with one write and
+//! one sync. Callers that arrive meanwhile queue up and are written by the next
+//! leader, so N concurrent callers share syncs instead of paying N in turn,
+//! and a lone save costs its write and sync and no thread hand-off (as in
+//! LevelDB's write groups). There is no batching window.
 //!
 //! Records are written in [`Seq`] order and a ticket resolves once its record
 //! (and every earlier one) is durable. A failed write is handled as the
 //! [`Policy`] says: retried, or the writer becomes degraded, or (only when what
 //! is on disk is unknown) it halts. A degraded writer refuses new records, so
 //! callers refuse the change before applying it; records already queued stay
-//! queued and are written in order once the disk takes writes again, except
-//! those whose callers still hold the lock they staged under: those are
-//! refused, and their callers roll back.
+//! queued and a prober thread, alive only while degraded, writes them in order
+//! once the disk takes writes again. Records whose callers still hold the lock
+//! they staged under are refused instead, and their callers roll back.
 use std::{
     fmt, io,
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
@@ -240,16 +242,30 @@ struct Entry {
     rollback: Rollback,
 }
 
-#[derive(Default)]
+/// Who has the files: nobody (a waiter may take them and lead a commit), a
+/// leader or the prober writing, or nobody ever again.
+enum Slot {
+    Idle(Box<dyn Sink>),
+    Writing,
+    Closed,
+}
+
 struct Queue {
+    sink: Slot,
+    policy: Policy,
     /// The last sequence number handed out.
     last: u64,
     pending: Vec<Entry>,
+    /// Records that failed while degraded and were already visible to
+    /// others: the prober writes them, in order, once the store recovers.
+    retained: Vec<Entry>,
     /// Every record up to here is durable (or was refused).
     settled: u64,
     /// Records refused so far (each a failed save, so few), with their error.
     refused: Vec<(u64, io::ErrorKind, String)>,
     degraded: Option<Unavailable>,
+    /// The thread that tries the store again while degraded; none otherwise.
+    prober: Option<JoinHandle<()>>,
     halted: Option<Halted>,
     stale: bool,
     closing: bool,
@@ -257,22 +273,92 @@ struct Queue {
 
 struct Shared {
     queue: Mutex<Queue>,
-    work: Condvar,
-    settled: Condvar,
+    /// Signalled whenever records settle, the files come free or the state
+    /// changes; waiters, the prober and a closing writer wait on it.
+    changed: Condvar,
 }
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    /// Waits until `outcome` has an answer for the queue.
-    fn wait<T>(&self, outcome: impl Fn(&Queue) -> Option<T>) -> T {
+    /// Waits until `outcome` has an answer, leading a commit whenever records
+    /// are queued and nobody is writing: the waiting thread does the I/O
+    /// itself, so a lone save costs its write and sync and nothing more, and
+    /// everything queued meanwhile shares the next leader's sync.
+    fn wait<T>(self: &Arc<Self>, outcome: impl Fn(&Queue) -> Option<T>) -> T {
         let mut queue = self.lock();
         loop {
             if let Some(answer) = outcome(&queue) {
                 return answer;
             }
-            queue = self.settled.wait(queue).unwrap_or_else(PoisonError::into_inner);
+            queue = match queue.sink {
+                Slot::Idle(_) if !queue.pending.is_empty() && queue.degraded.is_none() && queue.halted.is_none() => {
+                    self.commit(queue)
+                }
+                _ => self.changed.wait(queue).unwrap_or_else(PoisonError::into_inner),
+            };
         }
+    }
+    /// Takes the files and everything queued, writes it on this thread
+    /// (retrying, degrading or halting as the policy says) and gives the
+    /// files back.
+    fn commit<'a>(self: &'a Arc<Self>, mut queue: MutexGuard<'a, Queue>) -> MutexGuard<'a, Queue> {
+        let Slot::Idle(mut sink) = std::mem::replace(&mut queue.sink, Slot::Writing) else {
+            return queue;
+        };
+        let mut taken = std::mem::take(&mut queue.pending);
+        let mut failures = 0;
+        while !taken.is_empty() {
+            drop(queue);
+            let written = write(sink.as_mut(), &taken);
+            queue = self.lock();
+            let fault = match written {
+                Ok((written, log)) => {
+                    failures = 0;
+                    settle(&mut queue, &mut taken, written, log);
+                    continue;
+                }
+                Err(fault) => fault,
+            };
+            failures += 1;
+            eprintln!("state writer: save failed ({failures} time(s) in a row): {fault}");
+            match (queue.policy)(&Attempt {
+                fault: &fault,
+                failures,
+            }) {
+                Verdict::Retry(pause) => {
+                    drop(queue);
+                    std::thread::sleep(pause);
+                    queue = self.lock();
+                    // Records queued meanwhile extend these; they go together.
+                    taken.append(&mut queue.pending);
+                }
+                Verdict::Degrade(pause) => {
+                    degrade(&mut queue, &mut taken, &fault);
+                    queue.retained = std::mem::take(&mut taken);
+                    queue.prober = probe(self, failures, pause);
+                }
+                Verdict::Halt => {
+                    queue.halted = Some(Halted(fault.to_string().into()));
+                    break;
+                }
+            }
+        }
+        queue.sink = Slot::Idle(sink);
+        self.changed.notify_all();
+        queue
+    }
+}
+/// Marks the first `written` of `taken` durable.
+fn settle(queue: &mut Queue, taken: &mut Vec<Entry>, written: usize, log: Log) {
+    if let Log::Broken(error) = log {
+        eprintln!(
+            "state.log: could not start the log after a compaction ({error}); the next save rewrites the whole snapshot"
+        );
+        queue.stale = true;
+    }
+    if let Some(last) = taken.drain(..written).next_back() {
+        queue.settled = last.seq;
     }
 }
 fn refusal(queue: &Queue, seq: u64) -> Option<io::Error> {
@@ -281,6 +367,85 @@ fn refusal(queue: &Queue, seq: u64) -> Option<io::Error> {
         .iter()
         .find(|(refused, ..)| *refused == seq)
         .map(|(_, kind, message)| io::Error::new(*kind, message.clone()))
+}
+
+/// Starts the thread that tries the store again while degraded: it writes
+/// the retained records (or, with none, asks the sink whether it takes writes)
+/// with the policy's backoff until that succeeds, then ends. It exists only
+/// while degraded.
+fn probe(shared: &Arc<Shared>, failures: u32, pause: Duration) -> Option<JoinHandle<()>> {
+    let shared = shared.clone();
+    std::thread::Builder::new()
+        .name("state-prober".into())
+        .spawn(move || prober(&shared, failures, pause))
+        .inspect_err(|error| eprintln!("state writer: could not start the prober ({error}); restart to save again"))
+        .ok()
+}
+
+fn prober(shared: &Shared, mut failures: u32, mut pause: Duration) {
+    loop {
+        let mut queue = shared.lock();
+        let until = Instant::now() + pause;
+        while !queue.closing
+            && let Some(left) = until.checked_duration_since(Instant::now())
+        {
+            queue = shared
+                .changed
+                .wait_timeout(queue, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        if queue.closing {
+            return;
+        }
+        let Slot::Idle(mut sink) = std::mem::replace(&mut queue.sink, Slot::Writing) else {
+            continue;
+        };
+        let mut taken = std::mem::take(&mut queue.retained);
+        drop(queue);
+        let written = if taken.is_empty() {
+            sink.probe().map(|()| (0, Log::Restarted)).map_err(Fault::NotReplaced)
+        } else {
+            write(sink.as_mut(), &taken)
+        };
+        let mut queue = shared.lock();
+        let done = match written {
+            Ok((written, log)) => {
+                failures = 0;
+                settle(&mut queue, &mut taken, written, log);
+                // What is left after a compaction goes at once.
+                pause = Duration::ZERO;
+                taken.is_empty()
+            }
+            Err(fault) => {
+                failures += 1;
+                eprintln!("state writer: storage still unavailable ({failures} time(s)): {fault}");
+                match (queue.policy)(&Attempt {
+                    fault: &fault,
+                    failures,
+                }) {
+                    Verdict::Retry(next) | Verdict::Degrade(next) => {
+                        pause = next;
+                        false
+                    }
+                    Verdict::Halt => {
+                        queue.halted = Some(Halted(fault.to_string().into()));
+                        true
+                    }
+                }
+            }
+        };
+        queue.retained = taken;
+        queue.sink = Slot::Idle(sink);
+        if done && queue.halted.is_none() {
+            queue.degraded = None;
+            eprintln!("state writer: storage takes writes again; saves resume");
+        }
+        shared.changed.notify_all();
+        if done {
+            return;
+        }
+    }
 }
 
 /// A record whose caller has released (or will release) its lock before
@@ -332,29 +497,34 @@ impl Held {
     }
 }
 
-/// The thread that owns a sink. Dropping it writes what is queued (unless the
-/// store is degraded: that stays unsaved), then joins.
+/// A store's files and the order of its records. There is no writer thread:
+/// a caller waiting on its ticket writes everything queued itself when nobody
+/// else is writing. Dropping it writes what is queued (unless the store is
+/// degraded: that stays unsaved) and closes the files.
 pub struct Writer {
     shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
 }
 impl Writer {
-    pub fn spawn(sink: impl Sink, policy: Policy) -> io::Result<Self> {
-        let shared = Arc::new(Shared {
-            queue: Mutex::default(),
-            work: Condvar::new(),
-            settled: Condvar::new(),
-        });
-        let thread = {
-            let shared = shared.clone();
-            std::thread::Builder::new()
-                .name("state-writer".into())
-                .spawn(move || run(&shared, sink, policy))?
-        };
-        Ok(Self {
-            shared,
-            thread: Some(thread),
-        })
+    pub fn new(sink: impl Sink, policy: Policy) -> Self {
+        Self {
+            shared: Arc::new(Shared {
+                queue: Mutex::new(Queue {
+                    sink: Slot::Idle(Box::new(sink)),
+                    policy,
+                    last: 0,
+                    pending: Vec::new(),
+                    retained: Vec::new(),
+                    settled: 0,
+                    refused: Vec::new(),
+                    degraded: None,
+                    prober: None,
+                    halted: None,
+                    stale: false,
+                    closing: false,
+                }),
+                changed: Condvar::new(),
+            }),
+        }
     }
     /// Whether records are taken now: a pure read for status pages.
     pub fn health(&self) -> Health {
@@ -407,92 +577,37 @@ impl Writer {
         queue.last += 1;
         let seq = queue.last;
         queue.pending.push(Entry { seq, record, rollback });
-        self.shared.work.notify_one();
         Ok(seq)
     }
 }
+
 impl Drop for Writer {
     fn drop(&mut self) {
-        self.shared.lock().closing = true;
-        self.shared.work.notify_one();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-fn run(shared: &Shared, mut sink: impl Sink, policy: Policy) {
-    // Records taken from the queue and not yet written.
-    let mut taken: Vec<Entry> = Vec::new();
-    let mut failures = 0;
-    loop {
-        {
-            let mut queue = shared.lock();
-            while queue.pending.is_empty() && taken.is_empty() && queue.degraded.is_none() && !queue.closing {
-                queue = shared.work.wait(queue).unwrap_or_else(PoisonError::into_inner);
-            }
-            taken.append(&mut queue.pending);
-            if queue.closing && (taken.is_empty() || queue.degraded.is_some()) {
-                return;
-            }
-        }
-        // Nothing to write while degraded: ask whether the store recovered.
-        let written = if taken.is_empty() {
-            sink.probe().map(|()| (0, Log::Restarted)).map_err(Fault::NotReplaced)
-        } else {
-            write(&mut sink, &taken)
-        };
-        let fault = match written {
-            Ok((written, log)) => {
-                failures = 0;
-                let mut queue = shared.lock();
-                if let Log::Broken(error) = log {
-                    eprintln!(
-                        "state.log: could not start the log after a compaction ({error}); the next save rewrites the whole snapshot"
-                    );
-                    queue.stale = true;
-                }
-                if let Some(last) = taken.drain(..written).next_back() {
-                    queue.settled = last.seq;
-                }
-                if taken.is_empty() && queue.degraded.take().is_some() {
-                    eprintln!("state writer: storage takes writes again; saves resume");
-                }
-                shared.settled.notify_all();
-                continue;
-            }
-            Err(fault) => fault,
-        };
-        failures += 1;
-        eprintln!("state writer: save failed ({failures} time(s) in a row): {fault}");
+        let shared = &self.shared;
         let mut queue = shared.lock();
-        let pause = match policy(&Attempt {
-            fault: &fault,
-            failures,
-        }) {
-            Verdict::Retry(pause) => pause,
-            Verdict::Degrade(pause) => {
-                degrade(&mut queue, &mut taken, &fault);
-                pause
-            }
-            Verdict::Halt => {
-                queue.halted = Some(Halted(fault.to_string().into()));
-                shared.settled.notify_all();
-                return;
-            }
-        };
-        shared.settled.notify_all();
-        // Pause, but let a dropped writer stop waiting.
-        let until = Instant::now() + pause;
-        while !queue.closing
-            && let Some(left) = until.checked_duration_since(Instant::now())
-        {
-            queue = shared
-                .work
-                .wait_timeout(queue, left)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
+        queue.closing = true;
+        shared.changed.notify_all();
+        loop {
+            queue = match queue.sink {
+                Slot::Writing => shared.changed.wait(queue).unwrap_or_else(PoisonError::into_inner),
+                Slot::Idle(_) if !queue.pending.is_empty() && queue.degraded.is_none() && queue.halted.is_none() => {
+                    shared.commit(queue)
+                }
+                Slot::Idle(_) | Slot::Closed => break,
+            };
         }
+        let prober = queue.prober.take();
+        drop(queue);
+        if let Some(prober) = prober {
+            let _ = prober.join();
+        }
+        // Closing the files releases the log's lock for the next owner.
+        let mut queue = shared.lock();
+        queue.sink = Slot::Closed;
+        queue
+            .halted
+            .get_or_insert_with(|| Halted("the writer was closed".into()));
+        shared.changed.notify_all();
     }
 }
 
@@ -525,7 +640,7 @@ fn degrade(queue: &mut Queue, taken: &mut Vec<Entry>, fault: &Fault) {
 /// Writes a prefix of `rest`: everything up to and including its last
 /// compaction (earlier lines are inside the snapshot), else all of its lines
 /// with one append. Returns how many records it settled.
-fn write(sink: &mut impl Sink, rest: &[Entry]) -> Result<(usize, Log), Fault> {
+fn write(sink: &mut dyn Sink, rest: &[Entry]) -> Result<(usize, Log), Fault> {
     let compaction = rest
         .iter()
         .enumerate()

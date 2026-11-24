@@ -107,15 +107,14 @@ fn child(directory: &Path, crash: Crash, released: bool) {
         } = all.remove(directory).unwrap();
         drop(writer);
         let files = Files::new(directory, Some(FileJournal::open(&directory.join(LOG)).unwrap()));
-        let writer = Writer::spawn(
+        let writer = Writer::new(
             Dying {
                 files,
                 crash,
                 appends: 0,
             },
             writer::retry_then_degrade,
-        )
-        .unwrap();
+        );
         all.insert(
             directory.to_owned(),
             Published {

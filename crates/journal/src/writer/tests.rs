@@ -99,17 +99,18 @@ fn until(writer: &Writer, ready: fn(&Health) -> bool) {
 fn records_queued_during_a_write_share_the_next_one() {
     let (fake, entered, open) = gated();
     let written = fake.written.clone();
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     let first = writer.submit(line("1")).unwrap();
+    // Its waiter leads the first commit, on its own thread.
+    let leader = std::thread::spawn(move || first.wait().unwrap().seq());
     entered.recv().unwrap();
     let rest: Vec<Ticket> = ["2", "3", "4"]
         .into_iter()
         .map(|text| writer.submit(line(text)).unwrap())
         .collect();
     open.send(()).unwrap();
-    let seqs: Vec<Seq> = std::iter::once(first)
-        .chain(rest)
-        .map(|ticket| ticket.wait().unwrap().seq())
+    let seqs: Vec<Seq> = std::iter::once(leader.join().unwrap())
+        .chain(rest.into_iter().map(|ticket| ticket.wait().unwrap().seq()))
         .collect();
     assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]));
     assert_eq!(
@@ -123,15 +124,14 @@ fn records_queued_during_a_write_share_the_next_one() {
 fn a_compaction_contains_the_lines_queued_before_it() {
     let (fake, entered, open) = gated();
     let written = fake.written.clone();
-    let writer = Writer::spawn(fake, quick).unwrap();
-    let tickets = [writer.submit(line("0")).unwrap()];
+    let writer = Writer::new(fake, quick);
+    let first = writer.submit(line("0")).unwrap();
+    let leader = std::thread::spawn(move || first.wait().is_ok());
     entered.recv().unwrap();
     let more = [line("1"), compact("2"), line("3")].map(|record| writer.submit(record).unwrap());
     open.send(()).unwrap();
-    tickets
-        .into_iter()
-        .chain(more)
-        .for_each(|ticket| assert!(ticket.wait().is_ok()));
+    assert!(leader.join().unwrap());
+    more.into_iter().for_each(|ticket| assert!(ticket.wait().is_ok()));
     assert_eq!(*written.lock().unwrap(), [vec!["0"], vec!["compact 2"], vec!["3"]]);
 }
 
@@ -142,7 +142,7 @@ fn a_blip_is_absorbed_by_quick_retries() {
         ..Fake::default()
     };
     let attempts = fake.attempts.clone();
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     writer.submit_held(line("kept")).unwrap().wait().unwrap();
     assert_eq!(*attempts.lock().unwrap(), QUICK_RETRIES + 1);
     assert!(matches!(writer.health(), Health::Ready));
@@ -156,12 +156,16 @@ fn a_failing_disk_degrades_refuses_new_writes_and_writes_queued_records_in_order
     let (mut fake, entered, open) = gated();
     fake.failures = 30;
     let written = fake.written.clone();
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     let first = writer.submit(line("1")).unwrap();
+    let leader = std::thread::spawn(move || first.wait());
     entered.recv().unwrap();
     let second = writer.submit(line("2")).unwrap();
     open.send(()).unwrap();
-    assert!(matches!(first.wait(), Err(Unsaved::NotYet(_))), "an answer, not a hang");
+    assert!(
+        matches!(leader.join().unwrap(), Err(Unsaved::NotYet(_))),
+        "an answer, not a hang"
+    );
     assert!(matches!(second.wait(), Err(Unsaved::NotYet(_))));
     assert!(matches!(writer.submit(line("refused")), Err(Submit::Unavailable(_))));
     assert!(matches!(writer.submit_held(None), Err(Submit::Unavailable(_))));
@@ -180,7 +184,7 @@ fn a_held_record_is_refused_on_degrading_and_the_next_save_after_recovery_compac
         ..Fake::default()
     };
     let written = fake.written.clone();
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     assert!(matches!(
         writer.submit_held(line("refused")).unwrap().wait(),
         Err(Failure::Refused(_))
@@ -203,7 +207,7 @@ fn a_disk_failing_forever_refuses_every_write_and_never_halts() {
         ..Fake::default()
     };
     let (written, attempts) = (fake.written.clone(), fake.attempts.clone());
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     assert!(matches!(
         writer.submit(line("queued")).unwrap().wait(),
         Err(Unsaved::NotYet(_))
@@ -225,7 +229,7 @@ fn an_unconfirmed_write_halts_at_once_even_when_its_caller_could_roll_back() {
         ..Fake::default()
     };
     let attempts = fake.attempts.clone();
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     assert!(matches!(
         writer.submit_held(line("unknown")).unwrap().wait(),
         Err(Failure::Halted(_))
@@ -241,7 +245,7 @@ fn a_log_that_cannot_restart_after_a_compaction_makes_the_next_save_compact() {
         broken_log: true,
         ..Fake::default()
     };
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     writer.submit(compact("durable")).unwrap().wait().unwrap();
     assert!(matches!(writer.submit(line("would be lost")), Err(Submit::Stale)));
 }
@@ -250,13 +254,14 @@ fn a_log_that_cannot_restart_after_a_compaction_makes_the_next_save_compact() {
 fn an_unchanged_save_waits_for_the_records_before_it_and_dropping_drains() {
     let (fake, entered, open) = gated();
     let written = fake.written.clone();
-    let writer = Writer::spawn(fake, quick).unwrap();
+    let writer = Writer::new(fake, quick);
     let changed = writer.submit(line("changed")).unwrap();
     let unchanged = writer.submit_held(None).unwrap();
+    let leader = std::thread::spawn(move || changed.wait().unwrap().seq());
     entered.recv().unwrap();
     let pending = writer.submit(line("pending")).unwrap();
     open.send(()).unwrap();
-    assert_eq!(unchanged.wait().unwrap().seq(), changed.wait().unwrap().seq());
+    assert_eq!(unchanged.wait().unwrap().seq(), leader.join().unwrap());
     drop(writer);
     assert!(pending.wait().is_ok(), "dropping the writer wrote it first");
     assert_eq!(*written.lock().unwrap(), [vec!["changed"], vec!["pending"]]);
