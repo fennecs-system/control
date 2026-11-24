@@ -10,6 +10,7 @@
 //! durable receipts and recovery with `control_service_exec`.
 use super::*;
 use crate::artifacts::{diff_open_child, directory_names, excluded, valid_path};
+use crate::store::Store;
 use std::{
     ffi::{CString, OsStr},
     fs,
@@ -552,12 +553,7 @@ fn pax_record(key: &str, value: &str) -> String {
 /// Admits a copy after checking the source against its bounds outside the
 /// state lock. A retried identity returns its recorded outcome without
 /// reading the workspace again.
-pub(super) fn request(
-    shared: &Arc<Mutex<State>>,
-    attempt: &AttemptRef<'_>,
-    node: &NodeId,
-    input: Input,
-) -> io::Result<Value> {
+pub(super) fn request(shared: &Store, attempt: &AttemptRef<'_>, node: &NodeId, input: Input) -> io::Result<Value> {
     let wait = commands::wait_bound(input.wait_seconds)?;
     let service_id = input.service_id.clone();
     let admitted = request_with(
@@ -585,7 +581,7 @@ pub(super) fn request(
     ))
 }
 pub(super) fn request_with(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     attempt: &AttemptRef<'_>,
     node: &NodeId,
     input: Input,
@@ -599,7 +595,7 @@ pub(super) fn request_with(
     }
     let digest = commands::hash(&serde_json::to_vec(&("copy", &transfer, input.timeout_seconds)).map_err(fail)?);
     let bounds = {
-        let state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let state = shared.guard()?;
         let index = commands::owned(ServiceAuthority::of(&state), run, generation, node, &input.service_id)?;
         if let Some(value) = commands::previous(&state.services[index], run, generation, nonce, &digest)? {
             return Ok(value);
@@ -608,18 +604,19 @@ pub(super) fn request_with(
     };
     // `generation` is the caller's active attempt, checked by `owned` above.
     let tally = scan(&workspace(generation)?, &transfer.from, bounds)?;
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let work = commands::Work {
-        service_id: input.service_id,
-        digest,
-        command: String::new(),
-        display: transfer.display(),
-        timeout_seconds: input.timeout_seconds,
-        copy: Some(transfer),
-    };
-    let mut value = commands::admit_work(&mut state, run, generation, nonce, node, work, save)?;
-    value["copy"] = tally.summary(bounds);
-    Ok(value)
+    shared.write(|state| -> io::Result<Value> {
+        let work = commands::Work {
+            service_id: input.service_id,
+            digest,
+            command: String::new(),
+            display: transfer.display(),
+            timeout_seconds: input.timeout_seconds,
+            copy: Some(transfer),
+        };
+        let mut value = commands::admit_work(state, run, generation, nonce, node, work, save)?;
+        value["copy"] = tally.summary(bounds);
+        Ok(value)
+    })?
 }
 
 /// A copy ready to launch: its source was rechecked against current bounds
@@ -633,15 +630,15 @@ pub(super) struct Job {
 }
 impl Job {
     pub(super) fn prepare(
-        shared: &Arc<Mutex<State>>,
+        shared: &Store,
         service: &Service,
         run: &str,
         attempt: &str,
         transfer: &Transfer,
     ) -> io::Result<Self> {
         if !shared
-            .lock()
-            .is_ok_and(|state| commands::live_attempt(&state.runtime.runs, run, attempt))
+            .read(|state| commands::live_attempt(&state.runtime.runs, run, attempt))
+            .unwrap_or(false)
         {
             return Err(fail("the requesting attempt ended before the copy started"));
         }

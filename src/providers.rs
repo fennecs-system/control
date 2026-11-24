@@ -481,28 +481,26 @@ fn endpoint_row(runtime: &crate::runtime::Runtime, model: &crate::model_calls::E
 /// server-statistics line per local endpoint, read outside the state lock.
 /// Nothing polls when no page is open. `/providers/accounts` gives
 /// `control accounts list` and `control BACKEND check` each cooling account's note.
-pub fn live_http(
-    stream: &mut impl std::io::Write,
-    state: &std::sync::Mutex<crate::State>,
-    method: &str,
-    path: &str,
-) -> bool {
+pub fn live_http(stream: &mut impl std::io::Write, state: &crate::store::Store, method: &str, path: &str) -> bool {
     let accounts = match path {
         "/providers/live" => false,
         "/providers/accounts" => true,
         _ => return false,
     };
-    let body = match (method, state.lock()) {
-        ("GET", Ok(state)) if accounts => {
-            Ok(serde_json::json!(accounts::notes(&state.runtime, accounts::now())).to_string())
-        }
-        ("GET", Ok(state)) => {
-            let endpoints = local(&state.runtime).cloned().collect::<Vec<_>>();
-            drop(state);
+    let view = state.read(|state| match method {
+        "GET" if accounts => Some(Ok(
+            serde_json::json!(accounts::notes(&state.runtime, accounts::now())).to_string()
+        )),
+        "GET" => Some(Err(local(&state.runtime).cloned().collect::<Vec<_>>())),
+        _ => None,
+    });
+    let body = match view {
+        Ok(Some(Ok(notes))) => Ok(notes),
+        Ok(Some(Err(endpoints))) => {
             Ok(serde_json::Value::Object(crate::model_calls::stats::live(&endpoints)).to_string())
         }
-        ("GET", Err(_)) => Err("State unavailable"),
-        _ => Err("Use GET"),
+        Err(_) if method == "GET" => Err("State unavailable"),
+        Ok(None) | Err(_) => Err("Use GET"),
     };
     let _ = match body {
         Ok(body) => control_http::respond(

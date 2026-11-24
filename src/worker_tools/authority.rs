@@ -1,8 +1,9 @@
 //! A worker request's authority as a value: the one place that finds the
 //! caller's run and checks it may act.
 use super::deferred::Facts;
+use crate::store::Guard;
 use crate::{State, identity, runtime::RunStatus};
-use std::{path::Path, sync::MutexGuard};
+use std::path::Path;
 
 /// Proof that a request's run is running, its actor is authorized and the
 /// mailbox belongs to the run's current attempt. Only [`admit`] builds one,
@@ -42,11 +43,7 @@ impl Caller<'_> {
 /// Admits a request for `run` arriving through `workspace` (the mailbox's
 /// workspace; `None` for callers without one). Refusals keep their order:
 /// an inactive run, then actor authority, then a mailbox from another attempt.
-pub(super) fn admit<'r>(
-    state: &MutexGuard<'_, State>,
-    run: &'r str,
-    workspace: Option<&Path>,
-) -> Result<Caller<'r>, &'static str> {
+pub(super) fn admit<'r>(state: &Guard<'_>, run: &'r str, workspace: Option<&Path>) -> Result<Caller<'r>, &'static str> {
     let index = state
         .runtime
         .runs

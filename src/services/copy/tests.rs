@@ -267,7 +267,7 @@ fn bounds_come_from_node_settings_and_workspace_capacity() {
         Bounds::DEFAULT
     );
     let (state, ..) = fixture();
-    let mut service = state.lock().unwrap().services[0].clone();
+    let mut service = state.guard().unwrap().services[0].clone();
     service.storage = Storage::Workspace {
         limit_mb: std::num::NonZeroU32::new(1),
     };
@@ -300,13 +300,13 @@ fn pax_records_count_their_own_length() {
     assert_eq!(&field, b"7777777\0");
 }
 
-fn fixture() -> (Arc<Mutex<State>>, String, NodeId, String) {
+fn fixture() -> (Store, String, NodeId, String) {
     let (mut state, run, _, time) = super::super::tests::fixture();
     super::super::tests::admit_fixture(&mut state, &run, time, |_| Ok(())).unwrap();
     state.services[0].resource.phase = Phase::Running("b".repeat(64).try_into().unwrap());
     let id = state.services[0].resource.id.as_str().to_owned();
     (
-        Arc::new(Mutex::new(state)),
+        crate::store::Store::new(state),
         run,
         "node-a".to_owned().try_into().unwrap(),
         id,
@@ -346,7 +346,7 @@ fn admission_is_scoped_bounded_durable_and_idempotent() {
         )
         .is_err()
     );
-    assert!(shared.lock().unwrap().services[0].executions.is_empty());
+    assert!(shared.guard().unwrap().services[0].executions.is_empty());
     let admitted = request_with(
         &shared,
         &at(&run, "attempt-a", "copy-a"),
@@ -372,7 +372,7 @@ fn admission_is_scoped_bounded_durable_and_idempotent() {
         "results never expose host paths"
     );
     {
-        let state = shared.lock().unwrap();
+        let state = shared.guard().unwrap();
         let execution = &state.services[0].executions[0];
         let (command, display, copy) = execution.request();
         assert!(command.is_empty(), "an older Control must not launch anything");
@@ -408,7 +408,7 @@ fn admission_is_scoped_bounded_durable_and_idempotent() {
     .unwrap_err();
     assert!(error.to_string().contains("reused with different arguments"));
     // The same identity cannot turn into a shell command either.
-    let mut state = shared.lock().unwrap();
+    let mut state = shared.guard().unwrap();
     let command = commands::Work {
         service_id: id.clone(),
         digest: commands::hash(b"other"),
@@ -443,7 +443,7 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     fn never(_: &str) -> io::Result<PathBuf> {
         panic!("Unauthorized requests never read the workspace")
     }
-    let refuse = |shared: &Arc<Mutex<State>>, run: &str, generation: &str, node: &NodeId, id: &str| {
+    let refuse = |shared: &Store, run: &str, generation: &str, node: &NodeId, id: &str| {
         request_with(
             shared,
             &at(run, generation, "copy-x"),
@@ -457,8 +457,8 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     };
     // Another chat's service.
     let (shared, run, node, id) = fixture();
-    let other = crate::chat::create(&mut shared.lock().unwrap());
-    shared.lock().unwrap().runtime.runs[0].chat_id = Some(other);
+    let other = crate::chat::create(&mut shared.guard().unwrap());
+    shared.guard().unwrap().runtime.runs[0].chat_id = Some(other);
     assert!(refuse(&shared, &run, "attempt-a", &node, &id).contains("not owned by this chat"));
     // Another node's identity.
     let (shared, run, _, id) = fixture();
@@ -474,7 +474,7 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     );
     // A judge, even of the owning chat.
     let (shared, run, node, id) = fixture();
-    shared.lock().unwrap().runtime.runs[0].persona = Some(crate::delegation::Persona {
+    shared.guard().unwrap().runtime.runs[0].persona = Some(crate::delegation::Persona {
         role: crate::delegation::Role::Judge,
         root: "root".into(),
         depth: 1,
@@ -487,13 +487,13 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     assert!(refuse(&shared, &run, "attempt-old", &node, &id).contains("inactive"));
     // A source over the memory-backed workspace size fails before admission.
     let (shared, run, node, id) = fixture();
-    shared.lock().unwrap().services[0].storage = Storage::Memory;
+    shared.guard().unwrap().services[0].storage = Storage::Memory;
     let root = Scratch::new("oversized");
     let file = fs::OpenOptions::new()
         .write(true)
         .open(root.write("tool/huge", b""))
         .unwrap();
-    file.set_len(shared.lock().unwrap().services[0].profile.service_workspace_mb() * MIB + 1)
+    file.set_len(shared.guard().unwrap().services[0].profile.service_workspace_mb() * MIB + 1)
         .unwrap();
     let error = request_with(
         &shared,
@@ -505,7 +505,7 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
     )
     .unwrap_err();
     assert!(error.to_string().contains("limit"), "{error}");
-    assert!(shared.lock().unwrap().services[0].executions.is_empty());
+    assert!(shared.guard().unwrap().services[0].executions.is_empty());
     // A copy whose attempt ended before dispatch launches nothing.
     let (shared, run, node, id) = fixture();
     let root = Scratch::new("ended");
@@ -519,8 +519,8 @@ fn admission_rejects_foreign_services_judges_stale_attempts_and_oversized_source
         |_| Ok(()),
     )
     .unwrap();
-    shared.lock().unwrap().runtime.runs[0].status = RunStatus::Completed;
-    let service = shared.lock().unwrap().services[0].binding_snapshot();
+    shared.guard().unwrap().runtime.runs[0].status = RunStatus::Completed;
+    let service = shared.guard().unwrap().services[0].binding_snapshot();
     let error = Job::prepare(&shared, &service, &run, "attempt-a", &transfer("tool", "tool"))
         .err()
         .unwrap();
@@ -609,7 +609,7 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
     symlink("/etc/passwd", root.0.join("mc-client/passwd-link")).unwrap();
     std::mem::forget(root);
 
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let mut threads = Vec::new();
     let copy = |nonce: &str, from: &str, to: &str, threads: &mut Vec<std::thread::JoinHandle<()>>| {
         let admitted = request(
@@ -674,7 +674,7 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
         "{done}"
     );
     assert!(matches!(
-        shared.lock().unwrap().services[0].resource.phase,
+        shared.guard().unwrap().services[0].resource.phase,
         Phase::Running(_)
     ));
     assert_eq!(
@@ -694,7 +694,7 @@ fn live_copy_streams_a_tree_into_a_real_service_as_its_user() {
             copy: None,
         };
         let admitted = commands::admit_work(
-            &mut shared.lock().unwrap(),
+            &mut shared.guard().unwrap(),
             &run,
             "attempt-a",
             nonce,

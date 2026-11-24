@@ -1,6 +1,7 @@
 //! Bounded repository inspection over the existing credential broker. No writes.
 use super::*;
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::tool_registry::{AttemptCall, AttemptTools};
 use control_context::github::{Query, Section};
 
@@ -123,7 +124,7 @@ pub(super) fn authorize(state: &State, caller: Caller<'_>) -> io::Result<()> {
 }
 
 pub(super) struct ReadApi<'a> {
-    pub(super) shared: &'a Arc<Mutex<State>>,
+    pub(super) shared: &'a Store,
     pub(super) caller: Caller<'a>,
     pub(super) config: &'a Configuration,
     pub(super) rest: Rest,
@@ -133,10 +134,7 @@ impl ReadApi<'_> {
         if crate::shutdown::requested() {
             return Err(io::Error::other("Control is stopping"));
         }
-        authorize(
-            &*self.shared.lock().map_err(|_| io::Error::other("State unavailable"))?,
-            self.caller,
-        )?;
+        self.shared.read(|state| authorize(state, self.caller))??;
         if configuration()?.as_ref() != Some(self.config) {
             return Err(io::Error::other("GitHub binding changed; repeat the read explicitly"));
         }
@@ -152,15 +150,12 @@ impl Api for ReadApi<'_> {
         self.rest.request(method, path, None)
     }
 }
-fn execute(shared: &Arc<Mutex<State>>, caller: Caller<'_>, query: Query) -> io::Result<Value> {
+fn execute(shared: &Store, caller: Caller<'_>, query: Query) -> io::Result<Value> {
     query.validate().map_err(io::Error::other)?;
     let _guard = INSPECTION
         .try_lock()
         .map_err(|_| io::Error::other("A GitHub inspection is already running; retry explicitly"))?;
-    authorize(
-        &*shared.lock().map_err(|_| io::Error::other("State unavailable"))?,
-        caller,
-    )?;
+    shared.read(|state| authorize(state, caller))??;
     let config = configuration()?.ok_or_else(|| {
         io::Error::other("Configure a repository and credential reference with control github configure")
     })?;
@@ -346,7 +341,7 @@ fn inspect(api: &impl Api, repo: &str, query: &Query) -> io::Result<Value> {
 }
 
 /// The `/mcp` reply; the caller frames it.
-pub(crate) fn mcp(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
+pub(crate) fn mcp(shared: &Store, request: &Value) -> Value {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Input {

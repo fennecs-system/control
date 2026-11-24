@@ -1,6 +1,7 @@
 //! Scoped recall plans capture authority under lock; cache reads run outside it.
 use super::*;
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::tool_registry::{AttemptCall, AttemptTools};
 use serde_json::{Value, json};
 #[derive(Clone, Deserialize)]
@@ -210,8 +211,7 @@ impl AttemptTools for Tools {
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         let read: Read =
             serde_json::from_value(args.clone()).map_err(|_| io::Error::other("Invalid history-read arguments"))?;
-        let plan = {
-            let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
+        let plan = cx.host.0.read(|state| {
             let run = state
                 .runtime
                 .runs
@@ -234,8 +234,8 @@ impl AttemptTools for Tools {
             {
                 return Err(io::Error::other("Conversation owner changed"));
             }
-            route(&state, chat, &run.actor, read)?
-        };
+            route(state, chat, &run.actor, read)
+        })??;
         perform(plan)
     }
 }
@@ -312,13 +312,7 @@ fn perform(next: Next) -> io::Result<Value> {
     }
 }
 
-pub(crate) fn http(
-    stream: &mut impl std::io::Write,
-    state: &Arc<Mutex<State>>,
-    method: &str,
-    path: &str,
-    query: &str,
-) -> bool {
+pub(crate) fn http(stream: &mut impl std::io::Write, state: &Store, method: &str, path: &str, query: &str) -> bool {
     let Some(chat) = path
         .strip_prefix("/dm/")
         .and_then(|p| p.strip_suffix("/compaction/read"))
@@ -353,14 +347,15 @@ pub(crate) fn http(
             limit_bytes: parse("limit_bytes", 4096)?,
             query: None,
         };
-        let state = state.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        let actor = state
-            .chats
-            .iter()
-            .find(|c| c.id == chat)
-            .map(|c| c.actor.clone())
-            .ok_or_else(|| io::Error::other("Chat not found"))?;
-        route(&state, chat, &actor, read)
+        state.read(|state| {
+            let actor = state
+                .chats
+                .iter()
+                .find(|c| c.id == chat)
+                .map(|c| c.actor.clone())
+                .ok_or_else(|| io::Error::other("Chat not found"))?;
+            route(state, chat, &actor, read)
+        })?
     })()
     .and_then(perform);
     let (status, body) = match result {

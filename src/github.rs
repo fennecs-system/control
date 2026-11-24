@@ -1,6 +1,7 @@
 //! Scoped GitHub publication. The trusted broker consumes a private credential;
 //! models select immutable outputs, never a remote, token, host path or Git command.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{
     State,
     identity::{Action, Actor},
@@ -13,7 +14,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Mutex,
     time::Duration,
 };
 
@@ -735,14 +736,11 @@ fn finish(
     checkpoint(publication)?;
     Ok(url.into())
 }
-pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<Value> {
+pub fn open(shared: &Store, chat: &str, input: Input) -> io::Result<Value> {
     let _guard = PUBLICATION
         .try_lock()
         .map_err(|_| io::Error::other("A GitHub publication is already running"))?;
-    let (attempt, actor) = {
-        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        selected(&state.chats, &state.runtime.runs, chat, &input)?
-    };
+    let (attempt, actor) = shared.read(|state| selected(&state.chats, &state.runtime.runs, chat, &input))??;
     let config = configuration()?.ok_or_else(|| {
         io::Error::other("Configure a repository and credential reference with control github configure")
     })?;
@@ -753,7 +751,7 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
     let artifact = attempt.artifact.as_deref().unwrap();
     let edits = changes(source, artifact)?;
     let mut publication = {
-        let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+        let mut state = shared.guard()?;
         selected(&state.chats, &state.runtime.runs, chat, &input)?;
         if let Some(existing) = state
             .github_publications
@@ -802,26 +800,29 @@ pub fn open(shared: &Arc<Mutex<State>>, chat: &str, input: Input) -> io::Result<
             return Err(io::Error::other("Control is stopping; publication intent is retained"));
         }
         crate::identity::authorize(&actor, Action::Improve).map_err(io::Error::other)?;
-        let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        let index = state
-            .github_publications
-            .iter()
-            .position(|p| {
-                p.run == publication.run && p.repository == publication.repository && p.artifact == publication.artifact
-            })
-            .ok_or_else(|| io::Error::other("Publication intent missing"))?;
-        let old = state.github_publications[index].clone();
-        state.github_publications[index] = publication.clone();
-        for c in state.chats.iter_mut().filter(|c| c.id == chat) {
-            c.revision = c.revision.saturating_add(1);
-        }
-        if crate::storage::save(&state).is_err() {
-            state.github_publications[index] = old;
-            return Err(io::Error::other(
-                "Could not checkpoint publication; inspect its retained intent",
-            ));
-        }
-        Ok(())
+        shared.write(|state| {
+            let index = state
+                .github_publications
+                .iter()
+                .position(|p| {
+                    p.run == publication.run
+                        && p.repository == publication.repository
+                        && p.artifact == publication.artifact
+                })
+                .ok_or_else(|| io::Error::other("Publication intent missing"))?;
+            let old = state.github_publications[index].clone();
+            state.github_publications[index] = publication.clone();
+            for c in state.chats.iter_mut().filter(|c| c.id == chat) {
+                c.revision = c.revision.saturating_add(1);
+            }
+            if crate::storage::save(state).is_err() {
+                state.github_publications[index] = old;
+                return Err(io::Error::other(
+                    "Could not checkpoint publication; inspect its retained intent",
+                ));
+            }
+            Ok(())
+        })?
     });
     match result {
         Ok(url) => Ok(json!({"url":url,"status":PublicationStatus::Opened})),
@@ -867,7 +868,7 @@ pub fn panel(publications: &[Publication], runs: &crate::runtime::Runs, chat: &s
     html
 }
 /// The `/mcp` reply for `control_github_open_pr`; the caller frames it.
-pub(crate) fn mcp_open_pr(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
+pub(crate) fn mcp_open_pr(shared: &Store, request: &Value) -> Value {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     if id.is_null() || request["jsonrpc"] != "2.0" {
         return control_mcp::error(
@@ -879,19 +880,19 @@ pub(crate) fn mcp_open_pr(shared: &Arc<Mutex<State>>, request: &Value) -> Value 
     let result = serde_json::from_value::<Input>(request["params"]["arguments"].clone())
         .map_err(|_| io::Error::other("Expected run_id, title and optional body"))
         .and_then(|input| {
-            let chat = shared
-                .lock()
-                .map_err(|_| io::Error::other("State unavailable"))?
-                .runtime
-                .runs
-                .get(&input.run_id)
-                .and_then(|r| r.chat_id.clone())
-                .ok_or_else(|| io::Error::other("Run not found"))?;
+            let chat = shared.read(|state| {
+                state
+                    .runtime
+                    .runs
+                    .get(&input.run_id)
+                    .and_then(|r| r.chat_id.clone())
+                    .ok_or_else(|| io::Error::other("Run not found"))
+            })??;
             open(shared, &chat, input)
         });
     control_mcp::reply(&id, crate::toolbox::result(result))
 }
-pub fn http(stream: &mut impl Write, shared: &Arc<Mutex<State>>, method: &str, path: &str, body: &[u8]) -> bool {
+pub fn http(stream: &mut impl Write, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     let Some(chat) = path
         .strip_prefix("/dm/")
         .and_then(|s| s.strip_suffix("/github"))

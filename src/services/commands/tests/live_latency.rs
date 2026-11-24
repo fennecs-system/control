@@ -79,7 +79,7 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
     .unwrap();
     service.resource.phase = Phase::Running(id.clone());
     state.services.push(service.clone());
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let service_id = service.resource.id.as_str().to_owned();
     let waiter = Waiter {
         run: &run,
@@ -121,7 +121,7 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
                 let nonce = format!("{mode}-{n}");
                 let submitted = Instant::now();
                 let admitted = admit(
-                    &mut shared.lock().unwrap(),
+                    &mut shared.guard().unwrap(),
                     &run,
                     "attempt-a",
                     &nonce,
@@ -143,7 +143,7 @@ fn live_exec_latency_before_and_after_wake_and_inline_wait() {
                         let mut started = None;
                         loop {
                             let seen = changes().generation();
-                            let status = shared.lock().unwrap().services[0]
+                            let status = shared.guard().unwrap().services[0]
                                 .executions
                                 .iter()
                                 // Tools return a short handle of the execution id.

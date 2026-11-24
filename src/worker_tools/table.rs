@@ -528,19 +528,21 @@ fn workspace_run(command: WorkspaceCommand, shared: &Shared, _: &Call<'_>) -> Va
         output,
         status: status.into(),
     };
-    let Ok(mut state) = shared.lock() else {
-        return failure("State unavailable; tools are disabled until Control is checked and restarted");
-    };
     // Records only while the same attempt is still running (cancellation fences here).
-    if !crate::worker::record_activity_for(
-        &mut state,
-        &command.run,
-        &command.generation,
-        activity(String::new(), "running"),
-    ) {
-        return failure("Run is not active");
+    let refused = shared.write(|state| {
+        (!crate::worker::record_activity_for(
+            state,
+            &command.run,
+            &command.generation,
+            activity(String::new(), "running"),
+        ))
+        .then(|| failure("Run is not active"))
+    });
+    match refused {
+        Err(_) => return failure("State unavailable; tools are disabled until Control is checked and restarted"),
+        Ok(Some(refusal)) => return refusal,
+        Ok(None) => {}
     }
-    drop(state);
     let result = crate::host_shell::shell_scoped(
         crate::engine::isolation(),
         &command.image,
@@ -559,7 +561,7 @@ fn workspace_run(command: WorkspaceCommand, shared: &Shared, _: &Call<'_>) -> Va
             "observed",
         );
     }
-    if let Ok(mut state) = shared.lock() {
+    let _ = shared.write(|state| {
         let output = result
             .as_ref()
             .ok()
@@ -573,7 +575,7 @@ fn workspace_run(command: WorkspaceCommand, shared: &Shared, _: &Call<'_>) -> Va
         } else {
             "failed"
         };
-        crate::worker::record_activity_for(&mut state, &command.run, &command.generation, activity(output, status));
-    }
+        crate::worker::record_activity_for(state, &command.run, &command.generation, activity(output, status));
+    });
     crate::toolbox::result(result)
 }

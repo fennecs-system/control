@@ -5,6 +5,7 @@
 //! dispatch the CLI adapters use (authorization, attempt fencing, handoff and
 //! publication rules included), and decides when the turn ends. The endpoint only
 //! generates. Provider state never outlives the attempt; recovery starts fresh.
+use crate::store::Store;
 use control_ai::{
     Tokens,
     model::{Limits, Thinking, decode_step, think, tool_request},
@@ -688,16 +689,12 @@ pub(crate) fn run(
     }
 }
 
-use crate::State;
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::path::Path;
 
 /// The live attempt's effects. Tools go through the same worker dispatch and
 /// fencing as the CLI mailboxes; nothing here grants additional authority.
 struct Live<'a> {
-    shared: &'a Arc<Mutex<State>>,
+    shared: &'a Store,
     run: &'a str,
     generation: String,
     workspace: &'a Path,
@@ -717,7 +714,7 @@ struct Live<'a> {
     reasoning: Option<String>,
 }
 impl Live<'_> {
-    fn bridge(&self) -> Option<(&Arc<Mutex<State>>, &str)> {
+    fn bridge(&self) -> Option<(&Store, &str)> {
         Some((self.shared, self.run))
     }
     fn rpc(&self, request: Value, nonce: &str) -> Value {
@@ -801,9 +798,9 @@ impl Host for Live<'_> {
         crate::model_calls::call(&self.compactor, &crate::compaction::system_within(words), evidence).map(|r| r.text)
     }
     fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) {
-        if let Ok(mut state) = self.shared.lock() {
+        let _ = self.shared.write(|state| {
             crate::worker::record_activity_for(
-                &mut state,
+                state,
                 self.run,
                 &self.generation,
                 crate::usage::Activity {
@@ -814,7 +811,7 @@ impl Host for Live<'_> {
                     status: status.into(),
                 },
             );
-        }
+        });
     }
     fn step_limit(&mut self) {
         self.attempt.termination = Some(crate::attempt_control::Termination::StepLimit);
@@ -823,13 +820,24 @@ impl Host for Live<'_> {
         crate::observe::step(self.shared, self.run, first)
     }
     fn continues(&mut self) -> bool {
-        let Ok(state) = self.shared.lock() else { return true };
-        let chat = state.runtime.runs.get(self.run).and_then(|run| run.chat_id.as_deref());
-        chat.is_some_and(|chat| crate::bots::continuation_enabled(&state, chat))
+        self.shared
+            .read(|state| {
+                let chat = state.runtime.runs.get(self.run).and_then(|run| run.chat_id.as_deref());
+                chat.is_some_and(|chat| crate::bots::continuation_enabled(state, chat))
+            })
+            .unwrap_or(true)
     }
     fn inbox(&mut self) -> Option<String> {
-        let mut state = self.shared.lock().ok().filter(|_| self.managed)?;
-        crate::turn_context::inbox(&mut state, self.run, crate::storage::save)
+        self.shared
+            .write(|state| {
+                if self.managed {
+                    crate::turn_context::inbox(state, self.run, crate::storage::save)
+                } else {
+                    None
+                }
+            })
+            .ok()
+            .flatten()
     }
     fn reasoned(&mut self, reasoning: &str) {
         self.reasoning = Some(crate::turn_context::carried_reasoning(reasoning));
@@ -874,9 +882,9 @@ impl Host for Live<'_> {
         self.meter = *meter;
         // Live totals: one in-memory update per model call, never a save.
         let usage = meter.usage(false, self.reported_model());
-        if let Ok(mut state) = self.shared.lock() {
-            crate::worker::record_usage_for(&mut state, self.run, &self.generation, usage);
-        }
+        let _ = self
+            .shared
+            .write(|state| crate::worker::record_usage_for(state, self.run, &self.generation, usage));
     }
 }
 
@@ -884,7 +892,7 @@ impl Host for Live<'_> {
 /// workspace; it quiesces command jobs and publishes after a successful return.
 pub(crate) fn execute(
     attempt: &mut crate::usage::Attempt,
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
+    bridge: Option<(&Store, &str)>,
     workspace: &Path,
     prompt: &str,
 ) -> Result<String, Failure> {
@@ -892,39 +900,38 @@ pub(crate) fn execute(
         control_agent::Status::Blocked,
         "Local agent turns need a live Control node.".to_owned(),
     ))?;
-    let (endpoint, compactor, managed, resumed) = {
-        let state = shared
-            .lock()
-            .map_err(|_| (control_agent::Status::Failed, "Control state unavailable".to_owned()))?;
-        let model = crate::providers::Model::captured(crate::backend::Backend::Local, attempt.model.clone());
-        if !crate::providers::agent_capable(&state.runtime, &model) {
-            return Err((control_agent::Status::Blocked, crate::backend::LOCAL_TEXT_ONLY.into()));
-        }
-        let endpoint = crate::providers::endpoint(&state.runtime, &attempt.model)
-            .cloned()
-            .ok_or((
-                control_agent::Status::Blocked,
-                "The selected local endpoint is no longer configured; no fallback was used.".to_owned(),
-            ))?;
-        let current = state.runtime.runs.get(run);
-        let session = current
-            .and_then(|r| r.chat_id.as_ref())
-            .and_then(|chat| state.chats.iter().find(|c| &c.id == chat));
-        // Resuming a cut-off turn: the chat holds a host checkpoint, or this
-        // run already had an attempt (the live one is its last).
-        let resumed = session
-            .and_then(|s| s.continuity.as_ref())
-            .is_some_and(|c| c.interrupted.is_some())
-            || current.is_some_and(|r| r.attempts.len() > 1);
-        // A local chat compacts on its own endpoint unless the operator chose otherwise.
-        let compactor = session
-            .and_then(|s| crate::compaction::compactor_for(&state, s))
-            .cloned()
-            .unwrap_or_else(|| endpoint.clone());
-        // Same transport choice as the CLI mailboxes: managed turns get nudges.
-        let managed = attempt.context_trace.is_some();
-        (endpoint, compactor, managed, resumed)
-    };
+    let (endpoint, compactor, managed, resumed) = shared
+        .read(|state| {
+            let model = crate::providers::Model::captured(crate::backend::Backend::Local, attempt.model.clone());
+            if !crate::providers::agent_capable(&state.runtime, &model) {
+                return Err((control_agent::Status::Blocked, crate::backend::LOCAL_TEXT_ONLY.into()));
+            }
+            let endpoint = crate::providers::endpoint(&state.runtime, &attempt.model)
+                .cloned()
+                .ok_or((
+                    control_agent::Status::Blocked,
+                    "The selected local endpoint is no longer configured; no fallback was used.".to_owned(),
+                ))?;
+            let current = state.runtime.runs.get(run);
+            let session = current
+                .and_then(|r| r.chat_id.as_ref())
+                .and_then(|chat| state.chats.iter().find(|c| &c.id == chat));
+            // Resuming a cut-off turn: the chat holds a host checkpoint, or this
+            // run already had an attempt (the live one is its last).
+            let resumed = session
+                .and_then(|s| s.continuity.as_ref())
+                .is_some_and(|c| c.interrupted.is_some())
+                || current.is_some_and(|r| r.attempts.len() > 1);
+            // A local chat compacts on its own endpoint unless the operator chose otherwise.
+            let compactor = session
+                .and_then(|s| crate::compaction::compactor_for(state, s))
+                .cloned()
+                .unwrap_or_else(|| endpoint.clone());
+            // Same transport choice as the CLI mailboxes: managed turns get nudges.
+            let managed = attempt.context_trace.is_some();
+            Ok((endpoint, compactor, managed, resumed))
+        })
+        .map_err(|_| (control_agent::Status::Failed, "Control state unavailable".to_owned()))??;
     let generation = attempt
         .workspace_id
         .clone()
@@ -1007,10 +1014,10 @@ pub(crate) fn execute(
                     ))
                     .unwrap_or_else(|| " · usage not reported".into())
             );
-            if let Ok(mut state) = shared.lock() {
+            let _ = shared.write(|state| {
                 let generation = attempt.workspace_id.clone().unwrap_or_default();
                 crate::worker::record_activity_for(
-                    &mut state,
+                    state,
                     run,
                     &generation,
                     crate::usage::Activity {
@@ -1021,7 +1028,7 @@ pub(crate) fn execute(
                         status: "completed".into(),
                     },
                 );
-            }
+            });
         }
     }
     // The loop has ended: stop attempt-owned tool containers, as the CLI adapters
@@ -1039,9 +1046,10 @@ fn run_loop(
     thinking: Thinking,
     resumed: bool,
 ) -> Result<Outcome, Failure> {
-    let max_steps = live.shared.lock().map_or(Policy::default().max_steps, |state| {
-        state.runtime.execution.local_agent_steps
-    });
+    let max_steps = live
+        .shared
+        .read(|state| state.runtime.execution.local_agent_steps)
+        .unwrap_or(Policy::default().max_steps);
     run(
         live,
         model,

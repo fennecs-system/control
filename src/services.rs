@@ -20,6 +20,7 @@ pub(crate) fn probe(service: &Service, command: &str, owner: &str, timeout: Dura
     commands::probe(crate::engine::isolation(), service, command, owner, timeout)
 }
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{
     State,
     chat::Lineage,
@@ -425,7 +426,7 @@ fn listing(s: &State, owned: impl Fn(&&Service) -> bool, run: &str, detail: bool
         json!({"services":services})
     }
 }
-pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
+pub(crate) fn execute(shared: &Store, attempt: &AttemptRef<'_>, call: ServiceCall) -> io::Result<Value> {
     let (run, generation, nonce) = (attempt.run, attempt.generation, attempt.nonce);
     let node: NodeId = crate::config::node_id().map_err(fail)?.try_into().map_err(fail)?;
     let (stop, list, id, detail) = match call {
@@ -437,7 +438,7 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
         ServiceCall::Attach(id, detail) => (false, false, id, detail),
         ServiceCall::Stop(id) => (true, false, id, false),
     };
-    let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let mut s = shared.guard()?;
     let authority = ServiceAuthority::of(&s);
     let (active, _) = caller(authority.runs, run, generation)?;
     let owned = |service: &&Service| accessible(authority.lineage, service, &node, active);
@@ -481,24 +482,17 @@ pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call
     }
     Ok(value)
 }
-fn start(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    nonce: &str,
-    node: NodeId,
-    input: Input,
-) -> io::Result<Value> {
-    let s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let (active, _) = caller(&s.runtime.runs, run, generation)?;
-    let image: ImageId = active
-        .attempts
-        .last()
-        .and_then(|a| a.image.clone())
-        .ok_or_else(|| fail("Missing captured image"))?
-        .try_into()
-        .map_err(fail)?;
-    drop(s);
+fn start(shared: &Store, run: &str, generation: &str, nonce: &str, node: NodeId, input: Input) -> io::Result<Value> {
+    let image: ImageId = shared.read(|s| -> io::Result<ImageId> {
+        let (active, _) = caller(&s.runtime.runs, run, generation)?;
+        active
+            .attempts
+            .last()
+            .and_then(|a| a.image.clone())
+            .ok_or_else(|| fail("Missing captured image"))?
+            .try_into()
+            .map_err(fail)
+    })??;
     let isolation = crate::engine::isolation();
     let marker = image_label(isolation, &image, "dev.control.service-runner")?;
     let version = marker.trim().parse::<u8>().unwrap_or(0);
@@ -509,26 +503,27 @@ fn start(
     }
     let profile = crate::worker_profile::Profile::inspect(isolation, image.as_str())?;
     quota_supported(&input, || isolation.disk_quota())?;
-    let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    // Revalidate the captured image after the engine query outside the state lock.
-    if caller(&s.runtime.runs, run, generation)?
-        .0
-        .attempts
-        .last()
-        .and_then(|a| a.image.as_deref())
-        != Some(image.as_str())
-    {
-        return Err(fail("Captured service image changed"));
-    }
-    admit_profile(
-        &mut s,
-        Request { run, generation, nonce },
-        input,
-        node,
-        now(),
-        profile,
-        crate::storage::save,
-    )
+    shared.write(|s| -> io::Result<Value> {
+        // Revalidate the captured image after the engine query outside the state lock.
+        if caller(&s.runtime.runs, run, generation)?
+            .0
+            .attempts
+            .last()
+            .and_then(|a| a.image.as_deref())
+            != Some(image.as_str())
+        {
+            return Err(fail("Captured service image changed"));
+        }
+        admit_profile(
+            s,
+            Request { run, generation, nonce },
+            input,
+            node,
+            now(),
+            profile,
+            crate::storage::save,
+        )
+    })?
 }
 /// A writable-layer cap the engine cannot enforce is refused before admission,
 /// so it never reserves capacity and is never silently dropped.
@@ -1139,61 +1134,60 @@ fn remove_container(isolation: &dyn Isolation, binding: &Verified<'_>) -> io::Re
 }
 
 fn apply(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     snapshot: &Service,
     event: Event,
     time: u64,
     save: &impl Fn(&State) -> io::Result<()>,
 ) -> io::Result<Option<(Service, Effect)>> {
-    let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let Some(index) = s
-        .services
-        .iter()
-        .position(|s| s.resource.id == snapshot.resource.id && s.resource.generation == snapshot.resource.generation)
-    else {
-        return Ok(None);
-    };
-    if s.services[index].resource.phase != snapshot.resource.phase && !matches!(event, Event::Created(_)) {
-        return Ok(None);
-    }
-    let effect = transition(&mut s, index, event, time, save)?;
-    Ok(effect.map(|effect| (s.services[index].binding_snapshot(), effect)))
+    shared.write(|s| -> io::Result<_> {
+        let Some(index) = s.services.iter().position(|s| {
+            s.resource.id == snapshot.resource.id && s.resource.generation == snapshot.resource.generation
+        }) else {
+            return Ok(None);
+        };
+        if s.services[index].resource.phase != snapshot.resource.phase && !matches!(event, Event::Created(_)) {
+            return Ok(None);
+        }
+        let effect = transition(s, index, event, time, save)?;
+        Ok(effect.map(|effect| (s.services[index].binding_snapshot(), effect)))
+    })?
 }
 fn retain_output(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     snapshot: &Service,
     output: String,
     exit_code: Option<i32>,
     save: &impl Fn(&State) -> io::Result<()>,
 ) -> io::Result<()> {
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let Some(index) = state.services.iter().position(|s| s.resource == snapshot.resource) else {
-        return Err(fail("Service changed before retaining output"));
-    };
-    let previous = std::mem::replace(&mut state.services[index].output, output);
-    let previous_exit = std::mem::replace(&mut state.services[index].exit_code, exit_code);
-    if let Err(error) = save(&state) {
-        state.services[index].output = previous;
-        state.services[index].exit_code = previous_exit;
-        return Err(error);
-    }
-    Ok(())
+    shared.write(|state| -> io::Result<()> {
+        let Some(index) = state.services.iter().position(|s| s.resource == snapshot.resource) else {
+            return Err(fail("Service changed before retaining output"));
+        };
+        let previous = std::mem::replace(&mut state.services[index].output, output);
+        let previous_exit = std::mem::replace(&mut state.services[index].exit_code, exit_code);
+        if let Err(error) = save(state) {
+            state.services[index].output = previous;
+            state.services[index].exit_code = previous_exit;
+            return Err(error);
+        }
+        Ok(())
+    })?
 }
 fn drive(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     isolation: &dyn Isolation,
     node: &str,
     time: u64,
     save: impl Fn(&State) -> io::Result<()>,
 ) -> io::Result<()> {
-    let services = {
-        let s = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let services = shared.read(|s| {
         s.services
             .iter()
             .filter(|s| s.resource.phase.reserves_capacity() && !matches!(s.resource.phase, Phase::Fenced { .. }))
             .map(Service::binding_snapshot)
             .collect::<Vec<_>>()
-    };
+    })?;
     if services.is_empty() {
         return Ok(());
     }
@@ -1292,7 +1286,7 @@ fn drive(
 /// The stop still inspects before releasing, so a container a refused request
 /// left behind is verified and removed. The chat's workspace is never touched.
 fn create(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     isolation: &dyn Isolation,
     service: &Service,
     time: u64,
@@ -1309,40 +1303,42 @@ fn create(
         }
     }
 }
-fn eligible(shared: &Arc<Mutex<State>>, expected: &Service, time: u64) -> io::Result<bool> {
+fn eligible(shared: &Store, expected: &Service, time: u64) -> io::Result<bool> {
     identity::authorize(&expected.actor, Action::Task).map_err(fail)?;
-    let s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    Ok(!expected.resource.lease.expired(time)
-        && s.services.iter().any(|s| {
-            s.resource.id == expected.resource.id
-                && s.resource.generation == expected.resource.generation
-                && s.resource.phase == expected.resource.phase
-        }))
+    shared.read(|s| -> io::Result<bool> {
+        Ok(!expected.resource.lease.expired(time)
+            && s.services.iter().any(|s| {
+                s.resource.id == expected.resource.id
+                    && s.resource.generation == expected.resource.generation
+                    && s.resource.phase == expected.resource.phase
+            }))
+    })?
 }
 fn diagnose(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     id: Option<&ResourceId>,
     error: &io::Error,
     save: &impl Fn(&State) -> io::Result<()>,
 ) -> io::Result<()> {
-    let mut s = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let diagnostic = error.to_string().chars().take(256).collect::<String>();
-    let mut changed = false;
-    for service in &mut s.services {
-        if service.resource.phase.reserves_capacity()
-            && id.is_none_or(|id| id == &service.resource.id)
-            && service.diagnostic != diagnostic
-        {
-            service.diagnostic.clone_from(&diagnostic);
-            changed = true;
+    shared.write(|s| -> io::Result<()> {
+        let diagnostic = error.to_string().chars().take(256).collect::<String>();
+        let mut changed = false;
+        for service in &mut s.services {
+            if service.resource.phase.reserves_capacity()
+                && id.is_none_or(|id| id == &service.resource.id)
+                && service.diagnostic != diagnostic
+            {
+                service.diagnostic.clone_from(&diagnostic);
+                changed = true;
+            }
         }
-    }
-    if changed {
-        save(&s)?;
-    }
-    Ok(())
+        if changed {
+            save(s)?;
+        }
+        Ok(())
+    })?
 }
-pub fn supervise(shared: Arc<Mutex<State>>) -> std::thread::JoinHandle<()> {
+pub fn supervise(shared: Store) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let Ok(node) = crate::config::node_id() else {
             return;

@@ -265,7 +265,7 @@ fn attempt_in(
         run.action,
     );
     let generation = attempt.workspace_id.clone().unwrap();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let outcome = execute(
         engine,
         &generation,
@@ -275,12 +275,8 @@ fn attempt_in(
         &mut attempt,
         Some((&shared, &id)),
     );
-    let live = shared.lock().unwrap().runtime.runs[0].attempts[0].clone();
-    let mut state = Arc::try_unwrap(shared)
-        .ok()
-        .expect("the attempt released its state")
-        .into_inner()
-        .unwrap();
+    let live = shared.guard().unwrap().runtime.runs[0].attempts[0].clone();
+    let mut state = shared.into_state().expect("the attempt released its state");
     commit(&mut state, &id, action, attempt.clone(), outcome.clone(), false, |_| {
         Ok(())
     })

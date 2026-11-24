@@ -1,12 +1,10 @@
 //! Fail-closed lifecycle operations. Docker names discover intent; verified IDs
 //! authorize termination. Never stop an arbitrary container from a label alone.
 use crate::runtime::RunStatus;
-use crate::{State, identity::Actor, runtime::Runtime, usage::Attempt};
+use crate::store::Store;
+use crate::{identity::Actor, runtime::Runtime, usage::Attempt};
 use control_isolation::{ContainerId, Isolation, Observed, Select, States, Target};
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::path::PathBuf;
 
 pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<(), &'static str> {
     let run = runtime.runs.get_mut(id).ok_or("Run not found.")?;
@@ -51,12 +49,12 @@ pub fn request_cancel(runtime: &mut Runtime, id: &str, actor: &Actor) -> Result<
     Ok(())
 }
 
-pub fn cancelled(bridge: Option<(&Arc<Mutex<State>>, &str)>) -> bool {
+pub fn cancelled(bridge: Option<(&Store, &str)>) -> bool {
     crate::shutdown::requested()
         || bridge.is_some_and(|(state, id)| {
-            state.lock().map_or(true, |s| {
-                !s.runtime.runs.get(id).is_some_and(|r| r.status == RunStatus::Running)
-            })
+            state
+                .read(|s| !s.runtime.runs.get(id).is_some_and(|r| r.status == RunStatus::Running))
+                .unwrap_or(true)
         })
 }
 

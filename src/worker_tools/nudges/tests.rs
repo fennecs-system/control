@@ -2,7 +2,6 @@ use super::*;
 use crate::config::unix_seconds as now;
 use crate::runtime::RunStatus;
 use serde_json::json;
-use std::sync::{Arc, Mutex};
 
 /// A running managed attempt in a fresh chat, started at Unix second 1000.
 fn running(timeout: Option<u64>) -> (State, String, String) {
@@ -273,7 +272,7 @@ fn nudges_are_appended_to_tool_results_through_the_broker() {
     // An attempt that started long ago is near its default deadline and long.
     let started = now().saturating_sub(560);
     state.runtime.runs[0].attempts.last_mut().unwrap().started_unix = started;
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let call = |nonce: &str| {
         super::super::rpc_at(
             &shared,

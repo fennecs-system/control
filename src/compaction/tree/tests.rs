@@ -457,11 +457,11 @@ fn surgery_is_operator_only() {
         );
         assert!(surgery::plan(&state, &chat, actor, ROOT, "focus").is_err());
     }
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let fields = crate::fields("action=pin&at=1");
     assert!(post(&shared, &chat, &agent, &fields).is_err());
     assert!(regenerate(&shared, &chat, &agent, ROOT, "focus").is_err());
-    let state = shared.lock().unwrap();
+    let state = shared.guard().unwrap();
     assert!(state.chats[0].memory.is_none(), "rejected edits leave no trace");
     // Agents' only history tool stays read-only.
     let tools = crate::compaction::Tools;
@@ -514,7 +514,7 @@ fn operator_forms_edit_and_redirect_to_the_memory_tree() {
     // CONTROL_STATE_DIR does not create; do not rely on an earlier test making it.
     std::fs::create_dir_all(crate::config::state_directory().unwrap()).unwrap();
     let (state, chat, dir) = published();
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     let mut out = Vec::new();
     assert!(http(
         &mut out,
@@ -532,7 +532,7 @@ fn operator_forms_edit_and_redirect_to_the_memory_tree() {
             .contains(&format!("location: {}?entry=2", memory_url(&chat))),
         "{response}"
     );
-    assert!(shared.lock().unwrap().chats[0].memory.as_ref().unwrap().pinned(2));
+    assert!(shared.guard().unwrap().chats[0].memory.as_ref().unwrap().pinned(2));
     let mut out = Vec::new();
     assert!(http(
         &mut out,
@@ -709,7 +709,7 @@ fn compression_scores_reward_terse_facts_and_count_lost_ones() {
 /// move a byte; the body is the error page, passed through unchanged.
 #[test]
 fn memory_page_response_head_is_pinned() {
-    let state = Arc::new(Mutex::new(State::default()));
+    let state = crate::store::Store::new(State::default());
     let mut out = Vec::new();
     assert!(http(&mut out, &state, "GET", "/dm/missing/memory/node", "", b""));
     let text = String::from_utf8(out).unwrap();

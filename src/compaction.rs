@@ -1,16 +1,13 @@
 //! Derived summary views. The host snapshots bounded source records, calls a
 //! text adapter outside the state lock, then revalidates before publication.
+use crate::store::Store;
 use crate::{
     State,
     conversation::{Compactor, Conversation, Item, Window},
 };
 use control_comonad::{Block, cut};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    io,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, io, sync::Arc};
 
 pub(crate) mod command;
 mod recall;
@@ -481,14 +478,9 @@ fn node_checksum(node: &Node) -> String {
 
 /// At most one background text call per node. Existing dispatcher hints initiate
 /// work; completion wakes dispatch, never an agent or a steering-chat message.
-pub fn tick(state: &Arc<Mutex<State>>) {
-    let job = {
-        let Ok(mut s) = state.lock() else {
-            return;
-        };
-        let Some(job) = prepare(&s) else {
-            return;
-        };
+pub fn tick(state: &Store) {
+    let job = state.write(|s| {
+        let job = prepare(s)?;
         s.runtime.compaction.pending = Some((
             job.chat.clone(),
             job.revision,
@@ -499,10 +491,13 @@ pub fn tick(state: &Arc<Mutex<State>>) {
             .compaction
             .attempted
             .insert(job.chat.clone(), (job.revision, job.identity.clone()));
-        job
+        Some(job)
+    });
+    let Ok(Some(job)) = job else {
+        return;
     };
-    let state = Arc::clone(state);
-    let recovery = Arc::clone(&state);
+    let state = state.clone();
+    let recovery = state.clone();
     let chat = job.chat.clone();
     let spawned = std::thread::Builder::new()
         .name("control-compactor".into())
@@ -514,28 +509,27 @@ pub fn tick(state: &Arc<Mutex<State>>) {
                     .and_then(|dir| {
                         private_directory(&dir)?;
                         job.entries = source::Records::capture(job.entries.len(), &dir, |start, count| {
-                            let s = state.lock().map_err(|_| io::Error::other("State unavailable"))?;
-                            source_page(&s, &job, start, count)
+                            state.read(|s| source_page(s, &job, start, count))?
                         })?;
                         execute(&job, &dir, |model, system, input| {
-                            {
-                                let s = state.lock().map_err(|_| io::Error::other("State unavailable"))?;
-                                if !allowed(&s, &job) {
+                            state.read(|s| {
+                                if !allowed(s, &job) {
                                     return Err(io::Error::other("Compaction no longer authorized or enabled"));
                                 }
-                            }
+                                Ok(())
+                            })??;
                             crate::model_calls::call(model, system, input)
                         })
                     })
             }))
             .unwrap_or_else(|_| Err(io::Error::other("Summary worker stopped unexpectedly")));
-            if let Ok(mut s) = state.lock() {
-                let valid = allowed(&s, &job);
+            let _ = state.write(|s| {
+                let valid = allowed(s, &job);
                 let result = result.and_then(|view| {
                     if s.chats
                         .iter()
                         .find(|c| c.id == job.chat)
-                        .is_some_and(|c| sources_match(&Conversation::of(&s, c), &view.source_hash, view.count))
+                        .is_some_and(|c| sources_match(&Conversation::of(s, c), &view.source_hash, view.count))
                     {
                         Ok(view)
                     } else {
@@ -561,17 +555,17 @@ pub fn tick(state: &Arc<Mutex<State>>) {
                         }
                     }
                 }
-            }
+            });
             crate::worker::wake();
         });
-    if spawned.is_err()
-        && let Ok(mut s) = recovery.lock()
-    {
-        s.runtime.compaction.pending = None;
-        s.runtime
-            .compaction
-            .errors
-            .insert(chat, "Could not start summary worker".into());
+    if spawned.is_err() {
+        let _ = recovery.write(|s| {
+            s.runtime.compaction.pending = None;
+            s.runtime
+                .compaction
+                .errors
+                .insert(chat, "Could not start summary worker".into());
+        });
     }
 }
 

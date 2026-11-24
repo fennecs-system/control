@@ -7,14 +7,7 @@ fn command_deadline_respects_owner_without_limiting_persistent_service_lifetime(
 use super::*;
 use crate::runtime::RunStatus;
 use crate::tool_registry::{AttemptCall, AttemptTools, LocalHost};
-fn call(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    generation: &str,
-    nonce: &str,
-    name: &str,
-    args: &Value,
-) -> io::Result<Value> {
+fn call(shared: &Store, run: &str, generation: &str, nonce: &str, name: &str, args: &Value) -> io::Result<Value> {
     Tools.call(
         &AttemptCall {
             attempt: AttemptRef { run, generation, nonce },
@@ -53,7 +46,7 @@ fn fixture() -> (State, String, String) {
 #[test]
 fn status_cannot_cross_attempt_or_job_boundaries() {
     let (state, run, generation) = fixture();
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     assert!(
         call(
             &state,
@@ -80,7 +73,7 @@ fn status_cannot_cross_attempt_or_job_boundaries() {
         .to_string()
         .contains("Unknown job")
     );
-    state.lock().unwrap().runtime.runs[0].status = RunStatus::Cancelled;
+    state.guard().unwrap().runtime.runs[0].status = RunStatus::Cancelled;
     assert!(
         call(
             &state,
@@ -114,7 +107,7 @@ fn checkpoint_barrier_fails_closed_for_unconfirmed_writer() {
         output: String::new(),
         exit_code: None,
     });
-    let state = Arc::new(Mutex::new(state));
+    let state = crate::store::Store::new(state);
     assert!(
         quiesce_until(&state, &run, &generation, Instant::now())
             .unwrap_err()
@@ -122,7 +115,7 @@ fn checkpoint_barrier_fails_closed_for_unconfirmed_writer() {
             .contains("checkpoint remains unchanged")
     );
     assert_eq!(
-        state.lock().unwrap().runtime.runs[0].attempts[0].command_jobs[0].status,
+        state.guard().unwrap().runtime.runs[0].attempts[0].command_jobs[0].status,
         super::JobStatus::Stopping
     );
 }
@@ -213,15 +206,20 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     attempt.node_id = Some(crate::config::node_id().unwrap());
     // Commands are bounded by the attempt's own deadline since e2eead3; start the attempt now.
     attempt.started_unix = now();
-    let state = Arc::new(Mutex::new(state));
-    struct Cleanup(Arc<Mutex<State>>);
+    let state = crate::store::Store::new(state);
+    struct Cleanup(Store);
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            let jobs = self.0.lock().unwrap_or_else(|error| error.into_inner()).runtime.runs[0]
-                .attempts
-                .iter()
-                .flat_map(|a| a.command_jobs.clone())
-                .collect::<Vec<_>>();
+            let jobs = self
+                .0
+                .read(|state| {
+                    state.runtime.runs[0]
+                        .attempts
+                        .iter()
+                        .flat_map(|a| a.command_jobs.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             for job in jobs {
                 let _ = stop(crate::engine::isolation(), &job);
             }
@@ -250,7 +248,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
         .unwrap();
         if value["status"] == "running" && value["output"].as_str().unwrap().contains("early-output") {
             saw_live = true;
-            let saw_activity = state.lock().unwrap().runtime.runs[0].attempts[0]
+            let saw_activity = state.guard().unwrap().runtime.runs[0].attempts[0]
                 .activity
                 .iter()
                 .any(|a| a.output.contains("early-output"));
@@ -351,7 +349,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
         std::thread::sleep(Duration::from_millis(50));
     }
     {
-        let mut locked = state.lock().unwrap();
+        let mut locked = state.guard().unwrap();
         let attempt = &mut locked.runtime.runs[0].attempts[0];
         attempt.review_only = true;
         attempt.backend = crate::backend::Backend::Claude;
@@ -377,7 +375,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!workspace.join("forbidden-judge-write").exists());
-    state.lock().unwrap().runtime.runs[0].attempts[0].review_only = false;
+    state.guard().unwrap().runtime.runs[0].attempts[0].review_only = false;
     let handle = start(
         &state,
         &run,
@@ -392,7 +390,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     .unwrap();
     let until = Instant::now() + Duration::from_secs(10);
     let job = loop {
-        let locked = state.lock().unwrap();
+        let locked = state.guard().unwrap();
         let job = locked.runtime.runs[0].attempts[0]
             .command_jobs
             .iter()
@@ -417,7 +415,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
     assert!(inspect(crate::engine::isolation(), &job).unwrap().running);
     // Reconstruct owner records exactly as a restarted process would. Inactive attempts
     // retain their independent captured image and immutable container ID.
-    let recovered: State = serde_json::from_slice(&serde_json::to_vec(&*state.lock().unwrap()).unwrap()).unwrap();
+    let recovered: State = serde_json::from_slice(&serde_json::to_vec(&*state.guard().unwrap()).unwrap()).unwrap();
     let mut recovered = recovered;
     recovered.runtime.runs[0].status = RunStatus::Interrupted;
     crate::lifecycle::reconcile(
@@ -458,7 +456,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
         assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(50));
     }
-    state.lock().unwrap().runtime.runs[0].attempts.push(Attempt {
+    state.guard().unwrap().runtime.runs[0].attempts.push(Attempt {
         workspace_id: Some(format!("{generation}-retry")),
         ..Default::default()
     });
@@ -474,7 +472,7 @@ fn live_commands_stream_past_short_deadline_cancel_and_reconcile_exact_restart_i
         .is_err()
     );
     quiesce(&state, &run, &generation).unwrap();
-    let locked = state.lock().unwrap();
+    let locked = state.guard().unwrap();
     assert!(locked.runtime.runs[0].attempts[1].activity.is_empty());
     assert_eq!(
         locked.runtime.runs[0].attempts[0].command_jobs.last().unwrap().status,

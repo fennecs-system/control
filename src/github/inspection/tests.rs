@@ -159,7 +159,7 @@ fn ordinary_stale_judge_and_changed_owner_attempts_cannot_inspect() {
     state.chats[0].actor = Actor::LocalOperator;
     state.runtime.runs[0].status = RunStatus::Completed;
     assert!(authorize(&state, caller).is_err());
-    let shared = Arc::new(Mutex::new(state));
+    let shared = crate::store::Store::new(state);
     assert!(
         execute(&shared, caller, query(Section::Overview)).is_err(),
         "authorization fails before configuration or credentials are read"

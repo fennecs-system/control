@@ -1,6 +1,7 @@
 //! Unpublished, immutable workspace candidates. Retention never advances a chat
 //! head or callback cursor and never admits another model turn.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{
     State,
     attempt_control::Termination,
@@ -12,7 +13,6 @@ use serde_json::{Value, json};
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,11 +68,7 @@ fn snapshot(root: &Path, source: &Path, candidate: &Candidate) -> io::Result<()>
 
 /// Stop verification and file copying run outside shared state. Failure is an
 /// explicit record, not a claim that a live workspace is an immutable snapshot.
-pub fn capture(
-    isolation: &dyn control_isolation::Isolation,
-    bridge: Option<(&Arc<Mutex<State>>, &str)>,
-    attempt: &mut Attempt,
-) {
+pub fn capture(isolation: &dyn control_isolation::Isolation, bridge: Option<(&Store, &str)>, attempt: &mut Attempt) {
     if attempt.review_only || attempt.recovery.is_some() {
         return;
     }
@@ -95,20 +91,22 @@ pub fn capture(
     let result = (|| {
         crate::attempt_control::stop(isolation, bridge, attempt).map_err(io::Error::other)?;
         if let Some((shared, id)) = bridge {
-            let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-            let live = state
-                .runtime
-                .runs
-                .get(id)
-                .and_then(|r| r.attempts.last())
-                .filter(|a| a.workspace_id == attempt.workspace_id)
-                .ok_or_else(|| io::Error::other("Recovery generation changed"))?;
-            candidate.draft = live.turn_mailbox.as_ref().and_then(|m| m.accepted()).cloned();
-            if live.command_jobs.iter().any(|job| job.status.is_active()) {
-                return Err(io::Error::other(
-                    "Command supervision has not quiesced; recovery bytes were not copied",
-                ));
-            }
+            shared.read(|state| -> io::Result<()> {
+                let live = state
+                    .runtime
+                    .runs
+                    .get(id)
+                    .and_then(|r| r.attempts.last())
+                    .filter(|a| a.workspace_id == attempt.workspace_id)
+                    .ok_or_else(|| io::Error::other("Recovery generation changed"))?;
+                candidate.draft = live.turn_mailbox.as_ref().and_then(|m| m.accepted()).cloned();
+                if live.command_jobs.iter().any(|job| job.status.is_active()) {
+                    return Err(io::Error::other(
+                        "Command supervision has not quiesced; recovery bytes were not copied",
+                    ));
+                }
+                Ok(())
+            })??;
         }
         let source = crate::runtime::workspace(&candidate.generation).map_err(io::Error::other)?;
         snapshot(&root()?, &source, &candidate)
@@ -122,9 +120,8 @@ pub fn capture(
 
 /// Restart reconciliation supplies stopped writers before new admissions. No
 /// recovery turn is scheduled; ordinary cancellation/pause semantics stay intact.
-pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mutex<State>>) -> io::Result<()> {
-    let pending: Vec<_> = {
-        let state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Store) -> io::Result<()> {
+    let pending: Vec<_> = shared.read(|state| {
         state
             .runtime
             .runs
@@ -141,39 +138,41 @@ pub fn reconcile(isolation: &dyn control_isolation::Isolation, shared: &Arc<Mute
                     .then(|| (r.id().as_str().to_owned(), a.clone()))
             })
             .collect()
-    };
+    })?;
     for (id, mut attempt) in pending {
         capture(isolation, Some((shared, &id)), &mut attempt);
-        let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
-        let Some(live) = state
-            .runtime
-            .runs
-            .get_mut(&id)
-            .filter(|r| {
-                matches!(
-                    r.status,
-                    RunStatus::Failed | RunStatus::Interrupted | RunStatus::Cancelled
-                )
-            })
-            .and_then(|r| r.attempts.last_mut())
-            .filter(|a| a.workspace_id == attempt.workspace_id)
-        else {
-            continue;
-        };
-        let previous = live.recovery.clone();
-        live.recovery = attempt.recovery;
-        if let Err(error) = crate::storage::save(&state) {
-            state
+        shared.write(|state| -> io::Result<()> {
+            let Some(live) = state
                 .runtime
                 .runs
                 .get_mut(&id)
-                .unwrap()
-                .attempts
-                .last_mut()
-                .unwrap()
-                .recovery = previous;
-            return Err(error);
-        }
+                .filter(|r| {
+                    matches!(
+                        r.status,
+                        RunStatus::Failed | RunStatus::Interrupted | RunStatus::Cancelled
+                    )
+                })
+                .and_then(|r| r.attempts.last_mut())
+                .filter(|a| a.workspace_id == attempt.workspace_id)
+            else {
+                return Ok(());
+            };
+            let previous = live.recovery.clone();
+            live.recovery = attempt.recovery;
+            if let Err(error) = crate::storage::save(state) {
+                state
+                    .runtime
+                    .runs
+                    .get_mut(&id)
+                    .unwrap()
+                    .attempts
+                    .last_mut()
+                    .unwrap()
+                    .recovery = previous;
+                return Err(error);
+            }
+            Ok(())
+        })??;
     }
     Ok(())
 }
@@ -258,7 +257,7 @@ impl AttemptTools for Tools {
     fn call(&self, cx: &AttemptCall<'_>, _: &str, args: &Value) -> io::Result<Value> {
         let input: Input = serde_json::from_value(args.clone())?;
         let (candidate, target) = {
-            let state = cx.host.0.lock().map_err(|_| io::Error::other("State unavailable"))?;
+            let state = cx.host.0.guard()?;
             let run = state
                 .runtime
                 .runs

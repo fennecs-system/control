@@ -2,13 +2,13 @@ use super::*;
 use control::permissions::Approvals;
 
 /// An operator DM (`root`) whose agent runs in `own`, with an unrelated DM.
-fn task() -> (Arc<Mutex<State>>, String, String, String) {
+fn task() -> (Store, String, String, String) {
     let mut state = State::default();
     let root = crate::chat::create(&mut state);
     let own = crate::chat::create(&mut state);
     state.chats.last_mut().unwrap().parent_chat = Some(root.clone());
     let other = crate::chat::create(&mut state);
-    (Arc::new(Mutex::new(state)), root, own, other)
+    (crate::store::Store::new(state), root, own, other)
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn agents_drive_only_dms_below_their_own_chat() {
         .to_owned();
     assert_eq!(
         shared
-            .lock()
+            .guard()
             .unwrap()
             .chats
             .iter()
@@ -139,7 +139,7 @@ fn agents_drive_only_dms_below_their_own_chat() {
         )
         .is_err()
     );
-    assert!(shared.lock().unwrap().chats.iter().all(|c| c.project.is_none()));
+    assert!(shared.guard().unwrap().chats.iter().all(|c| c.project.is_none()));
 }
 
 #[test]

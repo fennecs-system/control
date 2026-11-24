@@ -1170,8 +1170,8 @@ fn an_operator_turn_handoff_replies_with_the_agents_last_message() {
         "{staged}"
     );
     let attempt = state.runtime.runs[0].attempts.last().unwrap().clone();
-    let shared = std::sync::Arc::new(std::sync::Mutex::new(state));
-    let poll = |shared: &std::sync::Arc<std::sync::Mutex<State>>| {
+    let shared = crate::store::Store::new(state);
+    let poll = |shared: &crate::store::Store| {
         crate::attempt_control::poll(Some((shared, &id)), &attempt, std::time::Duration::ZERO)
     };
     assert_eq!(
@@ -1179,7 +1179,7 @@ fn an_operator_turn_handoff_replies_with_the_agents_last_message() {
         crate::attempt_control::Decision::Finish("Root cause and diff.".into())
     );
     // A wake keeps the placeholder and the stop instruction.
-    shared.lock().unwrap().runtime.runs[0].kind = crate::runtime::RunKind::BotWake;
+    shared.guard().unwrap().runtime.runs[0].kind = crate::runtime::RunKind::BotWake;
     assert_eq!(
         poll(&shared),
         crate::attempt_control::Decision::Finish("Agent yielded with a committed handoff.".into())

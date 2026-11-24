@@ -431,7 +431,7 @@ fn source_git_output_is_bounded_by_time_and_size() {
 /// unacknowledged publication is a protocol error.
 #[test]
 fn github_mcp_envelopes_are_pinned() {
-    let shared = Arc::new(Mutex::new(State::default()));
+    let shared = crate::store::Store::new(State::default());
     let send = |body: Value| {
         let mut output = Vec::new();
         let served = crate::mcp_http::handle(&mut output, &shared, "POST", "/mcp", "", body.to_string().as_bytes());

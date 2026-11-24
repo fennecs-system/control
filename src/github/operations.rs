@@ -1,6 +1,7 @@
 //! Explicit repository mutations through the existing trusted GitHub broker.
 use super::inspection::{Caller, ReadApi, authorize, project};
 use super::*;
+use crate::store::Store;
 use control_context::github::Operation;
 
 static MUTATION: Mutex<()> = Mutex::new(());
@@ -100,27 +101,17 @@ fn authorize_write(state: &State, caller: Caller<'_>) -> io::Result<()> {
 impl Api for WriteApi<'_> {
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> io::Result<Value> {
         self.0.check()?;
-        authorize_write(
-            &*self
-                .0
-                .shared
-                .lock()
-                .map_err(|_| io::Error::other("State unavailable"))?,
-            self.0.caller,
-        )?;
+        self.0.shared.read(|state| authorize_write(state, self.0.caller))??;
         self.0.rest.request(method, path, body)
     }
 }
 
-pub(super) fn execute(shared: &Arc<Mutex<State>>, caller: Caller<'_>, operation: Operation) -> io::Result<Value> {
+pub(super) fn execute(shared: &Store, caller: Caller<'_>, operation: Operation) -> io::Result<Value> {
     operation.validate().map_err(io::Error::other)?;
     let _guard = MUTATION
         .try_lock()
         .map_err(|_| io::Error::other("A GitHub mutation is already running; inspect remote state before retrying"))?;
-    authorize_write(
-        &*shared.lock().map_err(|_| io::Error::other("State unavailable"))?,
-        caller,
-    )?;
+    shared.read(|state| authorize_write(state, caller))??;
     let config = configuration()?.ok_or_else(|| io::Error::other("Configure GitHub tools before writing"))?;
     if matches!(operation, Operation::Merge { .. }) && !config.allow_merge {
         return Err(io::Error::other(
@@ -227,7 +218,7 @@ fn mutate(api: &impl Api, repo: &str, base: &str, allow_merge: bool, operation: 
 }
 
 /// The `/mcp` reply; the caller frames it.
-pub(crate) fn mcp(shared: &Arc<Mutex<State>>, request: &Value) -> Value {
+pub(crate) fn mcp(shared: &Store, request: &Value) -> Value {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Input {

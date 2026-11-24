@@ -215,7 +215,7 @@ conversation, request a project, cancel or inspect a run, and read conversation
 updates. Web, MCP and terminal clients invoke the same authorization and durable
 operations. Keep render-only work outside the state lock where possible: borrow
 within a request and pass bounded owned snapshots across threads. Do not export
-`Arc<Mutex<State>>` as a public API. See
+the `Store` state handle as a public API. See
 [state and effect boundaries](STATE-BOUNDARIES.md) for the operations already
 migrated.
 

@@ -6,19 +6,16 @@
 //! dispatcher's interpreter, and `External` and `Family` handlers work
 //! (containers, network, waits) only after the lock is released.
 use super::authority::Caller;
+use crate::store::{Guard, Store};
 use crate::{State, tool_registry::AttemptTools};
 use serde_json::Value;
-use std::{
-    borrow::Cow,
-    path::Path,
-    sync::{Arc, Mutex, MutexGuard},
-};
+use std::{borrow::Cow, path::Path};
 
 /// A refusal the model reads as a failed tool result.
 pub(super) type Refusal = Cow<'static, str>;
 /// The checkpoint interpreter a write persists through.
 pub(super) type Save = fn(&State) -> std::io::Result<()>;
-pub(super) type Shared = Arc<Mutex<State>>;
+pub(super) type Shared = Store;
 
 /// One `tools/call` request after the protocol and authority checks. It
 /// borrows the request, never the state, so later steps may keep it.
@@ -64,7 +61,7 @@ impl Handler {
     /// requires. The guard is moved in so no caller can keep it.
     pub(super) fn answer(
         &self,
-        mut state: MutexGuard<'_, State>,
+        mut state: Guard<'_>,
         shared: &Shared,
         caller: &Caller<'_>,
         call: &Call<'_>,
@@ -101,11 +98,11 @@ mod sealed {
 }
 /// Implemented only by [`Read`]: the release between view and reply is its.
 pub(super) trait ReadTool: sealed::Sealed + Sync {
-    fn answer(&self, state: MutexGuard<'_, State>, caller: &Caller<'_>, call: &Call<'_>) -> Value;
+    fn answer(&self, state: Guard<'_>, caller: &Caller<'_>, call: &Call<'_>) -> Value;
 }
 /// Implemented only by [`External`].
 pub(super) trait ExternalTool: sealed::Sealed + Sync {
-    fn answer(&self, state: MutexGuard<'_, State>, shared: &Shared, caller: &Caller<'_>, call: &Call<'_>) -> Value;
+    fn answer(&self, state: Guard<'_>, shared: &Shared, caller: &Caller<'_>, call: &Call<'_>) -> Value;
 }
 
 /// `view` reads under the lock; `reply` gets only that `'static` copy, so
@@ -116,7 +113,7 @@ pub(super) struct Read<V: 'static> {
 }
 impl<V: 'static> sealed::Sealed for Read<V> {}
 impl<V: 'static> ReadTool for Read<V> {
-    fn answer(&self, state: MutexGuard<'_, State>, caller: &Caller<'_>, call: &Call<'_>) -> Value {
+    fn answer(&self, state: Guard<'_>, caller: &Caller<'_>, call: &Call<'_>) -> Value {
         let view = (self.view)(&state, caller, call);
         drop(state);
         (self.reply)(view)
@@ -132,7 +129,7 @@ pub(super) struct External<P: 'static> {
 }
 impl<P: 'static> sealed::Sealed for External<P> {}
 impl<P: 'static> ExternalTool for External<P> {
-    fn answer(&self, state: MutexGuard<'_, State>, shared: &Shared, caller: &Caller<'_>, call: &Call<'_>) -> Value {
+    fn answer(&self, state: Guard<'_>, shared: &Shared, caller: &Caller<'_>, call: &Call<'_>) -> Value {
         let plan = (self.prepare)(&state, caller, call);
         drop(state);
         match plan {

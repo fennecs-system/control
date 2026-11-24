@@ -9,6 +9,7 @@
 //! tool that changes it. Raw history is never rewritten.
 use super::*;
 use crate::identity::Actor;
+use crate::store::Store;
 
 pub(crate) const MAX_REVISIONS: usize = 64;
 pub(crate) const MAX_PINS: usize = 32;
@@ -491,22 +492,17 @@ pub(crate) fn commit(
 
 /// Start a regeneration on a background thread; the HTTP request returns at
 /// once and the Memory Tree shows it pending until the revision lands.
-pub fn regenerate(
-    state: &Arc<Mutex<State>>,
-    chat: &str,
-    actor: &Actor,
-    block: Block,
-    text: &str,
-) -> Result<(), &'static str> {
-    let plan = {
-        let mut s = state.lock().map_err(|_| "State unavailable")?;
-        let plan = plan(&s, chat, actor, block, text)?;
-        s.runtime.compaction.surgery = Some((chat.to_owned(), block));
-        s.runtime.compaction.surgery_errors.remove(chat);
-        plan
-    };
-    let state = Arc::clone(state);
-    let recovery = Arc::clone(&state);
+pub fn regenerate(state: &Store, chat: &str, actor: &Actor, block: Block, text: &str) -> Result<(), &'static str> {
+    let plan = state
+        .write(|s| -> Result<_, &'static str> {
+            let plan = plan(s, chat, actor, block, text)?;
+            s.runtime.compaction.surgery = Some((chat.to_owned(), block));
+            s.runtime.compaction.surgery_errors.remove(chat);
+            Ok(plan)
+        })
+        .map_err(|_| "State unavailable")??;
+    let state = state.clone();
+    let recovery = state.clone();
     let spawned = std::thread::Builder::new()
         .name("control-memory-surgery".into())
         .spawn(move || {
@@ -515,13 +511,13 @@ pub fn regenerate(
                 run(&plan, &directory, crate::model_calls::call)
             }))
             .unwrap_or_else(|_| Err(io::Error::other("Summary regeneration stopped unexpectedly")));
-            if let Ok(mut s) = state.lock() {
+            let _ = state.write(|s| {
                 s.runtime.compaction.surgery = None;
                 let chat = plan.chat.clone();
                 let previous = s.chats.iter().find(|c| c.id == chat).map(|c| c.memory.clone());
                 let outcome = result.map_err(|e| e.to_string()).and_then(|(base, response)| {
-                    commit(&mut s, plan, base, response).map_err(str::to_owned)?;
-                    crate::storage::save(&s).map_err(|e| format!("Could not save the revision: {e}"))
+                    commit(s, plan, base, response).map_err(str::to_owned)?;
+                    crate::storage::save(s).map_err(|e| format!("Could not save the revision: {e}"))
                 });
                 if let Err(error) = outcome {
                     if let (Some(previous), Some(session)) = (previous, s.chats.iter_mut().find(|c| c.id == chat)) {
@@ -529,17 +525,17 @@ pub fn regenerate(
                     }
                     s.runtime.compaction.surgery_errors.insert(chat, error);
                 }
-            }
+            });
             crate::worker::wake();
         });
-    if spawned.is_err()
-        && let Ok(mut s) = recovery.lock()
-    {
-        s.runtime.compaction.surgery = None;
-        s.runtime
-            .compaction
-            .surgery_errors
-            .insert(chat.to_owned(), "Could not start the regeneration".into());
+    if spawned.is_err() {
+        let _ = recovery.write(|s| {
+            s.runtime.compaction.surgery = None;
+            s.runtime
+                .compaction
+                .surgery_errors
+                .insert(chat.to_owned(), "Could not start the regeneration".into());
+        });
     }
     Ok(())
 }

@@ -1,14 +1,15 @@
 //! The host side of `control_agent`: this node's container rules, and a
 //! running attempt's view for one backend turn. Backends see only these
 //! traits; state, locks and attempt bookkeeping stay here.
-use crate::{State, usage::Attempt};
+use crate::store::Store;
+use crate::usage::Attempt;
 use control_agent::{Control, Events, Failure, Host, Node, Outcome, Stop};
 use control_effect::sync::CancelToken;
 use control_isolation::Isolation;
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -52,7 +53,7 @@ impl Node for ThisNode {
     }
 }
 
-type Bridge<'a> = Option<(&'a Arc<Mutex<State>>, &'a str)>;
+type Bridge<'a> = Option<(&'a Store, &'a str)>;
 
 /// One attempt's turn, as its backend sees it.
 pub(crate) struct Attempted<'a> {
@@ -75,7 +76,7 @@ impl Host for Attempted<'_> {
         crate::design::requested(self.bridge)
     }
     fn unavailable(&self) -> bool {
-        self.bridge.is_some_and(|(state, _)| state.is_poisoned())
+        self.bridge.is_some_and(|(state, _)| state.is_unavailable())
     }
     fn pump(&mut self, mailbox: &Path) {
         if let Some((state, run)) = self.bridge {
@@ -110,7 +111,7 @@ impl Host for Attempted<'_> {
     }
     fn events(&self) -> Arc<dyn Events> {
         Arc::new(Live {
-            target: self.bridge.map(|(state, run)| (Arc::clone(state), run.to_owned())),
+            target: self.bridge.map(|(state, run)| (state.clone(), run.to_owned())),
             generation: self.id.to_owned(),
             workspace: self.workspace.to_path_buf(),
         })
@@ -118,31 +119,27 @@ impl Host for Attempted<'_> {
     fn requested(&self) -> bool {
         self.bridge.is_some_and(|(state, run)| {
             state
-                .lock()
-                .is_ok_and(|s| s.runtime.runs.get(run).is_some_and(crate::attempt_control::requested))
+                .read(|s| s.runtime.runs.get(run).is_some_and(crate::attempt_control::requested))
+                .unwrap_or(false)
         })
     }
 }
 
 /// A turn's stream recorded into the live attempt, fenced by its generation.
 struct Live {
-    target: Option<(Arc<Mutex<State>>, String)>,
+    target: Option<(Store, String)>,
     generation: String,
     workspace: PathBuf,
 }
 impl Events for Live {
     fn activity(&self, activity: control_ai::Activity) {
-        if let Some((state, run)) = &self.target
-            && let Ok(mut state) = state.lock()
-        {
-            crate::worker::record_activity_for(&mut state, run, &self.generation, activity);
+        if let Some((state, run)) = &self.target {
+            let _ = state.write(|state| crate::worker::record_activity_for(state, run, &self.generation, activity));
         }
     }
     fn usage(&self, usage: &control_ai::Usage) {
-        if let Some((state, run)) = &self.target
-            && let Ok(mut state) = state.lock()
-        {
-            crate::worker::record_usage_for(&mut state, run, &self.generation, usage.clone());
+        if let Some((state, run)) = &self.target {
+            let _ = state.write(|state| crate::worker::record_usage_for(state, run, &self.generation, usage.clone()));
         }
     }
     fn changed(&self) {

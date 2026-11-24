@@ -81,6 +81,16 @@ The brokers behind the table (rooms, spawning, delegation, design, knowledge and
 the attempt families) still re-check the run and roll back their own saves.
 `src/worker_tools/tests/characterisation.rs` pins every tool's answer.
 
+**State handle** (`src/store.rs`). Every lock of `State` goes through
+`Store`. `read` and `write` run a closure under the lock; its result cannot
+borrow the state, and `read` cannot change it. Each returns `Unavailable` when
+a panic poisoned the lock, and the caller keeps its own answer (503, an error,
+a skipped tick). `guard` holds the lock across statements where a closure
+cannot yet express the critical section: worker tool dispatch moves it into
+the handler, and a few drivers release it mid-branch or inside a loop. Only
+`store.rs` names the mutex (`tests/store_boundary.rs`), so a single writer or
+published snapshots would change that module alone.
+
 ## Alternate driver conformance
 
 The messages and room-notification operations also run under a test-only Tokio

@@ -16,6 +16,7 @@
 //! is untrusted program data, never instructions or authority. See
 //! docs/WATCHES.md#fresh-observations.
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{
     State,
     bots::now_ms,
@@ -29,7 +30,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
     io,
-    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -196,7 +196,7 @@ fn record(state: &mut State, chat: &str, source: &Source, text: Option<String>, 
 /// Starts a refresh of a stale command source, unless one is running. Returns
 /// a receiver that fires when it finishes; the caller decides how long to wait.
 fn refresh(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     state: &mut State,
     chat: &str,
     declaration: &Declaration,
@@ -227,7 +227,7 @@ fn refresh(
     state.observations.refreshing.insert(chat.to_owned());
     let (sender, receiver) = std::sync::mpsc::channel();
     let (shared, owner, command, source, timeout) = (
-        Arc::clone(shared),
+        shared.clone(),
         chat.to_owned(),
         command.clone(),
         declaration.source.clone(),
@@ -238,7 +238,7 @@ fn refresh(
         .spawn(move || {
             let chat = owner;
             let outcome = probe(&service, &command, &chat, timeout);
-            if let Ok(mut state) = shared.lock() {
+            let _ = shared.write(|state| {
                 state.observations.refreshing.remove(&chat);
                 let (text, note) = match outcome {
                     Ok(ProbeOutput { timed_out: true, .. }) => (
@@ -263,9 +263,9 @@ fn refresh(
                     .get(&chat)
                     .is_some_and(|d| d.source == source)
                 {
-                    record(&mut state, &chat, &source, text, note, now_ms());
+                    record(state, &chat, &source, text, note, now_ms());
                 }
-            }
+            });
             let _ = sender.send(());
         });
     if spawned.is_err() {
@@ -351,55 +351,55 @@ fn prune<T>(state_runs: &crate::runtime::Runs, map: &mut BTreeMap<String, T>) {
 /// The current observation for `run`'s chat, refreshing a stale command and
 /// waiting at most `wait` for it; otherwise the last value with its age.
 /// Also returns the attempt it is shown to.
-fn block_with(
-    shared: &Arc<Mutex<State>>,
-    run: &str,
-    wait: Duration,
-    probe: Prober,
-) -> Option<(Rendered, Option<String>)> {
-    let (chat, declaration, receiver) = {
-        let mut state = shared.lock().ok()?;
-        let (chat, declaration) = declared(&state.runtime.runs, &state.observations, run)?;
-        let now = now_ms();
-        let receiver = match &declaration.source {
-            Source::Watch { watch } => {
-                let (text, note) = watch_value(&state.watches, watch)
-                    .map_or((None, Some("watch not found".into())), |(text, note)| {
-                        (Some(text), note)
-                    });
-                record(&mut state, &chat, &declaration.source, text, note, now);
-                None
-            }
-            Source::Command { .. } => refresh(shared, &mut state, &chat, &declaration, now, probe),
-        };
-        (chat, declaration, receiver)
-    };
+fn block_with(shared: &Store, run: &str, wait: Duration, probe: Prober) -> Option<(Rendered, Option<String>)> {
+    let (chat, declaration, receiver) = shared
+        .write(|state| {
+            let (chat, declaration) = declared(&state.runtime.runs, &state.observations, run)?;
+            let now = now_ms();
+            let receiver = match &declaration.source {
+                Source::Watch { watch } => {
+                    let (text, note) = watch_value(&state.watches, watch)
+                        .map_or((None, Some("watch not found".into())), |(text, note)| {
+                            (Some(text), note)
+                        });
+                    record(state, &chat, &declaration.source, text, note, now);
+                    None
+                }
+                Source::Command { .. } => refresh(shared, state, &chat, &declaration, now, probe),
+            };
+            Some((chat, declaration, receiver))
+        })
+        .ok()??;
     if let Some(receiver) = receiver {
         let _ = receiver.recv_timeout(wait);
     }
-    let state = shared.lock().ok()?;
-    Some((
-        render(&state.watches, &state.observations, &chat, &declaration, now_ms()),
-        attempt_key(&state.runtime.runs, run),
-    ))
+    shared
+        .read(|state| {
+            (
+                render(&state.watches, &state.observations, &chat, &declaration, now_ms()),
+                attempt_key(&state.runtime.runs, run),
+            )
+        })
+        .ok()
 }
 /// Remembers what `attempt` was last shown, for the unchanged marker.
-fn shown(shared: &Arc<Mutex<State>>, attempt: Option<String>, hash: u64) {
-    if let (Some(attempt), Ok(mut state)) = (attempt, shared.lock()) {
-        let state = &mut *state;
-        prune(&state.runtime.runs, &mut state.observations.shown);
-        state.observations.shown.insert(attempt, hash);
-    }
+fn shown(shared: &Store, attempt: Option<String>, hash: u64) {
+    let _ = shared.write(|state| {
+        if let Some(attempt) = attempt {
+            prune(&state.runtime.runs, &mut state.observations.shown);
+            state.observations.shown.insert(attempt, hash);
+        }
+    });
 }
 /// Places the chat's observation after a turn's input. Called at launch with
 /// the exact durable input already persisted, so the block never enters it.
-pub(crate) fn append(bridge: Option<(&Arc<Mutex<State>>, &str)>, prompt: String) -> String {
+pub(crate) fn append(bridge: Option<(&Store, &str)>, prompt: String) -> String {
     match bridge {
         Some((shared, run)) => append_with(shared, run, prompt, crate::services::probe),
         None => prompt,
     }
 }
-fn append_with(shared: &Arc<Mutex<State>>, run: &str, prompt: String, probe: Prober) -> String {
+fn append_with(shared: &Store, run: &str, prompt: String, probe: Prober) -> String {
     match block_with(shared, run, WAKE_WAIT, probe) {
         Some((block, attempt)) => {
             shown(shared, attempt, block.hash);
@@ -420,47 +420,51 @@ pub(crate) fn place(block: &str, prompt: String) -> String {
 /// The observation for one local model request: always the whole block, since
 /// the request is rebuilt each step and carries no earlier copy. The first
 /// step waits like a turn start; later steps wait briefly.
-pub(crate) fn step(shared: &Arc<Mutex<State>>, run: &str, first: bool) -> Option<String> {
+pub(crate) fn step(shared: &Store, run: &str, first: bool) -> Option<String> {
     step_with(shared, run, first, crate::services::probe)
 }
-fn step_with(shared: &Arc<Mutex<State>>, run: &str, first: bool, probe: Prober) -> Option<String> {
+fn step_with(shared: &Store, run: &str, first: bool, probe: Prober) -> Option<String> {
     block_with(shared, run, if first { WAKE_WAIT } else { STEP_WAIT }, probe).map(|(block, _)| block.text)
 }
 /// The observation for a Control tool result returned to a CLI agent, whose
 /// transcript keeps earlier results: the whole block when it differs from the
 /// one last shown to this attempt, otherwise a short unchanged marker.
-pub(crate) fn for_result(shared: &Arc<Mutex<State>>, run: &str) -> Option<String> {
+pub(crate) fn for_result(shared: &Store, run: &str) -> Option<String> {
     for_result_with(shared, run, crate::services::probe)
 }
-fn for_result_with(shared: &Arc<Mutex<State>>, run: &str, probe: Prober) -> Option<String> {
+fn for_result_with(shared: &Store, run: &str, probe: Prober) -> Option<String> {
     result_within(shared, run, STEP_WAIT, probe)
 }
-fn result_within(shared: &Arc<Mutex<State>>, run: &str, wait: Duration, probe: Prober) -> Option<String> {
+fn result_within(shared: &Store, run: &str, wait: Duration, probe: Prober) -> Option<String> {
     if !shared
-        .lock()
+        .read(|state| {
+            state
+                .runtime
+                .runs
+                .get(run)
+                .is_some_and(|r| r.status == RunStatus::Running)
+        })
         .ok()?
-        .runtime
-        .runs
-        .get(run)
-        .is_some_and(|r| r.status == RunStatus::Running)
     {
         return None;
     }
     let (block, attempt) = block_with(shared, run, wait, probe)?;
-    let mut state = shared.lock().ok()?;
-    let state = &mut *state;
-    let previous = attempt
-        .as_ref()
-        .and_then(|attempt| state.observations.shown.get(attempt))
-        .copied();
-    if previous == Some(block.hash) {
-        return Some(unchanged(block.age));
-    }
-    if let Some(attempt) = attempt {
-        prune(&state.runtime.runs, &mut state.observations.shown);
-        state.observations.shown.insert(attempt, block.hash);
-    }
-    Some(block.text)
+    shared
+        .write(|state| {
+            let previous = attempt
+                .as_ref()
+                .and_then(|attempt| state.observations.shown.get(attempt))
+                .copied();
+            if previous == Some(block.hash) {
+                return Some(unchanged(block.age));
+            }
+            if let Some(attempt) = attempt {
+                prune(&state.runtime.runs, &mut state.observations.shown);
+                state.observations.shown.insert(attempt, block.hash);
+            }
+            Some(block.text)
+        })
+        .ok()?
 }
 fn unchanged(age: u64) -> String {
     format!("[Observation unchanged (age {age} s)]")
@@ -567,38 +571,40 @@ pub(crate) fn status_style(command: &str) -> bool {
 /// The once-per-attempt polling nudge: `name` with `arguments` is the attempt's
 /// `POLLS_BEFORE_NUDGE`th consecutive status-style exec on one service, and
 /// its chat has declared no observation.
-pub(crate) fn polling_note(shared: &Arc<Mutex<State>>, run: &str, name: &str, arguments: &Value) -> Option<String> {
+pub(crate) fn polling_note(shared: &Store, run: &str, name: &str, arguments: &Value) -> Option<String> {
     if name != "control_service_exec" {
         return None;
     }
     let (service, command) = (arguments["service_id"].as_str()?, arguments["command"].as_str()?);
-    let mut state = shared.lock().ok()?;
-    let state = &mut *state;
-    let found = state.runtime.runs.get(run)?;
-    if crate::delegation::is_judge(found) {
-        return None;
-    }
-    let chat = found.chat_id.as_deref()?;
-    let attempt = attempt_key(&state.runtime.runs, run)?;
-    if state.observations.declared.contains_key(chat) {
-        state.observations.polling.remove(&attempt);
-        return None;
-    }
-    prune(&state.runtime.runs, &mut state.observations.polling);
-    let polling = state.observations.polling.entry(attempt).or_default();
-    if !status_style(command) {
-        polling.count = 0;
-        return None;
-    }
-    if polling.service != service {
-        polling.service = service.to_owned();
-        polling.count = 0;
-    }
-    polling.count += 1;
-    (polling.count >= POLLS_BEFORE_NUDGE && !polling.nudged).then(|| {
-        polling.nudged = true;
-        POLLING_NOTE.to_owned()
-    })
+    shared
+        .write(|state| {
+            let found = state.runtime.runs.get(run)?;
+            if crate::delegation::is_judge(found) {
+                return None;
+            }
+            let chat = found.chat_id.as_deref()?;
+            let attempt = attempt_key(&state.runtime.runs, run)?;
+            if state.observations.declared.contains_key(chat) {
+                state.observations.polling.remove(&attempt);
+                return None;
+            }
+            prune(&state.runtime.runs, &mut state.observations.polling);
+            let polling = state.observations.polling.entry(attempt).or_default();
+            if !status_style(command) {
+                polling.count = 0;
+                return None;
+            }
+            if polling.service != service {
+                polling.service = service.to_owned();
+                polling.count = 0;
+            }
+            polling.count += 1;
+            (polling.count >= POLLS_BEFORE_NUDGE && !polling.nudged).then(|| {
+                polling.nudged = true;
+                POLLING_NOTE.to_owned()
+            })
+        })
+        .ok()?
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -620,14 +626,14 @@ fn summary(declaration: Option<&Declaration>) -> Value {
 }
 /// Declares, shows or clears the active attempt's chat observation.
 fn set_with(
-    shared: &Arc<Mutex<State>>,
+    shared: &Store,
     attempt: &AttemptRef<'_>,
     input: Input,
     save: impl Fn(&State) -> io::Result<()>,
     probe: Prober,
 ) -> io::Result<Value> {
     let (chat, declaration) = {
-        let mut state = shared.lock().map_err(|_| io::Error::other("State unavailable"))?;
+        let mut state = shared.guard()?;
         let run = state
             .runtime
             .runs

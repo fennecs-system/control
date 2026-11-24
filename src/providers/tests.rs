@@ -669,7 +669,7 @@ fn local_endpoint_cards_carry_a_live_statistics_line_read_only_while_open() {
         .unwrap();
     assert!(!cli_card.contains("data-live="));
     // The endpoint answers only GET and only for its own path.
-    let state = std::sync::Mutex::new(crate::State::default());
+    let state = crate::store::Store::new(crate::State::default());
     let mut response = Vec::new();
     assert!(!live_http(&mut response, &state, "GET", "/providers"));
     assert!(live_http(&mut response, &state, "POST", "/providers/live"));

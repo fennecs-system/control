@@ -14,12 +14,12 @@ fn cpu() -> f64 {
 }
 
 /// Polls cancellation like a provider worker, then commits through the real path.
-fn execute(_: &dyn control_isolation::Isolation, state: Arc<Mutex<State>>, task: Task) {
+fn execute(_: &dyn control_isolation::Isolation, state: Store, task: Task) {
     while !crate::lifecycle::cancelled(Some((&state, &task.0))) {
         std::thread::sleep(Duration::from_millis(250));
     }
     let _ = commit(
-        &mut state.lock().unwrap(),
+        &mut state.guard().unwrap(),
         &task.0,
         task.3,
         task.4,
@@ -106,11 +106,11 @@ fn live_cancel_all_profile() {
     let (initial, root) = node(unrelated, 48, 6);
     storage::save(&initial).unwrap();
     let bytes = fs::metadata(crate::config::state("state.json").unwrap()).unwrap().len();
-    let state = Arc::new(Mutex::new(initial));
+    let state = crate::store::Store::new(initial);
     let threads = start_with(state.clone(), crate::engine::isolation(), execute);
     let active = |s: &State| s.runtime.runs.iter().filter(|r| r.status.occupies_slot()).count();
     let started = Instant::now();
-    while active(&state.lock().unwrap()) < 7 {
+    while active(&state.guard().unwrap()) < 7 {
         assert!(started.elapsed() < Duration::from_secs(60), "turns did not start");
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -129,7 +129,7 @@ fn live_cancel_all_profile() {
                     continue;
                 }
                 seen = now;
-                let s = state.lock().unwrap();
+                let s = state.guard().unwrap();
                 std::hint::black_box((
                     crate::chat::transcript(&s, &root).ok(),
                     crate::navigation::Picker::of(&s.chats, &root).render(),
@@ -141,7 +141,7 @@ fn live_cancel_all_profile() {
     std::thread::sleep(Duration::from_secs(1));
     let (before, generation, started) = (cpu(), storage::changes().generation(), Instant::now());
     {
-        let mut s = state.lock().unwrap();
+        let mut s = state.guard().unwrap();
         crate::session_http::change_with_save(
             &mut s,
             "control.chat.send",
@@ -151,7 +151,7 @@ fn live_cancel_all_profile() {
         .unwrap();
     }
     wake();
-    while active(&state.lock().unwrap()) > 0 {
+    while active(&state.guard().unwrap()) > 0 {
         assert!(
             started.elapsed() < Duration::from_secs(120),
             "cancellation did not finish"
@@ -164,7 +164,7 @@ fn live_cancel_all_profile() {
     let (cpu_s, checkpoints) = (cpu() - before, storage::changes().generation() - generation);
     done.store(true, Ordering::Relaxed);
     presenter.join().unwrap();
-    let s = state.lock().unwrap();
+    let s = state.guard().unwrap();
     println!(
         "{}",
         serde_json::json!({"workload":"live_cancel_all","chats":s.chats.len(),"runs":s.runtime.runs.len(),

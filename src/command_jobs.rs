@@ -1,6 +1,7 @@
 //! Durable, credential-free commands. Model requests select capabilities, never mounts.
 mod tools;
 use crate::runtime::RunStatus;
+use crate::store::Store;
 use crate::{State, tool_registry::AttemptRef, usage::Attempt};
 use control_effect::sync::{CancelToken, Recv};
 use control_isolation::{
@@ -12,7 +13,6 @@ use std::{
     fs,
     io::{self, Read},
     os::unix::fs::MetadataExt,
-    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 pub use tools::{JobCall, Tools};
@@ -167,38 +167,39 @@ fn current<'a>(state: &'a mut State, run: &str, generation: &str) -> io::Result<
         .filter(|a| a.workspace_id.as_deref() == Some(generation))
         .ok_or_else(|| fail("Command belongs to an inactive attempt"))
 }
-pub(crate) fn execute(shared: &Arc<Mutex<State>>, attempt: &AttemptRef<'_>, call: JobCall) -> io::Result<Value> {
+pub(crate) fn execute(shared: &Store, attempt: &AttemptRef<'_>, call: JobCall) -> io::Result<Value> {
     let (run, generation) = (attempt.run, attempt.generation);
     let (cancel, job_id) = match call {
         JobCall::Start(input) => return start(shared, run, generation, attempt.nonce, input),
         JobCall::Status(job_id) => (false, job_id),
         JobCall::Cancel(job_id) => (true, job_id),
     };
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
-    let attempt = current(&mut state, run, generation)?;
-    let job = attempt
-        .command_jobs
-        .iter_mut()
-        .find(|j| j.id == job_id)
-        .ok_or_else(|| fail("Unknown job in this attempt"))?;
-    if cancel && job.active() {
-        let old = job.status.clone();
-        job.status = JobStatus::Stopping;
-        let summary = job.summary();
-        if let Err(e) = crate::storage::save(&state) {
-            current(&mut state, run, generation)?
-                .command_jobs
-                .iter_mut()
-                .find(|j| j.id == job_id)
-                .unwrap()
-                .status = old;
-            return Err(e);
+    shared.write(|state| {
+        let attempt = current(state, run, generation)?;
+        let job = attempt
+            .command_jobs
+            .iter_mut()
+            .find(|j| j.id == job_id)
+            .ok_or_else(|| fail("Unknown job in this attempt"))?;
+        if cancel && job.active() {
+            let old = job.status.clone();
+            job.status = JobStatus::Stopping;
+            let summary = job.summary();
+            if let Err(e) = crate::storage::save(state) {
+                current(state, run, generation)?
+                    .command_jobs
+                    .iter_mut()
+                    .find(|j| j.id == job_id)
+                    .unwrap()
+                    .status = old;
+                return Err(e);
+            }
+            return Ok(summary);
         }
-        return Ok(summary);
-    }
-    Ok(job.summary())
+        Ok(job.summary())
+    })?
 }
-fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, input: Input) -> io::Result<Value> {
+fn start(shared: &Store, run: &str, generation: &str, nonce: &str, input: Input) -> io::Result<Value> {
     if crate::shutdown::requested() {
         return Err(fail("Control is stopping"));
     }
@@ -215,7 +216,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, i
         .map(|b| format!("{b:02x}"))
         .collect();
     let image = {
-        let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+        let mut state = shared.guard()?;
         let attempt = current(&mut state, run, generation)?;
         if let Some(job) = attempt.command_jobs.iter().find(|j| j.id == id) {
             return Ok(job.summary());
@@ -227,7 +228,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, i
     } else {
         crate::worker_profile::Profile::inspect(crate::engine::isolation(), &image)?
     };
-    let mut state = shared.lock().map_err(|_| fail("State unavailable"))?;
+    let mut state = shared.guard()?;
     let owner_deadline = state.runtime.runs.get(run).and_then(|r| {
         r.attempts.last().and_then(|a| {
             crate::attempt_control::deadline(&state, r, a).map(|limit| a.started_unix.saturating_add(limit))
@@ -276,7 +277,7 @@ fn start(shared: &Arc<Mutex<State>>, run: &str, generation: &str, nonce: &str, i
         return Err(e);
     }
     drop(state);
-    let thread_state = Arc::clone(shared);
+    let thread_state = shared.clone();
     let thread_run = run.to_owned();
     let thread_job = job.clone();
     let mut summary = job.summary();
@@ -575,51 +576,53 @@ fn live<'a>(state: &'a mut State, run: &str, job: &Job) -> Option<&'a mut Job> {
         .iter_mut()
         .find(|j| j.id == job.id)
 }
-fn activity(shared: &Arc<Mutex<State>>, run: &str, job: &Job, persist: bool) -> bool {
-    let Ok(mut state) = shared.lock() else {
-        return false;
-    };
-    if let Some(stored) = live(&mut state, run, job) {
-        // A cancellation request wins over an in-flight progress update.
-        let stopping = stored.status == JobStatus::Stopping && job.active();
-        let status = if stopping { &JobStatus::Stopping } else { &job.status };
-        if &stored.status == status
-            && stored.output == job.output
-            && stored.container_id == job.container_id
-            && stored.exit_code == job.exit_code
-        {
-            return !persist || crate::storage::save(&state).is_ok();
-        }
-        *stored = job.clone();
-        if stopping {
-            stored.status = JobStatus::Stopping;
-        }
-    }
-    crate::worker::record_activity_for(
-        &mut state,
-        run,
-        &job.generation,
-        crate::usage::Activity {
-            id: format!("job-{}", job.id),
-            kind: "command_execution".into(),
-            text: job.command.chars().take(2000).collect(),
-            output: job.output.clone(),
-            status: job.status.to_string(),
-        },
-    );
-    !persist || crate::storage::save(&state).is_ok()
+fn activity(shared: &Store, run: &str, job: &Job, persist: bool) -> bool {
+    shared
+        .write(|state| {
+            if let Some(stored) = live(state, run, job) {
+                // A cancellation request wins over an in-flight progress update.
+                let stopping = stored.status == JobStatus::Stopping && job.active();
+                let status = if stopping { &JobStatus::Stopping } else { &job.status };
+                if &stored.status == status
+                    && stored.output == job.output
+                    && stored.container_id == job.container_id
+                    && stored.exit_code == job.exit_code
+                {
+                    return !persist || crate::storage::save(state).is_ok();
+                }
+                *stored = job.clone();
+                if stopping {
+                    stored.status = JobStatus::Stopping;
+                }
+            }
+            crate::worker::record_activity_for(
+                state,
+                run,
+                &job.generation,
+                crate::usage::Activity {
+                    id: format!("job-{}", job.id),
+                    kind: "command_execution".into(),
+                    text: job.command.chars().take(2000).collect(),
+                    output: job.output.clone(),
+                    status: job.status.to_string(),
+                },
+            );
+            !persist || crate::storage::save(state).is_ok()
+        })
+        .unwrap_or(false)
 }
-fn should_stop(shared: &Arc<Mutex<State>>, run: &str, job: &Job) -> bool {
+fn should_stop(shared: &Store, run: &str, job: &Job) -> bool {
     if crate::shutdown::requested() || now() >= job.deadline_unix {
         return true;
     }
-    let Ok(mut state) = shared.lock() else {
-        return true;
-    };
-    let active = current(&mut state, run, &job.generation).is_ok();
-    !active || live(&mut state, run, job).is_none_or(|j| j.status == JobStatus::Stopping)
+    shared
+        .write(|state| {
+            let active = current(state, run, &job.generation).is_ok();
+            !active || live(state, run, job).is_none_or(|j| j.status == JobStatus::Stopping)
+        })
+        .unwrap_or(true)
 }
-fn supervise(shared: Arc<Mutex<State>>, run: String, mut job: Job) {
+fn supervise(shared: Store, run: String, mut job: Job) {
     let isolation = crate::engine::isolation();
     if should_stop(&shared, &run, &job) {
         job.status = if now() >= job.deadline_unix {
@@ -750,35 +753,36 @@ fn exit_waiter(isolation: &dyn Isolation, job: &Job) -> Option<crate::child::Wat
 
 /// Before any checkpoint, wait for admitted launches and cancel every writer.
 /// Failure fences publication rather than racing a background container.
-pub fn quiesce(shared: &Arc<Mutex<State>>, run: &str, generation: &str) -> io::Result<()> {
+pub fn quiesce(shared: &Store, run: &str, generation: &str) -> io::Result<()> {
     quiesce_until(shared, run, generation, Instant::now() + Duration::from_secs(20))
 }
-fn quiesce_until(shared: &Arc<Mutex<State>>, run: &str, generation: &str, deadline: Instant) -> io::Result<()> {
+fn quiesce_until(shared: &Store, run: &str, generation: &str, deadline: Instant) -> io::Result<()> {
     loop {
-        let mut state = shared
-            .lock()
-            .map_err(|_| fail("State unavailable; command writers remain fenced"))?;
-        let attempt = state
-            .runtime
-            .runs
-            .get_mut(run)
-            .and_then(|r| {
-                r.attempts
-                    .iter_mut()
-                    .find(|a| a.workspace_id.as_deref() == Some(generation))
+        let active = shared
+            .write(|state| -> io::Result<bool> {
+                let attempt = state
+                    .runtime
+                    .runs
+                    .get_mut(run)
+                    .and_then(|r| {
+                        r.attempts
+                            .iter_mut()
+                            .find(|a| a.workspace_id.as_deref() == Some(generation))
+                    })
+                    .ok_or_else(|| fail("Missing attempt command ownership"))?;
+                let mut active = false;
+                for job in &mut attempt.command_jobs {
+                    if job.active() {
+                        job.status = JobStatus::Stopping;
+                        active = true;
+                    }
+                }
+                Ok(active)
             })
-            .ok_or_else(|| fail("Missing attempt command ownership"))?;
-        let mut active = false;
-        for job in &mut attempt.command_jobs {
-            if job.active() {
-                job.status = JobStatus::Stopping;
-                active = true;
-            }
-        }
+            .map_err(|_| fail("State unavailable; command writers remain fenced"))??;
         if !active {
             return Ok(());
         }
-        drop(state);
         if Instant::now() >= deadline {
             return Err(fail(
                 "Could not confirm workspace command exit; checkpoint remains unchanged",
