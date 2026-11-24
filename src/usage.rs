@@ -1,5 +1,5 @@
 use crate::runtime::RunStatus;
-use crate::{escape, identity::Actor, runtime::Runtime};
+use crate::{escape, identity::Actor};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -331,26 +331,46 @@ fn outcomes(models: &BTreeMap<String, Summary>) -> String {
     html
 }
 
+/// An attempt in progress, as the Usage page lists it.
+struct Running {
+    run: String,
+    provider: String,
+    model: String,
+    /// The model the provider reported serving, when it differs.
+    served: Option<String>,
+    tokens: Option<Tokens>,
+    /// Why no tokens are shown yet: no model call, or nothing reported.
+    unrecorded: bool,
+}
+impl Running {
+    fn of(run: &crate::runtime::Run) -> Option<Self> {
+        let attempt = run.attempts.last().filter(|a| a.running())?;
+        Some(Self {
+            run: run.id().as_str().to_owned(),
+            provider: attempt.provider.clone(),
+            model: attempt.model.clone(),
+            served: attempt.reported_model.clone().filter(|m| *m != attempt.model),
+            tokens: attempt.tokens,
+            unrecorded: attempt.accounting.is_unrecorded(),
+        })
+    }
+}
 /// Attempts in progress with the usage their providers reported so far
 /// (per model call for local endpoints and Claude; Codex only at turn end).
-fn running(runtime: &Runtime) -> String {
+fn running(attempts: &[Running]) -> String {
     use std::fmt::Write;
     let mut rows = String::new();
-    for run in runtime.runs.iter().rev() {
-        let Some(attempt) = run.attempts.last().filter(|a| a.running()) else {
-            continue;
-        };
+    for attempt in attempts {
         let cell = |n: Option<u64>| n.map_or_else(|| "—".to_owned(), |n| n.to_string());
         let served = attempt
-            .reported_model
+            .served
             .as_deref()
-            .filter(|m| *m != attempt.model)
             .map(|m| format!(" (served: {})", escape(m)))
             .unwrap_or_default();
         let _ = write!(
             rows,
             "<tr><td>{}</td><td>{} · {}{served}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            escape(run.id()),
+            escape(&attempt.run),
             escape(&attempt.provider),
             escape(&attempt.model),
             cell(attempt.tokens.map(|t| t.input_tokens)),
@@ -358,7 +378,7 @@ fn running(runtime: &Runtime) -> String {
             cell(attempt.tokens.map(|t| t.output_tokens)),
             if attempt.tokens.is_some() {
                 "so far"
-            } else if attempt.accounting.is_unrecorded() {
+            } else if attempt.unrecorded {
                 "no model call yet"
             } else {
                 "not reported yet"
@@ -375,50 +395,87 @@ fn running(runtime: &Runtime) -> String {
 
 /// The Usage page: node totals (DMs, runs, genes) above model usage.
 pub fn render(state: &crate::State) -> String {
-    let runtime = &state.runtime;
-    let mut overall = Summary::default();
-    let mut people = BTreeMap::<String, Summary>::new();
-    let mut models = BTreeMap::<String, Summary>::new();
-    let mut days = BTreeMap::<String, Summary>::new();
-    let mut daily = BTreeMap::<u64, u64>::new();
-    let mut legacy = 0;
-    for run in runtime.runs.iter() {
-        if run.attempts.is_empty() && !matches!(run.status, RunStatus::Queued | RunStatus::Running) {
-            legacy += 1;
-        }
-        for attempt in &run.attempts {
-            overall.add(attempt);
-            people.entry(actor_label(&run.actor)).or_default().add(attempt);
-            models
-                .entry(format!("{} · {}", attempt.provider, attempt.model))
-                .or_default()
-                .add(attempt);
-            days.entry(day_label(attempt.started_unix)).or_default().add(attempt);
-            if let Some(tokens) = attempt.tokens {
-                *daily.entry(attempt.started_unix / 86400).or_default() += tokens.input_tokens + tokens.output_tokens;
+    Page::of(state).render(today())
+}
+/// The current UTC day, which ends the Usage page's activity grid.
+pub(crate) fn today() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() / 86400)
+}
+/// What the Usage page shows: attempt totals summed while state is read, so
+/// the page renders after the state lock is released.
+pub(crate) struct Page {
+    chats: usize,
+    runs: usize,
+    genes: usize,
+    overall: Summary,
+    people: BTreeMap<String, Summary>,
+    models: BTreeMap<String, Summary>,
+    days: BTreeMap<String, Summary>,
+    /// Tokens per UTC day.
+    daily: BTreeMap<u64, u64>,
+    /// Finished runs from before attempts were tracked.
+    legacy: u64,
+    running: Vec<Running>,
+}
+impl Page {
+    pub(crate) fn of(state: &crate::State) -> Self {
+        let runtime = &state.runtime;
+        let mut page = Self {
+            chats: state.chats.len(),
+            runs: runtime.runs.len(),
+            genes: state.lens_library.current().len(),
+            overall: Summary::default(),
+            people: BTreeMap::new(),
+            models: BTreeMap::new(),
+            days: BTreeMap::new(),
+            daily: BTreeMap::new(),
+            legacy: 0,
+            running: runtime.runs.iter().rev().filter_map(Running::of).collect(),
+        };
+        for run in runtime.runs.iter() {
+            if run.attempts.is_empty() && !matches!(run.status, RunStatus::Queued | RunStatus::Running) {
+                page.legacy += 1;
+            }
+            for attempt in &run.attempts {
+                page.overall.add(attempt);
+                page.people.entry(actor_label(&run.actor)).or_default().add(attempt);
+                page.models
+                    .entry(format!("{} · {}", attempt.provider, attempt.model))
+                    .or_default()
+                    .add(attempt);
+                page.days
+                    .entry(day_label(attempt.started_unix))
+                    .or_default()
+                    .add(attempt);
+                if let Some(tokens) = attempt.tokens {
+                    *page.daily.entry(attempt.started_unix / 86400).or_default() +=
+                        tokens.input_tokens + tokens.output_tokens;
+                }
             }
         }
+        page
     }
-    let mut html = format!(
-        "<h2>Usage</h2><div class='metrics usage-summary' aria-label='Node summary'><div><b>{}</b><span>DMS</span></div><div><b>{}</b><span>RUNS</span></div><div><b>{}</b><span>GENES</span></div></div>",
-        state.chats.len(),
-        runtime.runs.len(),
-        state.lens_library.current().len()
-    );
-    let today = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() / 86400);
-    html.push_str(&heatmap(&daily, today));
-    html.push_str(&running(runtime));
-    html.push_str(&outcomes(&models));
-    html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · running (totals so far): {} · unknown attempts: {} · partial (stopped mid-turn, lower bound): {} · no model call: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.running, overall.attempts - overall.measured - overall.pending, overall.partial, overall.no_call));
-    html.push_str(&table("By person", &people));
-    html.push_str(&table("By provider / requested model", &models));
-    html.push_str(&table("By day (UTC)", &days));
-    html.push_str(
-        "<p class='muted'>Per-turn attempts and tokens are in <a href='/bots/history?expand=1'>History ↗</a>.</p>",
-    );
-    html
+    /// The page, its activity grid ending on UTC day `today`.
+    pub(crate) fn render(&self, today: u64) -> String {
+        let (overall, legacy) = (&self.overall, self.legacy);
+        let mut html = format!(
+            "<h2>Usage</h2><div class='metrics usage-summary' aria-label='Node summary'><div><b>{}</b><span>DMS</span></div><div><b>{}</b><span>RUNS</span></div><div><b>{}</b><span>GENES</span></div></div>",
+            self.chats, self.runs, self.genes
+        );
+        html.push_str(&heatmap(&self.daily, today));
+        html.push_str(&running(&self.running));
+        html.push_str(&outcomes(&self.models));
+        html.push_str(&format!("<details class='record'><summary>Token accounting</summary><div class='metrics'><div><b>{}</b><span>INPUT</span></div><div><b>{}</b><span>OUTPUT</span></div><div><b>{}/{}</b><span>MEASURED ATTEMPTS</span></div></div><p class='muted'>Cached input: {} · running (totals so far): {} · unknown attempts: {} · partial (stopped mid-turn, lower bound): {} · no model call: {} · older runs without tracking: {legacy}</p><p class='muted'>Cached tokens are part of input. Counts are provider-reported; subscription billing is not estimated.</p></details>", overall.tokens.input_tokens, overall.tokens.output_tokens, overall.measured, overall.attempts, overall.tokens.cached_input_tokens, overall.running, overall.attempts - overall.measured - overall.pending, overall.partial, overall.no_call));
+        html.push_str(&table("By person", &self.people));
+        html.push_str(&table("By provider / requested model", &self.models));
+        html.push_str(&table("By day (UTC)", &self.days));
+        html.push_str(
+            "<p class='muted'>Per-turn attempts and tokens are in <a href='/bots/history?expand=1'>History ↗</a>.</p>",
+        );
+        html
+    }
 }
 
 const WEEKS: u64 = 26;

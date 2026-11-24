@@ -701,8 +701,7 @@ pub(crate) struct Page {
     search: String,
     forest: crate::process_tree::Forest,
     graveyard: crate::graveyard::Yard,
-    /// The runtime's queued-turns panel, still rendered while state is read.
-    queued: String,
+    queued: crate::runtime::Queued,
 }
 impl Page {
     pub(crate) fn of(state: &State, query: &crate::graveyard::Query) -> Self {
@@ -710,7 +709,7 @@ impl Page {
             search: query.search.clone(),
             forest: crate::process_tree::Forest::of(state, &query.search),
             graveyard: crate::graveyard::Yard::of(state, query),
-            queued: state.runtime.render("agents", "").unwrap_or_default(),
+            queued: crate::runtime::Queued::of(&state.runtime),
         }
     }
     pub(crate) fn render(&self) -> String {
@@ -737,7 +736,7 @@ impl Page {
             self.graveyard.render(),
             crate::process_tree::LEGEND,
         );
-        html.push_str(&self.queued);
+        html.push_str(&self.queued.render());
         html
     }
 }

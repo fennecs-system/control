@@ -662,50 +662,69 @@ pub(crate) fn operator_action(state: &mut State, f: &std::collections::HashMap<S
         Err(message) => message.into(),
     };
 }
-pub(crate) fn render(state: &State, room: &str) -> String {
-    let claims = listed(state, room);
-    let mut html = String::from("<h2>Claims</h2>");
-    if !state.collective.notice.is_empty() {
-        html.push_str(&format!(
-            "<p class='muted' role='status'>{}</p>",
-            crate::escape(&state.collective.notice)
-        ));
-    }
-    if claims.is_empty() {
-        html.push_str("<p class='muted'>No live claims.</p>");
-        return html;
-    }
-    html.push_str("<ul class='room-claims'>");
-    for claim in &claims {
-        let text = |name: &str| crate::escape(claim[name].as_str().unwrap_or_default());
-        let owner = state
-            .chats
-            .iter()
-            .find(|chat| Some(chat.id.as_str()) == claim["owner"].as_str())
-            .map_or_else(
-                || text("owner"),
-                |chat| crate::escape(&crate::callsigns::name_or_id(&state.chats, &chat.id)),
-            );
-        let blocked = claim["blocked_on"]
-            .as_str()
-            .map_or(String::new(), |key| format!(" on {}", crate::escape(key)));
-        html.push_str(&format!(
-            "<li><strong>{}</strong> <small>{}{blocked} · {owner} · r{}</small>",
-            text("key"),
-            text("status"),
-            claim["revision"]
-        ));
-        if !claim["note"].as_str().unwrap_or_default().is_empty() {
-            html.push_str(&format!("<p class='preserve muted'>{}</p>", text("note")));
+/// A room's claims as its page shows them, copied out of state so the page
+/// renders after the state lock is released.
+pub(crate) struct Panel {
+    notice: String,
+    /// Each live claim as `listed` gives it, with its owner's chat name when
+    /// the owner is a chat here.
+    claims: Vec<(Value, Option<String>)>,
+}
+impl Panel {
+    pub(crate) fn of(state: &State, room: &str) -> Self {
+        let claims = listed(state, room)
+            .into_iter()
+            .map(|claim| {
+                let owner = state
+                    .chats
+                    .iter()
+                    .find(|chat| Some(chat.id.as_str()) == claim["owner"].as_str())
+                    .map(|chat| crate::callsigns::name_or_id(&state.chats, &chat.id).into_owned());
+                (claim, owner)
+            })
+            .collect();
+        Self {
+            notice: state.collective.notice.clone(),
+            claims,
         }
-        if claim["abandoned"] == true || claim["owner_idle"] == true {
-            html.push_str(&format!("<form method='post' action='/room-claim-release'><input type='hidden' name='channel' value='{}'><input type='hidden' name='key' value='{}'><input type='hidden' name='revision' value='{}'><button>Release claim</button></form>",
-                crate::escape(room), text("key"), claim["revision"]));
-        }
-        html.push_str("</li>");
     }
-    html.push_str("</ul>");
-    html
+    pub(crate) fn render(&self, room: &str) -> String {
+        let mut html = String::from("<h2>Claims</h2>");
+        if !self.notice.is_empty() {
+            html.push_str(&format!(
+                "<p class='muted' role='status'>{}</p>",
+                crate::escape(&self.notice)
+            ));
+        }
+        if self.claims.is_empty() {
+            html.push_str("<p class='muted'>No live claims.</p>");
+            return html;
+        }
+        html.push_str("<ul class='room-claims'>");
+        for (claim, owner) in &self.claims {
+            let text = |name: &str| crate::escape(claim[name].as_str().unwrap_or_default());
+            let owner = owner.as_deref().map_or_else(|| text("owner"), crate::escape);
+            let blocked = claim["blocked_on"]
+                .as_str()
+                .map_or(String::new(), |key| format!(" on {}", crate::escape(key)));
+            html.push_str(&format!(
+                "<li><strong>{}</strong> <small>{}{blocked} · {owner} · r{}</small>",
+                text("key"),
+                text("status"),
+                claim["revision"]
+            ));
+            if !claim["note"].as_str().unwrap_or_default().is_empty() {
+                html.push_str(&format!("<p class='preserve muted'>{}</p>", text("note")));
+            }
+            if claim["abandoned"] == true || claim["owner_idle"] == true {
+                html.push_str(&format!("<form method='post' action='/room-claim-release'><input type='hidden' name='channel' value='{}'><input type='hidden' name='key' value='{}'><input type='hidden' name='revision' value='{}'><button>Release claim</button></form>",
+                    crate::escape(room), text("key"), claim["revision"]));
+            }
+            html.push_str("</li>");
+        }
+        html.push_str("</ul>");
+        html
+    }
 }
 
 #[cfg(test)]

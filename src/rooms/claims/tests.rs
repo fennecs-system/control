@@ -142,7 +142,11 @@ fn operators_release_only_abandoned_claims_at_the_shown_revision() {
         .revision;
     assert!(released > revision);
     assert_eq!(find(&state, "general", "server").unwrap().status, Status::Released);
-    assert!(render(&state, "general").contains("No live claims"));
+    assert!(
+        Panel::of(&state, "general")
+            .render("general")
+            .contains("No live claims")
+    );
 }
 
 #[test]
