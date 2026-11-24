@@ -1602,3 +1602,136 @@ fn requests_stay_append_only_until_the_shrink_threshold_then_shrink_once() {
         )
     );
 }
+
+/// A search-capable host: `control_tool_search` finds two deferred schemas.
+struct Searching(Mock);
+impl Host for Searching {
+    fn tools(&mut self) -> io::Result<Vec<Value>> {
+        let mut tools = self.0.tools()?;
+        tools.push(json!({"name":SEARCH,"description":"Search","inputSchema":{"type":"object"}}));
+        Ok(tools)
+    }
+    fn call(&mut self, name: &str, arguments: &Value, nonce: &str) -> Value {
+        if name != SEARCH {
+            return self.0.call(name, arguments, nonce);
+        }
+        let known = ["control_watch_stop", "control_port_status"];
+        let tools = arguments["names"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|n| known.contains(n))
+            .map(|n| json!({"name":n,"description":format!("{n} stops or reports. It takes an id."),"inputSchema":{"type":"object","properties":{"id":{"type":"string"}}}}))
+            .collect::<Vec<_>>();
+        crate::toolbox::result(Ok(json!({"tools":tools})))
+    }
+    fn poll(&mut self) -> Poll {
+        self.0.poll()
+    }
+    fn model(&mut self, body: &Value) -> io::Result<Value> {
+        self.0.model(body)
+    }
+    fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> {
+        self.0.summarize(evidence, words)
+    }
+    fn record(&mut self, kind: &str, id: &str, text: &str, output: &str, status: &str) {
+        self.0.record(kind, id, text, output, status)
+    }
+    fn metered(&mut self, meter: &Meter) {
+        self.0.metered(meter)
+    }
+    fn observation(&mut self, first: bool) -> Option<String> {
+        self.0.observation(first)
+    }
+    fn inbox(&mut self) -> Option<String> {
+        self.0.inbox()
+    }
+    fn retain(
+        &mut self,
+        block: control_comonad::Block,
+        text: &str,
+        children: Option<[String; 2]>,
+        sources: Vec<String>,
+    ) -> Option<String> {
+        self.0.retain(block, text, children, sources)
+    }
+}
+/// FNV-1a: a hash that never changes with the toolchain.
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+/// Every request body of a scripted turn as sent: serialized length, and a
+/// hash over all of them.
+fn pin(requests: &[Value]) -> (Vec<usize>, u64) {
+    let bodies: Vec<Vec<u8>> = requests.iter().map(|r| serde_json::to_vec(r).unwrap()).collect();
+    (bodies.iter().map(Vec::len).collect(), fnv(&bodies.concat()))
+}
+#[test]
+fn request_bytes_are_pinned() {
+    // Thinking, soft switches, repairs, reasoning, observations, an inbox and
+    // deferred tools loaded by search and by first use.
+    let wide = Limits {
+        context_tokens: 32768,
+        output_tokens: 8192,
+        input_bytes: 28000,
+        output_bytes: 8192,
+    };
+    let mut host = Searching(mock(vec![
+        thought(
+            Some("Looking.\nFinding: the port is 25565"),
+            "Plan: stop the watch first.",
+            call("control_watch_stop", r#"{"id":"w1"}"#),
+            "tool_calls",
+        ),
+        reply(None, call(SEARCH, r#"{"names":["control_port_status"]}"#), "tool_calls"),
+        reply(None, post("fail"), "tool_calls"),
+        reply(Some("cut"), json!(null), "length"),
+        reply(Some("/think"), json!(null), "stop"),
+        reply(Some("Posting. /no_think"), post("b"), "tool_calls"),
+        reply(None, call("control_nope", "{}"), "tool_calls"),
+        reply(None, call("control_room_post", "{not json"), "tool_calls"),
+        thought(Some("Done.\nDecision: keep the port"), "all good", json!(null), "stop"),
+    ]));
+    host.0.observations = ["hp=20", "hp=17", "hp=9", "hp=9", "hp=4"].map(String::from).into();
+    host.0.inboxes = [None, None, Some("New message: Go north".to_owned())].into();
+    run(
+        &mut host,
+        "qwen-local",
+        &wide,
+        compactor(20000),
+        "Current request: stop the watch",
+        &Policy::default(),
+    )
+    .unwrap();
+    let thinking = pin(&host.0.requests);
+    // Context growth on a small model: shrink, folds, the context and step notes.
+    let small = Limits {
+        context_tokens: 8192,
+        output_tokens: 512,
+        input_bytes: 28000,
+        output_bytes: 2048,
+    };
+    let capped = Policy {
+        max_steps: 16,
+        ..Policy::default()
+    };
+    let (host, _, _) = setup_turn(&small, &capped, 20);
+    let growth = pin(&host.requests);
+    let kinds: Vec<&str> = host.records.iter().map(|(kind, _)| kind.as_str()).collect();
+    assert!(kinds.contains(&"compaction") && host.step_limited, "{kinds:?}");
+    assert_eq!(
+        (thinking, growth),
+        (
+            (
+                vec![1761, 2234, 2829, 3087, 3254, 3222, 3478, 3866, 4388],
+                10289938786564562345
+            ),
+            (
+                vec![
+                    1607, 8771, 15935, 17505, 16604, 17316, 16415, 16655, 16682, 16922, 16655, 16895, 16951, 17193,
+                    16898, 17140
+                ],
+                10212100734700833733
+            )
+        ),
+        "a request byte changed"
+    );
+}
