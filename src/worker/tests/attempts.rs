@@ -89,7 +89,7 @@ fn lines(records: &[Value]) -> String {
 
 /// A private, empty stand-in for each backend's login, located where the
 /// backend looks for it in tests. Only its path and metadata are used.
-fn credential(backend: Backend) -> PathBuf {
+pub(crate) fn credential(backend: Backend) -> PathBuf {
     credential_on(backend, &crate::accounts::AccountName::implicit())
 }
 /// The same for a named account, in its own directory.

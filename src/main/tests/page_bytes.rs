@@ -337,9 +337,21 @@ fn without_heatmap(response: String) -> String {
     format!("{before}{start}…</section>{after}").replacen(length, "Content-Length: (masked)", 1)
 }
 
+/// Signs every backend's default account in as the worker tests do. The
+/// Models page shows whether each has a login, and the tests of one binary
+/// share the login folders: worker tests create these stand-ins (and none
+/// removes them), so without this the page read "No login yet" or "Signed
+/// in" depending on which tests ran first.
+fn signed_in() {
+    crate::backend::Backend::hosted().for_each(|backend| {
+        crate::worker::tests::attempts::credential(backend);
+    });
+}
+
 /// The operator pages under `/?view=`: DMs and runs with usage, genes, a
 /// room thread, knowledge entries and access requests.
 fn operator_fixture() -> State {
+    signed_in();
     let mut state = fixture();
     let form = |pairs: &[(&str, &str)]| {
         pairs
