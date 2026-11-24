@@ -353,7 +353,7 @@ fn tool_results_carry_the_whole_observation_only_when_it_changed_for_this_attemp
         marker.starts_with("[Observation unchanged (age ") && marker.ends_with(" s)]"),
         "{marker}"
     );
-    assert!(crate::local_agent::tokens(marker.len()) <= 12, "about ten tokens");
+    assert!(control_local::tokens(marker.len()) <= 12, "about ten tokens");
     // A changed value is shown whole, once.
     declare(
         &shared,
@@ -726,7 +726,7 @@ fn measure_observation_tokens_per_tool_result() {
                         .recent
                         .push(value(n));
                 }
-                crate::local_agent::tokens(for_result_with(&shared, &run, broken).unwrap().len())
+                control_local::tokens(for_result_with(&shared, &run, broken).unwrap().len())
             })
             .collect();
         println!("cli {label}: observation tokens per tool result {per_result:?}");
