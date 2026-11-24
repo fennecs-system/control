@@ -728,3 +728,56 @@ fn crash_recovery_survives_concurrent_process_spawns() {
     }
     result.unwrap();
 }
+
+/// The log a fixed sequence of saves writes, before and after a compaction,
+/// with each snapshot's nonce and the schema replaced by placeholders. Older
+/// and newer builds read these bytes, so changing how saves reach the disk
+/// must not change them. `CONTROL_WRITE_FIXTURE=1` rewrites the fixture.
+#[test]
+fn a_fixed_sequence_of_saves_writes_the_same_log_bytes() {
+    let scratch = Scratch::new("fixture");
+    let normalized = |log: Vec<u8>| {
+        let header: serde_json::Value = serde_json::from_slice(log.split(|&b| b == b'\n').next().unwrap()).unwrap();
+        let nonce = serde_json::to_string(&header["snapshot"]).unwrap();
+        let schema = serde_json::to_string(&header["schema"]).unwrap();
+        String::from_utf8(log)
+            .unwrap()
+            .replace(&nonce, "\"NONCE\"")
+            .replace(&schema, "\"SCHEMA\"")
+    };
+    let steps: [&dyn Fn(&mut State); 6] = [
+        &|s| s.note = "first".into(),
+        &|s| s.messages.extend((0..40).map(|i| format!("message {i:02} of the fixture"))),
+        &|s| {
+            s.messages[5] = "changed in place".into();
+            s.messages.drain(10..13);
+        },
+        &|s| {
+            s.agents.push("an agent".into());
+            s.runtime.notice = "a notice".into();
+        },
+        &|s| s.discord_seen.extend((0..100).map(|i| format!("seen-{i}"))),
+        &|s| s.messages.insert(0, "first again".into()),
+    ];
+    let mut state = State::default();
+    scratch.save(&state);
+    for step in steps {
+        step(&mut state);
+        scratch.save(&state);
+        scratch.save(&state);
+    }
+    let before = normalized(scratch.log());
+    scratch.compact(&state);
+    state.note = "after compaction".into();
+    state.messages.truncate(7);
+    scratch.save(&state);
+    let log = format!("{before}{}", normalized(scratch.log()));
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/storage/tests/state-log.fixture.jsonl");
+    if std::env::var_os("CONTROL_WRITE_FIXTURE").is_some() {
+        fs::write(&fixture, &log).unwrap();
+    }
+    assert!(
+        fs::read_to_string(&fixture).unwrap() == log,
+        "state.log bytes changed:\n{log}"
+    );
+}
