@@ -99,7 +99,9 @@ fn public_https_is_approved_and_recorded_with_the_policy_as_decider() {
     );
     assert!(
         overview(&state.ports, &state.auto_decisions)
-            .concat()
+            .iter()
+            .map(Open::render)
+            .collect::<String>()
             .contains("auto · public-web")
     );
     drop(state);

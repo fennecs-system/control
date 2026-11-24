@@ -91,6 +91,11 @@ fn auto_fieldset(policy: &AutoApproval) -> String {
 
 /// The opt-ins form, what is running, recent automatic decisions and the node's pending requests.
 pub(crate) fn render(state: &crate::State) -> String {
+    format!("{}{}", form(), Page::of(state).render())
+}
+/// The opt-ins form. It reads `permissions.json` and the Discord access
+/// policy, and no state, so the server renders it before the state lock.
+pub(crate) fn form() -> String {
     let current = permissions::read();
     let kinds = [
         ("folder", "Folder access (/open: host paths)"),
@@ -102,7 +107,7 @@ pub(crate) fn render(state: &crate::State) -> String {
     .iter()
     .map(|(kind, label)| check(&format!("mcp_{kind}"), label, current.mcp_approvals.allows(kind)))
     .collect::<String>();
-    let mut html = format!(
+    format!(
         "<h2>Permissions</h2><p class='muted'>Strict and off by default. Requests wait for a decision unless the automatic approval policy below takes them; the other settings only choose who else may decide.</p>\
         <form class='decision-form permissions' method='post' action='{PATH}'>{}\
         <fieldset><legend>The chat MCP (<code>control mcp --chat</code>) may decide</legend>{kinds}\
@@ -116,30 +121,46 @@ pub(crate) fn render(state: &crate::State) -> String {
             "Agents may use the chat tools (control_chat) to drive DMs in their own task",
             current.agent_chat_tools
         )
-    );
-    html.push_str(&crate::auto_approval::overview(state));
-    let groups = crate::chat::pending_requests(state);
-    let mut items = String::new();
-    for group in groups.as_array().into_iter().flatten() {
-        let chat = group["chat_id"].as_str().unwrap_or("");
-        let title = crate::escape(group["title"].as_str().unwrap_or(chat));
-        for pending in operator::pending(group) {
-            let body = if pending.body.is_empty() {
-                String::new()
-            } else {
-                format!("<p>{}</p>", crate::escape(pending.body))
-            };
-            items.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3>{body}<p class='muted'><a href='/dm/{}'>{title} ↗</a></p></article>",
-                pending.kind.as_str(), crate::escape(&pending.heading), crate::escape(chat)));
+    )
+}
+/// The page below the form, copied out of state so it renders after the
+/// state lock is released.
+pub(crate) struct Page {
+    running: crate::auto_approval::Overview,
+    /// `control.requests.list`'s groups.
+    waiting: serde_json::Value,
+}
+impl Page {
+    pub(crate) fn of(state: &crate::State) -> Self {
+        Self {
+            running: crate::auto_approval::Overview::of(state),
+            waiting: crate::chat::pending_requests(state),
         }
     }
-    html.push_str("<h3 class='form-title'>Waiting on you</h3>");
-    html.push_str(if items.is_empty() {
-        "<div class='empty'>No pending requests.</div>"
-    } else {
-        &items
-    });
-    html
+    pub(crate) fn render(&self) -> String {
+        let mut html = self.running.render();
+        let mut items = String::new();
+        for group in self.waiting.as_array().into_iter().flatten() {
+            let chat = group["chat_id"].as_str().unwrap_or("");
+            let title = crate::escape(group["title"].as_str().unwrap_or(chat));
+            for pending in operator::pending(group) {
+                let body = if pending.body.is_empty() {
+                    String::new()
+                } else {
+                    format!("<p>{}</p>", crate::escape(pending.body))
+                };
+                items.push_str(&format!("<article class='record'><span class='tag'>{}</span><h3>{}</h3>{body}<p class='muted'><a href='/dm/{}'>{title} ↗</a></p></article>",
+                    pending.kind.as_str(), crate::escape(&pending.heading), crate::escape(chat)));
+            }
+        }
+        html.push_str("<h3 class='form-title'>Waiting on you</h3>");
+        html.push_str(if items.is_empty() {
+            "<div class='empty'>No pending requests.</div>"
+        } else {
+            &items
+        });
+        html
+    }
 }
 
 /// `POST /manage/permissions` from the form above.

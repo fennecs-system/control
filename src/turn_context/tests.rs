@@ -255,8 +255,17 @@ fn exact_adapter_input_is_private_checked_and_unavailable_evidence_is_explicit()
     assert_eq!(input(&state.runtime.runs[0].attempts[0]).unwrap().unwrap(), original);
     let fields = crate::fields(&format!("run={}&attempt=1", state.runtime.runs[0].id()));
     let other = crate::chat::create(&mut state);
-    assert!(view(&state, &other, &fields).is_err());
-    assert!(view(&state, &chat, &fields).unwrap().contains("Control input"));
+    assert!(
+        Trace::of(&state, &other, &fields)
+            .and_then(|trace| trace.read())
+            .is_err()
+    );
+    assert!(
+        Trace::of(&state, &chat, &fields)
+            .and_then(|trace| trace.read())
+            .unwrap()
+            .contains("Control input")
+    );
     let mut corrupt = reference.clone();
     corrupt.sha256 = "0".repeat(64);
     assert!(read(&corrupt).is_err());
