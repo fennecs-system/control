@@ -99,10 +99,30 @@ Fault tests inject directory-sync failure and byte mismatches, and check
 shutdown, 503 and poison fencing in a child process. They are filesystem fault
 injections, not power-loss simulations.
 
+A writer thread per state directory (`control_journal::writer`) owns
+`state.json` and `state.log`. A save encodes and diffs under the state mutex,
+advances the diff base, queues the record and gets a ticket; the writer writes
+everything queued since its last write with one write and one sync (a
+compaction contains the lines queued before it). The bytes on disk are those
+the synchronous path wrote (`storage::tests::log` pins them). `storage::save`
+waits for its ticket under the mutex, so its callers see no change.
+`storage::submit` returns before durability for callers that release the
+mutex first and then wait; `POST /dna/save` is the only one so far.
+
+The writer's failure policy is one function (`writer::stall_then_halt`): an
+unconfirmed write halts the writer at once; a record that is alone in flight
+and whose caller still holds the mutex is refused as before (`NotReplaced`, the
+caller rolls back, the next save compacts); any other failed record may
+already be extended by a later one, so it is retried with backoff for up to 30
+seconds, then the writer halts. A halted writer refuses every later save, and
+its waiters stop Control as an unconfirmed checkpoint does. If a compaction's
+snapshot is durable but its log cannot restart, the writer says so on stderr
+and the next save compacts again.
+
 ## Limits and next steps
 
-Persistence is synchronous and runs under the write lock. Before releasing the
-lock during persistence, add durable intent and typed effect identity carrying
+Most saves still wait for durability under the write lock. Before more callers
+release the lock before waiting, add durable intent and typed effect identity carrying
 source generation and target revisions, revalidate authority and versions on
 completion, and reconcile unknown outcomes. A plan from these operations cannot
 be kept across another writer or an await: its rollback positions are only safe

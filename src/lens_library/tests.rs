@@ -199,12 +199,47 @@ fn export_response_bytes_are_pinned() {
     let mut state = State::default();
     let body = serde_json::to_string_pretty(&state.lens_library).unwrap();
     let mut out = Vec::new();
-    assert!(handle(&mut out, &mut state, "GET", "/dna/export", &HashMap::new(), b""));
+    assert!(handle(&mut out, &mut state, "GET", "/dna/export", &HashMap::new()));
     assert_eq!(
         String::from_utf8(out).unwrap(),
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\ncontent-disposition: attachment; filename=control-lenses.json\r\n\r\n{body}",
             body.len()
         )
+    );
+}
+
+/// A save answers after the writer made it durable, with the lock released
+/// while it waited; a stale revision is answered in place with the draft.
+#[test]
+fn saving_a_gene_redirects_once_durable_and_answers_a_stale_revision_in_place() {
+    crate::storage::initialize().unwrap();
+    let state = std::sync::Mutex::new(State::default());
+    let post = |body: &str| {
+        let mut out = Vec::new();
+        assert!(http(&mut out, &state, "POST", "/dna/save", body.as_bytes()));
+        String::from_utf8(out).unwrap()
+    };
+    assert!(!http(&mut Vec::new(), &state, "GET", "/dna/save", b""));
+    let saved = post("id=durable-gene&name=Durable&revision=0&instructions=Kept");
+    assert!(
+        saved.starts_with("HTTP/1.1 303 ") && saved.contains("location: /dna?id=durable-gene&saved=1\r\n"),
+        "{saved}"
+    );
+    assert!(
+        !state.is_poisoned() && state.try_lock().is_ok(),
+        "released before answering"
+    );
+    let stale = post("id=durable-gene&name=Durable&revision=0&instructions=Lost");
+    assert!(stale.starts_with("HTTP/1.1 409 ") && stale.contains("Lost"), "{stale}");
+    assert_eq!(
+        state
+            .lock()
+            .unwrap()
+            .lens_library
+            .get("durable-gene")
+            .unwrap()
+            .instructions,
+        "Kept"
     );
 }

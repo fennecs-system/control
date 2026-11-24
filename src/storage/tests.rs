@@ -1,6 +1,7 @@
 use super::*;
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
+mod crash;
 mod log;
 mod profiling;
 

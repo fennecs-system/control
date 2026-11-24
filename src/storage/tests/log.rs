@@ -47,7 +47,7 @@ impl Drop for Scratch {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn same(a: &State, b: &State) -> bool {
+pub(super) fn same(a: &State, b: &State) -> bool {
     let json = |s| crate::history::persisting(|| serde_json::to_value(s).unwrap());
     json(a) == json(b)
 }
@@ -729,6 +729,28 @@ fn crash_recovery_survives_concurrent_process_spawns() {
     result.unwrap();
 }
 
+/// A log that cannot be opened after a compaction (here a directory in its
+/// place) costs every save a compaction, said on stderr, and loses nothing;
+/// once it opens again saves go back to appending.
+#[test]
+fn a_log_that_cannot_restart_makes_each_save_compact_until_it_can() {
+    let scratch = Scratch::new("log-restart");
+    fs::create_dir(scratch.0.join(LOG)).unwrap();
+    let (mut state, chat) = with_chat();
+    scratch.save(&state);
+    let first = scratch.snapshot();
+    crate::chat::send(&mut state, &chat, "compacted again", "test").unwrap();
+    scratch.save(&state);
+    assert!(scratch.snapshot() != first, "the second save rewrote the snapshot");
+    fs::remove_dir(scratch.0.join(LOG)).unwrap();
+    crate::chat::send(&mut state, &chat, "the log is back", "test").unwrap();
+    scratch.save(&state);
+    crate::chat::send(&mut state, &chat, "appended", "test").unwrap();
+    scratch.save(&state);
+    assert_eq!(scratch.lines(), 2, "a header and one appended line");
+    assert!(same(&scratch.restart(), &state));
+}
+
 /// The log a fixed sequence of saves writes, before and after a compaction,
 /// with each snapshot's nonce and the schema replaced by placeholders. Older
 /// and newer builds read these bytes, so changing how saves reach the disk
@@ -747,7 +769,10 @@ fn a_fixed_sequence_of_saves_writes_the_same_log_bytes() {
     };
     let steps: [&dyn Fn(&mut State); 6] = [
         &|s| s.note = "first".into(),
-        &|s| s.messages.extend((0..40).map(|i| format!("message {i:02} of the fixture"))),
+        &|s| {
+            s.messages
+                .extend((0..40).map(|i| format!("message {i:02} of the fixture")))
+        },
         &|s| {
             s.messages[5] = "changed in place".into();
             s.messages.drain(10..13);

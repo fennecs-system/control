@@ -3,6 +3,7 @@ use control_context::{Audience, Definition, DocumentInput, Resolved};
 use std::{
     collections::HashMap,
     io::{self, Write},
+    sync::Mutex,
 };
 
 pub fn inputs(documents: &[crate::knowledge::Document]) -> Vec<DocumentInput> {
@@ -449,7 +450,6 @@ pub fn handle(
     method: &str,
     path: &str,
     query: &HashMap<String, String>,
-    body: &[u8],
 ) -> bool {
     if path == "/dna/export" && method == "GET" {
         let _ = control_http::respond(
@@ -493,34 +493,55 @@ pub fn handle(
         );
         return true;
     }
-    if path == "/dna/save" && method == "POST" {
-        let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
-        match save_with(state, draft.clone(), crate::storage::save) {
-            Ok(d) => {
+    false
+}
+/// `POST /dna/save`. The edit is staged under the state lock and its save is
+/// waited for after releasing it, so other requests do not queue behind the
+/// disk. Once staged the edit is not rolled back: others may already read it.
+pub(crate) fn http(stream: &mut impl Write, state: &Mutex<State>, method: &str, path: &str, body: &[u8]) -> bool {
+    if path != "/dna/save" || method != "POST" {
+        return false;
+    }
+    let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
+    let staged = state.lock().map(|mut state| {
+        let mut saving = None;
+        save_with(&mut state, draft.clone(), |state| {
+            saving = Some(crate::storage::submit(state)?);
+            Ok(())
+        })
+        .map(|saved| (saved, saving))
+        .map_err(|error| render(Sources::of(&state), &draft.id, Some(&draft), Some(&error), false))
+    });
+    let mut response = Vec::new();
+    match staged {
+        Ok(Ok((saved, Some(saving)))) => match saving.wait() {
+            Ok(()) => {
                 let _ = control_http::respond(
-                    stream,
+                    &mut response,
                     "303 See Other",
                     "text/plain",
                     b"",
-                    &format!("Location: /dna?id={}&saved={}\r\n", d.id, d.revision),
+                    &format!("Location: /dna?id={}&saved={}\r\n", saved.id, saved.revision),
                     control_http::Policy::Page,
                 );
             }
-            Err(error) => {
-                let html = render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false);
-                let _ = control_http::respond(
-                    stream,
-                    "409 Conflict",
-                    "text/html; charset=utf-8",
-                    crate::shell("lens-page", &html).as_bytes(),
-                    "",
-                    control_http::Policy::Page,
-                );
-            }
+            // The writer stopped for good: Control is stopping.
+            Err(_) => crate::unavailable(&mut response),
+        },
+        Ok(Err(html)) => {
+            let _ = control_http::respond(
+                &mut response,
+                "409 Conflict",
+                "text/html; charset=utf-8",
+                crate::shell("lens-page", &html).as_bytes(),
+                "",
+                control_http::Policy::Page,
+            );
         }
-        return true;
+        Ok(Ok((_, None))) | Err(_) => crate::unavailable(&mut response),
     }
-    false
+    let _ = stream.write_all(&response);
+    true
 }
 #[cfg(test)]
 mod tests;

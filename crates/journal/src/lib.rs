@@ -8,6 +8,7 @@
 //! sealed or compressed segments later, memory in tests.
 pub mod lens;
 pub mod snapshot;
+pub mod writer;
 
 use control_comonad::Space;
 use serde::{Serialize, de::DeserializeOwned};
@@ -160,20 +161,24 @@ impl FileJournal {
     pub fn poisoned(&self) -> bool {
         self.poisoned
     }
-}
-impl Journal for FileJournal {
-    fn len(&self) -> u64 {
-        self.starts.len() as u64
-    }
-    fn append(&mut self, entry: &[u8]) -> io::Result<u64> {
-        check(entry)?;
+    /// Durably appends `entries` with one write and one sync, all or none,
+    /// and returns the first one's position. Callers that queue appends share
+    /// a sync this way instead of paying one each.
+    pub fn append_batch(&mut self, entries: &[&[u8]]) -> io::Result<u64> {
+        entries.iter().try_for_each(|entry| check(entry))?;
         if self.poisoned {
             return Err(io::Error::other("Journal needs reopening after a failed append"));
         }
-        let mut line = Vec::with_capacity(entry.len() + 1);
-        line.extend_from_slice(entry);
-        line.push(b'\n');
-        if let Err(error) = self.file.write_all(&line).and_then(|()| self.file.sync_data()) {
+        if entries.is_empty() {
+            return Ok(self.len());
+        }
+        let size = entries.iter().map(|entry| entry.len() + 1).sum();
+        let bytes = entries.iter().fold(Vec::with_capacity(size), |mut bytes, entry| {
+            bytes.extend_from_slice(entry);
+            bytes.push(b'\n');
+            bytes
+        });
+        if let Err(error) = self.file.write_all(&bytes).and_then(|()| self.file.sync_data()) {
             // Keep the file a whole number of lines for the next append; if
             // that fails, refuse appends until reopening repairs the tail.
             self.poisoned = self
@@ -183,9 +188,22 @@ impl Journal for FileJournal {
                 .is_err();
             return Err(error);
         }
-        self.starts.push(self.end);
-        self.end += line.len() as u64;
-        Ok(self.starts.len() as u64 - 1)
+        let first = self.starts.len() as u64;
+        self.starts.extend(entries.iter().scan(self.end, |start, entry| {
+            let this = *start;
+            *start += entry.len() as u64 + 1;
+            Some(this)
+        }));
+        self.end += bytes.len() as u64;
+        Ok(first)
+    }
+}
+impl Journal for FileJournal {
+    fn len(&self) -> u64 {
+        self.starts.len() as u64
+    }
+    fn append(&mut self, entry: &[u8]) -> io::Result<u64> {
+        self.append_batch(&[entry])
     }
     fn read(&self, pos: u64) -> io::Result<Option<Vec<u8>>> {
         let Some(&start) = usize::try_from(pos).ok().and_then(|pos| self.starts.get(pos)) else {

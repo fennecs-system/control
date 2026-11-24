@@ -209,9 +209,12 @@ copy of a real state file. On an 18.1 MB state (6,881 runs, 128 chats), APFS,
 | Replay of a 2,001-line log | — | 72 ms |
 | Clean start | 41.6 ms | 60 ms (snapshot plus archive blocks) |
 
-About 60% of a save is now the sync. Not measured: APFS metadata writes and
-concurrent saves (each save still syncs under the state mutex; there is no
-group commit).
+About 60% of a save is the sync. A writer thread (`control_journal::writer`)
+owns the files: a save encodes and diffs under the state mutex, queues its
+line and waits; the writer drains its queue and writes every queued line with
+one write and one sync. Most callers still wait under the state mutex, so their
+saves still serialize there; only `POST /dna/save` waits after releasing it, so
+group commit pays off as more callers do. Not measured: APFS metadata writes.
 
 ```sh
 CONTROL_PROFILE_STATE=/scratch/state.json CONTROL_PROFILE_DIR=/scratch/bench \
