@@ -51,7 +51,7 @@ pub struct Runtime {
 }
 use crate::application::effects::Effects;
 pub(crate) use crate::application::runs::Runs;
-use crate::application::runs::{Admission, Queued, Refusal, Submission, Tx, admit};
+use crate::application::runs::{self, Admission, Refusal, Submission, Tx, admit};
 pub use crate::application::runs::{Run, RunStatus};
 
 // Pending transitions change status/result and possibly a design answer. Keep
@@ -162,7 +162,7 @@ impl Runtime {
     }
     /// Authorizes, admits and queues `submission`: the one way new work
     /// enters the queue. The caller saves, then releases the wake.
-    pub(crate) fn queue(&mut self, submission: Submission, tx: Tx) -> Result<Queued, Refusal> {
+    pub(crate) fn queue(&mut self, submission: Submission, tx: Tx) -> Result<runs::Queued, Refusal> {
         let authorized = submission.authorize(identity::authorize)?;
         let admission = Admission {
             runs: &self.runs,
