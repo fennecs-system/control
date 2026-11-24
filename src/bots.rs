@@ -2757,7 +2757,7 @@ fn visible(state: &State, approval: &Approval, chat: &str) -> bool {
         .any(|requester| requester.id == approval.requester && requester.actor == viewer.actor)
         && (approval.chat == chat || crate::chat::Lineage::of(&state.chats).within(&approval.requester, chat))
 }
-fn pending<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a Approval> {
+fn pending_approvals<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a Approval> {
     state
         .bots
         .approvals
@@ -2765,7 +2765,7 @@ fn pending<'a>(state: &'a State, chat: &'a str) -> impl Iterator<Item = &'a Appr
         .filter(move |a| a.decision == Decision::Pending && visible(state, a, chat))
 }
 pub(crate) fn pending_count(state: &State, chat: &str) -> usize {
-    pending(state, chat).count()
+    pending_approvals(state, chat).count()
 }
 /// Requesting chats of every pending request, for the node-wide view.
 pub(crate) fn pending_chats(state: &State) -> impl Iterator<Item = &str> {
@@ -2784,21 +2784,40 @@ pub(crate) fn decision_revision(state: &State) -> u64 {
     }
     hash.finish()
 }
+/// A pending bot request as the chat's requests panel shows it.
+pub(crate) struct Pending {
+    id: String,
+    /// The chat that would run as the bot, by its name.
+    title: String,
+    room: bool,
+    judge: bool,
+    every_minutes: Option<u64>,
+}
 /// Pending requests from this chat and its same-actor descendants.
-pub(crate) fn pending_panel(state: &State, chat: &str) -> String {
-    pending(state, chat).map(|a| {
-        let title = crate::callsigns::name_or_id(&state.chats, &a.chat);
+pub(crate) fn pending(state: &State, chat: &str) -> Vec<Pending> {
+    pending_approvals(state, chat)
+        .map(|a| Pending {
+            id: a.id.clone(),
+            title: crate::callsigns::name_or_id(&state.chats, &a.chat).into_owned(),
+            room: a.room,
+            judge: judge_chat(state, &a.chat),
+            every_minutes: a.every_minutes,
+        })
+        .collect()
+}
+pub(crate) fn pending_panel(pending: &[Pending], chat: &str) -> String {
+    pending.iter().map(|a| {
         let mut sources = Vec::new();
         if a.room { sources.push("room messages".to_owned()); }
-        if judge_chat(state, &a.chat) { sources.push("its team (read-only observer)".to_owned()); }
+        if a.judge { sources.push("its team (read-only observer)".to_owned()); }
         if let Some(minutes) = a.every_minutes { sources.push(format!("every {minutes} min")); }
         format!("<article class='assistant-message port-request' data-transcript-key='bot-{}'><h3>Bot request · {}</h3><p>{} · up to {TURNS_PER_WINDOW} turns/hour</p><form class='decision-form' method='post' action='/tools/bots' target='_top'><input type='hidden' name='id' value='{}'><input type='hidden' name='return_chat' value='{}'><button class='primary' name='allow' value='yes'>Allow bot</button><button name='deny' value='yes' formnovalidate>Deny</button><p role='alert' hidden></p></form></article>",
-            crate::escape(&a.id), crate::escape(&title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat))
+            crate::escape(&a.id), crate::escape(&a.title), crate::escape(&sources.join(" and ")), crate::escape(&a.id), crate::escape(chat))
     }).collect()
 }
 pub(crate) fn pending_json(state: &State, chat: &str) -> Value {
     Value::from(
-        pending(state, chat)
+        pending_approvals(state, chat)
             .map(|a| {
                 let mut summary = a.summary();
                 summary["name"] = json!(crate::callsigns::name_or_id(&state.chats, &a.chat));

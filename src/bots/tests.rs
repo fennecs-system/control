@@ -970,7 +970,7 @@ fn an_agent_requests_bots_for_its_children_and_resumes_with_the_operators_decisi
         .unwrap()
         .to_owned();
     assert!(!defined(&state, &child), "a request grants nothing");
-    assert!(pending_panel(&state, &parent).contains(&format!("value='{id}'")));
+    assert!(pending_panel(&pending(&state, &parent), &parent).contains(&format!("value='{id}'")));
     assert_eq!(pending_json(&state, &parent).as_array().unwrap().len(), 2);
 
     crate::chat::send(&mut state, &parent, &format!("/bot allow {id}"), "discord").unwrap();
