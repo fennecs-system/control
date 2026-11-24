@@ -1,0 +1,10 @@
+HTTP/1.1 303 See Other
+Content-Type: text/plain
+Content-Length: 0
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'
+location: /bots/history?expand=1
+
