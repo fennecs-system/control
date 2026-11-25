@@ -204,3 +204,72 @@ fn agents_are_told_the_number_status_and_reply_of_their_sends() {
         ]
     );
 }
+
+/// An agent's sends to a DM below it whose actor may not run a task, and to
+/// a chat that does not exist, are refused as before and change nothing.
+#[test]
+fn agents_sends_without_task_authority_are_refused_as_before() {
+    let (shared, _, own, _) = task();
+    let mut scoped = Scoped {
+        shared: &shared,
+        own: own.clone(),
+    };
+    let created = call(
+        &mut scoped,
+        "chat_create",
+        &json!({"title":"Refused"}),
+        Approvals::default(),
+    )
+    .unwrap();
+    let child = created
+        .strip_prefix("Created chat ")
+        .unwrap()
+        .trim_end_matches('.')
+        .to_owned();
+    let actors = [
+        crate::identity::Actor::Unknown,
+        crate::identity::Actor::Discord {
+            user_id: "5".parse().unwrap(),
+            channel_id: "6".parse().unwrap(),
+        },
+        crate::chat::discord_actor("d-7-8").unwrap(),
+    ];
+    let mut told = Vec::new();
+    for actor in actors {
+        shared
+            .write(|state| state.chats.iter_mut().find(|c| c.id == child).unwrap().actor = actor)
+            .unwrap();
+        let before = shared.read(|state| serde_json::to_vec(state).unwrap()).unwrap();
+        for (name, arguments) in [
+            ("chat_send", json!({"id":child,"message":"Not allowed"})),
+            ("chat_model", json!({"id":child})),
+            ("chat_model", json!({"id":child,"model":"codex"})),
+            ("chat_cancel", json!({"id":child})),
+            ("chat_cancel", json!({"id":child,"all":true})),
+        ] {
+            told.push(
+                call(&mut scoped, name, &arguments, Approvals::default())
+                    .map_or_else(|error| format!("error: {error}"), |told| told.replace(&child, "CHILD")),
+            );
+        }
+        assert!(shared.read(|state| serde_json::to_vec(state).unwrap()).unwrap() == before);
+    }
+    for name in ["chat_model", "chat_cancel"] {
+        told.push(
+            call(&mut scoped, name, &json!({"id":"c-1-1"}), Approvals::default())
+                .map_or_else(|error| format!("error: {error}"), |told| told),
+        );
+    }
+    // No policy file on a test node: every actor but the local operator is refused.
+    let policy = "error: Discord access policy must be a private regular file (mode 0600, at most 64 KiB)";
+    let actor = ["error: Chat not found.", policy, policy, policy, policy];
+    let missing = "error: Only chats in your own task (your chat and the chats spawned below it).";
+    assert_eq!(
+        told,
+        [actor, actor, actor]
+            .concat()
+            .into_iter()
+            .chain([missing, missing])
+            .collect::<Vec<_>>()
+    );
+}

@@ -201,3 +201,41 @@ fn an_unchecked_value_opens_only_for_an_authorized_actor() {
         Ok("local")
     );
 }
+
+/// Whoever may request Control source changes may also run a task, so a
+/// change authorized for `Improve` needs no separate `Task` check (chat
+/// sends rely on this).
+#[test]
+fn improve_authority_includes_task_authority() {
+    let p = policy();
+    let bound = DmBindings {
+        recipients: ["1", "2", "3"]
+            .iter()
+            .map(|id| DmBinding {
+                user_id: id.parse().unwrap(),
+                channel_id: "100".parse().unwrap(),
+            })
+            .collect(),
+    };
+    let actors = [
+        Actor::Discord {
+            user_id: "1".parse().unwrap(),
+            channel_id: "100".parse().unwrap(),
+        },
+        Actor::Unknown,
+        actor("1"),
+        actor("2"),
+        actor("4"),
+    ];
+    for dms in [&bound, &DmBindings::default()] {
+        for actor in &actors {
+            if p.authorize_with_dms(actor, Action::Improve, dms).is_ok() {
+                assert!(p.authorize_with_dms(actor, Action::Task, dms).is_ok());
+            }
+        }
+    }
+    // The architect is the one that may: the check above is not vacuous.
+    assert!(p.authorize_with_dms(&actor("1"), Action::Improve, &bound).is_ok());
+    assert!(authorize(&Actor::LocalOperator, Action::Improve).is_ok());
+    assert!(authorize(&Actor::LocalOperator, Action::Task).is_ok());
+}

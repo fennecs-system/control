@@ -371,11 +371,33 @@ pub(crate) fn change_with_save(
         save,
     )
 }
+/// `POST /dm/{id}/lenses`: the chat's genes from the form, saved by `save`
+/// under the lock.
+fn change_lenses(
+    state: &mut State,
+    id: &str,
+    fields: &std::collections::HashMap<String, String>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
+) -> Result<(), std::borrow::Cow<'static, str>> {
+    let arguments = json!({"id":id,"lenses":chat::form_lenses(fields,"none")});
+    saved_under_lock(
+        state,
+        "control.chat.lenses",
+        &arguments,
+        |state| {
+            chat::set_lenses(state, &arguments)
+                .map(|_| ((), Effects::none()))
+                .map_err(Into::into)
+        },
+        save,
+    )
+}
 /// `control.chat.send` as the operator endpoint runs it (saved under the
 /// lock), answering the chat's tail (`chat::Tail`) instead of its detail.
 pub(crate) fn send_with_tail(
     state: &mut State,
     arguments: &Value,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<chat::Tail, std::borrow::Cow<'static, str>> {
     let tx = crate::store::legacy_tx();
     saved_under_lock(
@@ -386,7 +408,7 @@ pub(crate) fn send_with_tail(
             let effects = chat::send_applied(state, arguments, tx)?;
             Ok((chat::Tail::of(state, chat::chat_id(arguments)?)?, effects))
         },
-        storage::save,
+        save,
     )
 }
 /// Applies tool `name` by `apply` behind its checkpoint (`staged`) and saves
@@ -911,19 +933,7 @@ pub fn handle(
     }
     if method == "POST" && operation == "lenses" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
-        let arguments = json!({"id":id,"lenses":chat::form_lenses(&fields,"none")});
-        let changed = saved_under_lock(
-            state,
-            "control.chat.lenses",
-            &arguments,
-            |state| {
-                chat::set_lenses(state, &arguments)
-                    .map(|_| ((), Effects::none()))
-                    .map_err(Into::into)
-            },
-            storage::save,
-        );
-        match changed {
+        match change_lenses(state, id, &fields, storage::save) {
             Ok(_) => {
                 let _ = control_http::respond(
                     stream,

@@ -447,6 +447,43 @@ fn request_tools_match_their_pinned_bytes() {
     assert_pinned(changed);
 }
 
+/// The operator MCP's `control.chat.send` answers with the chat's detail,
+/// built under the state lock. Commands only: a turn's run id reads the
+/// clock.
+#[test]
+fn mcp_chat_send_matches_its_pinned_bytes() {
+    let state = Store::new(fixture());
+    let call = |id: &str, arguments: &str| {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"control.chat.send","arguments":{arguments}}}}}"#
+        )
+    };
+    let bodies = [
+        (
+            "mcp_chat_send_command",
+            call("1", r#"{"id":"c-100-2","message":"/improve off"}"#),
+        ),
+        ("mcp_chat_send_room", call("2", r#"{"id":"c-100-0","message":"/room"}"#)),
+        (
+            "mcp_chat_send_refused",
+            call("3", r#"{"id":"c-100-2","message":"/steer"}"#),
+        ),
+        (
+            "mcp_chat_send_missing",
+            call("4", r#"{"id":"c-100-9","message":"Nobody"}"#),
+        ),
+        (
+            "mcp_chat_send_invalid",
+            call("5", r#"{"id":"../x","message":"Nobody"}"#),
+        ),
+    ];
+    let pages = bodies
+        .iter()
+        .map(|(name, body)| (*name, "POST", "/mcp", "", body.as_str()))
+        .collect::<Vec<_>>();
+    assert_pinned(changed(&state, &pages));
+}
+
 /// The Bots page: live bots under a steering chat, a running agent, dead
 /// bots in the graveyard and a queued turn.
 fn bots_fixture() -> State {
@@ -679,6 +716,71 @@ fn chat_sends_match_their_pinned_bytes() {
     ]
     .map(|(name, target, cookie, body)| (name, "POST", target, cookie, body));
     assert_pinned(changed_after(&state, &created, without_new_chats));
+}
+/// Three DMs whose actors may not run a task: no identity, a Discord server
+/// channel and a Discord DM with no channel binding on this node.
+fn unauthorized_fixture() -> State {
+    let mut state = State::default();
+    crate::ui_previews::genes(&mut state, 3);
+    let ids: Vec<String> = (0..3).map(|_| chat::create(&mut state)).collect();
+    chat::send(&mut state, &ids[0], "Before the actor changed", "test").unwrap();
+    state.runtime.runs[0].status = crate::runtime::RunStatus::Completed;
+    let actors = [
+        crate::identity::Actor::Unknown,
+        crate::identity::Actor::Discord {
+            user_id: "5".parse().unwrap(),
+            channel_id: "6".parse().unwrap(),
+        },
+        chat::discord_actor("d-7-8").unwrap(),
+    ];
+    for (session, actor) in state.chats.iter_mut().zip(actors) {
+        session.actor = actor;
+    }
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    renamed(&state, &ids)
+}
+
+/// Sends and gene changes to a DM whose actor may not run a task, and to a
+/// chat that does not exist, answer as the base did and change nothing.
+#[test]
+fn chat_writes_without_task_authority_match_their_pinned_bytes() {
+    let state = Store::new(unauthorized_fixture());
+    let before = state.read(|state| serde_json::to_vec(state).unwrap()).unwrap();
+    const JSON: &str = "\r\nAccept: application/json";
+    let mut pages = Vec::new();
+    for (who, id) in [
+        ("unknown", "c-100-0"),
+        ("channel", "c-100-1"),
+        ("unbound", "c-100-2"),
+        ("missing", "c-100-9"),
+    ] {
+        for (what, body) in [
+            ("turn", "message=Not+allowed"),
+            ("improve_on", "message=%2Fimprove+on"),
+            ("model", "message=%2Fmodel"),
+        ] {
+            for (form, cookie) in [("form", ""), ("json", JSON)] {
+                pages.push((
+                    format!("refused_{who}_{what}_{form}"),
+                    format!("/dm/{id}/messages"),
+                    cookie,
+                    body,
+                ));
+            }
+        }
+        pages.push((
+            format!("refused_{who}_lenses"),
+            format!("/dm/{id}/lenses"),
+            "",
+            "lens=gene-0001",
+        ));
+    }
+    let pages = pages
+        .iter()
+        .map(|(name, target, cookie, body)| (name.as_str(), "POST", target.as_str(), *cookie, *body))
+        .collect::<Vec<_>>();
+    assert_pinned(changed(&state, &pages));
+    assert!(state.read(|state| serde_json::to_vec(state).unwrap()).unwrap() == before);
 }
 /// One DM with every kind of pending request: a folder, a design question,
 /// a port, a bot and a knowledge proposal.

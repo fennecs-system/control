@@ -1682,3 +1682,53 @@ fn chat_route_response_bytes_are_pinned() {
         )
     );
 }
+
+/// A send or a genes change to a chat whose actor may not run a task, or to
+/// no chat, is refused before anything is staged or saved and changes
+/// nothing: the web send (form and composer), the genes form and the agent
+/// tools' send. These no longer build the chat's detail, whose own check
+/// (the chat exists, its actor may run a task) the change itself makes.
+#[test]
+fn refused_chat_writes_stage_and_save_nothing() {
+    let mut state = State::default();
+    let ids: Vec<String> = (0..3).map(|_| chat::create(&mut state)).collect();
+    state.chats[0].actor = crate::identity::Actor::Unknown;
+    state.chats[1].actor = crate::identity::Actor::Discord {
+        user_id: "5".parse().unwrap(),
+        channel_id: "6".parse().unwrap(),
+    };
+    state.chats[2].actor = chat::discord_actor("d-7-8").unwrap();
+    let store = crate::Store::new(state);
+    let before = store.read(|state| serde_json::to_vec(state).unwrap()).unwrap();
+    for id in ids.iter().map(String::as_str).chain(["c-100-9"]) {
+        for header in ["", "Accept: application/json"] {
+            for message in ["Not allowed", "/improve on", "/model"] {
+                let fields = std::collections::HashMap::from([("message".to_owned(), message.to_owned())]);
+                let committed = send_commit(
+                    &store,
+                    id,
+                    header,
+                    None,
+                    &fields,
+                    |_, _| panic!("a refused send stages no save"),
+                    || panic!("a refused send wakes no worker"),
+                );
+                assert!(
+                    matches!(committed, Ok(crate::store::Commit::Refused(..))),
+                    "{id} {message}"
+                );
+            }
+        }
+        store
+            .write(|state| {
+                let none = std::collections::HashMap::from([("lens".to_owned(), "none".to_owned())]);
+                assert!(change_lenses(state, id, &none, |_| panic!("a refused change saves nothing")).is_err());
+                for message in ["Not allowed", "/model", "/cancel"] {
+                    let arguments = json!({"id":id,"message":message});
+                    assert!(send_with_tail(state, &arguments, |_| panic!("a refused send saves nothing")).is_err());
+                }
+            })
+            .unwrap();
+    }
+    assert!(store.read(|state| serde_json::to_vec(state).unwrap()).unwrap() == before);
+}

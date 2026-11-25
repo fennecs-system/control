@@ -102,7 +102,8 @@ impl Remote for Scoped<'_> {
         let arguments = json!({"id":id,"message":message});
         self.shared.write(|state| {
             self.admit(state, "control.chat.send", &arguments)?;
-            crate::session_http::send_with_tail(state, &arguments).map_err(|error| io::Error::other(error.into_owned()))
+            crate::session_http::send_with_tail(state, &arguments, crate::storage::save)
+                .map_err(|error| io::Error::other(error.into_owned()))
         })?
     }
     fn tool(&mut self, name: &str, arguments: Value) -> io::Result<Value> {
