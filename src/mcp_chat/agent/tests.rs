@@ -155,6 +155,7 @@ fn the_worker_tool_is_hidden_and_refused_unless_the_operator_enables_it() {
             nonce: "n",
         },
         host: &host,
+        now: crate::design::UnixSeconds::now(),
     };
     let refused = Tools
         .call(&cx, "control_chat", &json!({"tool":"chats_list"}))

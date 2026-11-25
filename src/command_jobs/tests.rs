@@ -12,6 +12,7 @@ fn call(shared: &Store, run: &str, generation: &str, nonce: &str, name: &str, ar
         &AttemptCall {
             attempt: AttemptRef { run, generation, nonce },
             host: &LocalHost(shared),
+            now: crate::design::UnixSeconds::now(),
         },
         name,
         args,

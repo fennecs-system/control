@@ -639,6 +639,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
             nonce: "request-fixture",
         },
         host: &host,
+        now: crate::design::UnixSeconds::now(),
     };
     let response = crate::tool_registry::attempt_tools("control_workspace_start")
         .unwrap()

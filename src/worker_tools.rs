@@ -153,6 +153,16 @@ fn dispatch_at(shared: &Store, run_id: &str, envelope: &Value, workspace: Option
     response
 }
 fn dispatch_raw(shared: &Store, run_id: &str, envelope: &Value, workspace: Option<&Path>) -> Value {
+    dispatch_raw_at(shared, run_id, envelope, workspace, crate::design::UnixSeconds::now())
+}
+/// `dispatch_raw` at clock reading `now`, which tests fix.
+fn dispatch_raw_at(
+    shared: &Store,
+    run_id: &str,
+    envelope: &Value,
+    workspace: Option<&Path>,
+    now: crate::design::UnixSeconds,
+) -> Value {
     let envelope = match direct(envelope) {
         Ok(envelope) => envelope,
         Err(refused) => return refused,
@@ -187,7 +197,7 @@ fn dispatch_raw(shared: &Store, run_id: &str, envelope: &Value, workspace: Optio
         // The role's core schemas; the rest are in the prompt's deferred index.
         control_mcp::Method::ToolsList => control_mcp::tools(deferred::listed(caller.facts())),
         control_mcp::Method::ToolsCall => {
-            let call = kinds::Call::of(envelope, workspace);
+            let call = kinds::Call::of(envelope, workspace, now);
             let entry = table::lookup(call.name);
             match fence(&state, &caller, &call, entry) {
                 Ok(()) => entry
