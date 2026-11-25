@@ -162,3 +162,44 @@ fn the_worker_tool_is_hidden_and_refused_unless_the_operator_enables_it() {
     assert!(refused.to_string().contains("Permissions"), "{refused}");
     assert!(!own.is_empty());
 }
+
+/// What an agent is told of its sends: the message's number and status,
+/// and a command's reply. Pinned before sends stopped building the chat's
+/// whole detail for it.
+#[test]
+fn agents_are_told_the_number_status_and_reply_of_their_sends() {
+    let (shared, _, own, _) = task();
+    let mut scoped = Scoped {
+        shared: &shared,
+        own: own.clone(),
+    };
+    let mut tool = |name: &str, arguments: Value| call(&mut scoped, name, &arguments, Approvals::default());
+    let created = tool("chat_create", json!({"title":"Sender"})).unwrap();
+    let child = created
+        .strip_prefix("Created chat ")
+        .unwrap()
+        .trim_end_matches('.')
+        .to_owned();
+    let told = [
+        tool("chat_send", json!({"id":child,"message":"First"})),
+        tool("chat_send", json!({"id":child,"message":"Second"})),
+        tool("chat_cancel", json!({"id":child})),
+        tool("chat_cancel", json!({"id":child,"all":true})),
+        tool("chat_send", json!({"id":child,"message":"After the cancel"})),
+        tool("chat_send", json!({"id":own,"message":"Own chat"})),
+        tool("chat_send", json!({"id":"c-1-1","message":"Nobody"})),
+    ]
+    .map(|told| told.map_or_else(|error| format!("error: {error}"), |told| told.replace(&child, "CHILD")));
+    assert_eq!(
+        told,
+        [
+            "Sent to CHILD as message #0 [queued]. Follow it with chat_read.",
+            "Sent to CHILD as message #1 [queued]. Follow it with chat_read.",
+            "Pending run cancelled.",
+            "Cancelled 1 run(s) and stopped 0 bot(s) across 1 chat(s). Services keep running; /services lists them and /services stop all stops them.",
+            "Sent to CHILD as message #4 [queued]. Follow it with chat_read.",
+            "error: Agents change the DMs they spawned, not their own chat.",
+            "error: Chat not found.",
+        ]
+    );
+}
