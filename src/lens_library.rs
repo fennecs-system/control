@@ -181,7 +181,7 @@ pub fn draft(fields: &HashMap<String, String>) -> Definition {
 pub(crate) fn save_with(
     state: &mut State,
     draft: Definition,
-    persist: impl FnOnce(&State) -> std::io::Result<()>,
+    persist: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Definition, String> {
     let (draft, previous) = apply(state, draft)?;
     if persist(state).is_err() {

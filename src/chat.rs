@@ -10,6 +10,7 @@ use crate::{
     runtime::RunKind,
 };
 use control_context::commands::{self, Kind};
+use control_journal::snapshot::Part;
 use serde_json::{Value, json};
 use std::borrow::Cow;
 mod activity;
@@ -331,45 +332,11 @@ pub fn discord_actor(id: &str) -> Option<Actor> {
 pub fn create(state: &mut State) -> String {
     let id = format!("c-{:x}-{}", crate::ids::stamp(), state.chats.len());
     let activity_order = next_activity(state);
-    state.chats.push(Session {
-        model: None,
-        continuity: None,
-        activity_order,
-        project: None,
-        parent_chat: None,
-        fork_context: None,
-        improve_mode: false,
-        improve_workspace: None,
-        workspace: None,
-        lenses: Some(Vec::new()),
-        persona: None,
-        design_context: None,
-        room: None,
-        lens: None,
-        revision: 0,
-        id: id.clone(),
-        actor: Actor::LocalOperator,
-        title: "New chat".into(),
-        name: None,
-        cancelled_through: None,
-        memory: None,
-        messages: Vec::new(),
-    });
-    id
-}
-/// A Discord message, as a send; the caller saves, then releases the wake.
-pub fn receive(state: &mut State, incoming: &discord::Incoming, tx: Tx) -> Result<Effects, &'static str> {
-    let actor = incoming.actor();
-    identity::authorize(&actor, incoming.action)?;
-    let id = crate::design::discord_chat(state, incoming);
-    if state.chats.iter().any(|s| s.id == id && s.actor != actor) {
-        return Err("Chat identity mismatch.");
-    }
-    if !state.chats.iter().any(|s| s.id == id) {
-        state.chats.push(Session {
+    state.chats.push(
+        Session {
             model: None,
             continuity: None,
-            activity_order: 0,
+            activity_order,
             project: None,
             parent_chat: None,
             fork_context: None,
@@ -383,13 +350,53 @@ pub fn receive(state: &mut State, incoming: &discord::Incoming, tx: Tx) -> Resul
             lens: None,
             revision: 0,
             id: id.clone(),
-            actor,
-            title: "Discord chat".into(),
+            actor: Actor::LocalOperator,
+            title: "New chat".into(),
             name: None,
             cancelled_through: None,
             memory: None,
             messages: Vec::new(),
-        });
+        }
+        .into(),
+    );
+    id
+}
+/// A Discord message, as a send; the caller saves, then releases the wake.
+pub fn receive(state: &mut State, incoming: &discord::Incoming, tx: Tx) -> Result<Effects, &'static str> {
+    let actor = incoming.actor();
+    identity::authorize(&actor, incoming.action)?;
+    let id = crate::design::discord_chat(state, incoming);
+    if state.chats.iter().any(|s| s.id == id && s.actor != actor) {
+        return Err("Chat identity mismatch.");
+    }
+    if !state.chats.iter().any(|s| s.id == id) {
+        state.chats.push(
+            Session {
+                model: None,
+                continuity: None,
+                activity_order: 0,
+                project: None,
+                parent_chat: None,
+                fork_context: None,
+                improve_mode: false,
+                improve_workspace: None,
+                workspace: None,
+                lenses: Some(Vec::new()),
+                persona: None,
+                design_context: None,
+                room: None,
+                lens: None,
+                revision: 0,
+                id: id.clone(),
+                actor,
+                title: "Discord chat".into(),
+                name: None,
+                cancelled_through: None,
+                memory: None,
+                messages: Vec::new(),
+            }
+            .into(),
+        );
     }
     let text = if incoming.action == Action::Improve {
         format!("/improve {}", incoming.objective)
@@ -426,7 +433,8 @@ fn fork_queued(
         .iter()
         .find(|s| s.id == parent_id)
         .ok_or("Chat not found.")?
-        .clone();
+        .clone()
+        .into_inner();
     let from = latest_task(state, parent_id, &parent.actor);
     identity::authorize(&parent.actor, Action::Task)?;
     let objective = objective.trim();
@@ -1159,7 +1167,7 @@ pub(crate) fn response_from_run<'a>(
 }
 /// The chat `id` when it exists and its actor may run tasks: what every chat
 /// view checks first, and all that a caller needing only that should check.
-pub fn viewable<'a>(chats: &'a [Session], id: &str) -> Result<&'a Session, &'static str> {
+pub fn viewable<'a>(chats: &'a [Part<Session>], id: &str) -> Result<&'a Session, &'static str> {
     let session = chats.iter().find(|s| s.id == id).ok_or("Chat not found.")?;
     identity::authorize(&session.actor, Action::Task)?;
     Ok(session)
@@ -1413,7 +1421,7 @@ pub struct Page {
 }
 impl Page {
     pub fn of(
-        chats: &[Session],
+        chats: &[Part<Session>],
         scores: &[crate::scores::Probe],
         library: &control_context::Library,
         id: &str,
@@ -1733,12 +1741,12 @@ pub(crate) fn cancelled_after(state: &State, run: &crate::runtime::Run) -> bool 
 /// its save fails, whichever transport delivered it.
 pub(crate) struct Checkpoint {
     chats: usize,
-    previous: Vec<(usize, Session)>,
+    previous: Vec<(usize, Part<Session>)>,
     runs: usize,
     pending: crate::runtime::RunStatusCheckpoint,
     notice: String,
     posts: usize,
-    watches: Vec<crate::rooms::Watch>,
+    watches: Part<Vec<crate::rooms::Watch>>,
     /// Only when the command may change bots (`changes_bots`): a clone of
     /// every bot's state is the costliest part of a capture.
     bots: Option<crate::bots::Bots>,

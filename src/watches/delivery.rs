@@ -189,7 +189,7 @@ pub(crate) fn record(
     read: &Read,
     through: u64,
     gap: bool,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Option<String>> {
     let index = index(&state.runtime.runs, attempt)?;
     if !read.managed {

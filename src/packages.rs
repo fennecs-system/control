@@ -279,7 +279,7 @@ pub(crate) fn import_at(
     store: &Path,
     shared: &Store,
     input: Import,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Manifest> {
     let name = input.name.trim().to_owned();
     if !control_context::valid_id(&name) {
@@ -555,7 +555,7 @@ pub(crate) fn import_at(
         return Err(io::Error::other("The package changed during import; retry"));
     }
     state.packages.push(manifest.clone());
-    if save(&state).is_err() {
+    if save(&mut state).is_err() {
         state.packages.pop();
         drop(state);
         let _ = fs::remove_dir_all(&destination);
@@ -582,7 +582,7 @@ pub(crate) fn revoke(
     name: &str,
     version: u64,
     reason: &str,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> Result<Value, &'static str> {
     let reason = reason.trim();
     if reason.is_empty() || reason.chars().count() > 300 || reason.chars().any(char::is_control) {

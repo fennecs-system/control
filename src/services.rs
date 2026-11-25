@@ -548,7 +548,7 @@ fn admit(
     input: Input,
     node: NodeId,
     time: u64,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     admit_profile(
         s,
@@ -567,7 +567,7 @@ fn admit_profile(
     node: NodeId,
     time: u64,
     profile: crate::worker_profile::Profile,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let Request { run, generation, nonce } = request;
     let (run, chat) = caller(&s.runtime.runs, run, generation)?;
@@ -705,7 +705,7 @@ fn transition(
     index: usize,
     event: Event,
     time: u64,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Option<Effect>> {
     let observed = matches!(&event, Event::Observed { .. });
     let resource = &s.services[index].resource;
@@ -1138,7 +1138,7 @@ fn apply(
     snapshot: &Service,
     event: Event,
     time: u64,
-    save: &impl Fn(&State) -> io::Result<()>,
+    save: &impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<Option<(Service, Effect)>> {
     shared.write(|s| -> io::Result<_> {
         let Some(index) = s.services.iter().position(|s| {
@@ -1158,7 +1158,7 @@ fn retain_output(
     snapshot: &Service,
     output: String,
     exit_code: Option<i32>,
-    save: &impl Fn(&State) -> io::Result<()>,
+    save: &impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     shared.write(|state| -> io::Result<()> {
         let Some(index) = state.services.iter().position(|s| s.resource == snapshot.resource) else {
@@ -1179,7 +1179,7 @@ fn drive(
     isolation: &dyn Isolation,
     node: &str,
     time: u64,
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     let services = shared.read(|s| {
         s.services
@@ -1290,7 +1290,7 @@ fn create(
     isolation: &dyn Isolation,
     service: &Service,
     time: u64,
-    save: &impl Fn(&State) -> io::Result<()>,
+    save: &impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     if !eligible(shared, service, time)? {
         return Ok(());
@@ -1318,7 +1318,7 @@ fn diagnose(
     shared: &Store,
     id: Option<&ResourceId>,
     error: &io::Error,
-    save: &impl Fn(&State) -> io::Result<()>,
+    save: &impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     shared.write(|s| -> io::Result<()> {
         let diagnostic = error.to_string().chars().take(256).collect::<String>();

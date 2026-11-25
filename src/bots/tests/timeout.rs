@@ -4,7 +4,7 @@ use super::advisor::{monitor, turn};
 use super::*;
 use crate::runtime::RunStatus;
 
-fn ok(_: &State) -> io::Result<()> {
+fn ok(_: &mut State) -> io::Result<()> {
     Ok(())
 }
 /// Marks `runs[index]` as stopped at its time limit, as the worker records it.

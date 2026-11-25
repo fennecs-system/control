@@ -629,7 +629,7 @@ fn set_with(
     shared: &Store,
     attempt: &AttemptRef<'_>,
     input: Input,
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
     probe: Prober,
 ) -> io::Result<Value> {
     let (chat, declaration) = {
@@ -733,7 +733,7 @@ fn set_with(
             Some(declaration) => state.observations.declared.insert(chat.clone(), declaration.clone()),
             None => state.observations.declared.remove(&chat),
         };
-        if let Err(error) = save(&state) {
+        if let Err(error) = save(&mut state) {
             match previous {
                 Some(previous) => state.observations.declared.insert(chat.clone(), previous),
                 None => state.observations.declared.remove(&chat),

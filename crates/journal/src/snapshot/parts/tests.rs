@@ -14,9 +14,18 @@ struct Inner {
     items: Vec<Part<Item>>,
     plain: Vec<u64>,
 }
+/// Shaped like a chat: no parts inside, a message list that grows past
+/// `SEGMENT`.
+#[derive(Clone, Serialize)]
+struct Chat {
+    id: String,
+    revision: u64,
+    messages: Vec<String>,
+}
 #[derive(Clone, Default, Serialize)]
 struct Doc {
     items: Part<Vec<Part<Item>>>,
+    chats: Part<Vec<Part<Chat>>>,
     inner: Part<Inner>,
     words: Part<Vec<String>>,
     plain: Vec<String>,
@@ -52,7 +61,37 @@ fn item(rng: &mut Lcg) -> Item {
 }
 fn mutate(doc: &mut Doc, rng: &mut Lcg) {
     let pick = |rng: &mut Lcg, len: usize| rng.next(len);
-    match rng.next(12) {
+    match rng.next(17) {
+        12 => doc.chats.push(
+            Chat {
+                id: format!("c-{}", rng.next(1000)),
+                revision: 0,
+                messages: Vec::new(),
+            }
+            .into(),
+        ),
+        13 if !doc.chats.is_empty() => {
+            let at = pick(rng, doc.chats.len());
+            let chat = &mut doc.chats[at];
+            chat.messages.push("message ".repeat(rng.next(40)));
+            chat.revision += 1;
+        }
+        14 if !doc.chats.iter().all(|chat| chat.messages.is_empty()) => {
+            let chat = doc.chats.iter_mut().find(|chat| !chat.messages.is_empty()).unwrap();
+            let at = pick(rng, chat.messages.len());
+            chat.messages[at] = format!("edited {}", rng.next(9));
+        }
+        15 if !doc.chats.is_empty() => {
+            let at = pick(rng, doc.chats.len());
+            doc.chats.remove(at);
+        }
+        // Found through a mutable borrow but only read: keeps its encoding.
+        16 => drop(
+            doc.chats
+                .iter_mut()
+                .find(|chat| chat.revision > 3)
+                .map(|chat| chat.id.len()),
+        ),
         0 | 1 => doc.items.push(item(rng).into()),
         2 if !doc.items.is_empty() => {
             let at = pick(rng, doc.items.len());
@@ -189,8 +228,16 @@ fn joined_members_encode_as_the_whole_value() {
     for _ in 0..200 {
         let item = item(&mut rng);
         assert_eq!(leaf(split(&item).unwrap()), encode(&item).unwrap());
-        let map: std::collections::BTreeMap<String, Item> =
-            (0..rng.next(5)).map(|i| (format!("k\"{i}"), { let mut next = item.clone(); next.n = rng.next(9) as u64; next.tags.push("a\\b".repeat(rng.next(90))); next })).collect();
+        let map: std::collections::BTreeMap<String, Item> = (0..rng.next(5))
+            .map(|i| {
+                (format!("k\"{i}"), {
+                    let mut next = item.clone();
+                    next.n = rng.next(9) as u64;
+                    next.tags.push("a\\b".repeat(rng.next(90)));
+                    next
+                })
+            })
+            .collect();
         assert_eq!(leaf(split(&map).unwrap()), encode(&map).unwrap());
     }
 }

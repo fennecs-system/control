@@ -117,7 +117,7 @@ fn recording_uses_only_supplied_records_and_preserves_unrelated_chats() {
         )
         .unwrap()
     };
-    let mut chats = vec![session("chat", u64::MAX), session("other", 0)];
+    let mut chats = vec![session("chat", u64::MAX).into(), session("other", 0).into()];
     let other = serde_json::to_vec(&chats[1]).unwrap();
     assert_eq!(
         record(

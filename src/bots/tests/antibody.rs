@@ -4,7 +4,7 @@ use super::advisor::turn;
 use super::*;
 use crate::runtime::RunStatus;
 
-fn ok(_: &State) -> io::Result<()> {
+fn ok(_: &mut State) -> io::Result<()> {
     Ok(())
 }
 /// An operator-owned observer tree with the antibody lens and its judge child.

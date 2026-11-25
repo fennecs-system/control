@@ -654,7 +654,7 @@ pub(crate) fn operator_action(state: &mut State, f: &std::collections::HashMap<S
             }
         })
         .and_then(|revision| operator_release(state, room, key, revision));
-    state.collective.notice = match result {
+    *state.collective.notice = match result {
         Ok(resolved) => {
             crate::bots::claim_resolved(state, &resolved);
             String::new()
@@ -684,7 +684,7 @@ impl Panel {
             })
             .collect();
         Self {
-            notice: state.collective.notice.clone(),
+            notice: (*state.collective.notice).clone(),
             claims,
         }
     }

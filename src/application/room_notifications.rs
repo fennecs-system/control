@@ -6,6 +6,7 @@ use super::{
 };
 use crate::services::Grant;
 use control_context::agent_policy::RunKind;
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 
 /// Persisted subscription receipt; field names and defaults are unchanged.
@@ -21,7 +22,7 @@ pub(crate) struct Wake {
 pub(crate) struct Edit<'a> {
     pub runs: &'a mut crate::application::runs::Runs,
     pub notice: &'a mut String,
-    pub chats: &'a mut [Session],
+    pub chats: &'a mut [Part<Session>],
     pub wake: &'a mut Option<Wake>,
     pub delivered: &'a mut Option<String>,
 }

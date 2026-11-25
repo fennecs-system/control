@@ -10,7 +10,7 @@ fn profile_checkpoint_load() {
     let directory = crate::config::state_directory().unwrap();
     fs::create_dir_all(&directory).unwrap();
     assert!(!directory.join("state.json").exists(), "use a fresh scratch directory");
-    save(&State::initial()).unwrap();
+    save(&mut State::initial()).unwrap();
     // Each load is a process start: the saving process (this one) has let go of
     // its exclusively locked state.log. Since saves append to that log, a load
     // while this process still holds it waits and fails as "open elsewhere".
@@ -163,8 +163,8 @@ fn profile_swarm_hour() {
         if mode != "before" {
             // The first save fills the run cache, the second moves finished runs to blocks.
             let start = Instant::now();
-            checkpoint_in(&directory, &state).unwrap();
-            checkpoint_in(&directory, &state).unwrap();
+            checkpoint_in(&directory, &mut state).unwrap();
+            checkpoint_in(&directory, &mut state).unwrap();
             let archived_runs = state.runtime.runs.iter().filter(|run| run.archived()).count();
             println!(
                 "{}",
@@ -186,7 +186,7 @@ fn profile_swarm_hour() {
                 write_checkpoint(&directory, &bytes).unwrap();
                 written += bytes.len() as u64;
             } else {
-                checkpoint_in(&directory, black_box(&state)).unwrap();
+                checkpoint_in(&directory, black_box(&mut state)).unwrap();
             }
             latencies.push(start.elapsed().as_nanos());
             if mode != "before" {
@@ -278,8 +278,8 @@ fn profile_encode_by_field() {
     }
     // As after a server start: finished runs leave for archive blocks.
     persist(&directory, encode(&state, &archived(&directory)).unwrap(), true).unwrap();
-    checkpoint_in(&directory, &state).unwrap();
-    checkpoint_in(&directory, &state).unwrap();
+    checkpoint_in(&directory, &mut state).unwrap();
+    checkpoint_in(&directory, &mut state).unwrap();
     macro_rules! fields {
         ($($field:ident),*) => {
             fn parts(state: &State) -> Vec<(&'static str, snapshot::Encoded)> {

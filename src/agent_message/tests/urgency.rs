@@ -164,7 +164,7 @@ fn an_unattended_descendant_gets_one_digest_turn_after_the_bound() {
 
     // A failed checkpoint leaves the digest pending and the state unchanged.
     let before = serde_json::to_vec(&state).unwrap();
-    let mut save = |_: &State| Err(std::io::Error::other("disk full"));
+    let mut save = |_: &mut State| Err(std::io::Error::other("disk full"));
     assert!(crate::agent_message::digest::reconcile(&mut state, sent + 31_000, &mut save).is_err());
     assert_eq!(serde_json::to_vec(&state).unwrap(), before);
 

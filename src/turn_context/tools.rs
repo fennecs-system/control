@@ -352,7 +352,7 @@ const INBOX_BYTES: usize = 6 * 1024;
 /// them. A cut entry points at a receipt that rereads it in full. Room posts
 /// keep the callback hint. Nothing is delivered once a handoff is staged or
 /// when the save fails.
-pub(crate) fn inbox(state: &mut State, id: &str, save: impl FnOnce(&State) -> io::Result<()>) -> Option<String> {
+pub(crate) fn inbox(state: &mut State, id: &str, save: impl FnOnce(&mut State) -> io::Result<()>) -> Option<String> {
     use control_context::agent_policy::PromptRole;
     let index = state
         .runtime
@@ -724,12 +724,12 @@ fn handle(
     attempt: &AttemptRef<'_>,
     name: &str,
     args: &Value,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     // A failed save is a storage fault, not a rejected receipt; it leaves
     // state untouched.
     let mut unsaved = false;
-    let result = respond(state, attempt, name, args, |state: &State| {
+    let result = respond(state, attempt, name, args, |state: &mut State| {
         save(state).inspect_err(|_| unsaved = true)
     });
     if name == "control_turn_handoff"
@@ -781,7 +781,7 @@ fn respond(
     attempt: &AttemptRef<'_>,
     name: &str,
     args: &Value,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let index = state
         .runtime

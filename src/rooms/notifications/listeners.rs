@@ -199,7 +199,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
 pub(super) fn reconcile(
     state: &mut State,
     now: u64,
-    save: &mut impl FnMut(&State) -> Result<(), std::io::Error>,
+    save: &mut impl FnMut(&mut State) -> Result<(), std::io::Error>,
 ) -> Result<(), &'static str> {
     for (index, plan) in plans(state, now) {
         let previous = state.collective.room_watches[index].clone();

@@ -1,4 +1,5 @@
 //! Service-owned TCP ports over verified stdio relays. Containers stay offline.
+use control_journal::snapshot::Part;
 mod decisions;
 mod guidance;
 mod ingress_guard;
@@ -215,7 +216,7 @@ pub struct Input {
 pub(crate) struct PortAuthority<'a> {
     ports: &'a [Port],
     services: &'a [Service],
-    chats: &'a [crate::chat::Session],
+    chats: &'a [Part<crate::chat::Session>],
 }
 impl<'a> PortAuthority<'a> {
     pub(crate) fn of(state: &'a State) -> Self {
@@ -342,7 +343,7 @@ fn admit(
     nonce: &str,
     input: Input,
     node: NodeId,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let run = state
         .runtime
@@ -583,7 +584,7 @@ pub(crate) fn execute(shared: &Store, attempt: &AttemptRef<'_>, call: PortCall) 
     })?
 }
 
-fn stop_all(state: &mut State, chosen: &[usize], save: impl Fn(&State) -> io::Result<()>) -> io::Result<Value> {
+fn stop_all(state: &mut State, chosen: &[usize], save: impl Fn(&mut State) -> io::Result<()>) -> io::Result<Value> {
     let old: Vec<Status> = chosen.iter().map(|&i| state.ports[i].status).collect();
     chosen.iter().for_each(|&i| state.ports[i].status = Status::Stopping);
     if let Err(e) = save(state) {
@@ -602,7 +603,7 @@ fn approve(
     allow_loopback: bool,
     pinned: Option<SocketAddr>,
     time: u64,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     let index = state
         .ports
@@ -729,7 +730,7 @@ fn auto_approve(
     shared: &Store,
     id: &str,
     policy: &control::permissions::AutoApproval,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
     verify: impl FnOnce(&Service, &ContainerId) -> io::Result<()>,
     pin: impl FnOnce(&Endpoint, bool) -> io::Result<SocketAddr>,
 ) -> Option<Value> {
@@ -833,7 +834,7 @@ pub(crate) fn http_with_save(
     method: &str,
     path: &str,
     body: &[u8],
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
 ) -> bool {
     if path != "/tools/ports" {
         return false;

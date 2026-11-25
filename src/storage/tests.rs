@@ -335,7 +335,7 @@ fn profile_durable_save_stages() {
             raw.write_all(&bytes).unwrap();
             raw.sync_all().unwrap();
             fs::File::open(&directory).unwrap().sync_all().unwrap();
-            save(&state).unwrap();
+            save(&mut state).unwrap();
             let (mut encode, mut sync, mut atomic, mut complete) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             for round in 0..31 {
                 // Rotate stage order to avoid systematically favouring one path
@@ -357,7 +357,7 @@ fn profile_durable_save_stages() {
                             write_checkpoint(&directory, black_box(&bytes)).unwrap();
                         }
                         _ => {
-                            save(black_box(&state)).unwrap();
+                            save(black_box(&mut state)).unwrap();
                         }
                     }
                     [&mut encode, &mut sync, &mut atomic, &mut complete][stage].push(start.elapsed().as_nanos());

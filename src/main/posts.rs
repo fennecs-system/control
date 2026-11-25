@@ -96,7 +96,7 @@ impl Before {
                     )
                 }),
             posts: state.collective.posts.len(),
-            room_notice: state.collective.notice.clone(),
+            room_notice: (*state.collective.notice).clone(),
             agents: state.agents.len(),
         }
     }
@@ -111,7 +111,7 @@ impl Before {
         }
         state.runtime.notice = self.notice;
         state.collective.posts.truncate(self.posts);
-        state.collective.notice = self.room_notice;
+        *state.collective.notice = self.room_notice;
         state.agents.truncate(self.agents);
     }
 }

@@ -7,7 +7,7 @@ use control_context::{
     working_state::Payload,
 };
 
-fn ok(_: &State) -> io::Result<()> {
+fn ok(_: &mut State) -> io::Result<()> {
     Ok(())
 }
 /// A persistent bot in `chat` with managed continuity and a published head.
@@ -524,7 +524,8 @@ fn unfinished_or_unprocessed_watches_are_kept() {
     state.watches[0].stopped = true;
     reconcile_at(&mut state, 1_000, ok).unwrap();
     publish(&mut state, &chat, 1, vec![processed("w-stopped", 1)]);
-    state.runtime.runs.push(state.runtime.runs[0].clone().with_id("active"));
+    let active = state.runtime.runs[0].clone().with_id("active");
+    state.runtime.runs.push(active);
     state.runtime.runs.last_mut().unwrap().status = RunStatus::Running;
     reconcile_at(&mut state, 40_000, ok).unwrap();
     assert_eq!(state.watches.len(), 1, "an active attempt may hold a receipt");

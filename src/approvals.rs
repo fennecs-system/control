@@ -63,10 +63,11 @@ pub(crate) fn resume(state: &mut State, decisions: Decisions<'_>) -> Outcome {
             Err(crate::chat::ContinuationError::Rejected) => {}
         }
     }
+    let runtime = &mut *state.runtime;
     approval_resume::record(
         Edit {
-            runs: &mut state.runtime.runs,
-            notice: &mut state.runtime.notice,
+            runs: &mut runtime.runs,
+            notice: &mut runtime.notice,
             chats: &mut state.chats,
         },
         chat,

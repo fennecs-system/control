@@ -140,7 +140,7 @@ fn handle(
     state: &mut State,
     attempt: &AttemptRef<'_>,
     call: MessageCall,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     handle_with_archive(state, attempt, call, |_| Ok(()), save)
 }
@@ -150,7 +150,7 @@ fn handle_with_archive(
     attempt: &AttemptRef<'_>,
     call: MessageCall,
     archive: impl FnOnce(&mut crate::runtime::Run) -> io::Result<()>,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     serde_json::to_value(transact(state, attempt, call, archive, save, crate::worker::wake)?).map_err(io::Error::other)
 }
@@ -159,7 +159,7 @@ fn transact(
     attempt: &AttemptRef<'_>,
     call: MessageCall,
     archive: impl FnOnce(&mut crate::runtime::Run) -> io::Result<()>,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
     wake: impl FnOnce(),
 ) -> io::Result<MessageResult> {
     let stamp = crate::ids::stamp();
@@ -198,9 +198,10 @@ struct InFlight<'a> {
 }
 impl<'a> InFlight<'a> {
     fn new(state: &'a mut State, delivery: operation::Delivery) -> Self {
+        let runtime = &mut *state.runtime;
         let pending = delivery.apply(operation::Edit {
-            runs: &mut state.runtime.runs,
-            notice: &mut state.runtime.notice,
+            runs: &mut runtime.runs,
+            notice: &mut runtime.notice,
             chats: &mut state.chats,
             sent: &mut state.agent_messages,
         });
@@ -229,9 +230,10 @@ impl Drop for InFlight<'_> {
         if !self.durable
             && let Some(pending) = self.pending.take()
         {
+            let runtime = &mut *self.state.runtime;
             pending.rollback(operation::Edit {
-                runs: &mut self.state.runtime.runs,
-                notice: &mut self.state.runtime.notice,
+                runs: &mut runtime.runs,
+                notice: &mut runtime.notice,
                 chats: &mut self.state.chats,
                 sent: &mut self.state.agent_messages,
             });
@@ -245,7 +247,7 @@ fn transact_at(
     call: MessageCall,
     (id, at_ms): (String, u64),
     archive: impl FnOnce(&mut crate::runtime::Run) -> io::Result<()>,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
     wake: impl FnOnce(),
 ) -> io::Result<MessageResult> {
     use operation::{Decision, Effect};

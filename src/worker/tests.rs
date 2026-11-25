@@ -1015,7 +1015,7 @@ fn isolated_supervisor_retains_intent_after_worker_panic() {
     let mut initial = State::default();
     let chat = crate::chat::create(&mut initial);
     crate::chat::send(&mut initial, &chat, "Work", "test").unwrap();
-    storage::save(&initial).unwrap();
+    storage::save(&mut initial).unwrap();
     let state = crate::store::Store::new(initial);
     let threads = start_with(state, crate::engine::isolation(), panic_worker);
     let start = Instant::now();
@@ -1091,7 +1091,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
         {
             let mut s = state.guard().unwrap();
             s.runtime.runs.get_mut(&task.0).unwrap().result = "entered".into();
-            storage::save(&s).unwrap();
+            storage::save(&mut s).unwrap();
         }
         let marker = crate::config::state(&format!("release-{}", task.0)).unwrap();
         let started = Instant::now();
@@ -1132,7 +1132,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     for chat in [&a, &a, &b, &c] {
         crate::chat::send(&mut initial, chat, "Work", "test").unwrap();
     }
-    storage::save(&initial).unwrap();
+    storage::save(&mut initial).unwrap();
     let ids: Vec<_> = initial
         .runtime
         .runs
@@ -1166,7 +1166,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     {
         let mut s = state.guard().unwrap();
         crate::lifecycle::request_cancel(&mut s.runtime, &ids[2], &Actor::LocalOperator).unwrap();
-        storage::save(&s).unwrap();
+        storage::save(&mut s).unwrap();
     }
     wake();
     wait(&[
@@ -1184,7 +1184,7 @@ fn isolated_supervisor_overlaps_cancels_orders_and_joins() {
     {
         let mut s = state.guard().unwrap();
         crate::chat::send(&mut s, &a, "Keep queued", "test").unwrap();
-        storage::save(&s).unwrap();
+        storage::save(&mut s).unwrap();
     }
     crate::shutdown::request();
     threads.join().unwrap();

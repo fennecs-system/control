@@ -114,7 +114,7 @@ impl RunStatusCheckpoint {
     pub(crate) fn save(
         self,
         state: &mut crate::State,
-        save: impl FnOnce(&crate::State) -> std::io::Result<()>,
+        save: impl FnOnce(&mut crate::State) -> std::io::Result<()>,
     ) -> std::io::Result<()> {
         if let Err(error) = save(state) {
             self.restore(&mut state.runtime);

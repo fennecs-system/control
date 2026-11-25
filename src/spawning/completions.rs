@@ -51,7 +51,7 @@ fn ready<'a>(state: &'a State, parent: &runtime::Run, batch: &Batch) -> Result<V
 
 pub(super) fn reconcile(
     state: &mut State,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     let mut authorize = identity::authorizer();
     let mut candidate = None;

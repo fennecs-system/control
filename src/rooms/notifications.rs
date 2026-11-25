@@ -297,7 +297,7 @@ pub(crate) fn inbox_cursor(state: &State, chat: &str) -> Option<usize> {
 pub(crate) fn start_at_edge(state: &mut State, chat: &str) -> Result<(), &'static str> {
     ensure_inbox(state, chat)?;
     let through = state.collective.posts.len();
-    let session = state.chats.iter_mut().find(|c| c.id == chat).ok_or("Chat not found.")?;
+    let session: &mut crate::chat::Session = state.chats.iter_mut().find(|c| c.id == chat).ok_or("Chat not found.")?;
     let continuity = session.continuity.get_or_insert_with(Default::default);
     let Some(room) = session.room.as_ref().filter(|r| super::valid(r)) else {
         return Ok(());
@@ -367,7 +367,10 @@ pub(crate) fn listening(state: &State, chat: &str) -> bool {
 
 /// Runs in the existing supervisor. Planning borrows history once; only armed
 /// watches are considered. No additional scheduler, thread, timer or model loop.
-pub fn reconcile(state: &mut State, mut save: impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+pub fn reconcile(
+    state: &mut State,
+    mut save: impl FnMut(&mut State) -> std::io::Result<()>,
+) -> Result<(), &'static str> {
     if state
         .collective
         .room_watches

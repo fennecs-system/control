@@ -8,7 +8,7 @@ pub use control_journal::writer::Health;
 use control_journal::{
     FileJournal, Journal,
     lens::{self, Schema},
-    snapshot::{self, Tree},
+    snapshot::{self, Part, Tree},
     writer::{self, Durable, Failure, Log, Mark, Record, Sink, Submit, Ticket, Unsaved, Writer},
 };
 use std::{
@@ -103,7 +103,7 @@ pub fn load() -> io::Result<State> {
     // compacts: replayed logs, older schemas and migrations all end here.
     let adopted = published.is_some_and(|published| adopt(&directory, published));
     if changed || !adopted {
-        save(&state)?;
+        save(&mut state)?;
     }
     Ok(state)
 }
@@ -210,7 +210,7 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
     archives()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .insert(directory.to_owned(), archived);
+        .insert(directory.to_owned(), archived.into());
     Ok((
         state,
         Some(Recovered {
@@ -305,7 +305,7 @@ fn interrupt_active(state: &mut State) -> bool {
     }
     changed
 }
-pub fn save(state: &State) -> io::Result<()> {
+pub fn save(state: &mut State) -> io::Result<()> {
     legacy_result(checkpoint(state))
 }
 
@@ -384,7 +384,7 @@ pub use control_journal::writer::Fault as CheckpointError;
 /// (and `edits` every patch against a diff of the joined documents): the
 /// parts can only change the cost, never the bytes. Archived runs are left
 /// out; `archive` lists their blocks.
-fn encode(state: &State, archive: &archive::Archive) -> serde_json::Result<Tree> {
+fn encode(state: &State, archive: &Part<archive::Archive>) -> serde_json::Result<Tree> {
     let saved = archive::Saved { archive, state };
     let tree = crate::history::persisting(|| snapshot::split(&saved))?;
     #[cfg(debug_assertions)]
@@ -415,17 +415,38 @@ fn edits(base: &Tree, tree: &Tree) -> Option<Vec<u8>> {
 /// The archive blocks the state in `directory` references, by directory like
 /// `published` but never dropped on a failed save: the runs marked archived in
 /// memory are only in those blocks.
-fn archives() -> &'static Mutex<HashMap<PathBuf, archive::Archive>> {
-    static ARCHIVES: OnceLock<Mutex<HashMap<PathBuf, archive::Archive>>> = OnceLock::new();
+fn archives() -> &'static Mutex<HashMap<PathBuf, Part<archive::Archive>>> {
+    static ARCHIVES: OnceLock<Mutex<HashMap<PathBuf, Part<archive::Archive>>>> = OnceLock::new();
     ARCHIVES.get_or_init(Mutex::default)
 }
-fn archived(directory: &Path) -> archive::Archive {
+/// A copy that shares the kept list's encoding (made here, once per change),
+/// so a save that drops its copy does not leave the next to encode it again.
+fn archived(directory: &Path) -> Part<archive::Archive> {
     archives()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(directory)
-        .cloned()
+        .map(|archive| {
+            let _ = snapshot::split(archive);
+            archive.clone()
+        })
         .unwrap_or_default()
+}
+
+/// Per state directory, the runtime's encoding when the last archive step
+/// found nothing to move. What a step moves depends only on the runtime, so
+/// while the runtime keeps that encoding the step is skipped instead of
+/// scanning every run again.
+fn settled() -> &'static Mutex<HashMap<PathBuf, Tree>> {
+    static SETTLED: OnceLock<Mutex<HashMap<PathBuf, Tree>>> = OnceLock::new();
+    SETTLED.get_or_init(Mutex::default)
+}
+fn settled_in(directory: &Path, runtime: &Tree) -> bool {
+    settled()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(directory)
+        .is_some_and(|settled| settled.same(runtime))
 }
 
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
@@ -444,7 +465,7 @@ fn archived(directory: &Path) -> archive::Archive {
 /// Finished runs far from the focus move to archive blocks first
 /// (`storage::archive`); the blocks are durable before this save, which
 /// commits them, references them.
-pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
+pub fn checkpoint(state: &mut State) -> Result<(), CheckpointError> {
     let directory =
         crate::config::state_directory().map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
     checkpoint_in(&directory, state)?;
@@ -452,14 +473,19 @@ pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
     crate::live_updates::notify();
     Ok(())
 }
-fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError> {
+fn checkpoint_in(directory: &Path, state: &mut State) -> Result<(), CheckpointError> {
     // Refused before the archive step moves anything; the caller rolls back.
     if let Health::Degraded(unavailable) = health_in(directory) {
         return Err(CheckpointError::NotReplaced(unavailable.into()));
     }
     let directory = directory.to_owned();
     let mut archive = archived(&directory);
-    let pending = archive::step(&directory, state, &mut archive).map_err(CheckpointError::NotReplaced)?;
+    let before = state.runtime.saved().cloned();
+    let pending = if before.as_ref().is_some_and(|runtime| settled_in(&directory, runtime)) {
+        archive::Pending::default()
+    } else {
+        archive::step(&directory, state, &mut archive).map_err(CheckpointError::NotReplaced)?
+    };
     let saved = encode(state, &archive)
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))
         .and_then(|encoded| persist(&directory, encoded, false));
@@ -468,7 +494,14 @@ fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError>
             archives()
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .insert(directory, archive);
+                .insert(directory.clone(), archive);
+            // Nothing moved, and every hot run was saved when the step looked.
+            if let Some(runtime) = before.filter(|before| state.runtime.saved().is_some_and(|now| now.same(before))) {
+                settled()
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(directory, runtime);
+            }
             pending.commit();
         }
         Err(CheckpointError::NotReplaced(error)) => {

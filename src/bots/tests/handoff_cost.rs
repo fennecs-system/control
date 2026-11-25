@@ -15,7 +15,7 @@ struct Calls {
     handoff: usize,
     refused: usize,
 }
-fn ok(_: &State) -> io::Result<()> {
+fn ok(_: &mut State) -> io::Result<()> {
     Ok(())
 }
 /// Admits the queued wake, runs the scripted agent and publishes its handoff

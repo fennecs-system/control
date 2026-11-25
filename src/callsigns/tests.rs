@@ -95,7 +95,7 @@ fn chats_saved_without_names_derive_them_on_read() {
         serde_json::json!({"id":"c-old-0","actor":{"type":"local_operator"},"title":"mc263-client","messages":[]});
     let session: Session = serde_json::from_value(old).unwrap();
     assert!(session.name.is_none());
-    let chats = [session];
+    let chats = [session.into()];
     let shown = name(&chats, "c-old-0").unwrap();
     assert!(WORDS.contains(&shown.as_ref()));
     // An unnamed chat still serializes without the member.

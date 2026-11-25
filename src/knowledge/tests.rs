@@ -14,7 +14,7 @@ fn fields(id: &str, title: &str, body: &str, rev: u64) -> HashMap<String, String
 fn legacy_draft_is_preserved_and_migration_is_idempotent() {
     let mut s = State {
         note: String::from("  Original draft\n[[other]]\n").into(),
-        saved: true,
+        saved: true.into(),
         ..Default::default()
     };
     migrate(&mut s);

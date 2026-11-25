@@ -250,14 +250,14 @@ pub(crate) struct Cached<T> {
     value: Part<T>,
     /// Saved in an archive block (`storage::archive`) and unchanged since: the
     /// state's own encoding leaves it out. Forgotten with the encoding.
-    archived: std::sync::atomic::AtomicBool,
+    archived: bool,
 }
 impl<T> Cached<T> {
     /// A value read back from `saved`, its exact saved form.
     pub(crate) fn restored(value: T, saved: Tree, archived: bool) -> Self {
         Self {
             value: Part::restored(value, saved),
-            archived: archived.into(),
+            archived,
         }
     }
     /// The saved form, when the value is unchanged since it was saved.
@@ -265,13 +265,13 @@ impl<T> Cached<T> {
         self.value.saved()
     }
     pub(crate) fn archived(&self) -> bool {
-        self.archived.load(std::sync::atomic::Ordering::Relaxed)
+        self.archived
     }
     /// Marks an unchanged value as written to an archive block (or not, to
     /// undo that when the save recording it fails). Changed values never are.
-    pub(crate) fn set_archived(&self, archived: bool) {
-        self.archived
-            .store(archived && self.saved().is_some(), std::sync::atomic::Ordering::Relaxed);
+    /// Keeps the saved form: the value is unchanged, only where it is kept.
+    pub(crate) fn set_archived(&mut self, archived: bool) {
+        self.archived = archived && self.saved().is_some();
     }
     /// Mutable access for an edit that leaves the saved form unchanged, such
     /// as filling journal-backed text back in after loading (the save writes
@@ -286,7 +286,7 @@ impl<T> From<T> for Cached<T> {
     fn from(value: T) -> Self {
         Self {
             value: value.into(),
-            archived: false.into(),
+            archived: false,
         }
     }
 }
@@ -294,7 +294,7 @@ impl<T: Clone> Clone for Cached<T> {
     fn clone(&self) -> Self {
         Self {
             value: self.value.clone(),
-            archived: self.archived().into(),
+            archived: self.archived,
         }
     }
 }
@@ -316,7 +316,7 @@ impl<T> std::ops::Deref for Cached<T> {
 }
 impl<T> std::ops::DerefMut for Cached<T> {
     fn deref_mut(&mut self) -> &mut T {
-        *self.archived.get_mut() = false;
+        self.archived = false;
         &mut self.value
     }
 }
@@ -534,7 +534,7 @@ fn outbox_path() -> io::Result<PathBuf> {
 /// status, for frontends following the outbox. Events are at least once; the
 /// caller's save records what was emitted, and followers deduplicate by run
 /// and status.
-pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&crate::State) -> io::Result<()>) -> io::Result<()> {
+pub(crate) fn emit(state: &mut crate::State, save: impl FnOnce(&mut crate::State) -> io::Result<()>) -> io::Result<()> {
     use control_delivery::{Change, DELIVERABLE, Delivery};
     let mut emitted = Vec::new();
     for (index, run) in state.runtime.runs.iter().enumerate() {

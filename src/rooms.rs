@@ -469,7 +469,7 @@ pub fn checkpoint(
     state: &mut State,
     run_id: &str,
     envelope: &Value,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Value {
     let post_count = state.collective.posts.len();
     let Some(run_index) = state.runtime.runs.position(run_id) else {

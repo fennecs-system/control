@@ -16,7 +16,7 @@ const WINDOW: usize = 512;
 
 pub(crate) struct View<'a> {
     pub runs: &'a [Run],
-    pub chats: &'a [Session],
+    pub chats: &'a [Part<Session>],
     pub posts: &'a [Part<Post>],
 }
 

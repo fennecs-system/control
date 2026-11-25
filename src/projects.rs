@@ -3,6 +3,7 @@
 //! subsequent agent-written repositories are copied without executing host Git.
 use crate::store::Store;
 use crate::{State, identity::Action};
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -334,7 +335,7 @@ pub fn definition(worker: bool) -> Value {
         }
     })
 }
-pub fn panel(chats: &[crate::chat::Session], id: &str) -> String {
+pub fn panel(chats: &[Part<crate::chat::Session>], id: &str) -> String {
     Panel::of(chats, id).map_or_else(String::new, |panel| panel.render())
 }
 /// What a chat's folder panel shows, copied out of state so it can render
@@ -359,7 +360,7 @@ struct Folder {
     workspace: Option<String>,
 }
 impl Panel {
-    pub(crate) fn of(chats: &[crate::chat::Session], id: &str) -> Option<Self> {
+    pub(crate) fn of(chats: &[Part<crate::chat::Session>], id: &str) -> Option<Self> {
         let chat = chats.iter().find(|c| c.id == id)?;
         let project = chat.project.as_ref();
         Some(Self {
@@ -548,10 +549,11 @@ pub fn dismiss(state: &mut State, id: &str, request: &str) -> Result<Option<crat
     // A busy chat cannot resume now. A request has no receipt to retry later,
     // so the decision is only noted; the agent reads it on its next turn.
     Ok(Some(if outcome == crate::approvals::Outcome::Wait {
+        let runtime = &mut *state.runtime;
         approval_resume::record(
             approval_resume::Edit {
-                runs: &mut state.runtime.runs,
-                notice: &mut state.runtime.notice,
+                runs: &mut runtime.runs,
+                notice: &mut runtime.notice,
                 chats: &mut state.chats,
             },
             id,
@@ -1003,7 +1005,7 @@ fn publish_with(
 }
 
 /// Durable checkpoint of approval outcomes (`storage::save` outside tests).
-type Save = fn(&State) -> io::Result<()>;
+type Save = fn(&mut State) -> io::Result<()>;
 /// A folder import running in the background after the operator's approval.
 /// Held in memory only: a restart interrupts it, grants nothing, and the
 /// approval form reappears for the unchanged request.

@@ -16,6 +16,7 @@ use crate::{
 use control_context::agent_policy::RunKind;
 use control_core::resources::Phase;
 use control_core::resources::ResourceId;
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MAX_SENT: usize = 256;
@@ -85,7 +86,7 @@ impl From<&Sent> for MessageResult {
 
 pub(crate) struct View<'a> {
     pub runs: &'a crate::runtime::Runs,
-    pub chats: &'a [Session],
+    pub chats: &'a [Part<Session>],
     pub services: &'a [Service],
     pub sent: &'a [Sent],
     pub bots: &'a Bots,
@@ -93,7 +94,7 @@ pub(crate) struct View<'a> {
 pub(crate) struct Edit<'a> {
     pub runs: &'a mut crate::application::runs::Runs,
     pub notice: &'a mut String,
-    pub chats: &'a mut [Session],
+    pub chats: &'a mut [Part<Session>],
     pub sent: &'a mut Vec<Sent>,
 }
 /// Effects are application instructions, not domain-specific supervisor states.
@@ -197,7 +198,7 @@ pub(crate) fn record(run: &Run) -> bool {
 }
 /// A digest receipt its recipient has not taken yet: no later turn of that
 /// chat exists and no published handoff processed it.
-pub(crate) fn awaiting(runs: &crate::runtime::Runs, chats: &[Session], sent: &Sent) -> bool {
+pub(crate) fn awaiting(runs: &crate::runtime::Runs, chats: &[Part<Session>], sent: &Sent) -> bool {
     let (Some(cursor), true) = (sent.peer_cursor, sent.digest) else {
         return false;
     };
@@ -213,7 +214,7 @@ pub(crate) fn awaiting(runs: &crate::runtime::Runs, chats: &[Session], sent: &Se
 /// a published handoff processed it, or an attempt was delivered it (its
 /// inbox or a `control_turn_context` read). Saved state only, so a restart
 /// decides the same way.
-pub(crate) fn delivered(runs: &crate::runtime::Runs, chats: &[Session], chat: &str, cursor: u64) -> bool {
+pub(crate) fn delivered(runs: &crate::runtime::Runs, chats: &[Part<Session>], chat: &str, cursor: u64) -> bool {
     use control_context::turn_mailbox::Range;
     let covers = |range: &Range, through_only: bool| match range {
         Range::Conversation {
@@ -236,7 +237,7 @@ pub(crate) fn delivered(runs: &crate::runtime::Runs, chats: &[Session], chat: &s
             .flat_map(|mailbox| mailbox.deliveries.values())
             .any(|delivery| delivery.ranges.iter().any(|range| covers(range, false)))
 }
-fn ancestry<'a>(chats: &'a [Session], mut session: &'a Session, ancestor: &str) -> Option<(&'a str, bool)> {
+fn ancestry<'a>(chats: &'a [Part<Session>], mut session: &'a Session, ancestor: &str) -> Option<(&'a str, bool)> {
     let actor = &session.actor;
     let mut descendant = false;
     for _ in 0..64 {

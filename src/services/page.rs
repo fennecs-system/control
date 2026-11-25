@@ -100,7 +100,7 @@ pub(crate) fn stop(
     state: &mut State,
     id: &str,
     time: u64,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     let index = state
         .services
@@ -123,7 +123,7 @@ pub(crate) fn command(
     chat: &str,
     option: &str,
     time: u64,
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
 ) -> Result<String, &'static str> {
     let session = state
         .chats
@@ -218,7 +218,7 @@ fn team_list(state: &State, chat: &str, live: &[&Service]) -> String {
 pub(crate) fn forget(
     state: &mut State,
     id: Option<&str>,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<(HashSet<String>, Option<String>)> {
     let chat = match id {
         Some(id) => {

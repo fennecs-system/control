@@ -231,7 +231,7 @@ fn waiting_chat_does_not_starve_an_independent_ready_callback() {
     let (mut other, chat) = approved();
     other.runtime.runs[0].status = RunStatus::Completed;
     state.chats.extend(other.chats);
-    state.runtime.runs.extend(other.runtime.runs.into_vec());
+    state.runtime.runs.extend(other.runtime.into_inner().runs.into_vec());
     state.ports.extend(other.ports);
     state.services.extend(other.services);
     advance(&mut state, |_| Ok(())).unwrap();

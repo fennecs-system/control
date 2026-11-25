@@ -85,7 +85,7 @@ pub(super) fn post(state: &mut State, room: &str, text: &str, chat: Option<Strin
 fn rpc(name: &str, args: Value) -> Value {
     json!({"nonce":"1-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}})
 }
-fn fail(_: &State) -> std::io::Result<()> {
+fn fail(_: &mut State) -> std::io::Result<()> {
     Err(std::io::Error::other("fixture checkpoint failure"))
 }
 

@@ -42,7 +42,7 @@ pub(super) fn admit_fixture(
     s: &mut State,
     run: &str,
     time: u64,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     admit(
         s,

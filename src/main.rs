@@ -122,12 +122,11 @@ struct State {
     services: Part<Vec<services::Service>>,
     github_publications: Part<Vec<github::Publication>>,
     previews: Part<Vec<previews::Preview>>,
-    chats: Part<Vec<chat::Session>>,
+    chats: Part<Vec<Part<chat::Session>>>,
     discord_seen: Part<Vec<String>>,
-    /// Split at every save, not kept: archiving a run changes its encoding
-    /// through a shared borrow (`storage::archive`). Its runs are parts.
-    #[serde(serialize_with = "control_journal::snapshot::split_each_save")]
-    runtime: runtime::Runtime,
+    /// Its runs are parts too; archiving one (`storage::archive`) is a
+    /// mutation like any other.
+    runtime: Part<runtime::Runtime>,
     collective: Part<collective::Collective>,
     bots: Part<bots::Bots>,
     watches: Part<Vec<watches::Watch>>,
@@ -145,7 +144,7 @@ struct State {
     messages: Part<Vec<String>>,
     agents: Part<Vec<Part<String>>>,
     note: Part<String>,
-    saved: bool,
+    saved: Part<bool>,
 }
 fn is_empty<T>(items: &Part<Vec<T>>) -> bool {
     items.is_empty()

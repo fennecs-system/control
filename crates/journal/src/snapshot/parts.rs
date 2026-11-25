@@ -57,10 +57,17 @@ impl Tree {
             Shape::Leaf(encoded) => encoded.clone(),
             Shape::Object(..) | Shape::Array(..) => unreachable!("only leaves are joined"),
         };
-        Arc::try_unwrap(self.0).map_or_else(|shared| leaf(&shared), |shape| match shape {
-            Shape::Leaf(encoded) => encoded,
-            shape => leaf(&shape),
-        })
+        Arc::try_unwrap(self.0).map_or_else(
+            |shared| leaf(&shared),
+            |shape| match shape {
+                Shape::Leaf(encoded) => encoded,
+                shape => leaf(&shape),
+            },
+        )
+    }
+    /// Whether both are the same encoding, shared rather than equal.
+    pub fn same(&self, other: &Tree) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
     /// The length of the joined document.
     pub fn len(&self) -> usize {

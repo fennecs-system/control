@@ -11,7 +11,7 @@ impl Scratch {
         fs::create_dir_all(&directory).unwrap();
         Self(directory)
     }
-    fn save(&self, state: &State) {
+    fn save(&self, state: &mut State) {
         checkpoint_in(&self.0, state).unwrap();
     }
     fn compact(&self, state: &State) {
@@ -70,12 +70,12 @@ fn with_chat() -> (State, String) {
 fn saves_append_only_the_change_and_a_restart_reads_them_back() {
     let scratch = Scratch::new("append");
     let (mut state, chat) = with_chat();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let snapshot = scratch.snapshot();
     assert_eq!(scratch.lines(), 1, "a first save compacts: snapshot and header");
     crate::chat::send(&mut state, &chat, "one more", "test").unwrap();
-    scratch.save(&state);
-    scratch.save(&state);
+    scratch.save(&mut state);
+    scratch.save(&mut state);
     assert_eq!(scratch.lines(), 2, "an unchanged save writes nothing");
     assert_eq!(scratch.snapshot(), snapshot, "the snapshot is not rewritten");
     assert!(
@@ -108,9 +108,9 @@ fn a_torn_or_corrupt_log_tail_is_dropped_and_earlier_saves_survive() {
     use std::io::Write;
     let scratch = Scratch::new("torn");
     let (mut state, chat) = with_chat();
-    scratch.save(&state);
+    scratch.save(&mut state);
     crate::chat::send(&mut state, &chat, "durable", "test").unwrap();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let durable = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     // A crash mid-append leaves a line without its newline.
     let mut log = fs::OpenOptions::new().append(true).open(scratch.0.join(LOG)).unwrap();
@@ -125,7 +125,7 @@ fn a_torn_or_corrupt_log_tail_is_dropped_and_earlier_saves_survive() {
     // A complete but corrupt line (zero-filled block after power loss) ends the
     // valid prefix too: it and everything after it are truncated on recovery.
     crate::chat::send(&mut state, &chat, "second", "test").unwrap();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let lines = scratch.lines();
     let mut log = fs::OpenOptions::new().append(true).open(scratch.0.join(LOG)).unwrap();
     log.write_all(b"\0\0\0\0\n").unwrap();
@@ -148,9 +148,9 @@ fn a_torn_or_corrupt_log_tail_is_dropped_and_earlier_saves_survive() {
 fn a_crash_between_snapshot_and_log_reset_ignores_the_old_log() {
     let scratch = Scratch::new("compaction-crash");
     let (mut state, chat) = with_chat();
-    scratch.save(&state);
+    scratch.save(&mut state);
     crate::chat::send(&mut state, &chat, "in the log", "test").unwrap();
-    scratch.save(&state);
+    scratch.save(&mut state);
     // Compaction published a new snapshot, then the process died before the
     // log was reset: the log's header names the previous snapshot.
     crate::chat::send(&mut state, &chat, "in the new snapshot", "test").unwrap();
@@ -169,10 +169,10 @@ fn a_crash_between_snapshot_and_log_reset_ignores_the_old_log() {
 fn the_log_compacts_once_it_outgrows_the_snapshot() {
     let scratch = Scratch::new("outgrow");
     let mut state = State::default();
-    scratch.save(&state);
+    scratch.save(&mut state);
     for i in 0..6 {
         *state.note = format!("{i}").repeat(1 << 20);
-        scratch.save(&state);
+        scratch.save(&mut state);
     }
     assert!(
         scratch.log().len() < LOG_MINIMUM + (1 << 20) + 4096,
@@ -193,7 +193,7 @@ fn a_monolithic_state_json_migrates_and_compaction_keeps_it_readable_by_older_bu
         crate::history::persisting(|| serde_json::to_vec(&state)).unwrap(),
     )
     .unwrap();
-    let restored = scratch.restart();
+    let mut restored = scratch.restart();
     assert!(same(&restored, &state));
     let snapshot = scratch.snapshot();
     assert!(
@@ -205,7 +205,7 @@ fn a_monolithic_state_json_migrates_and_compaction_keeps_it_readable_by_older_bu
     // An older build then rewrote state.json (rollback): its log is stale and ignored.
     let (mut older, chat) = with_chat();
     crate::chat::send(&mut older, &chat, "written by the older build", "test").unwrap();
-    scratch.save(&restored);
+    scratch.save(&mut restored);
     fs::write(
         scratch.0.join("state.json"),
         crate::history::persisting(|| serde_json::to_vec(&older)).unwrap(),
@@ -261,14 +261,14 @@ fn recovered(scratch: &Scratch) -> serde_json::Value {
 fn a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it() {
     let scratch = Scratch::new("transaction");
     let (mut state, chat) = with_chat();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let committed = scratch.log();
     let before = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     state.runtime.runs[0].status = RunStatus::Completed;
     crate::chat::send(&mut state, &chat, "a reply and a receipt", "test").unwrap();
     state.runtime.notice = "receipt r-1 recorded".into();
     *state.note = "edited".into();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let after = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     let full = scratch.log();
     let line = &full[committed.len()..];
@@ -306,9 +306,9 @@ fn a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it() {
 fn a_crash_at_every_step_of_compaction_recovers_the_committed_state() {
     let scratch = Scratch::new("compaction-steps");
     let (mut state, chat) = with_chat();
-    scratch.save(&state);
+    scratch.save(&mut state);
     crate::chat::send(&mut state, &chat, "committed in the log", "test").unwrap();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let committed = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     let (snapshot_before, log_before) = (scratch.snapshot(), scratch.log());
     let schema = serde_json::to_value(schema()).unwrap();
@@ -382,7 +382,7 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
     }
     let scratch = Scratch::new("full-disk");
     let (mut state, chat) = with_chat();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let limit = |bytes: u64| unsafe {
         let mut current = std::mem::zeroed::<libc::rlimit>();
         assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut current), 0);
@@ -412,7 +412,7 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
         );
         assert!(matches!(health_in(&scratch.0), Health::Degraded(_)), "{what}: degraded");
         let started = std::time::Instant::now();
-        let Err(CheckpointError::NotReplaced(refusal)) = checkpoint_in(&scratch.0, &state) else {
+        let Err(CheckpointError::NotReplaced(refusal)) = checkpoint_in(&scratch.0, &mut state) else {
             panic!("{what}: a save while degraded is refused");
         };
         assert!(refusal.to_string().starts_with("storage unavailable: "), "{refusal}");
@@ -432,7 +432,7 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
         assert!(on_disk["chats"] == before["chats"], "{what}: the change is not on disk");
         limit(libc::RLIM_INFINITY);
         recovers();
-        scratch.save(&state);
+        scratch.save(&mut state);
     }
     assert!(same(&scratch.restart(), &state), "saves resume once space returns");
 }
@@ -515,9 +515,9 @@ fn archived_runs_leave_the_state_and_are_found_by_id_after_restart() {
     let last = state.runtime.runs.len() - 1;
     state.runtime.runs[last].persona = Some(crate::delegation::lineage(&state.runtime.runs[5]));
     state.runtime.runs[7].status = RunStatus::Running;
-    scratch.save(&state); // fills the saved bytes
+    scratch.save(&mut state); // fills the saved bytes
     assert!(blocks(&scratch).is_empty());
-    scratch.save(&state); // moves whole blocks of 64
+    scratch.save(&mut state); // moves whole blocks of 64
     let archived = state.runtime.runs.iter().filter(|run| run.archived()).count();
     assert_eq!(archived, 192, "three blocks of 64 out of 197 candidates");
     assert_eq!(saved_runs(&scratch), state.runtime.runs.len() - archived);
@@ -543,13 +543,13 @@ fn archived_runs_leave_the_state_and_are_found_by_id_after_restart() {
 fn changing_an_archived_run_unarchives_it() {
     let scratch = Scratch::new("unarchive");
     let mut state = with_history(archive::RECENT + 64);
-    scratch.save(&state);
-    scratch.save(&state);
+    scratch.save(&mut state);
+    scratch.save(&mut state);
     assert!(state.runtime.runs[0].archived());
     let hot = saved_runs(&scratch);
     state.runtime.runs[0].status = RunStatus::Continued;
     assert!(!state.runtime.runs[0].archived(), "a mutable borrow un-archives");
-    scratch.save(&state);
+    scratch.save(&mut state);
     assert_eq!(saved_runs(&scratch), hot + 1);
     let restored = scratch.restart();
     assert_eq!(
@@ -566,8 +566,8 @@ fn changing_an_archived_run_unarchives_it() {
 fn blocks_merge_and_unreferenced_blocks_are_removed_at_load() {
     let scratch = Scratch::new("archive-merge");
     let mut state = with_history(archive::RECENT + 64);
-    scratch.save(&state);
-    scratch.save(&state);
+    scratch.save(&mut state);
+    scratch.save(&mut state);
     assert_eq!(blocks(&scratch), ["000000000000-06.jsonl"]);
     for i in 0..64 {
         state
@@ -575,8 +575,8 @@ fn blocks_merge_and_unreferenced_blocks_are_removed_at_load() {
             .enqueue(format!("more {i}"), crate::runtime::RunKind::Task, "test");
         state.runtime.runs.last_mut().unwrap().status = RunStatus::Completed;
     }
-    scratch.save(&state);
-    scratch.save(&state);
+    scratch.save(&mut state);
+    scratch.save(&mut state);
     assert_eq!(
         blocks(&scratch),
         ["000000000000-07.jsonl"],
@@ -593,12 +593,12 @@ fn blocks_merge_and_unreferenced_blocks_are_removed_at_load() {
 #[test]
 fn a_failed_save_undoes_the_archive_step() {
     let scratch = Scratch::new("archive-undo");
-    let state = with_history(archive::RECENT + 64);
-    scratch.save(&state);
+    let mut state = with_history(archive::RECENT + 64);
+    scratch.save(&mut state);
     let mut archive = archived(&scratch.0);
-    let pending = archive::step(&scratch.0, &state, &mut archive).unwrap();
+    let pending = archive::step(&scratch.0, &mut state, &mut archive).unwrap();
     assert!(state.runtime.runs[0].archived() && blocks(&scratch).len() == 1);
-    pending.undo(&state);
+    pending.undo(&mut state);
     assert!(state.runtime.runs.iter().all(|run| !run.archived()) && blocks(&scratch).is_empty());
     assert!(archived(&scratch.0).is_empty(), "the saved block list is unchanged");
 }
@@ -629,9 +629,9 @@ fn ids(state: &State) -> Vec<String> {
 #[test]
 fn archived_runs_stay_out_of_the_snapshot_across_shutdowns_and_restarts() {
     let scratch = Scratch::new("archive-restart");
-    let state = with_history(archive::RECENT + 200);
-    scratch.save(&state);
-    scratch.save(&state);
+    let mut state = with_history(archive::RECENT + 200);
+    scratch.save(&mut state);
+    scratch.save(&mut state);
     let archived = state.runtime.runs.iter().filter(|run| run.archived()).count();
     assert_eq!(archived, 192);
     let all = ids(&state);
@@ -668,7 +668,7 @@ fn archived_runs_stay_out_of_the_snapshot_across_shutdowns_and_restarts() {
         );
         // Work after the restart, then another clean stop.
         restored.runtime.notice = format!("restart {restart}");
-        scratch.save(&restored);
+        scratch.save(&mut restored);
         scratch.compact(&restored);
         assert_eq!(saved_runs(&scratch), all.len() - archived);
         assert_eq!(referenced_blocks(&scratch), blocks(&scratch));
@@ -686,8 +686,8 @@ fn archived_runs_stay_out_of_the_snapshot_across_shutdowns_and_restarts() {
 fn a_snapshot_holding_archived_runs_recovers_without_losing_or_duplicating_runs() {
     let scratch = Scratch::new("archive-repair");
     let mut state = with_history(archive::RECENT + 200);
-    scratch.save(&state);
-    scratch.save(&state);
+    scratch.save(&mut state);
+    scratch.save(&mut state);
     let old_blocks = blocks(&scratch);
     let every = runs_json(&state);
     let all = ids(&state);
@@ -697,11 +697,11 @@ fn a_snapshot_holding_archived_runs_recovers_without_losing_or_duplicating_runs(
     scratch.compact(&state);
     assert_eq!(saved_runs(&scratch), all.len(), "every run in the snapshot");
     assert_eq!(referenced_blocks(&scratch), old_blocks);
-    let restored = scratch.restart();
+    let mut restored = scratch.restart();
     assert_eq!(blocks(&scratch), old_blocks, "referenced blocks are kept");
     assert_eq!(ids(&restored), all);
-    scratch.save(&restored);
-    scratch.save(&restored);
+    scratch.save(&mut restored);
+    scratch.save(&mut restored);
     assert_eq!(restored.runtime.runs.iter().filter(|run| run.archived()).count(), 192);
     scratch.compact(&restored);
     assert_eq!(saved_runs(&scratch), all.len() - 192);
@@ -759,16 +759,16 @@ fn a_log_that_cannot_restart_makes_each_save_compact_until_it_can() {
     let scratch = Scratch::new("log-restart");
     fs::create_dir(scratch.0.join(LOG)).unwrap();
     let (mut state, chat) = with_chat();
-    scratch.save(&state);
+    scratch.save(&mut state);
     let first = scratch.snapshot();
     crate::chat::send(&mut state, &chat, "compacted again", "test").unwrap();
-    scratch.save(&state);
+    scratch.save(&mut state);
     assert!(scratch.snapshot() != first, "the second save rewrote the snapshot");
     fs::remove_dir(scratch.0.join(LOG)).unwrap();
     crate::chat::send(&mut state, &chat, "the log is back", "test").unwrap();
-    scratch.save(&state);
+    scratch.save(&mut state);
     crate::chat::send(&mut state, &chat, "appended", "test").unwrap();
-    scratch.save(&state);
+    scratch.save(&mut state);
     assert_eq!(scratch.lines(), 2, "a header and one appended line");
     assert!(same(&scratch.restart(), &state));
 }
@@ -807,17 +807,17 @@ fn a_fixed_sequence_of_saves_writes_the_same_log_bytes() {
         &|s| s.messages.insert(0, "first again".into()),
     ];
     let mut state = State::default();
-    scratch.save(&state);
+    scratch.save(&mut state);
     for step in steps {
         step(&mut state);
-        scratch.save(&state);
-        scratch.save(&state);
+        scratch.save(&mut state);
+        scratch.save(&mut state);
     }
     let before = normalized(scratch.log());
     scratch.compact(&state);
     *state.note = "after compaction".into();
     state.messages.truncate(7);
-    scratch.save(&state);
+    scratch.save(&mut state);
     let log = format!("{before}{}", normalized(scratch.log()));
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/storage/tests/state-log.fixture.jsonl");
     if std::env::var_os("CONTROL_WRITE_FIXTURE").is_some() {

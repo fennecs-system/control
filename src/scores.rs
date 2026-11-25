@@ -15,6 +15,7 @@ use crate::{
     State,
     tool_registry::{AttemptCall, AttemptRef, AttemptTools, LocalHost},
 };
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -138,7 +139,7 @@ pub fn push(samples: &mut VecDeque<Sample>, sample: Sample) {
 /// rest of `State`.
 #[derive(Clone, Copy)]
 pub(crate) struct TeamProgress<'a> {
-    chats: &'a [crate::chat::Session],
+    chats: &'a [Part<crate::chat::Session>],
     runs: &'a [crate::runtime::Run],
     claims: &'a [crate::rooms::claims::Claim],
 }
@@ -166,7 +167,7 @@ struct Teams<'a> {
     roots: HashMap<&'a str, &'a str>,
 }
 impl<'a> Teams<'a> {
-    fn new(chats: &'a [crate::chat::Session]) -> Self {
+    fn new(chats: &'a [Part<crate::chat::Session>]) -> Self {
         let parents = chats
             .iter()
             .map(|chat| (chat.id.as_str(), chat.parent_chat.as_deref()))
@@ -329,7 +330,7 @@ fn apply(
     true
 }
 /// Probes of chats that no longer exist are dropped.
-fn retire(scores: &mut Vec<Probe>, chats: &[crate::chat::Session]) -> bool {
+fn retire(scores: &mut Vec<Probe>, chats: &[Part<crate::chat::Session>]) -> bool {
     let before = scores.len();
     scores.retain(|probe| chats.iter().any(|chat| chat.id == probe.chat));
     before != scores.len()

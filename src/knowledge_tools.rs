@@ -217,7 +217,7 @@ fn propose(
     state: &mut State,
     args: &Value,
     source: Source,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> Result<Value, &'static str> {
     let mut input: Proposal =
         serde_json::from_value(args.clone()).map_err(|_| "Expected claim, evidence, scope and validity")?;
@@ -285,7 +285,7 @@ pub fn worker(
     name: &str,
     args: &Value,
     nonce: &str,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> Result<Value, &'static str> {
     let run = state
         .runtime
@@ -327,7 +327,7 @@ pub fn local(
     state: &mut State,
     name: &str,
     args: &Value,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> Result<Value, &'static str> {
     if canonical(name) != "control.knowledge.propose" {
         return read(&state.documents, &state.collective.proposals, None, name, args);
@@ -389,7 +389,7 @@ pub fn review_action(
     state: &mut State,
     path: &str,
     fields: &std::collections::HashMap<String, String>,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> Result<(), &'static str> {
     if path == "/review" {
         let pending = fields

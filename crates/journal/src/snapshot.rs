@@ -216,7 +216,13 @@ fn object(members: Vec<(Box<[u8]>, Encoded)>) -> serde_json::Result<Encoded> {
         let (offset, base) = (bytes.len() as u32, nodes.len() as u32);
         bytes.extend_from_slice(&value.bytes);
         // An array element's key is the empty (0, 0) wherever it is.
-        let moved = |key: (u32, u32)| if key == (0, 0) { key } else { (key.0 + offset, key.1 + offset) };
+        let moved = |key: (u32, u32)| {
+            if key == (0, 0) {
+                key
+            } else {
+                (key.0 + offset, key.1 + offset)
+            }
+        };
         nodes.extend(value.nodes.iter().enumerate().map(|(j, node)| Node {
             start: node.start + offset,
             end: node.end + offset,
