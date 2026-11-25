@@ -187,10 +187,19 @@ into the `state.json` snapshot only when the log outgrows it (see
 state, which on an 18 MB node meant 8–34 GB written per hour of swarm work.
 
 - A save encodes only the parts borrowed mutably since the last one (each
-  top-level field, room post, agent note and run, see
+  top-level field, chat, room post and room field, agent note and run, see
   [HISTORY.md](HISTORY.md)) and diffs only those. Debug builds and tests
   check every save against a fresh serialization and every patch against a
-  diff of the whole documents.
+  diff of the whole documents; `storage::tests::fresh` checks that each kind
+  of write re-encodes only the value it changed (on the seeded node a chat
+  message re-encodes its chat, about 0.4 KB, not all 1,000 chats, 335 KB).
+- Per kind of write, 8 writers at a fixed count on the seeded node, the lock
+  is held 0.06–0.08 ms per room post or agent note (0.16–0.20 ms when the
+  room fields and the runtime were re-encoded with them). A chat message
+  spends 0.16–0.22 ms of its hold encoding (0.69–0.80 ms when every chat was).
+  The archive step is skipped while the runtime is unchanged; it scans every
+  run (38 µs at 20,000 runs), and so does re-splitting a changed runtime
+  (30 µs), on a save that changed a run.
 - Under 8 concurrent writers (room post, agent note, gene edit on the seeded
   18 MB node) the state lock is held 0.19 ms per write, 9% of the time
   (1.7 ms and 82% when every save re-encoded the whole state).
