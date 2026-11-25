@@ -7,7 +7,11 @@ use control_journal::snapshot::Part;
 
 /// The chat and, with `team`, every chat spawned from it, for the named
 /// chat's actor. The named chat must exist.
-fn chats(sessions: &[Part<crate::chat::Session>], id: &str, team: bool) -> io::Result<identity::Unchecked<Vec<String>>> {
+fn chats(
+    sessions: &[Part<crate::chat::Session>],
+    id: &str,
+    team: bool,
+) -> io::Result<identity::Unchecked<Vec<String>>> {
     let session = sessions
         .iter()
         .find(|session| session.id == id)

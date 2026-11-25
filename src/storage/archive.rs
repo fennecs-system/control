@@ -274,7 +274,9 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
         for line in fs::read_to_string(span.file(directory))?.lines() {
             let record: Record = serde_json::from_str(line).map_err(io::Error::other)?;
             if !hot.contains(record.id().as_str()) {
-                let saved = control_journal::snapshot::index(line.as_bytes().to_vec())?;
+                // Kept, not indexed: an archived run is left out of the state's
+                // encoding, so its members are never diffed.
+                let saved = control_journal::snapshot::kept(line.as_bytes().to_vec())?;
                 let run = Run::restored(record, control_journal::snapshot::Tree::leaf(saved), true);
                 match at.get(run.id().as_str()) {
                     Some(&index) => archived[index] = run,

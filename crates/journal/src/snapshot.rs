@@ -180,6 +180,10 @@ pub fn encode<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
     if u32::try_from(writer.out.len()).is_err() {
         return Err(serde::ser::Error::custom("documents are limited to 4 GiB"));
     }
+    // Kept until the value changes (a part's encoding), so without the
+    // slack the buffers grew by.
+    writer.out.shrink_to_fit();
+    ranges.nodes.shrink_to_fit();
     Ok(Encoded {
         bytes: writer.out,
         nodes: ranges.nodes,
@@ -239,6 +243,22 @@ fn object(members: Vec<(Box<[u8]>, Encoded)>) -> serde_json::Result<Encoded> {
     Ok(Encoded { bytes, nodes })
 }
 
+/// One compact JSON value kept as is, without the ranges of its members: an
+/// encoding only held (its bytes saved elsewhere), never diffed member by
+/// member. Diffed, it is one value. `bytes` must be one valid JSON value.
+pub fn kept(bytes: Vec<u8>) -> io::Result<Encoded> {
+    let end = u32::try_from(bytes.len()).map_err(|_| invalid("documents are limited to 4 GiB"))?;
+    Ok(Encoded {
+        bytes,
+        nodes: vec![Node {
+            start: 0,
+            end,
+            key: (0, 0),
+            subtree_end: 1,
+        }],
+    })
+}
+
 /// The ranges of a compact JSON document already in hand, such as a snapshot
 /// just read: the same [`Encoded`] that [`encode`] would build from the value
 /// those bytes serialize, without serializing it. `bytes` must be one valid
@@ -260,6 +280,7 @@ pub fn index(bytes: Vec<u8>) -> io::Result<Encoded> {
     }
     ranges.at.set(end);
     ranges.close();
+    ranges.nodes.shrink_to_fit();
     Ok(Encoded {
         bytes,
         nodes: ranges.nodes,

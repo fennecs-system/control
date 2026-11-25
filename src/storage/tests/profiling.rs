@@ -113,9 +113,15 @@ fn profile_swarm_hour() {
         "{}",
         serde_json::json!({"case": "monolithic_parse", "state_bytes": data.len(), "ms": start.elapsed().as_secs_f64() * 1e3})
     );
-    let (mut plain, mut ranged, mut cached, mut compared, mut indexed) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    let base = crate::history::persisting(|| snapshot::encode(&initial)).unwrap();
+    // Whole-document encodings (`to_vec`, `encode_with_ranges`), then what a
+    // save does: the tree of parts on a state just read (`encode_cold`, as at
+    // the first save after a start) and on one saved before and unchanged
+    // since (`encode_cached`, every later save), and its diff.
+    let (mut plain, mut ranged, mut cold, mut cached, mut compared, mut indexed) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let archive = Part::default();
+    let base = encode(&initial, &archive).unwrap();
+    let joined = base.bytes().into_owned();
     let fresh = |f: &dyn Fn()| crate::history::persisting(f);
     for _ in 0..21 {
         let start = Instant::now();
@@ -124,19 +130,24 @@ fn profile_swarm_hour() {
         let start = Instant::now();
         fresh(&|| drop(black_box(snapshot::encode(&initial).unwrap())));
         ranged.push(start.elapsed().as_nanos());
+        let read: State = serde_json::from_slice(&data).unwrap();
         let start = Instant::now();
-        let encoded = black_box(crate::history::persisting(|| snapshot::encode(&initial)).unwrap());
+        black_box(encode(black_box(&read), &archive).unwrap());
+        cold.push(start.elapsed().as_nanos());
+        drop(read);
+        let start = Instant::now();
+        let encoded = black_box(encode(black_box(&initial), &archive).unwrap());
         cached.push(start.elapsed().as_nanos());
         let start = Instant::now();
-        black_box(snapshot::index(encoded.bytes().to_vec()).unwrap());
+        black_box(snapshot::index(joined.clone()).unwrap());
         indexed.push(start.elapsed().as_nanos());
         let start = Instant::now();
-        black_box(snapshot::diff(&base, &encoded));
+        black_box(edits(&base, &encoded));
         compared.push(start.elapsed().as_nanos());
     }
     println!(
         "{}",
-        serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "encode_cached": quantiles(&mut cached), "index_bytes": quantiles(&mut indexed), "diff_unchanged": quantiles(&mut compared)})
+        serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "encode_cold": quantiles(&mut cold), "encode_cached": quantiles(&mut cached), "index_bytes": quantiles(&mut indexed), "diff_unchanged": quantiles(&mut compared)})
     );
     let mut by_size: Vec<usize> = (0..initial.chats.len()).collect();
     by_size.sort_by_key(|&i| std::cmp::Reverse(initial.chats[i].messages.len()));
