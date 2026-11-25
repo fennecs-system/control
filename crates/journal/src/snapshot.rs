@@ -29,6 +29,8 @@ use std::{borrow::Cow, cell::Cell, io, path::Path, rc::Rc};
 
 mod parts;
 use parts::At;
+#[cfg(debug_assertions)]
+pub use parts::fresh;
 pub use parts::{Part, Tree, offer, split, split_each_save};
 
 /// Containers smaller than this are rewritten whole when they change; larger
@@ -182,6 +184,53 @@ pub fn encode<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
         bytes: writer.out,
         nodes: ranges.nodes,
     })
+}
+
+/// What [`encode`] gives for an object whose members (raw JSON keys and
+/// encoded values) were encoded one by one: their bytes joined and their
+/// ranges moved, so nothing is serialized twice.
+fn object(members: Vec<(Box<[u8]>, Encoded)>) -> serde_json::Result<Encoded> {
+    let length = 1 + members
+        .iter()
+        .map(|(key, value)| key.len() + 1 + value.bytes.len() + 1)
+        .sum::<usize>()
+        .max(1);
+    if u32::try_from(length).is_err() {
+        return Err(serde::ser::Error::custom("documents are limited to 4 GiB"));
+    }
+    let mut bytes = Vec::with_capacity(length);
+    let mut nodes = vec![Node {
+        start: 0,
+        end: 0,
+        key: (0, 0),
+        subtree_end: 0,
+    }];
+    bytes.push(b'{');
+    for (i, (key, value)) in members.into_iter().enumerate() {
+        if i > 0 {
+            bytes.push(b',');
+        }
+        let named = (bytes.len() as u32, (bytes.len() + key.len()) as u32);
+        bytes.extend_from_slice(&key);
+        bytes.push(b':');
+        let (offset, base) = (bytes.len() as u32, nodes.len() as u32);
+        bytes.extend_from_slice(&value.bytes);
+        // An array element's key is the empty (0, 0) wherever it is.
+        let moved = |key: (u32, u32)| if key == (0, 0) { key } else { (key.0 + offset, key.1 + offset) };
+        nodes.extend(value.nodes.iter().enumerate().map(|(j, node)| Node {
+            start: node.start + offset,
+            end: node.end + offset,
+            key: if j == 0 { named } else { moved(node.key) },
+            subtree_end: node.subtree_end + base,
+        }));
+    }
+    bytes.push(b'}');
+    if bytes.len() < SEGMENT {
+        nodes.truncate(1);
+    }
+    nodes[0].end = bytes.len() as u32;
+    nodes[0].subtree_end = nodes.len() as u32;
+    Ok(Encoded { bytes, nodes })
 }
 
 /// The ranges of a compact JSON document already in hand, such as a snapshot

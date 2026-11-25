@@ -2,6 +2,8 @@ use super::*;
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
 mod crash;
+#[cfg(debug_assertions)]
+mod fresh;
 mod log;
 mod profiling;
 

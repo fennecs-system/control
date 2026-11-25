@@ -176,3 +176,21 @@ fn values_without_parts_stay_one_encoding() {
     let part = Part::from(item.clone());
     assert_eq!(serde_json::to_vec(&part).unwrap(), serde_json::to_vec(&item).unwrap());
 }
+
+/// An object without parts is encoded member by member and joined: the
+/// same bytes and ranges as encoding it whole, small or past `SEGMENT`.
+#[test]
+fn joined_members_encode_as_the_whole_value() {
+    let leaf = |tree: Tree| match Arc::try_unwrap(tree.0).unwrap() {
+        Shape::Leaf(encoded) => encoded,
+        _ => panic!("a leaf"),
+    };
+    let mut rng = Lcg(7);
+    for _ in 0..200 {
+        let item = item(&mut rng);
+        assert_eq!(leaf(split(&item).unwrap()), encode(&item).unwrap());
+        let map: std::collections::BTreeMap<String, Item> =
+            (0..rng.next(5)).map(|i| (format!("k\"{i}"), { let mut next = item.clone(); next.n = rng.next(9) as u64; next.tags.push("a\\b".repeat(rng.next(90))); next })).collect();
+        assert_eq!(leaf(split(&map).unwrap()), encode(&map).unwrap());
+    }
+}

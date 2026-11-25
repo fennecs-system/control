@@ -51,6 +51,17 @@ impl Tree {
         let len = 1 + items.iter().map(|item| item.len() + 1).sum::<usize>();
         Self(Arc::new(Shape::Array(items, len.max(2))))
     }
+    /// A leaf's encoding, taken without a copy when nothing else holds it.
+    fn into_leaf(self) -> Encoded {
+        let leaf = |shape: &Shape| match shape {
+            Shape::Leaf(encoded) => encoded.clone(),
+            Shape::Object(..) | Shape::Array(..) => unreachable!("only leaves are joined"),
+        };
+        Arc::try_unwrap(self.0).map_or_else(|shared| leaf(&shared), |shape| match shape {
+            Shape::Leaf(encoded) => encoded,
+            shape => leaf(&shape),
+        })
+    }
     /// The length of the joined document.
     pub fn len(&self) -> usize {
         self.at().len()
@@ -347,7 +358,7 @@ pub fn split<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Tree> {
     }
     match value.serialize(Splitter) {
         Ok(Some(tree)) => Ok(tree),
-        _ => encode(value).map(Tree::leaf),
+        _ => fresh(value).map(Tree::leaf),
     }
 }
 
@@ -361,8 +372,9 @@ fn offered<T: Serialize + ?Sized>(value: &T) -> Option<Tree> {
     answered.ok().and(tree)
 }
 
-/// A member's tree inside a split: its own when it offers one, a split when
-/// it is a sequence of parts, else its encoding (`None` with `plain`).
+/// A member's tree inside a split, and whether it is a part: its own tree
+/// when it offers one, a split when it is a sequence of parts, else its
+/// encoding (a leaf).
 fn member<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<(Tree, bool)> {
     if let Some(tree) = offered(value) {
         return Ok((tree, true));
@@ -371,6 +383,15 @@ fn member<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<(Tree, bool)> 
         Ok(Some(tree)) => Ok((tree, true)),
         _ => encode(value).map(|encoded| (Tree::leaf(encoded), false)),
     }
+}
+
+/// A split's contiguous encoding of a value that offered no tree: the work a
+/// save does for what changed.
+fn fresh<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
+    let encoded = encode(value)?;
+    #[cfg(debug_assertions)]
+    fresh::record(encoded.bytes().len());
+    Ok(encoded)
 }
 
 fn not_split() -> serde_json::Error {
@@ -482,7 +503,8 @@ impl ser::SerializeSeq for Items {
     type Ok = Option<Tree>;
     type Error = serde_json::Error;
     fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), serde_json::Error> {
-        self.0.push(offered(value).ok_or_else(not_split)?);
+        let tree = within(|| self.0.len().to_string(), || offered(value));
+        self.0.push(tree.ok_or_else(not_split)?);
         Ok(())
     }
     // An empty sequence has nothing to share: it is encoded whole.
@@ -491,8 +513,8 @@ impl ser::SerializeSeq for Items {
     }
 }
 
-/// Splits an object, or a sequence of parts, into members. `None` when no
-/// member is a part: the caller encodes the value whole.
+/// Splits an object into members (joined into one encoding when none is a
+/// part), or a sequence of parts; `None` for anything else.
 struct Splitter;
 impl Serializer for Splitter {
     type Ok = Option<Tree>;
@@ -526,27 +548,48 @@ impl Serializer for Splitter {
     }
 }
 struct Members {
-    members: Vec<(Box<[u8]>, Tree)>,
+    /// Each member's raw key, its tree, and whether that tree is a part.
+    members: Vec<(Box<[u8]>, Tree, bool)>,
     key: Option<Box<[u8]>>,
-    split: bool,
 }
 impl Members {
     fn new(len: usize) -> Self {
         Self {
             members: Vec::with_capacity(len),
             key: None,
-            split: false,
         }
     }
     fn push<T: Serialize + ?Sized>(&mut self, key: Box<[u8]>, value: &T) -> serde_json::Result<()> {
-        let (tree, part) = member(value)?;
-        self.split |= part;
-        self.members.push((key, tree));
+        let (tree, part) = within(|| name(&key), || member(value))?;
+        self.members.push((key, tree, part));
         Ok(())
     }
+    /// The object of parts, or, when no member is a part, its members'
+    /// encodings joined into one: each member is encoded once either way.
     fn end(self) -> serde_json::Result<Option<Tree>> {
-        Ok(self.split.then(|| Tree::object(self.members)))
+        if self.members.iter().any(|(_, _, part)| *part) {
+            #[cfg(debug_assertions)]
+            for (key, tree, _) in self.members.iter().filter(|(_, _, part)| !part) {
+                within(|| name(key), || fresh::record(tree.len()));
+            }
+            return Ok(Some(Tree::object(
+                self.members.into_iter().map(|(key, tree, _)| (key, tree)).collect(),
+            )));
+        }
+        let joined = super::object(
+            self.members
+                .into_iter()
+                .map(|(key, tree, _)| (key, tree.into_leaf()))
+                .collect(),
+        )?;
+        #[cfg(debug_assertions)]
+        fresh::record(joined.bytes().len());
+        Ok(Some(Tree::leaf(joined)))
     }
+}
+/// A raw JSON key as a path segment.
+fn name(key: &[u8]) -> String {
+    String::from_utf8_lossy(key).trim_matches('"').to_owned()
 }
 /// A member name as JSON writes it; only string keys are split.
 fn key<T: Serialize + ?Sized>(key: &T) -> serde_json::Result<Box<[u8]>> {
@@ -582,6 +625,42 @@ impl ser::SerializeStruct for Members {
     }
     fn end(self) -> Result<Option<Tree>, serde_json::Error> {
         Members::end(self)
+    }
+}
+
+/// Runs `f` one level down the document, at `segment` (a key or an index).
+#[cfg(debug_assertions)]
+fn within<R>(segment: impl FnOnce() -> String, f: impl FnOnce() -> R) -> R {
+    fresh::within(segment, f)
+}
+#[cfg(not(debug_assertions))]
+fn within<R>(_: impl FnOnce() -> String, f: impl FnOnce() -> R) -> R {
+    f()
+}
+
+/// What splits encoded afresh on this thread, by path: debug builds record it
+/// so tests can check that a save re-encodes only what it changed.
+#[cfg(debug_assertions)]
+pub mod fresh {
+    use std::cell::RefCell;
+    thread_local! {
+        static PATH: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static ENCODED: RefCell<Vec<(String, usize)>> = const { RefCell::new(Vec::new()) };
+    }
+    pub(super) fn within<R>(segment: impl FnOnce() -> String, f: impl FnOnce() -> R) -> R {
+        PATH.with(|path| path.borrow_mut().push(segment()));
+        let result = f();
+        PATH.with(|path| path.borrow_mut().pop());
+        result
+    }
+    pub(super) fn record(bytes: usize) {
+        let path = PATH.with(|path| path.borrow().join("/"));
+        ENCODED.with(|encoded| encoded.borrow_mut().push((path, bytes)));
+    }
+    /// The values encoded afresh on this thread since the last call: each
+    /// one's path (keys and indices joined by `/`) and its length.
+    pub fn take() -> Vec<(String, usize)> {
+        ENCODED.with(|encoded| std::mem::take(&mut *encoded.borrow_mut()))
     }
 }
 
