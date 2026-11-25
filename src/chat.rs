@@ -1624,65 +1624,85 @@ pub(crate) fn fixed_tool(state: &mut State, name: &str, arguments: &Value) -> Re
             detail(state, id)
         }
         "control.chat.lenses" => {
-            let id = id()?;
-            if arguments.get("lenses").is_none() {
-                return Err("Specify a list of lenses, including an empty list to clear them.");
-            }
-            let lenses = parse_lenses(arguments, state)?;
-            crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
-                .map_err(|_| "Selected context cannot be resolved.")?;
-            let session = state.chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
-            identity::authorize(&session.actor, Action::Task)?;
-            session.lens = if lenses.len() == 1 {
-                Some(lenses[0].clone())
-            } else {
-                None
-            };
-            session.lenses = Some(lenses);
-            session.revision = session.revision.saturating_add(1);
+            let id = set_lenses(state, arguments)?;
             detail(state, id)
         }
         "control.chat.create" => {
-            let improve = parse_mode(arguments.get("mode"), false)?;
-            identity::authorize(
-                &Actor::LocalOperator,
-                if improve { Action::Improve } else { Action::Task },
-            )?;
-            let design_context = match arguments.get("design_context") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(value)) => {
-                    identity::authorize(&Actor::LocalOperator, Action::Improve)?;
-                    Some(design_topic(value).ok_or("Unknown design topic.")?.0.to_owned())
-                }
-                _ => return Err("Unknown design topic."),
-            };
-            let room = match arguments.get("room") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(s)) if crate::rooms::valid(s) => Some(s.clone()),
-                _ => return Err("Unknown room."),
-            };
-            let lenses = parse_lenses(arguments, state)?;
-            crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
-                .map_err(|_| "Selected context cannot be resolved.")?;
-            let id = create(state);
-            state.chats.last_mut().unwrap().improve_mode = improve;
-            state.chats.last_mut().unwrap().lens = if lenses.len() == 1 {
-                Some(lenses[0].clone())
-            } else {
-                None
-            };
-            state.chats.last_mut().unwrap().lenses = Some(lenses);
-            state.chats.last_mut().unwrap().room = room
-                .as_deref()
-                .map(|room| crate::rooms::for_task(room, &id))
-                .transpose()?;
-            state.chats.last_mut().unwrap().design_context = design_context;
+            let id = create_from(state, arguments)?;
             detail(state, &id)
         }
         _ => Err("Unknown tool."),
     }
 }
+// The chat tools that change a chat answer with its detail, which reads far
+// more of the state than the change; a caller answering otherwise (the web
+// routes) applies the change alone. Each change authorizes what the detail
+// would (a Task, or an Improve, which needs more), so neither refuses after it.
+
+/// `control.chat.lenses`'s change; answers the chat id.
+pub(crate) fn set_lenses<'a>(state: &mut State, arguments: &'a Value) -> Result<&'a str, &'static str> {
+    let id = chat_id(arguments)?;
+    if arguments.get("lenses").is_none() {
+        return Err("Specify a list of lenses, including an empty list to clear them.");
+    }
+    let lenses = parse_lenses(arguments, state)?;
+    crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
+        .map_err(|_| "Selected context cannot be resolved.")?;
+    let session = state.chats.iter_mut().find(|c| c.id == id).ok_or("Chat not found.")?;
+    identity::authorize(&session.actor, Action::Task)?;
+    session.lens = if lenses.len() == 1 {
+        Some(lenses[0].clone())
+    } else {
+        None
+    };
+    session.lenses = Some(lenses);
+    session.revision = session.revision.saturating_add(1);
+    Ok(id)
+}
+/// `control.chat.create`'s change; answers the new chat's id.
+pub(crate) fn create_from(state: &mut State, arguments: &Value) -> Result<String, &'static str> {
+    let improve = parse_mode(arguments.get("mode"), false)?;
+    identity::authorize(
+        &Actor::LocalOperator,
+        if improve { Action::Improve } else { Action::Task },
+    )?;
+    let design_context = match arguments.get("design_context") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            identity::authorize(&Actor::LocalOperator, Action::Improve)?;
+            Some(design_topic(value).ok_or("Unknown design topic.")?.0.to_owned())
+        }
+        _ => return Err("Unknown design topic."),
+    };
+    let room = match arguments.get("room") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if crate::rooms::valid(s) => Some(s.clone()),
+        _ => return Err("Unknown room."),
+    };
+    let lenses = parse_lenses(arguments, state)?;
+    crate::lens_library::resolve(crate::lens_library::Sources::of(state), &lenses)
+        .map_err(|_| "Selected context cannot be resolved.")?;
+    let id = create(state);
+    state.chats.last_mut().unwrap().improve_mode = improve;
+    state.chats.last_mut().unwrap().lens = if lenses.len() == 1 {
+        Some(lenses[0].clone())
+    } else {
+        None
+    };
+    state.chats.last_mut().unwrap().lenses = Some(lenses);
+    state.chats.last_mut().unwrap().room = room
+        .as_deref()
+        .map(|room| crate::rooms::for_task(room, &id))
+        .transpose()?;
+    state.chats.last_mut().unwrap().design_context = design_context;
+    Ok(id)
+}
 fn send_tool(state: &mut State, arguments: &Value, tx: Tx) -> Result<(Value, Effects), Cow<'static, str>> {
+    let effects = send_applied(state, arguments, tx)?;
+    Ok((detail(state, chat_id(arguments)?)?, effects))
+}
+/// `control.chat.send`'s change: the wake to release once it is durable.
+pub(crate) fn send_applied(state: &mut State, arguments: &Value, tx: Tx) -> Result<Effects, Cow<'static, str>> {
     let id = chat_id(arguments)?;
     let text = arguments["message"].as_str().ok_or("Missing message.")?;
     let index = state.chats.iter().position(|c| c.id == id).ok_or("Chat not found.")?;
@@ -1706,18 +1726,13 @@ fn send_tool(state: &mut State, arguments: &Value, tx: Tx) -> Result<(Value, Eff
         state.chats[index].lenses = Some(lenses);
     }
     state.chats[index].improve_mode = improve;
-    let effects = match send_queued(state, id, text, "session-chat", tx) {
-        Ok(effects) => effects,
-        Err(error) => {
-            (
-                state.chats[index].lens,
-                state.chats[index].lenses,
-                state.chats[index].improve_mode,
-            ) = previous;
-            return Err(error);
-        }
-    };
-    Ok((detail(state, id)?, effects))
+    send_queued(state, id, text, "session-chat", tx).inspect_err(|_| {
+        (
+            state.chats[index].lens,
+            state.chats[index].lenses,
+            state.chats[index].improve_mode,
+        ) = previous;
+    })
 }
 
 /// The given chats and every chat spawned from them, at any depth.

@@ -65,10 +65,11 @@ fn accepts_json(header: &str) -> bool {
 }
 /// What a send decided under the lock.
 enum Sent {
-    /// A change to save: its reply once durable, the wake to release then,
-    /// and the rollback if storage refuses it while the lock is held.
+    /// A change to save: what its reply shows once durable, the wake to
+    /// release then, and the rollback if storage refuses it while the lock
+    /// is held.
     Changed {
-        reply: Vec<u8>,
+        answer: Answer,
         effects: Effects,
         checkpoint: Box<chat::Checkpoint>,
     },
@@ -112,6 +113,46 @@ fn refused_send(
     }
     reply
 }
+/// What a saved send answers, copied under the lock and encoded after it.
+pub(crate) enum Answer {
+    /// Back to the chat page (the native form).
+    Chat(String),
+    /// The composer's JSON: the chat's title and mode.
+    Composer { title: String, improve: bool },
+}
+impl Answer {
+    fn of(state: &State, id: &str, header: &str) -> Self {
+        match state.chats.iter().find(|chat| chat.id == id) {
+            Some(session) if accepts_json(header) => Self::Composer {
+                title: crate::callsigns::name_or_id(&state.chats, id).into_owned(),
+                improve: session.improve_mode,
+            },
+            _ => Self::Chat(id.to_owned()),
+        }
+    }
+    pub(crate) fn render(self) -> Vec<u8> {
+        let mut reply = Vec::new();
+        let _ = match self {
+            Self::Composer { title, improve } => control_http::respond(
+                &mut reply,
+                "200 OK",
+                "application/json",
+                json!({"title":title,"improve":improve}).to_string().as_bytes(),
+                "",
+                control_http::Policy::Embedded,
+            ),
+            Self::Chat(id) => control_http::respond(
+                &mut reply,
+                "303 See Other",
+                "text/plain",
+                b"",
+                &format!("Location: /dm/{id}\r\n"),
+                control_http::Policy::Embedded,
+            ),
+        };
+        reply
+    }
+}
 // Both native forms and the WASM composer use the same checkpointed command.
 fn send_change(
     state: &mut State,
@@ -121,8 +162,8 @@ fn send_change(
     fields: &std::collections::HashMap<String, String>,
     tx: Tx,
 ) -> Sent {
-    let mut reply = Vec::new();
     if fields.get("message").is_some_and(|message| message.trim() == "/open") {
+        let mut reply = Vec::new();
         match chat::viewable(&state.chats, id) {
             Ok(_) => {
                 let _ = control_http::respond(
@@ -147,35 +188,16 @@ fn send_change(
     if fields.contains_key("composition") {
         arguments["lenses"] = chat::form_lenses(fields, "none");
     }
-    let (effects, checkpoint) = match change_staged(state, "control.chat.send", &arguments, tx) {
-        Ok((_, effects, checkpoint)) => (effects, Box::new(checkpoint)),
-        Err(message) => return Sent::Answered(refused_send(state, lens, id, header, fields, &message)),
-    };
-    if accepts_json(header) {
-        let session = state.chats.iter().find(|chat| chat.id == id).unwrap();
-        let value = json!({"title":crate::callsigns::name_or_id(&state.chats,id),"improve":session.improve_mode});
-        let _ = control_http::respond(
-            &mut reply,
-            "200 OK",
-            "application/json",
-            value.to_string().as_bytes(),
-            "",
-            control_http::Policy::Embedded,
-        );
-    } else {
-        let _ = control_http::respond(
-            &mut reply,
-            "303 See Other",
-            "text/plain",
-            b"",
-            &format!("Location: /dm/{id}\r\n"),
-            control_http::Policy::Embedded,
-        );
-    }
-    Sent::Changed {
-        reply,
-        effects,
-        checkpoint,
+    let sent = staged(state, "control.chat.send", &arguments, |state| {
+        chat::send_applied(state, &arguments, tx).map(|effects| ((), effects))
+    });
+    match sent {
+        Ok(((), effects, checkpoint)) => Sent::Changed {
+            answer: Answer::of(state, id, header),
+            effects,
+            checkpoint: Box::new(checkpoint),
+        },
+        Err(message) => Sent::Answered(refused_send(state, lens, id, header, fields, &message)),
     }
 }
 /// `send_change` saved under the lock by `save`, for a caller that already
@@ -192,14 +214,14 @@ fn send_message(
     let reply = match send_change(state, id, lens, header, fields, crate::store::legacy_tx()) {
         Sent::Answered(reply) => reply,
         Sent::Changed {
-            reply,
+            answer,
             effects,
             checkpoint,
         } => {
             let saved = save(state);
             crate::store::perform(effects.after_held_save(&saved));
             if saved.is_ok() {
-                reply
+                answer.render()
             } else {
                 checkpoint.restore(state);
                 refused_send(state, lens, id, header, fields, SAVE_FAILED)
@@ -252,7 +274,7 @@ pub(crate) fn messages(
         reply
     };
     let reply = match committed {
-        Ok(Commit::Saved(reply)) => reply,
+        Ok(Commit::Saved(answer)) => answer.render(),
         Ok(Commit::Refused(reply, seen)) => {
             seen.wait();
             reply
@@ -275,8 +297,8 @@ pub(crate) fn messages(
     true
 }
 /// A send as a transaction, with the stage and the wake passed in (tests
-/// script the disk). Success, and refusals rendered under the lock, carry
-/// the reply bytes.
+/// script the disk). Success carries what its reply shows, encoded after
+/// the lock is released; a refusal, rendered under the lock, its bytes.
 pub(crate) fn send_commit(
     store: &crate::Store,
     id: &str,
@@ -285,17 +307,17 @@ pub(crate) fn send_commit(
     fields: &std::collections::HashMap<String, String>,
     submit: impl FnOnce(&State, crate::store::Staging) -> std::io::Result<storage::Saving>,
     wake: impl FnOnce(),
-) -> Result<Commit<Vec<u8>, Vec<u8>>, crate::store::Unavailable> {
+) -> Result<Commit<Answer, Vec<u8>>, crate::store::Unavailable> {
     store.commit_with(
         |state, tx| {
             let lens = crate::lens_ui::selected(&state.lens_library, header, requested_lens).to_owned();
             match send_change(state, id, &lens, header, fields, tx) {
                 Sent::Changed {
-                    reply,
+                    answer,
                     effects,
                     checkpoint,
                 } => Ok(Applied {
-                    answer: reply,
+                    answer,
                     effects,
                     undo: move |state: &mut State| checkpoint.restore(state),
                 }),
@@ -337,7 +359,25 @@ pub(crate) fn change_with_save(
     arguments: &Value,
     save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Value, std::borrow::Cow<'static, str>> {
-    let (value, effects, checkpoint) = change_staged(state, name, arguments, crate::store::legacy_tx())?;
+    let tx = crate::store::legacy_tx();
+    saved_under_lock(
+        state,
+        name,
+        arguments,
+        |state| tool_change(state, name, arguments, tx),
+        save,
+    )
+}
+/// Applies tool `name` by `apply` behind its checkpoint (`staged`) and saves
+/// by `save` under the lock, restoring the checkpoint if the save is refused.
+fn saved_under_lock<T>(
+    state: &mut State,
+    name: &str,
+    arguments: &Value,
+    apply: impl FnOnce(&mut State) -> Result<(T, Effects), std::borrow::Cow<'static, str>>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
+) -> Result<T, std::borrow::Cow<'static, str>> {
+    let (value, effects, checkpoint) = staged(state, name, arguments, apply)?;
     let saved = save(state);
     crate::store::perform(effects.after_held_save(&saved));
     if saved.is_err() {
@@ -346,15 +386,41 @@ pub(crate) fn change_with_save(
     }
     Ok(value)
 }
-/// Applies a checkpointed command. A refusal restores chats, runs and posts
-/// together and is returned; otherwise the caller saves, restoring with the
-/// checkpoint if the save is refused.
-fn change_staged(
+/// A checkpointed tool's change and its answer.
+fn tool_change(
     state: &mut State,
     name: &str,
     arguments: &Value,
     tx: Tx,
-) -> Result<(Value, Effects, chat::Checkpoint), std::borrow::Cow<'static, str>> {
+) -> Result<(Value, Effects), std::borrow::Cow<'static, str>> {
+    if crate::tool_registry::lookup(name).is_some_and(|tool| tool.route == crate::tool_registry::Route::Project) {
+        crate::projects::request_named(
+            state,
+            arguments["id"].as_str().unwrap_or(""),
+            arguments["path"].as_str().unwrap_or(""),
+            arguments["name"].as_str(),
+            crate::projects::Requester::Agent { run: None },
+        )
+        .map(|value| (value, Effects::none()))
+        .map_err(Into::into)
+    } else if crate::tool_registry::lookup(name).is_some_and(|tool| tool.route == crate::tool_registry::Route::Room) {
+        crate::rooms::tool(state, name, arguments)
+            .map(|value| (value, Effects::none()))
+            .map_err(Into::into)
+    } else {
+        chat::tool_queued(state, name, arguments, tx)
+    }
+}
+/// Applies a checkpointed command by `apply`, which answers what the caller
+/// needs. A refusal restores chats, runs and posts together and is
+/// returned; otherwise the caller saves, restoring with the checkpoint if
+/// the save is refused.
+fn staged<T>(
+    state: &mut State,
+    name: &str,
+    arguments: &Value,
+    apply: impl FnOnce(&mut State) -> Result<(T, Effects), std::borrow::Cow<'static, str>>,
+) -> Result<(T, Effects, chat::Checkpoint), std::borrow::Cow<'static, str>> {
     let related = if name == "control.chat.send" {
         arguments["message"]
             .as_str()
@@ -377,26 +443,7 @@ fn change_staged(
         ("control.chat.send", Some(text)) => chat::Checkpoint::for_send(state, &targets, text),
         _ => chat::Checkpoint::capture(state, &targets),
     };
-    let result = if crate::tool_registry::lookup(name)
-        .is_some_and(|tool| tool.route == crate::tool_registry::Route::Project)
-    {
-        crate::projects::request_named(
-            state,
-            arguments["id"].as_str().unwrap_or(""),
-            arguments["path"].as_str().unwrap_or(""),
-            arguments["name"].as_str(),
-            crate::projects::Requester::Agent { run: None },
-        )
-        .map(|value| (value, Effects::none()))
-        .map_err(Into::into)
-    } else if crate::tool_registry::lookup(name).is_some_and(|tool| tool.route == crate::tool_registry::Route::Room) {
-        crate::rooms::tool(state, name, arguments)
-            .map(|value| (value, Effects::none()))
-            .map_err(Into::into)
-    } else {
-        chat::tool_queued(state, name, arguments, tx)
-    };
-    match result {
+    match apply(state) {
         Ok((value, effects)) => Ok((value, effects, checkpoint)),
         Err(error) => {
             checkpoint.restore(state);
@@ -405,11 +452,11 @@ fn change_staged(
     }
 }
 /// Apply `operation` and checkpoint once; any failure restores chats, runs and posts together.
-fn transact(
+fn transact<T>(
     state: &mut State,
-    operation: impl FnOnce(&mut State) -> Result<(Value, Effects), std::borrow::Cow<'static, str>>,
+    operation: impl FnOnce(&mut State) -> Result<(T, Effects), std::borrow::Cow<'static, str>>,
     save: impl FnOnce(&mut State) -> std::io::Result<()>,
-) -> Result<Value, std::borrow::Cow<'static, str>> {
+) -> Result<T, std::borrow::Cow<'static, str>> {
     let checkpoint = chat::Checkpoint::capture(state, &std::collections::HashSet::new());
     let (value, effects) = match operation(state) {
         Ok(applied) => applied,
@@ -784,30 +831,23 @@ pub fn handle(
             state,
             |state| {
                 let tx = crate::store::legacy_tx();
-                let (value, created) = chat::tool_queued(state, "control.chat.create", &arguments, tx)?;
+                let id = chat::create_from(state, &arguments)?;
                 let effects = match text {
-                    Some(text) => {
-                        let first = json!({"id":value["id"],"message":text});
-                        created.and(chat::tool_queued(state, "control.chat.send", &first, tx)?.1)
-                    }
-                    None => created,
+                    Some(text) => chat::send_applied(state, &json!({"id":id,"message":text}), tx)?,
+                    None => Effects::none(),
                 };
-                Ok((value, effects))
+                Ok((id, effects))
             },
             storage::save,
         );
         match result {
-            Ok(value) => {
+            Ok(id) => {
                 let _ = control_http::respond(
                     stream,
                     "303 See Other",
                     "text/plain",
                     b"",
-                    &format!(
-                        "Location: /dm/{}\r\n{}",
-                        value["id"].as_str().unwrap(),
-                        crate::lens_ui::cookie(chosen)
-                    ),
+                    &format!("Location: /dm/{}\r\n{}", id, crate::lens_ui::cookie(chosen)),
                     control_http::Policy::Embedded,
                 );
             }
@@ -854,11 +894,19 @@ pub fn handle(
     }
     if method == "POST" && operation == "lenses" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
-        match change(
+        let arguments = json!({"id":id,"lenses":chat::form_lenses(&fields,"none")});
+        let changed = saved_under_lock(
             state,
             "control.chat.lenses",
-            &json!({"id":id,"lenses":chat::form_lenses(&fields,"none")}),
-        ) {
+            &arguments,
+            |state| {
+                chat::set_lenses(state, &arguments)
+                    .map(|_| ((), Effects::none()))
+                    .map_err(Into::into)
+            },
+            storage::save,
+        );
+        match changed {
             Ok(_) => {
                 let _ = control_http::respond(
                     stream,
