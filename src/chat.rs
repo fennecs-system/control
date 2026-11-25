@@ -1778,6 +1778,8 @@ impl Checkpoint {
         Self::scoped(state, targets, changes_bots(text))
     }
     fn scoped(state: &State, targets: &std::collections::HashSet<&str>, bots: bool) -> Self {
+        let lineage = Lineage::of(&state.chats);
+        let subtree = lineage.subtree(targets.iter().copied());
         Self {
             chats: state.chats.len(),
             previous: state
@@ -1788,12 +1790,9 @@ impl Checkpoint {
                 .map(|(i, s)| (i, s.clone()))
                 .collect(),
             runs: state.runtime.runs.len(),
-            pending: {
-                let chats = Lineage::of(&state.chats).subtree(targets.iter().copied());
-                crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| {
-                    run.chat_id.as_deref().is_some_and(|chat| chats.contains(chat))
-                })
-            },
+            pending: crate::runtime::RunStatusCheckpoint::capture(&state.runtime, |run| {
+                run.chat_id.as_deref().is_some_and(|chat| subtree.contains(chat))
+            }),
             notice: state.runtime.notice.clone(),
             posts: state.collective.posts.len(),
             watches: state.collective.room_watches.clone(),
@@ -1814,16 +1813,13 @@ impl Checkpoint {
                         .map(|m| (i, m.baseline.clone()))
                 })
                 .collect(),
-            cancelled: {
-                let chats = Lineage::of(&state.chats).subtree(targets.iter().copied());
-                state
-                    .chats
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| chats.contains(s.id.as_str()))
-                    .map(|(i, s)| (i, s.cancelled_through))
-                    .collect()
-            },
+            cancelled: state
+                .chats
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| subtree.contains(s.id.as_str()))
+                .map(|(i, s)| (i, s.cancelled_through))
+                .collect(),
         }
     }
     pub(crate) fn restore(self, state: &mut State) {

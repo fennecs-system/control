@@ -113,3 +113,38 @@ fn snapshots_exclude_secrets_and_symlinks() {
     assert!(!dest.join("src/linked.rs").exists());
     fs::remove_dir_all(root).unwrap();
 }
+#[test]
+fn status_checkpoints_follow_persona_parents_from_active_runs() {
+    let mut runtime = Runtime::default();
+    for objective in ["Root", "Child", "Grandchild", "Loop a", "Loop b", "Orphan"] {
+        runtime.enqueue(objective.into(), RunKind::Task, "test");
+    }
+    let id = |index: usize| runtime.runs[index].id().as_str().to_owned();
+    let ids: Vec<String> = (0..6).map(id).collect();
+    let persona = |parent: &str| crate::delegation::Persona {
+        role: crate::delegation::Role::Worker,
+        root: ids[0].clone(),
+        depth: 1,
+        parent: Some(parent.to_owned()),
+        bundle: None,
+    };
+    // A finished root whose active descendants count; a parentless cycle
+    // and a parent that is not a run do not.
+    runtime.runs[0].status = RunStatus::Completed;
+    runtime.runs[1].persona = Some(persona(&ids[0]));
+    runtime.runs[1].status = RunStatus::Completed;
+    runtime.runs[2].persona = Some(persona(&ids[1]));
+    runtime.runs[3].persona = Some(persona(&ids[4]));
+    runtime.runs[4].persona = Some(persona(&ids[3]));
+    runtime.runs[5].persona = Some(persona("no-such-run"));
+    let kept = |checkpoint: RunStatusCheckpoint| checkpoint.runs.into_iter().map(|(id, ..)| id).collect::<Vec<_>>();
+    assert_eq!(
+        kept(RunStatusCheckpoint::capture(&runtime, |run| run.id() == ids[0])),
+        [ids[2].clone()]
+    );
+    assert_eq!(
+        kept(RunStatusCheckpoint::capture(&runtime, |run| run.id() == ids[3])),
+        [ids[3].clone(), ids[4].clone()]
+    );
+    assert!(kept(RunStatusCheckpoint::capture(&runtime, |run| run.id() == "no-such-run")).is_empty());
+}

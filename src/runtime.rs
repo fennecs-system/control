@@ -61,34 +61,28 @@ pub(crate) struct RunStatusCheckpoint {
     notice: String,
 }
 impl RunStatusCheckpoint {
+    /// The active runs that `matches`, or whose persona parent, at any
+    /// depth, does. Only active runs are kept, so only their ancestors are
+    /// visited: one pass over the runs' statuses, not a closure over every
+    /// run of the node.
     pub(crate) fn capture(runtime: &Runtime, matches: impl Fn(&Run) -> bool) -> Self {
-        let mut selected = runtime
-            .runs
-            .iter()
-            .filter(|r| matches(r))
-            .map(|r| r.id().as_str())
-            .collect::<std::collections::HashSet<_>>();
-        loop {
-            let before = selected.len();
-            for run in runtime.runs.iter() {
-                if run
-                    .persona
-                    .as_ref()
-                    .and_then(|p| p.parent.as_deref())
-                    .is_some_and(|parent| selected.contains(parent))
-                {
-                    selected.insert(run.id().as_str());
-                }
-            }
-            if before == selected.len() {
-                break;
-            }
-        }
+        let selected = |run: &Run| {
+            std::iter::successors(Some(run), |run| {
+                run.persona
+                    .as_ref()?
+                    .parent
+                    .as_deref()
+                    .and_then(|parent| runtime.runs.get(parent))
+            })
+            // A chain longer than the ledger repeats a run: a cycle.
+            .take(runtime.runs.len())
+            .any(&matches)
+        };
         Self {
             runs: runtime
                 .runs
                 .iter()
-                .filter(|run| run.status.is_active() && selected.contains(run.id().as_str()))
+                .filter(|run| run.status.is_active() && selected(run))
                 .map(|run| {
                     (
                         run.id().as_str().to_owned(),
