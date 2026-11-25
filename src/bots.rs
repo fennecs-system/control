@@ -1782,13 +1782,6 @@ fn reconcile_with_wake_at(
     // Turns requested earlier and now finished; decided before new events so a
     // turn requested in this pass is never mistaken for a finished one.
     let finished = if outstanding {
-        let index = state
-            .runtime
-            .runs
-            .iter()
-            .enumerate()
-            .map(|(i, run)| (run.id().as_str(), i))
-            .collect::<std::collections::HashMap<_, _>>();
         let tagged = state
             .runtime
             .runs
@@ -1803,7 +1796,7 @@ fn reconcile_with_wake_at(
             .supervisor
             .outstanding()
             .filter(|(bot, _, turn)| match tagged.get(&(bot.0.as_str(), turn.0)) {
-                Some(&run) => crate::rooms::continuation_leaf(state, run, &index)
+                Some(&run) => crate::rooms::continuation_leaf(state, run)
                     .is_none_or(|leaf| state.runtime.runs[leaf].status.is_finished()),
                 None => !state
                     .bots
