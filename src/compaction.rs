@@ -773,22 +773,22 @@ pub fn status(
 /// The Memory Tree page as `GET /dm/{id}/memory` serves it.
 #[cfg(test)]
 pub(crate) fn render(state: &State, id: &str, query: &str) -> Result<String, &'static str> {
-    overview(state, id, &crate::fields(query))?.render()
+    overview(state, id, &crate::fields(query))?
+        .check(crate::identity::authorize)?
+        .render()
 }
 /// The Memory Tree overview, copied out of state: bounded, in-memory, no
-/// disk reads or model calls.
+/// disk reads or model calls. It is shown once the chat's actor is
+/// authorized, after the lock: a Discord actor's policy is read from disk.
 pub(crate) fn overview(
     state: &State,
     id: &str,
     query: &HashMap<String, String>,
-) -> Result<tree::Overview, &'static str> {
+) -> Result<crate::identity::Unchecked<tree::Overview>, &'static str> {
     let session = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found")?;
-    crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
-    Ok(tree::Overview::of(
-        state,
-        session,
-        query,
-        status(&state.runtime, &state.chats, id),
+    Ok(crate::identity::Unchecked::new(
+        session.actor.clone(),
+        tree::Overview::of(state, session, query, status(&state.runtime, &state.chats, id)),
     ))
 }
 

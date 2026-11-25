@@ -127,6 +127,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
     let host = crate::tool_registry::LocalHost(&shared);
     let cx = AttemptCall {
         host: &host,
+        now: crate::design::UnixSeconds::now(),
         attempt: crate::tool_registry::AttemptRef {
             run: &id,
             generation: &generation,

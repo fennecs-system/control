@@ -63,7 +63,7 @@ impl Backend {
     }
     /// Difference: Control runs this backend's tool loop itself (local endpoints).
     pub(crate) fn runs_control_loop(self) -> bool {
-        matches!(self.agent().runs(), control_agent::Runs::Control)
+        matches!(self.agent().runs(), control_agent::Runs::Control(_))
     }
 }
 /// Whether any backend keeps `name` private in a workspace.

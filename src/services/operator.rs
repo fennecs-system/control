@@ -5,38 +5,43 @@
 use super::*;
 use control_journal::snapshot::Part;
 
-/// The chat and, with `team`, every chat spawned from it. The named chat must
-/// exist and be visible to its actor.
-fn chats(sessions: &[Part<crate::chat::Session>], id: &str, team: bool) -> io::Result<Vec<String>> {
+/// The chat and, with `team`, every chat spawned from it, for the named
+/// chat's actor. The named chat must exist.
+fn chats(sessions: &[Part<crate::chat::Session>], id: &str, team: bool) -> io::Result<identity::Unchecked<Vec<String>>> {
     let session = sessions
         .iter()
         .find(|session| session.id == id)
         .ok_or_else(|| fail("Chat not found."))?;
-    identity::authorize(&session.actor, Action::Task).map_err(fail)?;
-    Ok(if team {
-        Lineage::of(sessions)
-            .subtree([id])
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    } else {
-        vec![id.to_owned()]
-    })
+    Ok(identity::Unchecked::new(
+        session.actor.clone(),
+        if team {
+            Lineage::of(sessions)
+                .subtree([id])
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        } else {
+            vec![id.to_owned()]
+        },
+    ))
 }
 fn row(service: &Service) -> Value {
     json!({"service_id":service.resource.id,"chat":service.resource.owner.chat.as_str(),"phase":service.phase_name(),"command":service.label(),"running_commands":service.running_commands()})
 }
-/// Live services owned by `id` (or its team), oldest first.
+/// Live services owned by `id` (or its team), oldest first, shown once the
+/// chat's actor is authorized (after the lock: a Discord actor's policy is
+/// read from disk).
 pub(crate) fn list(
     services: &[Service],
     sessions: &[Part<crate::chat::Session>],
     id: &str,
     team: bool,
-) -> io::Result<Value> {
-    let chats = chats(sessions, id, team)?;
-    Ok(json!({"services":services.iter()
-        .filter(|service| service.live() && chats.iter().any(|chat| chat == service.resource.owner.chat.as_str()))
-        .map(row).collect::<Vec<_>>()}))
+) -> io::Result<identity::Unchecked<Value>> {
+    Ok(chats(sessions, id, team)?.map(|chats| {
+        json!({"services":services.iter()
+            .filter(|service| service.live() && chats.iter().any(|chat| chat == service.resource.owner.chat.as_str()))
+            .map(row).collect::<Vec<_>>()})
+    }))
 }
 /// Requests a stop of every live service owned by `id` (or its team), or only
 /// `service` when named. Each stop is the services page's own transition and
@@ -49,7 +54,9 @@ pub(crate) fn stop(
     service: Option<&str>,
     save: impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
-    let chats = chats(&state.chats, id, team)?;
+    let chats = chats(&state.chats, id, team)?
+        .check(identity::authorize)
+        .map_err(fail)?;
     let chosen = state
         .services
         .iter()

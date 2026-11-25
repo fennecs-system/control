@@ -38,7 +38,7 @@ generic invariant that existing interfaces cannot express.
 | `control-agent` | The agent backend interface: the `Agent` trait and its facts, a turn's typed inputs (`Turn`, `Granted`), the host context traits (`Host`, `Events`, `Node`), the `Outcome` and `Failure` a turn returns with their status and wording, and `cli`: what the CLI backends whose only tools are Control's share (base container, isolation probe, supervised turn). Also the child-process waiter and mailbox wake those use. No application state. |
 | `control-inject` | The pure core of the key-injecting relay: a request head parsed once into typed parts, each backend's `InjectionRule` (fixed origin, route allow-list, key header), the per-attempt `AttemptCap` and its placeholder, `plan` returning the outbound head with a slot for the key, and the relay's budget and audit retention. `std` only; no I/O, clock or key. |
 | `control-codex`, `control-claude`, `control-grok`, `control-antigravity` | One agent backend each: its containers and launch arguments, decoder wiring, probe, text call, turn and `control ID login\|check`, and its `KeyDelivery` (its `control-inject` rule). Depend only on `control-agent`, `control-ai`, `control-inject`, `control-isolation`, `control-context` (and Codex on `control-effect`); only the root links them. |
-| `control-local` | The local endpoint backend (`Local`) and the host-free decisions of its tool loop: worker tools as function tools, result text and host notes in the transcript, the token estimate and context reserve, the system prompt, adaptive thinking and per-call metering. Depends only on `control-agent`, `control-ai`, `control-isolation`; only the root links it. The loop itself still runs in the root (see Agent backends). |
+| `control-local` | The local endpoint backend (`Local`): its turn, the tool loop Control runs (`tool_loop`, with its step lens), bound only to `control-agent`'s `Host`, and the private-endpoint transport the host's own text calls on local endpoints also use. Also the loop's host-free decisions: worker tools as function tools, result text and host notes in the transcript, the token estimate and context reserve, the system prompt, adaptive thinking and per-call metering. Depends only on `control-agent`, `control-ai`, `control-comonad`, `control-context`, `control-isolation`; only the root links it. |
 
 The `control` library (`src/lib.rs`) keeps only build information and the
 operator's permission policy, which the server alone uses. Discord follows typed
@@ -79,27 +79,42 @@ persisted with each run and attempt, and `Backend::agent()` is the only
 dispatch from it. What a backend supplies is the `Agent` trait in
 `control-agent`: identity and default model, where its image is pinned, how
 its login is checked, the offline isolation probe, the bounded text call and
-its decoder, who runs a turn's tool loop (`runs`), and the facts listed below.
-`control-codex`, `control-claude`, `control-grok`, `control-antigravity` and
-`control-local` each implement it in their own crate. The local endpoint's
-loop (`Runs::Control`) still runs in the root, `src/local_agent.rs`.
-`worker::execute` prepares the workspace, renders
-the prompt and dispatches once through the trait.
+its decoder, who runs a turn's tool loop and the turn itself (`runs`, which
+hands out its `Turns`), and the facts listed below. `control-codex`,
+`control-claude`, `control-grok`, `control-antigravity` and `control-local`
+each implement it in their own crate. `worker::execute` prepares the
+workspace, renders the prompt and dispatches once through `Turns::turn`, the
+same call for all five.
 
-A CLI turn (`Turns::turn`) receives a `Turn` of typed values (attempt id,
+A turn (`Turns::turn`) receives a `Turn` of typed values (attempt id,
 isolation handle, node, image, model, prepared workspace, rendered prompt,
-admission time, whether Control's tools are served, and the login) and a
-`&mut dyn Host`: cancellation, design requests, tool pumping for its
-mailbox, the attempt's time limit and handoff (`poll`), stopping its
-containers, the declared observation, and an `Events` sink a reader thread
-records activity and usage through. It returns an `Outcome`: not launched,
-or launched with its usage and a reply or a `Failure`. `Failure` is an enum
-(blocked, a classified provider `Cause` such as a usage limit or rejected
-login, the CLI's own ending, unexpected tools, time limit, cancellation,
-design wait, interruption, an unfinished tool call); its status and wording
-live in `control-agent`, and `agent_host::finish` turns it into attempt
-state. The host implements these traits in `src/agent_host.rs`; no backend
-names `State`, `Attempt` or a root module.
+admission time, whether Control's tools are served, the login, the operator's
+step cap, whether it resumes a cut-off turn, and, for Control's own loop, the
+endpoint and the in-turn compactor's bounds) and a `&mut dyn Host`:
+cancellation, design requests, Control's worker tools (pumped from a CLI's
+mailbox, or one request at a time with `serve`), the attempt's time limit and
+handoff (`poll`), stopping its containers, the declared observation (once
+into a prompt the provider keeps, or per request), new callbacks, whether a
+next turn follows, a summary on the chat's compactor, recall in the
+conversation's summary tree, the reasoning a cut-off turn stopped in, and an
+`Events` sink a reader thread records activity and usage through. It returns
+an `Outcome`: not launched, or launched with its usage and a reply or a
+`Failure`. `Failure` is an enum (blocked, a classified provider `Cause` such
+as a usage limit or rejected login, the CLI's own ending, unexpected tools,
+time limit, step cap, cancellation, design wait, interruption, an unfinished
+tool call); its status and wording live in `control-agent`, and
+`agent_host::finish` turns it into attempt state. The host implements these
+traits in `src/agent_host.rs`; no backend names `State`, `Attempt` or a root
+module, and no backend has a host interface of its own.
+
+The local loop (`control_local::tool_loop`) keeps the effects it needs as a
+trait of its own, `Effects`, so its tests script the endpoint and the
+dispatcher; in a turn its only binding is `control_local`'s adapter over the
+shared `Host`, and the loop is generic over it, so each effect is one
+dynamic call into the host as before. The model is reached over the
+private-endpoint transport in `control_local::transport`, as a CLI reaches its
+own provider; the host's own text calls on a local endpoint use the same
+transport.
 
 Backends never locate credentials. The host (`src/logins.rs`) finds the one
 implicit account per backend at the path its backend used to look at itself,
@@ -118,44 +133,11 @@ root depends on a backend crate.
 
 Still open:
 
-- The local endpoint's loop. `control-local` holds the backend and the
-  loop's host-free decisions, but `local_agent::run` and its step lens
-  (`local_agent/context.rs`) stay in the root because what they ask of the
-  host is the loop's own `Host` trait (`src/local_agent.rs:98`), which no
-  `control-agent` type carries; moving that trait into `control-local`
-  would give one backend a host interface the others lack. What it reaches
-  for:
-  - worker tools: `tools`/`call` (`:99`, `:101`) go straight to
-    `worker_tools::local_rpc` (`:584`, `:598`) where CLIs pump a mailbox;
-  - model transport: `model` (`:103`, `:636`) is `model_calls::post_json`
-    on the endpoint from the registry (`providers::endpoint`,
-    `providers::agent_capable`, `:753`–`:756`);
-  - compaction and recall: `summarize` (`:106`, `:644`) on the chat's
-    compactor (`compaction::compactor_for`, `:774`), `retain` (`:135`,
-    `:692`) into the conversation's summary tree, and
-    `compaction::target_words` (`context.rs:482`);
-  - per-step context: `observation` (`:119`, `:666`, refreshed each step,
-    where `Host::observed` runs once), `inbox` (`:124`, `:677`) and
-    `continues` (`:112`, `:669`, bot continuation);
-  - endings: `step_limit` (`:110`, `:663`) and `reasoned` (`:129`, `:689`)
-    set the attempt's termination and host-checkpoint reasoning (`:830`);
-  - settings: `local_agent_steps` (`:898`), resumption and the managed flag
-    read from `State` in `execute` (`:740`);
-  - texts shared with the host: `worker_tools::nudges` (`:259`–`:339`) and
-    `worker_tools::deferred::SEARCH` (`:154`).
-
-  `record` and `metered` already map onto `Events::activity` and
-  `Events::usage`, `poll` onto `Host::poll`, `cancelled` and
-  `design_requested`, and the container stop (`:883`) onto `Host::stop`.
-  Proposed interface, so `Local` implements `Turns` like the CLIs and
-  `Runs::Control` goes: `Host::serve(request) -> response` (one worker MCP
-  request without a mailbox, usable by any in-process bridge);
-  `Host::summarize` and `Host::retain` (host compaction and recall, open to
-  any backend that compacts in-turn); `Host::observed` and an inbox read
-  per step rather than once; a `Failure::StepLimit` carrying the cut-off
-  reasoning; and the endpoint, its compactor's limits, the step cap and
-  `resumed` as typed `Turn` fields, with the endpoint transport moving into
-  `control-local`. The nudge texts would move to `control-context`.
+- Endpoint resolution. Which endpoint and compactor a local turn runs on is
+  read from the registry and the chat by the host (`src/local_agent.rs`,
+  `resolve`), the one place the dispatch branches on `Runs::Control`; a
+  backend whose loop Control runs needs its endpoint, as a CLI needs its
+  login.
 - Prompt rendering (`turn_context.rs`) uses the root `identity::Workspace`;
   it stays with the host, which hands a backend the rendered prompt.
 - Endpoint selection still asks whether a model is the local kind
@@ -169,7 +151,7 @@ it can be evened out on purpose; do not add to the list.
 
 | Difference | Codex | Claude | Grok | Antigravity | Local |
 | --- | --- | --- | --- | --- | --- |
-| Tool loop (`runs`) | its own CLI | its own CLI | its own CLI | its own CLI | Control's loop (`local_agent`), with its own step cap, thinking levels and in-turn compaction |
+| Tool loop (`runs`) | its own CLI | its own CLI | its own CLI | its own CLI | Control's loop (`control_local::tool_loop`), with its own step cap, thinking levels and in-turn compaction |
 | Shell (`host_shell`) | CLI's sandboxed shell inside the turn container | Control's shell tool in a separate offline container | same as Claude | same as Claude | Control's shell tool |
 | Web search (`own_web_search`) | the CLI's built-in search stays on in a turn (its text calls turn it off) | Control's search tool only: its own tools are removed | same as Claude | same as Claude | Control's search tool |
 | Turn context (`own_prompt`) | captured context and policy prompt (`worker::render_prompt`) | its own shorter prompt (`control_claude::render_prompt`) unless the attempt captured its turn context | same as Codex | same as Codex | same as Codex |

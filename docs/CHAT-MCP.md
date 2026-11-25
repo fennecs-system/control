@@ -67,14 +67,18 @@ folder approvals enabled, `chat_open` requests and approves each path in turn.
 
 Every call goes to the running server's operator MCP endpoint (`/mcp`) over
 loopback, through the `Hive` client the TUI uses. The server runs its own
-application functions under its state lock:
+application functions. Calls that change state run under its state lock:
 
-- `control.chat.create`, `.send`, `.read`, `.lenses`, `.rename` and `.persona`;
-- `control.chats.list` and `control.requests.list`;
+- `control.chat.create`, `.send`, `.lenses`, `.rename` and `.persona`;
 - `control.project.request`;
 - `control.chat.ask` (`control_design_ask` for a caller with no run) and
   `control.chat.withdraw` (`control_design_withdraw`);
-- `control.services.list` and `control.services.stop`.
+- `control.services.stop`.
+
+Read-only calls (`control.chat.read`, `control.chats.list`,
+`control.requests.list`, `control.services.list`) copy what they answer under
+the lock and finish after it: they encode the reply there, and requests and
+services also authorize a Discord actor there (its policy is read from disk).
 
 `control.services.stop` makes the same stop transition as the services page.
 

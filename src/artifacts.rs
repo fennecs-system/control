@@ -546,43 +546,80 @@ pub fn definitions() -> Vec<serde_json::Value> {
         }),
     ]
 }
-fn published<'a>(state: &'a crate::State, id: &str) -> Result<Vec<&'a str>, &'static str> {
+/// The published outputs of chat `id`, oldest first, for its actor to see.
+fn published(state: &crate::State, id: &str) -> Result<crate::identity::Unchecked<Vec<String>>, &'static str> {
     let chat = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found")?;
-    crate::identity::authorize(&chat.actor, crate::identity::Action::Task)?;
-    Ok(chat
-        .messages
-        .iter()
-        .filter_map(|message| message.run_id.as_ref())
-        .filter_map(|id| state.runtime.runs.get(id).filter(|r| r.actor == chat.actor))
-        .flat_map(|r| &r.attempts)
-        .filter_map(|a| a.artifact.as_deref())
-        .collect())
-}
-pub fn tool(state: &crate::State, name: &str, args: &serde_json::Value) -> Result<serde_json::Value, &'static str> {
-    use serde_json::json;
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Args {
-        id: String,
-        artifact: Option<String>,
-        path: Option<String>,
-    }
-    let args: Args = serde_json::from_value(args.clone()).map_err(|_| "Invalid artifact arguments")?;
-    let ids = published(state, &args.id)?;
-    if name == TOOLS[0] {
-        let outputs = ids
+    Ok(crate::identity::Unchecked::new(
+        chat.actor.clone(),
+        chat.messages
             .iter()
-            .rev()
-            .take(16)
-            .map(|id| manifest(id))
-            .collect::<io::Result<Vec<_>>>()
-            .map_err(|_| "Published artifact unavailable or invalid")?;
-        return Ok(json!({"id":args.id,"artifacts":outputs,"earlier_omitted":ids.len().saturating_sub(16)}));
+            .filter_map(|message| message.run_id.as_ref())
+            .filter_map(|id| state.runtime.runs.get(id).filter(|r| r.actor == chat.actor))
+            .flat_map(|r| &r.attempts)
+            .filter_map(|a| a.artifact.clone())
+            .collect(),
+    ))
+}
+/// A `control.artifacts.list` (`list`) or `control.artifact.read` call,
+/// its arguments checked before locking.
+pub(crate) struct Call {
+    list: bool,
+    id: String,
+    artifact: Option<String>,
+    path: Option<String>,
+}
+/// What a call answers from, copied out of state: the chat's published
+/// outputs. Their manifests and files are read after the lock.
+pub(crate) struct Listed {
+    call: Call,
+    ids: crate::identity::Unchecked<Vec<String>>,
+}
+impl Call {
+    pub(crate) fn of(list: bool, args: &serde_json::Value) -> Result<Self, &'static str> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            id: String,
+            artifact: Option<String>,
+            path: Option<String>,
+        }
+        let Args { id, artifact, path } =
+            serde_json::from_value(args.clone()).map_err(|_| "Invalid artifact arguments")?;
+        Ok(Self {
+            list,
+            id,
+            artifact,
+            path,
+        })
     }
-    if name != TOOLS[1] {
-        return Err("Unknown artifact tool");
+    pub(crate) fn view(self, state: &crate::State) -> Result<Listed, &'static str> {
+        published(state, &self.id).map(|ids| Listed { call: self, ids })
     }
-    preview(&ids, args.artifact.as_deref(), args.path.as_deref())
+}
+impl Listed {
+    /// Authorizes the chat's actor, then reads the manifests (list) or the
+    /// file (read).
+    pub(crate) fn answer(self) -> Result<serde_json::Value, &'static str> {
+        use serde_json::json;
+        let Self { call, ids } = self;
+        let ids = ids.check(crate::identity::authorize)?;
+        let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        if call.list {
+            let outputs = ids
+                .iter()
+                .rev()
+                .take(16)
+                .map(|id| manifest(id))
+                .collect::<io::Result<Vec<_>>>()
+                .map_err(|_| "Published artifact unavailable or invalid")?;
+            return Ok(json!({"id":call.id,"artifacts":outputs,"earlier_omitted":ids.len().saturating_sub(16)}));
+        }
+        preview(&ids, call.artifact.as_deref(), call.path.as_deref())
+    }
+}
+#[cfg(test)]
+pub fn tool(state: &crate::State, name: &str, args: &serde_json::Value) -> Result<serde_json::Value, &'static str> {
+    Call::of(name == TOOLS[0], args)?.view(state)?.answer()
 }
 /// One published file's text, read from disk.
 fn preview(ids: &[&str], artifact: Option<&str>, path: Option<&str>) -> Result<serde_json::Value, &'static str> {
@@ -630,12 +667,12 @@ fn visible_outputs<'a>(
         .collect()
 }
 /// A DM's artifacts page as state decides it: the chat's published
-/// outputs and the request's choice. Its manifests and files are read
-/// after the state lock.
+/// outputs and the request's choice. The chat's actor is authorized and
+/// its manifests and files are read after the state lock.
 pub(crate) struct Page {
     chat: String,
     /// What `published` lists, in its order.
-    ids: Vec<String>,
+    ids: crate::identity::Unchecked<Vec<String>>,
     artifact: Option<String>,
     file: Option<String>,
 }
@@ -647,14 +684,16 @@ impl Page {
     ) -> Result<Self, &'static str> {
         Ok(Self {
             chat: chat.to_owned(),
-            ids: published(state, chat)?.into_iter().map(str::to_owned).collect(),
+            ids: published(state, chat)?,
             artifact: args.get("artifact").cloned(),
             file: args.get("file").cloned(),
         })
     }
-    /// Reads the outputs' manifests and the chosen file, then renders.
-    pub(crate) fn read(&self) -> Result<String, &'static str> {
-        let ids = self.ids.iter().map(String::as_str).collect::<Vec<_>>();
+    /// Authorizes the chat's actor, reads the outputs' manifests and the
+    /// chosen file, then renders.
+    pub(crate) fn read(self) -> Result<String, &'static str> {
+        let ids = self.ids.check(crate::identity::authorize)?;
+        let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
         render(&self.chat, &ids, self.artifact.as_deref(), self.file.as_deref())
     }
 }

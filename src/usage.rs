@@ -137,11 +137,7 @@ pub struct Attempt {
 impl Attempt {
     /// Records what the provider reported, whatever the attempt's outcome.
     pub fn record_usage(&mut self, usage: control_ai::Usage) {
-        self.accounting = match (usage.tokens, usage.complete) {
-            (None, _) => Accounting::Unknown,
-            (Some(_), true) => Accounting::Reported,
-            (Some(_), false) => Accounting::Partial,
-        };
+        self.accounting = usage.accounting();
         self.tokens = usage.tokens;
         if usage.model.is_some() {
             self.reported_model = usage.model;

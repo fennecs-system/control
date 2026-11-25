@@ -184,7 +184,7 @@ impl AttemptTools for Tools {
     fn call(&self, cx: &AttemptCall<'_>, name: &str, args: &Value) -> io::Result<Value> {
         cx.host
             .0
-            .write(|state| handle(state, &cx.attempt, name, args, crate::storage::save))
+            .write(|state| handle_at(state, &cx.attempt, name, args, cx.now, crate::storage::save))
             .map_err(|_| err(format!("State unavailable. {OPERATOR_FIX}")))?
     }
 }
@@ -719,6 +719,8 @@ fn disposition(state: &State, chat: &str, value: Value, adjusted: &mut Vec<Strin
         recheck_seconds,
     })
 }
+/// `handle_at` now.
+#[cfg(test)]
 fn handle(
     state: &mut State,
     attempt: &AttemptRef<'_>,
@@ -726,10 +728,21 @@ fn handle(
     args: &Value,
     save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
+    handle_at(state, attempt, name, args, crate::design::UnixSeconds::now(), save)
+}
+/// One call at clock reading `now`.
+fn handle_at(
+    state: &mut State,
+    attempt: &AttemptRef<'_>,
+    name: &str,
+    args: &Value,
+    now: crate::design::UnixSeconds,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
+) -> io::Result<Value> {
     // A failed save is a storage fault, not a rejected receipt; it leaves
     // state untouched.
     let mut unsaved = false;
-    let result = respond(state, attempt, name, args, |state: &mut State| {
+    let result = respond(state, attempt, name, args, now, |state: &mut State| {
         save(state).inspect_err(|_| unsaved = true)
     });
     if name == "control_turn_handoff"
@@ -776,11 +789,13 @@ fn reject(state: &mut State, attempt: &AttemptRef<'_>, error: &str) {
         });
     }
 }
+/// `now`: the clock reading the remaining time budget counts from.
 fn respond(
     state: &mut State,
     attempt: &AttemptRef<'_>,
     name: &str,
     args: &Value,
+    now: crate::design::UnixSeconds,
     save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let index = state
@@ -1020,10 +1035,7 @@ fn respond(
             request: if empty { String::new() } else { fingerprint },
         };
         mailbox.deliver(key.clone(), delivery).map_err(err)?;
-        let elapsed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-            .saturating_sub(run.attempts.last().unwrap().started_unix);
+        let elapsed = now.0.saturating_sub(run.attempts.last().unwrap().started_unix);
         let limit = crate::attempt_control::deadline(state, run, run.attempts.last().unwrap());
         // The turn prompt already carries the committed notes and the standing
         // guidance; a staged draft is summarised by its disposition.

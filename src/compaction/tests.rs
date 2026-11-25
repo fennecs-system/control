@@ -343,8 +343,9 @@ fn a_local_model_chat_compacts_on_its_own_endpoint_by_default_and_its_turn_fits(
 /// final report (never its in-turn summaries) enters the chat history.
 #[test]
 fn a_long_local_chat_compacts_across_turns_and_within_each_turn() {
-    use crate::local_agent::{Compactor as Steps, Host, Policy, Poll};
+    use control_agent::Compactor as Steps;
     use control_local::Meter;
+    use control_local::tool_loop::{Effects, Policy, Poll};
     use serde_json::{Value, json};
     #[derive(Default)]
     struct Turn {
@@ -352,7 +353,7 @@ fn a_long_local_chat_compacts_across_turns_and_within_each_turn() {
         requests: Vec<usize>,
         folds: usize,
     }
-    impl Host for Turn {
+    impl Effects for Turn {
         fn tools(&mut self) -> io::Result<Vec<Value>> {
             Ok(vec![
                 json!({"name":"control_workspace_run","description":"Run","inputSchema":{"type":"object"}}),
@@ -427,13 +428,13 @@ fn a_long_local_chat_compacts_across_turns_and_within_each_turn() {
         // Within the turn: fourteen bulky steps through the local step lens.
         let mut host = Turn::default();
         let prompt = format!("{history}\nCurrent request: build svc-a ({turn})");
-        let outcome = crate::local_agent::run(
+        let outcome = control_local::tool_loop::run(
             &mut host,
             "m",
             &limits,
             Steps {
                 input_bytes: 6000,
-                output_tokens: 512,
+                words: target_words(512),
             },
             &prompt,
             &Policy::default(),

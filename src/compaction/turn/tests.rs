@@ -93,6 +93,7 @@ fn compacted_steps_join_the_tree_and_recall_returns_their_verbatim_excerpts() {
     let host = LocalHost(&shared);
     let cx = AttemptCall {
         host: &host,
+        now: crate::design::UnixSeconds::now(),
         attempt: AttemptRef {
             run: &run,
             generation: &generation,

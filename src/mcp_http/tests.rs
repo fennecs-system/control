@@ -156,3 +156,77 @@ fn refused_method_response_bytes_are_pinned() {
         "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'\r\nallow: POST\r\n\r\nUse MCP POST requests."
     );
 }
+
+/// Which operator MCP calls take the read path (`READ_TOOLS`): the state is
+/// copied under the lock and the reply finished and encoded after it, behind
+/// the reply gate. `chat_team` and `chat_requests` call two of them through
+/// `Hive`. Tools that write stay on the locked path.
+#[test]
+fn read_only_tools_take_the_read_path() {
+    let call = |name: &str, arguments: Value| {
+        let request =
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}});
+        ReadCall::of("POST", None, &request).is_some()
+    };
+    for name in [
+        "control.chats.list",
+        "control.chat.read",
+        "control.requests.list",
+        "control.run.scores",
+        "control.services.list",
+        "control.personas.list",
+        "control.persona.read",
+        "control.lenses.list",
+        "control.lens.read",
+        "control.lenses.resolve",
+        "control.knowledge.search",
+        "control.knowledge.read",
+        "control_knowledge_search",
+        "control.rooms.list",
+        "control.room.read",
+        "control.artifacts.list",
+        "control.artifact.read",
+    ] {
+        assert!(call(name, json!({})), "{name} takes the read path");
+    }
+    assert!(
+        call("control.services.list", json!({"id":"c-1","team":true})),
+        "chat_team"
+    );
+    // `control.intel.brief` saves the brief with `save: true`.
+    for name in [
+        "control.intel.brief",
+        "control.services.stop",
+        "control.chat.send",
+        "control.chat.persona",
+        "control.knowledge.propose",
+        "control.room.post",
+        "control_github_read",
+        "unknown",
+    ] {
+        assert!(!call(name, json!({})), "{name} stays off the read path");
+    }
+    let unchecked = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control.rooms.list"}});
+    assert!(ReadCall::of("GET", None, &unchecked).is_none());
+    assert!(ReadCall::of("POST", Some("1999-01-01"), &unchecked).is_none());
+    assert!(ReadCall::of("POST", None, &json!({"jsonrpc":"2.0","method":"tools/call"})).is_none());
+}
+
+/// `tools/list` reads no state and takes no lock; a poisoned state still
+/// answers 503, as it did under the lock.
+#[test]
+fn the_tool_list_needs_no_lock() {
+    let shared = crate::store::Store::new(State::default());
+    let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+    let held = shared.guard().unwrap();
+    let mut out = Vec::new();
+    assert!(handle(&mut out, &shared, "POST", "/mcp", "", body));
+    drop(held);
+    assert!(String::from_utf8(out).unwrap().starts_with("HTTP/1.1 200 OK\r\n"));
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = shared.guard().unwrap();
+        panic!("simulate interrupted state mutation");
+    });
+    let (_, status, _) = send(&shared, "POST", "", body);
+    assert_eq!(status, "HTTP/1.1 503 Service Unavailable");
+}

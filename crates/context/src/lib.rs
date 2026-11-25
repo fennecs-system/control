@@ -5,11 +5,14 @@ pub mod commands;
 pub mod github;
 mod library;
 pub mod limits;
+pub mod nudges;
 pub mod persona;
 pub mod tool_policy;
 pub mod turn_context;
 pub mod turn_mailbox;
 pub mod working_state;
+/// The search tool through which deferred worker tools load.
+pub const TOOL_SEARCH: &str = "control_tool_search";
 pub use library::{
     Audience, Definition, DocumentInput, Guidance, LensVersion, Library, PackageInput, Resolved, package_reference,
     valid_id,

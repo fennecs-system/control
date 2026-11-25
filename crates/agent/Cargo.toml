@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 control-ai = { path = "../ai" }
+control-comonad = { path = "../comonad" }
 control-context = { path = "../context" }
 control-effect = { path = "../effect" }
 control-inject = { path = "../inject" }

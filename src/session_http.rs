@@ -4,6 +4,9 @@ use crate::{State, chat, storage};
 use serde_json::{Value, json};
 use std::io::Write;
 
+pub(crate) mod reads;
+use reads::ReadTool;
+
 fn cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     header
         .lines()
@@ -442,28 +445,21 @@ impl control_mcp::Tools for Operator<'_> {
     }
     fn call(&mut self, call: control_mcp::Call<'_>) -> Value {
         let (state, name, arguments) = (&mut *self.0, call.name, call.arguments);
-        let result: Result<Value, std::borrow::Cow<'static, str>> = if crate::knowledge_tools::known(name) {
+        let result: Result<Value, std::borrow::Cow<'static, str>> = if let Some(read) = ReadTool::of(name, arguments) {
+            // The steps `/mcp` takes around the lock, here under it.
+            read.view(state).and_then(reads::Viewed::value).map_err(Into::into)
+        } else if crate::knowledge_tools::known(name) {
             crate::knowledge_tools::local(state, name, arguments, storage::save).map_err(Into::into)
         } else if crate::tool_registry::checkpoint(name) {
             change(state, name, arguments)
         } else {
             match crate::tool_registry::lookup(name).map(|tool| tool.route) {
-                Some(crate::tool_registry::Route::Artifacts) => {
-                    crate::artifacts::tool(state, name, arguments).map_err(Into::into)
-                }
-                Some(crate::tool_registry::Route::Room) => {
-                    crate::rooms::tool(state, name, arguments).map_err(Into::into)
-                }
-                Some(crate::tool_registry::Route::Lens) => {
-                    crate::lens_library::tool(crate::lens_library::Sources::of(state), name, arguments)
-                        .map_err(Into::into)
-                }
                 // Served by `mcp_http` before the state lock is taken.
                 Some(crate::tool_registry::Route::Package) => {
                     Err("Package tools are served by the HTTP MCP endpoint.".into())
                 }
                 // `control.chat.send`, the one tool that queues work, is a
-                // checkpointed tool (`change`); these read or change in place.
+                // checkpointed tool (`change`); these change in place.
                 _ => chat::fixed_tool(state, name, arguments).map_err(Into::into),
             }
         };
@@ -621,7 +617,7 @@ impl FilePage {
 }
 pub(crate) enum Located {
     Artifacts(Result<crate::artifacts::Page, &'static str>),
-    Memory(Result<Box<crate::compaction::tree::Overview>, &'static str>),
+    Memory(Result<Box<crate::identity::Unchecked<crate::compaction::tree::Overview>>, &'static str>),
     Context(std::io::Result<crate::turn_context::Trace>),
 }
 pub(crate) const FILE_PAGES: crate::Read<FilePage, Located> = crate::Read {
@@ -633,7 +629,10 @@ pub(crate) const FILE_PAGES: crate::Read<FilePage, Located> = crate::Read {
     render: |located| {
         let html = match located {
             Located::Artifacts(page) => page.and_then(|page| page.read()).map_err(str::to_owned),
-            Located::Memory(overview) => overview.and_then(|overview| overview.render()).map_err(str::to_owned),
+            Located::Memory(overview) => overview
+                .and_then(|overview| overview.check(crate::identity::authorize))
+                .and_then(|overview| overview.render())
+                .map_err(str::to_owned),
             Located::Context(trace) => trace.and_then(|trace| trace.read()).map_err(|error| error.to_string()),
         };
         let (status, mime, body) = match html {

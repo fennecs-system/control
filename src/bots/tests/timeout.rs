@@ -11,7 +11,7 @@ fn ok(_: &mut State) -> io::Result<()> {
 fn time_out(state: &mut State, index: usize) {
     let run = &mut state.runtime.runs[index];
     run.status = RunStatus::Failed;
-    *run.result = crate::worker::timeout_message(std::time::Duration::from_secs(600));
+    *run.result = control_agent::timeout_message(std::time::Duration::from_secs(600));
     run.attempts.last_mut().unwrap().termination = Some(crate::attempt_control::Termination::TimedOut);
 }
 fn lifecycle_facts(state: &State, advisor: &str) -> Vec<Facts> {

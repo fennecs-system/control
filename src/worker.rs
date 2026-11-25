@@ -14,8 +14,6 @@ pub(crate) use control_context::agent_policy::ENVIRONMENT_CORE;
 /// On-demand detail behind `ENVIRONMENT_CORE`.
 pub(crate) const ENVIRONMENT_GUIDANCE: &str = "The pinned Nix-built base image is immutable. Edit task files in /workspace and use /tmp for scratch builds. Lite workers provide Rust tools. If the operator selected the full profile, credential-free workspace tools and persistent services additionally provide Nix, Node/npm, Java, Python and curl. Use control_workspace_start or workspace command tools for private Nix builds; the model CLI container remains read-only. Full has pinned local nixpkgs and a private single-user store; cached/local builds work offline. Network access is separately scoped, so remote packages are not automatically reachable. Never modify or publish shared images or caches; there is no host Nix daemon access.";
 
-pub(crate) use control_agent::timeout_message;
-
 static DISPATCH_WAKE: Mutex<Option<std::sync::mpsc::SyncSender<()>>> = Mutex::new(None);
 pub fn wake() {
     if let Ok(sender) = DISPATCH_WAKE.lock()
@@ -1390,48 +1388,64 @@ fn execute(
             render_prompt(objective, scope, room.as_deref(), bridge.is_some())
         }),
     };
-    let output = match agent.runs() {
-        // The loop ends every model request with the declared observation,
-        // after the cache-stable prefix and outside the step transcript.
-        control_agent::Runs::Control => crate::local_agent::execute(attempt, bridge, &absolute, &prompt)?,
-        control_agent::Runs::Cli(cli) => {
-            let (login, relay) = match early.map_or_else(|| login(&store, attempt, id), Ok) {
-                Ok((granted, relay)) => (Ok(granted), relay),
-                Err(error) => (Err(error), None),
-            };
-            // What a sign-in failure tells the operator to run for this account.
-            let sign_in = control_agent::SignIn::from(crate::logins::sign_in_command(&crate::logins::account(
-                &store.unwrap_or_default(),
-                attempt.backend,
-                &attempt.account,
-            )));
-            let model = attempt.model.clone();
-            let turn = control_agent::Turn {
-                id,
-                isolation,
-                node: &node,
-                image: &image,
-                model: &model,
-                workspace: &absolute,
-                prompt,
-                review_only: attempt.review_only,
-                started_unix: attempt.started_unix,
-                tools: bridge.is_some(),
-                login,
-            };
-            let mut host = crate::agent_host::Attempted {
-                id,
-                isolation,
-                bridge,
-                attempt,
-                workspace: &absolute,
-            };
-            // A proxied key's relay serves the turn's container while it runs.
-            let container = format!("control-{id}");
-            let outcome = crate::ports::key_relay::during(relay, isolation, &container, || cli.turn(turn, &mut host));
-            crate::agent_host::finish(outcome, attempt, bridge, id, &sign_in)?
-        }
+    // Every backend's turn goes through the same interface. Control's own loop
+    // also gets the endpoint and compactor the host resolved for it.
+    let (turns, local) = match agent.runs() {
+        control_agent::Runs::Cli(turns) => (turns, None),
+        control_agent::Runs::Control(turns) => (turns, crate::local_agent::resolve(attempt, bridge)?),
     };
+    // Local endpoints use no provider login; no account file is located or mounted.
+    let (login, relay) = match agent
+        .login()
+        .map(|_| early.map_or_else(|| login(&store, attempt, id), Ok))
+    {
+        Some(Ok((granted, relay))) => (Ok(granted), relay),
+        Some(Err(error)) => (Err(error), None),
+        None => (Err(std::io::Error::other("This backend has no login")), None),
+    };
+    // What a sign-in failure tells the operator to run for this account.
+    let sign_in = control_agent::SignIn::from(crate::logins::sign_in_command(&crate::logins::account(
+        &store.unwrap_or_default(),
+        attempt.backend,
+        &attempt.account,
+    )));
+    let model = attempt.model.clone();
+    let (steps, resumed) = crate::agent_host::continuity(bridge);
+    let (endpoint, compactor, budget) = match local {
+        Some(local) => (Some(local.endpoint), Some(local.compactor), Some(local.budget)),
+        None => (None, None, None),
+    };
+    let turn = control_agent::Turn {
+        id,
+        isolation,
+        node: &node,
+        image: &image,
+        model: &model,
+        workspace: &absolute,
+        // The local loop ends every model request with the declared
+        // observation, after the cache-stable prefix and outside its steps.
+        prompt,
+        review_only: attempt.review_only,
+        started_unix: attempt.started_unix,
+        tools: bridge.is_some(),
+        login,
+        endpoint,
+        compactor: budget,
+        steps,
+        resumed,
+    };
+    let mut host = crate::agent_host::Attempted {
+        id,
+        isolation,
+        bridge,
+        attempt,
+        workspace: &absolute,
+        compactor,
+    };
+    // A proxied key's relay serves the turn's container while it runs.
+    let container = format!("control-{id}");
+    let outcome = crate::ports::key_relay::during(relay, isolation, &container, || turns.turn(turn, &mut host));
+    let output = crate::agent_host::finish(outcome, attempt, bridge, id, &sign_in)?;
     if let Some((state, run)) = bridge {
         crate::command_jobs::quiesce(state, run, id).map_err(|e| failed(&e.to_string()))?;
     }
