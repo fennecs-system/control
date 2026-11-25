@@ -88,6 +88,8 @@ mod spawning;
 mod storage;
 mod store;
 use store::Store;
+#[path = "main/posts.rs"]
+mod posts;
 #[cfg(test)]
 mod test_support;
 mod texts;
@@ -320,7 +322,10 @@ struct OperatorPage {
     lens: String,
     /// The UTC day that ends the Usage page's activity grid.
     today: u64,
-    /// A page that reads files and no state, rendered before locking.
+    /// The time the Models page's cooling accounts count from.
+    now: accounts::UnixSeconds,
+    /// A page, or the Permissions form, that reads files and no state,
+    /// rendered before locking.
     unlocked: Option<String>,
 }
 impl OperatorPage {
@@ -329,7 +334,9 @@ impl OperatorPage {
             query: query.clone(),
             lens: lens_ui::requested(header, query.get("lens").map(String::as_str)).to_owned(),
             today: usage::today(),
+            now: providers::accounts::now(),
             unlocked: match query.get("view").map(String::as_str) {
+                Some("authority") => Some(permissions_page::form()),
                 Some("discord-access") => Some(runtime::discord_access()),
                 Some("integrations") => Some(runtime::integrations()),
                 _ => None,
@@ -354,14 +361,14 @@ enum Content {
         page: usage::Page,
         today: u64,
     },
-    /// The permissions part is still rendered while state is read.
-    Authority(String, collective::Page),
+    /// The Permissions form (rendered before locking), the rest of the
+    /// Permissions page and the access requests.
+    Authority(String, permissions_page::Page, collective::Page),
     Collective(collective::Page),
-    /// Still rendered while state is read.
-    Providers(String),
+    /// Its logins are checked after the state lock.
+    Providers(providers::Page),
     Tools(tool_catalog::Search),
-    /// Still rendered while state is read.
-    Knowledge(String),
+    Knowledge(knowledge::Page),
     Rooms(rooms::Page),
     /// Content that reads no state.
     Fixed(String),
@@ -370,11 +377,15 @@ impl Content {
     fn render(self) -> String {
         match self {
             Self::Usage { page, today } => page.render(today),
-            Self::Authority(permissions, requests) => format!("{permissions}{}", requests.render()),
+            Self::Authority(form, permissions, requests) => {
+                format!("{form}{}{}", permissions.render(), requests.render())
+            }
             Self::Collective(page) => page.render(),
             Self::Tools(search) => search.render(),
             Self::Rooms(page) => page.render(),
-            Self::Providers(html) | Self::Knowledge(html) | Self::Fixed(html) => html,
+            Self::Providers(page) => page.sign_ins().render(),
+            Self::Knowledge(page) => page.render(),
+            Self::Fixed(html) => html,
         }
     }
 }
@@ -385,6 +396,7 @@ const OPERATOR_PAGES: Read<OperatorPage, Operator> = Read {
                query,
                lens,
                today,
+               now,
                unlocked,
            }| {
         if query.get("view").is_some_and(|view| view == "evolution") {
@@ -409,14 +421,18 @@ const OPERATOR_PAGES: Read<OperatorPage, Operator> = Read {
             .map(String::as_str)
             .unwrap_or("general");
         let content = match view {
-            "authority" => Content::Authority(permissions_page::render(state), state.collective.access()),
+            "authority" => Content::Authority(
+                unlocked.unwrap_or_default(),
+                permissions_page::Page::of(state),
+                state.collective.access(),
+            ),
             "knowledge-review" => Content::Collective(state.collective.review()),
-            "providers" => Content::Providers(providers::render(&state.runtime)),
+            "providers" => Content::Providers(providers::Page::of(&state.runtime, now)),
             "tools" => Content::Tools(tool_catalog::Search::of(
                 state,
                 if channel == "general" { "" } else { channel },
             )),
-            "editor" | "knowledge" => Content::Knowledge(knowledge::render(
+            "editor" | "knowledge" => Content::Knowledge(knowledge::Page::of(
                 &state.documents,
                 &state.collective,
                 if view == "editor" { "scratchpad" } else { "" },
@@ -693,8 +709,10 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         );
         return;
     }
+    // Routes below read state their own way: replies wait for released changes.
+    let mut gated = store::Gated::new(&mut stream, &state);
     if compaction::http(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -703,53 +721,29 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     ) {
         return;
     }
-    if providers::live_http(&mut stream, &state, method, path) {
+    if providers::live_http(&mut gated, &state, method, path) {
         return;
     }
-    if ports::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if ports::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if bots::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if bots::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if channel_settings::http(&mut stream, method, path, &data[header_end..header_end + length]) {
+    if channel_settings::http(&mut gated, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if permissions_page::http(&mut stream, method, path, &data[header_end..header_end + length]) {
+    if permissions_page::http(&mut gated, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if services::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if services::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if web_access::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if web_access::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
     if mcp_http::handle(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -758,17 +752,11 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     ) {
         return;
     }
-    if github::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if github::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
     if projects::http(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -793,6 +781,10 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     }
     if let Some(page) = session_http::ChatPage::of(method, path, &header) {
         read_response(&mut stream, &state, &session_http::CHAT_PAGES, page);
+        return;
+    }
+    if let Some(page) = session_http::FilePage::of(method, path, &query) {
+        read_response(&mut stream, &state, &session_http::FILE_PAGES, page);
         return;
     }
     if let Some(page) = BotsPage::of(method, path, &query) {
@@ -832,11 +824,30 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         read_response(&mut stream, &state, &OPERATOR_PAGES, page);
         return;
     }
+    if method == "GET" && path == "/knowledge" {
+        read_response(&mut stream, &state, &knowledge::PAGE, knowledge::Request::from(&query));
+        return;
+    }
     if lens_library::http(
         &mut stream,
         &state,
         method,
         path,
+        &data[header_end..header_end + length],
+    ) {
+        return;
+    }
+    if let Some(post) = posts::Post::of(method, path) {
+        posts::respond(&mut stream, &state, post, &data[header_end..header_end + length]);
+        return;
+    }
+    if session_http::messages(
+        &mut stream,
+        &state,
+        method,
+        path,
+        &header,
+        query.get("lens").map(String::as_str),
         &data[header_end..header_end + length],
     ) {
         return;
@@ -936,25 +947,15 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
             };
             let location = match path {
                 // POST /chat and /improve are handled by session_http.
-                "/task" | "/retry-run" | "/cancel-run" => state.runtime.action(path, &f),
-                "/room" | "/propose" | "/review" | "/request" | "/decide" => state.collective.action(path, &f),
+                "/cancel-run" => state.runtime.action(path, &f),
+                "/propose" | "/review" | "/request" | "/decide" => state.collective.action(path, &f),
                 "/room-claim-release" => {
                     rooms::claims::operator_action(state, &f);
                     "/?view=rooms"
                 }
-                "/spawn" => {
-                    if let Some(task) = f.get("objective").filter(|s| !s.trim().is_empty()) {
-                        state.agents.push(format!(
-                            "{} · {}",
-                            task.chars().take(300).collect::<String>(),
-                            f.get("provider").unwrap_or(&"Self-hosted".into())
-                        ));
-                    }
-                    "/?view=agents"
-                }
                 _ => "/",
             };
-            let thread_location = matches!(path, "/room" | "/room-claim-release")
+            let thread_location = (path == "/room-claim-release")
                 .then(|| f.get("channel"))
                 .flatten()
                 .filter(|room| rooms::valid(room))
@@ -1024,8 +1025,11 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
 // Routes that change state run here; routes that only read it use `Read`.
 fn state_response(stream: &mut impl Write, state: &Store, respond: impl FnOnce(&mut Vec<u8>, &mut State)) {
     let mut response = Vec::new();
-    if state.write(|state| respond(&mut response, state)).is_err() {
-        unavailable(&mut response);
+    match state.write_seen(|state| respond(&mut response, state)) {
+        // The reply may show a change another request let others see before
+        // it was durable: it goes out once that change is.
+        Ok(((), seen)) => seen.wait(),
+        Err(_) => unavailable(&mut response),
     }
     let _ = stream.write_all(&response);
 }
@@ -1079,11 +1083,13 @@ impl<Q, V: 'static> Read<Q, V> {
 #[inline(never)]
 pub(crate) fn read_response<Q, V: 'static>(stream: &mut impl Write, state: &Store, route: &Read<Q, V>, request: Q) {
     // The guard is dropped as soon as the view is copied.
-    let view = state.read(|state| (route.view)(state, request));
+    let view = state.read_seen(|state| (route.view)(state, request));
     let mut response = Vec::new();
     match view {
-        Ok(view) => {
+        Ok((view, seen)) => {
             let _ = (route.render)(view).write(&mut response);
+            // Rendering first overlaps the wait for a change the view showed.
+            seen.wait();
         }
         Err(_) => unavailable(&mut response),
     }
@@ -1386,3 +1392,6 @@ mod ui_previews;
 #[cfg(test)]
 #[path = "main/tests/page_bytes.rs"]
 mod page_bytes;
+#[cfg(test)]
+#[path = "main/tests/write_release.rs"]
+mod write_release;

@@ -1,3 +1,5 @@
+use crate::application::{effects::Effects, runs::Tx};
+use crate::store::{Applied, Commit};
 use crate::{State, chat, storage};
 use serde_json::{Value, json};
 use std::io::Write;
@@ -53,7 +55,131 @@ fn respond_chat(stream: &mut impl Write, status: &str, html: &str, extra: &str) 
 fn change(state: &mut State, name: &str, arguments: &Value) -> Result<Value, std::borrow::Cow<'static, str>> {
     change_with_save(state, name, arguments, storage::save)
 }
+/// Whether the client asked for the composer's JSON reply.
+fn accepts_json(header: &str) -> bool {
+    header.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("accept") && value.split(',').any(|mime| mime.trim() == "application/json")
+        })
+    })
+}
+/// What a send decided under the lock.
+enum Sent {
+    /// A change to save: its reply once durable, the wake to release then,
+    /// and the rollback if storage refuses it while the lock is held.
+    Changed {
+        reply: Vec<u8>,
+        effects: Effects,
+        checkpoint: Box<chat::Checkpoint>,
+    },
+    /// Nothing changed (`/open`, or a refusal already rolled back).
+    Answered(Vec<u8>),
+}
+/// A refused send: the chat page with the error and the draft kept, or the
+/// composer's JSON error.
+fn refused_send(
+    state: &State,
+    lens: &str,
+    id: &str,
+    header: &str,
+    fields: &std::collections::HashMap<String, String>,
+    message: &str,
+) -> Vec<u8> {
+    let mut reply = Vec::new();
+    if accepts_json(header) {
+        let _ = control_http::respond(
+            &mut reply,
+            "400 Bad Request",
+            "application/json",
+            json!({"error":message}).to_string().as_bytes(),
+            "",
+            control_http::Policy::Embedded,
+        );
+    } else {
+        respond_chat(
+            &mut reply,
+            "400 Bad Request",
+            &chat_page(
+                state,
+                lens,
+                id,
+                message,
+                fields.get("message").map(String::as_str).unwrap_or(""),
+                header,
+            ),
+            "",
+        );
+    }
+    reply
+}
 // Both native forms and the WASM composer use the same checkpointed command.
+fn send_change(
+    state: &mut State,
+    id: &str,
+    lens: &str,
+    header: &str,
+    fields: &std::collections::HashMap<String, String>,
+    tx: Tx,
+) -> Sent {
+    let mut reply = Vec::new();
+    if fields.get("message").is_some_and(|message| message.trim() == "/open") {
+        match chat::viewable(&state.chats, id) {
+            Ok(_) => {
+                let _ = control_http::respond(
+                    &mut reply,
+                    "303 See Other",
+                    "text/plain",
+                    b"",
+                    &format!("Location: /dm/{id}/project\r\n"),
+                    control_http::Policy::Embedded,
+                );
+            }
+            Err(message) => respond_chat(
+                &mut reply,
+                "400 Bad Request",
+                &chat_page(state, lens, id, message, "/open", header),
+                "",
+            ),
+        }
+        return Sent::Answered(reply);
+    }
+    let mut arguments = json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or("")});
+    if fields.contains_key("composition") {
+        arguments["lenses"] = chat::form_lenses(fields, "none");
+    }
+    let (effects, checkpoint) = match change_staged(state, "control.chat.send", &arguments, tx) {
+        Ok((_, effects, checkpoint)) => (effects, Box::new(checkpoint)),
+        Err(message) => return Sent::Answered(refused_send(state, lens, id, header, fields, &message)),
+    };
+    if accepts_json(header) {
+        let session = state.chats.iter().find(|chat| chat.id == id).unwrap();
+        let value = json!({"title":crate::callsigns::name_or_id(&state.chats,id),"improve":session.improve_mode});
+        let _ = control_http::respond(
+            &mut reply,
+            "200 OK",
+            "application/json",
+            value.to_string().as_bytes(),
+            "",
+            control_http::Policy::Embedded,
+        );
+    } else {
+        let _ = control_http::respond(
+            &mut reply,
+            "303 See Other",
+            "text/plain",
+            b"",
+            &format!("Location: /dm/{id}\r\n"),
+            control_http::Policy::Embedded,
+        );
+    }
+    Sent::Changed {
+        reply,
+        effects,
+        checkpoint,
+    }
+}
+/// `send_change` saved under the lock by `save`, for a caller that already
+/// holds the state; the server uses `messages`, which releases it first.
 fn send_message(
     stream: &mut impl Write,
     state: &mut State,
@@ -63,83 +189,147 @@ fn send_message(
     fields: &std::collections::HashMap<String, String>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) {
-    let asynchronous = header.lines().any(|line| {
-        line.split_once(':').is_some_and(|(name, value)| {
-            name.eq_ignore_ascii_case("accept") && value.split(',').any(|mime| mime.trim() == "application/json")
-        })
-    });
-    if fields.get("message").is_some_and(|message| message.trim() == "/open") {
-        match chat::viewable(&state.chats, id) {
-            Ok(_) => {
-                let _ = control_http::respond(
-                    stream,
-                    "303 See Other",
-                    "text/plain",
-                    b"",
-                    &format!("Location: /dm/{id}/project\r\n"),
-                    control_http::Policy::Embedded,
-                );
+    let reply = match send_change(state, id, lens, header, fields, crate::store::legacy_tx()) {
+        Sent::Answered(reply) => reply,
+        Sent::Changed {
+            reply,
+            effects,
+            checkpoint,
+        } => {
+            let saved = save(state);
+            crate::store::perform(effects.after_held_save(&saved));
+            if saved.is_ok() {
+                reply
+            } else {
+                checkpoint.restore(state);
+                refused_send(state, lens, id, header, fields, SAVE_FAILED)
             }
-            Err(message) => respond_chat(
-                stream,
-                "400 Bad Request",
-                &chat_page(state, lens, id, message, "/open", header),
-                "",
-            ),
         }
-        return;
-    }
-    let mut arguments = json!({"id":id,"message":fields.get("message").map(String::as_str).unwrap_or("")});
-    if fields.contains_key("composition") {
-        arguments["lenses"] = chat::form_lenses(fields, "none");
-    }
-    let result = change_with_save(state, "control.chat.send", &arguments, save);
-    if asynchronous {
-        let (status, value) = match result {
-            Ok(_) => {
-                let session = state.chats.iter().find(|chat| chat.id == id).unwrap();
-                (
-                    "200 OK",
-                    json!({"title":crate::callsigns::name_or_id(&state.chats,id),"improve":session.improve_mode}),
-                )
+    };
+    let _ = stream.write_all(&reply);
+}
+/// What a caller is told when its change was refused and rolled back.
+const SAVE_FAILED: &str = "Could not save the chat. Try again.";
+
+/// `POST /dm/{id}/messages`, from the native form and the WASM composer. The
+/// message is applied under the lock and saved after it is released
+/// (`Store::commit`). The caller hears of success only once it is durable.
+/// If storage fails after the release, others may already see the message,
+/// so it stays and is saved when storage recovers: the caller gets a 503
+/// saying "not saved yet". If storage refuses before the release (it was
+/// already unavailable), nothing changed: the usual rejection, saying "not
+/// saved". Other `/dm/` routes fall through to `handle`.
+pub(crate) fn messages(
+    stream: &mut impl Write,
+    store: &crate::Store,
+    method: &str,
+    path: &str,
+    header: &str,
+    requested_lens: Option<&str>,
+    body: &[u8],
+) -> bool {
+    let Some(id) = path
+        .strip_prefix("/dm/")
+        .and_then(|route| route.strip_suffix("/messages"))
+        .filter(|id| method == "POST" && chat::valid_id(id))
+    else {
+        return false;
+    };
+    let fields = crate::fields(&String::from_utf8_lossy(body));
+    let lens = |state: &State| crate::lens_ui::selected(&state.lens_library, header, requested_lens).to_owned();
+    let committed = send_commit(
+        store,
+        id,
+        header,
+        requested_lens,
+        &fields,
+        crate::storage::submit,
+        crate::worker::wake,
+    );
+    let unavailable = || {
+        let mut reply = Vec::new();
+        crate::unavailable(&mut reply);
+        reply
+    };
+    let reply = match committed {
+        Ok(Commit::Saved(reply)) => reply,
+        Ok(Commit::Refused(reply, seen)) => {
+            seen.wait();
+            reply
+        }
+        Ok(Commit::NotYet(_, unsaved)) => not_saved_yet(header, &unsaved.to_string()),
+        Ok(Commit::NotSaved(error)) => {
+            let refused =
+                store.read_seen(|state| refused_send(state, &lens(state), id, header, &fields, &error.to_string()));
+            refused.map_or_else(
+                |_| unavailable(),
+                |(reply, seen)| {
+                    seen.wait();
+                    reply
+                },
+            )
+        }
+        Err(_) => unavailable(),
+    };
+    let _ = stream.write_all(&reply);
+    true
+}
+/// A send as a transaction, with the stage and the wake passed in (tests
+/// script the disk). Success, and refusals rendered under the lock, carry
+/// the reply bytes.
+pub(crate) fn send_commit(
+    store: &crate::Store,
+    id: &str,
+    header: &str,
+    requested_lens: Option<&str>,
+    fields: &std::collections::HashMap<String, String>,
+    submit: impl FnOnce(&State, crate::store::Staging) -> std::io::Result<storage::Saving>,
+    wake: impl FnOnce(),
+) -> Result<Commit<Vec<u8>, Vec<u8>>, crate::store::Unavailable> {
+    store.commit_with(
+        |state, tx| {
+            let lens = crate::lens_ui::selected(&state.lens_library, header, requested_lens).to_owned();
+            match send_change(state, id, &lens, header, fields, tx) {
+                Sent::Changed {
+                    reply,
+                    effects,
+                    checkpoint,
+                } => Ok(Applied {
+                    answer: reply,
+                    effects,
+                    undo: move |state: &mut State| checkpoint.restore(state),
+                }),
+                Sent::Answered(reply) => Err(reply),
             }
-            Err(message) => ("400 Bad Request", json!({"error":message})),
-        };
-        let _ = control_http::respond(
-            stream,
-            status,
+        },
+        submit,
+        wake,
+    )
+}
+/// The message is in the chat but not durable: storage failed after others
+/// could see it, so it stays and is saved once storage recovers.
+pub(crate) fn not_saved_yet(header: &str, message: &str) -> Vec<u8> {
+    let mut reply = Vec::new();
+    let _ = if accepts_json(header) {
+        control_http::respond(
+            &mut reply,
+            "503 Service Unavailable",
             "application/json",
-            value.to_string().as_bytes(),
+            json!({"error":message}).to_string().as_bytes(),
             "",
             control_http::Policy::Embedded,
-        );
+        )
     } else {
-        match result {
-            Ok(_) => {
-                let _ = control_http::respond(
-                    stream,
-                    "303 See Other",
-                    "text/plain",
-                    b"",
-                    &format!("Location: /dm/{id}\r\n"),
-                    control_http::Policy::Embedded,
-                );
-            }
-            Err(message) => respond_chat(
-                stream,
-                "400 Bad Request",
-                &chat_page(
-                    state,
-                    lens,
-                    id,
-                    &message,
-                    fields.get("message").map(String::as_str).unwrap_or(""),
-                    header,
-                ),
-                "",
-            ),
-        }
-    }
+        control_http::respond(
+            &mut reply,
+            "503 Service Unavailable",
+            "text/plain; charset=utf-8",
+            message.as_bytes(),
+            "",
+            control_http::Policy::Embedded,
+        )
+    };
+    reply
 }
 pub(crate) fn change_with_save(
     state: &mut State,
@@ -147,6 +337,24 @@ pub(crate) fn change_with_save(
     arguments: &Value,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, std::borrow::Cow<'static, str>> {
+    let (value, effects, checkpoint) = change_staged(state, name, arguments, crate::store::legacy_tx())?;
+    let saved = save(state);
+    crate::store::perform(effects.after_held_save(&saved));
+    if saved.is_err() {
+        checkpoint.restore(state);
+        return Err(SAVE_FAILED.into());
+    }
+    Ok(value)
+}
+/// Applies a checkpointed command. A refusal restores chats, runs and posts
+/// together and is returned; otherwise the caller saves, restoring with the
+/// checkpoint if the save is refused.
+fn change_staged(
+    state: &mut State,
+    name: &str,
+    arguments: &Value,
+    tx: Tx,
+) -> Result<(Value, Effects, chat::Checkpoint), std::borrow::Cow<'static, str>> {
     let related = if name == "control.chat.send" {
         arguments["message"]
             .as_str()
@@ -163,48 +371,60 @@ pub(crate) fn change_with_save(
     } else {
         None
     };
-    transact(
-        state,
-        arguments["id"].as_str(),
-        related.as_deref(),
-        |state| {
-            if crate::tool_registry::lookup(name).is_some_and(|tool| tool.route == crate::tool_registry::Route::Project)
-            {
-                crate::projects::request_named(
-                    state,
-                    arguments["id"].as_str().unwrap_or(""),
-                    arguments["path"].as_str().unwrap_or(""),
-                    arguments["name"].as_str(),
-                    crate::projects::Requester::Agent { run: None },
-                )
-                .map_err(Into::into)
-            } else if crate::tool_registry::lookup(name)
-                .is_some_and(|tool| tool.route == crate::tool_registry::Route::Room)
-            {
-                crate::rooms::tool(state, name, arguments).map_err(Into::into)
-            } else {
-                chat::tool(state, name, arguments)
-            }
-        },
-        save,
-    )
+    let targets: std::collections::HashSet<_> =
+        arguments["id"].as_str().into_iter().chain(related.as_deref()).collect();
+    let checkpoint = match (name, arguments["message"].as_str()) {
+        ("control.chat.send", Some(text)) => chat::Checkpoint::for_send(state, &targets, text),
+        _ => chat::Checkpoint::capture(state, &targets),
+    };
+    let result = if crate::tool_registry::lookup(name)
+        .is_some_and(|tool| tool.route == crate::tool_registry::Route::Project)
+    {
+        crate::projects::request_named(
+            state,
+            arguments["id"].as_str().unwrap_or(""),
+            arguments["path"].as_str().unwrap_or(""),
+            arguments["name"].as_str(),
+            crate::projects::Requester::Agent { run: None },
+        )
+        .map(|value| (value, Effects::none()))
+        .map_err(Into::into)
+    } else if crate::tool_registry::lookup(name).is_some_and(|tool| tool.route == crate::tool_registry::Route::Room) {
+        crate::rooms::tool(state, name, arguments)
+            .map(|value| (value, Effects::none()))
+            .map_err(Into::into)
+    } else {
+        chat::tool_queued(state, name, arguments, tx)
+    };
+    match result {
+        Ok((value, effects)) => Ok((value, effects, checkpoint)),
+        Err(error) => {
+            checkpoint.restore(state);
+            Err(error)
+        }
+    }
 }
 /// Apply `operation` and checkpoint once; any failure restores chats, runs and posts together.
 fn transact(
     state: &mut State,
-    id: Option<&str>,
-    related: Option<&str>,
-    operation: impl FnOnce(&mut State) -> Result<Value, std::borrow::Cow<'static, str>>,
+    operation: impl FnOnce(&mut State) -> Result<(Value, Effects), std::borrow::Cow<'static, str>>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Value, std::borrow::Cow<'static, str>> {
-    let targets: std::collections::HashSet<_> = id.into_iter().chain(related).collect();
-    let checkpoint = crate::chat::Checkpoint::capture(state, &targets);
-    let result = operation(state);
-    if result.is_err() || save(state).is_err() {
+    let checkpoint = chat::Checkpoint::capture(state, &std::collections::HashSet::new());
+    let (value, effects) = match operation(state) {
+        Ok(applied) => applied,
+        Err(error) => {
+            checkpoint.restore(state);
+            return Err(error);
+        }
+    };
+    let saved = save(state);
+    crate::store::perform(effects.after_held_save(&saved));
+    if saved.is_err() {
         checkpoint.restore(state);
-        return result.and(Err("Could not save the chat. Try again.".into()));
+        return Err(SAVE_FAILED.into());
     }
-    result
+    Ok(value)
 }
 
 const OPERATOR: control_mcp::Server = control_mcp::Server {
@@ -242,7 +462,9 @@ impl control_mcp::Tools for Operator<'_> {
                 Some(crate::tool_registry::Route::Package) => {
                     Err("Package tools are served by the HTTP MCP endpoint.".into())
                 }
-                _ => chat::tool(state, name, arguments),
+                // `control.chat.send`, the one tool that queues work, is a
+                // checkpointed tool (`change`); these read or change in place.
+                _ => chat::fixed_tool(state, name, arguments).map_err(Into::into),
             }
         };
         match result {
@@ -363,6 +585,71 @@ pub(crate) const CHAT_PAGES: crate::Read<ChatPage, ChatView> = crate::Read {
             ChatView::Transcript(transcript) => html(transcript.map(|transcript| transcript.render())),
             ChatView::Conversations(picker) => html(picker.map(|picker| picker.render())),
             ChatView::Requests(requests, now) => html(requests.map(|requests| requests.render(now))),
+        }
+    },
+};
+/// `GET /dm/{id}/artifacts`, `/memory` and `/context`: what a DM's turns
+/// left behind. The view copies the Memory Tree and locates the artifacts
+/// and Control input in state; their files are read after the lock is
+/// released.
+pub(crate) struct FilePage {
+    id: String,
+    query: std::collections::HashMap<String, String>,
+    kind: FileKind,
+}
+enum FileKind {
+    Artifacts,
+    Memory,
+    Context,
+}
+impl FilePage {
+    pub(crate) fn of(method: &str, path: &str, query: &std::collections::HashMap<String, String>) -> Option<Self> {
+        let route = path.strip_prefix("/dm/").filter(|_| method == "GET")?;
+        let (id, operation) = route.split_once('/')?;
+        let kind = match operation {
+            "artifacts" => FileKind::Artifacts,
+            "memory" => FileKind::Memory,
+            "context" => FileKind::Context,
+            _ => return None,
+        };
+        chat::valid_id(id).then(|| Self {
+            id: id.to_owned(),
+            query: query.clone(),
+            kind,
+        })
+    }
+}
+pub(crate) enum Located {
+    Artifacts(Result<crate::artifacts::Page, &'static str>),
+    Memory(Result<Box<crate::compaction::tree::Overview>, &'static str>),
+    Context(std::io::Result<crate::turn_context::Trace>),
+}
+pub(crate) const FILE_PAGES: crate::Read<FilePage, Located> = crate::Read {
+    view: |state, FilePage { id, query, kind }| match kind {
+        FileKind::Artifacts => Located::Artifacts(crate::artifacts::Page::of(state, &id, &query)),
+        FileKind::Memory => Located::Memory(crate::compaction::overview(state, &id, &query).map(Box::new)),
+        FileKind::Context => Located::Context(crate::turn_context::Trace::of(state, &id, &query)),
+    },
+    render: |located| {
+        let html = match located {
+            Located::Artifacts(page) => page.and_then(|page| page.read()).map_err(str::to_owned),
+            Located::Memory(overview) => overview.and_then(|overview| overview.render()).map_err(str::to_owned),
+            Located::Context(trace) => trace.and_then(|trace| trace.read()).map_err(|error| error.to_string()),
+        };
+        let (status, mime, body) = match html {
+            Ok(html) => (
+                "200 OK",
+                "text/html; charset=utf-8",
+                crate::shell("artifact-page", &html),
+            ),
+            Err(message) => ("404 Not Found", "text/plain", message),
+        };
+        crate::Reply {
+            status,
+            mime,
+            body,
+            extra: String::new(),
+            policy: control_http::Policy::Embedded,
         }
     },
 };
@@ -495,14 +782,17 @@ pub fn handle(
         // Create and first message commit together, so a rejected message leaves no empty chat.
         let result = transact(
             state,
-            None,
-            None,
             |state| {
-                let value = chat::tool(state, "control.chat.create", &arguments)?;
-                if let Some(text) = text {
-                    chat::tool(state, "control.chat.send", &json!({"id":value["id"],"message":text}))?;
-                }
-                Ok(value)
+                let tx = crate::store::legacy_tx();
+                let (value, created) = chat::tool_queued(state, "control.chat.create", &arguments, tx)?;
+                let effects = match text {
+                    Some(text) => {
+                        let first = json!({"id":value["id"],"message":text});
+                        created.and(chat::tool_queued(state, "control.chat.send", &first, tx)?.1)
+                    }
+                    None => created,
+                };
+                Ok((value, effects))
             },
             storage::save,
         );
@@ -546,6 +836,10 @@ pub fn handle(
         let _ = CHAT_PAGES.reply(state, page).write(stream);
         return true;
     }
+    if let Some(page) = FilePage::of(method, path, &crate::fields(query)) {
+        let _ = FILE_PAGES.reply(state, page).write(stream);
+        return true;
+    }
     let (id, operation) = route.split_once('/').unwrap_or((route, ""));
     if !chat::valid_id(id) {
         let _ = control_http::respond(
@@ -585,63 +879,6 @@ pub fn handle(
     } else if method == "POST" && operation == "messages" {
         let fields = crate::fields(&String::from_utf8_lossy(body));
         send_message(stream, state, id, lens, header, &fields, storage::save);
-    } else if method == "GET" && operation == "artifacts" {
-        let _ = match crate::artifacts::render(state, id, &crate::fields(query)) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                crate::shell("artifact-page", &html).as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(message) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                message.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
-    } else if method == "GET" && operation == "memory" {
-        let _ = match crate::compaction::render(state, id, query) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                crate::shell("artifact-page", &html).as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(error) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                error.as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
-    } else if method == "GET" && operation == "context" {
-        let _ = match crate::turn_context::view(state, id, &crate::fields(query)) {
-            Ok(html) => control_http::respond(
-                stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                crate::shell("artifact-page", &html).as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-            Err(error) => control_http::respond(
-                stream,
-                "404 Not Found",
-                "text/plain",
-                error.to_string().as_bytes(),
-                "",
-                control_http::Policy::Embedded,
-            ),
-        };
     } else {
         let _ = control_http::respond(
             stream,

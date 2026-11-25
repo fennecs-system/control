@@ -237,14 +237,11 @@ pub(super) fn links(base: &str, listing: &Value) -> String {
     }
     out
 }
-/// The Memory Tree section for `session`'s recent local turns: their step
-/// trees' roots, from memory only (no disk reads), each linked to the
-/// evidence reader that expands it.
-pub(crate) fn section(memory: &Memory, session: &crate::chat::Session) -> String {
-    let items = links(
-        &evidence_url(&session.id),
-        &listing(memory, &session.id, &session.actor),
-    );
+/// The Memory Tree section for `chat`'s recent local turns: their step
+/// trees' roots as [`listing`] gives them, each linked to the evidence
+/// reader that expands it.
+pub(crate) fn section(chat: &str, listing: &Value) -> String {
+    let items = links(&evidence_url(chat), listing);
     if items.is_empty() {
         return String::new();
     }

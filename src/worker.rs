@@ -995,7 +995,7 @@ fn ingest_discord(state: &Store, notified: &mut std::collections::HashSet<String
             &mut s,
             &id,
             message_id.clone(),
-            |s| crate::chat::receive(s, &message),
+            |s| crate::chat::receive(s, &message, crate::store::legacy_tx()),
             storage::save,
         );
         // A shutdown refusal is transient: leave the message for the next process.
@@ -1042,18 +1042,20 @@ fn notify_discord(message: &crate::discord::Incoming, text: &str) {
         let _ = fs::rename(&temporary, directory.join(format!("{}.json", message.message_id)));
     }
 }
-fn receive_with_save(
+fn receive_with_save<E: Into<crate::application::effects::Effects>>(
     state: &mut State,
     id: &str,
     message_id: String,
-    receive: impl FnOnce(&mut State) -> Result<(), &'static str>,
+    receive: impl FnOnce(&mut State) -> Result<E, &'static str>,
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     let checkpoint = crate::chat::Checkpoint::capture(state, &std::iter::once(id).collect());
     let seen = state.discord_seen.len();
-    let result = receive(state).and_then(|()| {
+    let result = receive(state).and_then(|effects| {
         state.discord_seen.push(message_id);
-        save(state).map_err(|_| "Could not persist Discord task.")
+        let saved = save(state);
+        crate::store::perform(effects.into().after_held_save(&saved));
+        saved.map_err(|_| "Could not persist Discord task.")
     });
     if result.is_err() {
         checkpoint.restore(state);
@@ -1572,4 +1574,4 @@ pub(crate) fn render_prompt_mode(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

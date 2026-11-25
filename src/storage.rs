@@ -9,7 +9,7 @@ use control_journal::{
     FileJournal, Journal,
     lens::{self, Schema},
     snapshot::{self, Encoded},
-    writer::{self, Failure, Log, Record, Sink, Submit, Ticket, Unsaved, Writer},
+    writer::{self, Durable, Failure, Log, Mark, Record, Sink, Submit, Ticket, Unsaved, Writer},
 };
 use std::{
     collections::{HashMap, hash_map::Entry},
@@ -313,22 +313,31 @@ pub fn save(state: &State) -> io::Result<()> {
 #[must_use = "the change is durable only once `wait` returns"]
 pub struct Saving(Ticket);
 impl Saving {
+    /// A save staged on a writer a test scripts.
+    #[cfg(test)]
+    pub(crate) fn staged(ticket: Ticket) -> Self {
+        Self(ticket)
+    }
+    /// What a reply that may show this change waits on.
+    pub(crate) fn mark(&self) -> Mark {
+        self.0.mark()
+    }
     /// Waits until the change is durable. An error says the change is not
     /// saved yet (storage is unavailable; it stays queued and is saved when
     /// storage recovers) or never will be (the writer stopped and Control is
     /// stopping with it).
-    pub fn wait(self) -> io::Result<()> {
+    pub fn wait(self) -> Result<Durable, Unsaved> {
         match self.0.wait() {
-            Ok(_) => {
+            Ok(durable) => {
                 changes().bump();
                 crate::live_updates::notify();
-                Ok(())
+                Ok(durable)
             }
             Err(Unsaved::Halted(halted)) => {
                 crate::shutdown::request();
-                Err(halted.into())
+                Err(Unsaved::Halted(halted))
             }
-            Err(not_yet) => Err(not_yet.into()),
+            Err(not_yet) => Err(not_yet),
         }
     }
 }
@@ -338,10 +347,11 @@ impl Saving {
 /// see and extend the change before then, so it is never refused once staged:
 /// if storage fails it stays queued until storage recovers. An error here
 /// (storage already unavailable among them) means nothing was staged and the
-/// caller rolls back as after `save`; check [`health`] before changing state
-/// to refuse without touching it. Runs
-/// are not archived here: undoing that on a refusal needs the state.
-pub fn submit(state: &State) -> io::Result<Saving> {
+/// caller rolls back as after `save`. Only the store's driver stages this
+/// way (`Staging`), so every change others may see before it is durable
+/// sets the reply gate (`Store::commit`). Runs are not archived here: undoing
+/// that on a refusal needs the state.
+pub(crate) fn submit(state: &State, _: crate::store::Staging) -> io::Result<Saving> {
     let directory = crate::config::state_directory().map_err(io::Error::other)?;
     let encoded = encode(state, &archived(&directory)).map_err(io::Error::other)?;
     legacy_result(stage(&directory, encoded, false, Writer::submit)).map(Saving)

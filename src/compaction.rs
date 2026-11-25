@@ -765,13 +765,26 @@ pub fn status(runtime: &crate::runtime::Runtime, chats: &[crate::chat::Session],
         "notice":"Summaries are derived untrusted evidence. Raw history is retained. Missing/invalid summaries use the existing history view."})
 }
 
-/// The Memory Tree overview: bounded, in-memory, no disk reads or model calls.
-pub fn render(state: &State, id: &str, query: &str) -> Result<String, &'static str> {
+/// The Memory Tree page as `GET /dm/{id}/memory` serves it.
+#[cfg(test)]
+pub(crate) fn render(state: &State, id: &str, query: &str) -> Result<String, &'static str> {
+    overview(state, id, &crate::fields(query))?.render()
+}
+/// The Memory Tree overview, copied out of state: bounded, in-memory, no
+/// disk reads or model calls.
+pub(crate) fn overview(
+    state: &State,
+    id: &str,
+    query: &HashMap<String, String>,
+) -> Result<tree::Overview, &'static str> {
     let session = state.chats.iter().find(|c| c.id == id).ok_or("Chat not found")?;
     crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
-    let metadata = serde_json::to_string_pretty(&status(&state.runtime, &state.chats, id))
-        .map_err(|_| "Cannot render compaction metadata")?;
-    Ok(tree::overview(state, session, &crate::fields(query), &metadata))
+    Ok(tree::Overview::of(
+        state,
+        session,
+        query,
+        status(&state.runtime, &state.chats, id),
+    ))
 }
 
 #[cfg(test)]

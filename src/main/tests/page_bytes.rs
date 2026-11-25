@@ -278,6 +278,62 @@ fn dms_landing_matches_its_pinned_bytes() {
     assert_pinned(changed(&state, &pages));
 }
 
+/// The write routes that release the state lock before waiting for the disk
+/// answer with the bytes they did while waiting under it: redirects, the
+/// JSON composer reply and the rejected pages. Each request runs on the state
+/// the ones before it left.
+#[test]
+fn write_routes_match_their_pinned_bytes() {
+    let state = Store::new(fixture());
+    // The composer asks for JSON; the header rides after the cookie line.
+    const JSON: &str = "\r\nAccept: application/json";
+    let pages = [
+        ("write_task", "/task", "", "objective=Pinned+%3Ctask%3E+%26+more"),
+        ("write_task_empty", "/task", "", "objective="),
+        ("write_retry_run", "/retry-run", "", "id=fixture-run-1"),
+        ("write_retry_missing", "/retry-run", "", "id=fixture-run-9"),
+        (
+            "write_room",
+            "/room",
+            "",
+            "channel=research&message=Pinned+room+%3Cpost%3E",
+        ),
+        ("write_room_rejected", "/room", "", "channel=nowhere&message=Lost"),
+        (
+            "write_spawn",
+            "/spawn",
+            "",
+            "objective=Pinned+spawn&provider=Self-hosted",
+        ),
+        (
+            "write_chat_send",
+            "/dm/c-100-2/messages",
+            "",
+            "message=Pinned+%3Cmessage%3E",
+        ),
+        (
+            "write_chat_send_json",
+            "/dm/c-100-2/messages",
+            JSON,
+            "message=Pinned+json",
+        ),
+        (
+            "write_chat_send_rejected",
+            "/dm/c-100-2/messages",
+            "",
+            "message=%2Fsteer",
+        ),
+        (
+            "write_chat_send_rejected_json",
+            "/dm/c-100-2/messages",
+            JSON,
+            "message=%2Fsteer",
+        ),
+        ("write_chat_send_missing", "/dm/c-100-9/messages", "", "message=Nobody"),
+    ]
+    .map(|(name, target, cookie, body)| (name, "POST", target, cookie, body));
+    assert_pinned(changed(&state, &pages));
+}
 /// One DM with every kind of pending request: a folder, a design question,
 /// a port, a bot and a knowledge proposal.
 fn requests_fixture() -> State {
@@ -337,9 +393,21 @@ fn without_heatmap(response: String) -> String {
     format!("{before}{start}…</section>{after}").replacen(length, "Content-Length: (masked)", 1)
 }
 
+/// Signs every backend's default account in as the worker tests do. The
+/// Models page shows whether each has a login, and the tests of one binary
+/// share the login folders: worker tests create these stand-ins (and none
+/// removes them), so without this the page read "No login yet" or "Signed
+/// in" depending on which tests ran first.
+fn signed_in() {
+    crate::backend::Backend::hosted().for_each(|backend| {
+        crate::worker::tests::attempts::credential(backend);
+    });
+}
+
 /// The operator pages under `/?view=`: DMs and runs with usage, genes, a
 /// room thread, knowledge entries and access requests.
 fn operator_fixture() -> State {
+    signed_in();
     let mut state = fixture();
     let form = |pairs: &[(&str, &str)]| {
         pairs
@@ -433,4 +501,129 @@ fn operator_pages_match_their_pinned_bytes() {
     ]
     .map(|(name, target)| (name, "GET", target, "", ""));
     assert_pinned(changed_after(&state, &usage, without_heatmap));
+}
+
+/// The Permissions part of Access with something in every list: a live
+/// service, a pending port, an automatic decision and requests waiting.
+#[test]
+fn permissions_overview_matches_its_pinned_bytes() {
+    let mut state = requests_fixture();
+    // Decided for the pending port, so its line carries the rule.
+    let port = serde_json::to_value(&state.ports[0]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    state.auto_decisions.push(crate::auto_approval::Record {
+        unix: 1_800_000_000,
+        kind: "port".into(),
+        id: port,
+        chat: "c-100-0".into(),
+        what: "egress <example.org>:443".into(),
+        rule: "public-web".into(),
+        decider: "policy".into(),
+    });
+    let state = Store::new(state);
+    let pages = [("view_authority_requests", "GET", "/?view=authority", "", "")];
+    assert_pinned(changed(&state, &pages));
+}
+
+/// The Models page with saved models, local agent and summary endpoints, a
+/// CLI summary model and Memory Tree settings.
+#[test]
+fn models_page_matches_its_pinned_bytes() {
+    let mut state = operator_fixture();
+    let endpoint = |id: &str, url: &str, tools: bool, extra: serde_json::Value| {
+        let mut value = serde_json::json!({"id":id,"model":format!("{id} <model>"),"url":url,"revision":"rev & 1","limits":{"context_tokens":32768,"output_tokens":1024,"input_bytes":28000,"output_bytes":8192},"timeout_seconds":1800,"tools":tools});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value::<crate::model_calls::Endpoint>(value).unwrap()
+    };
+    let runtime = &mut state.runtime;
+    runtime.compaction.models = vec![
+        endpoint(
+            "qwen-agent",
+            "http://127.0.0.1:8081/v1",
+            true,
+            serde_json::json!({"thinking":"low"}),
+        ),
+        endpoint(
+            "summary-small",
+            "http://127.0.0.1:8082/v1",
+            false,
+            serde_json::json!({}),
+        ),
+        endpoint("claude-summary", "", false, serde_json::json!({"cli":"claude"})),
+    ];
+    runtime.compaction.settings.enabled = true;
+    runtime.compaction.settings.model = Some("summary-small".into());
+    runtime.compaction.settings.chats = vec!["c-100-0".into(), "c-100-1".into()];
+    runtime.models = serde_json::from_value(serde_json::json!([
+        {"backend":"claude","model":"claude-<big>","capacity":{"context_tokens":200000,"output_tokens":8192,"overhead_tokens":4096}},
+        {"backend":"grok","model":"grok-4"}
+    ]))
+    .unwrap();
+    runtime.backend = crate::backend::Backend::Local;
+    runtime.model = Some("qwen-agent".into());
+    let state = Store::new(state);
+    let pages = [("view_providers_models", "GET", "/?view=providers", "", "")];
+    assert_pinned(changed(&state, &pages));
+}
+
+/// `GET /knowledge` in each mode, with a note that links to another and
+/// one that links to nothing yet.
+#[test]
+fn knowledge_pages_match_their_pinned_bytes() {
+    let mut state = operator_fixture();
+    state.documents.push(crate::knowledge::Document {
+        id: "plan".into(),
+        title: "Plan".into(),
+        body: "Back to [[Scratchpad.md]] & [[Missing <note>]]".into(),
+        revision: 3,
+        saved_at: Some(1_800_000_000),
+    });
+    let state = Store::new(state);
+    let pages = [
+        ("knowledge", "/knowledge"),
+        ("knowledge_plan_saved", "/knowledge?doc=plan&saved=3"),
+        ("knowledge_scratchpad", "/knowledge?doc=scratchpad&saved=9"),
+        ("knowledge_graph", "/knowledge?mode=graph"),
+        ("knowledge_review", "/knowledge?mode=review"),
+        ("knowledge_new", "/knowledge?mode=new"),
+        ("knowledge_missing", "/knowledge?doc=nowhere"),
+        ("view_knowledge_plan", "/?view=knowledge"),
+    ]
+    .map(|(name, target)| (name, "GET", target, "", ""));
+    assert_pinned(changed(&state, &pages));
+}
+
+/// A DM's artifacts, Memory Tree and Control input pages, as far as they
+/// read no files: the files they read live outside the fixture.
+#[test]
+fn dm_file_pages_match_their_pinned_bytes() {
+    let mut state = fixture();
+    // A published output whose manifest is not on disk.
+    state.runtime.runs[3].attempts = vec![crate::usage::Attempt {
+        artifact: Some("a-missing".into()),
+        ..Default::default()
+    }];
+    state.runtime.compaction.settings.chats = vec!["c-100-0".into()];
+    let state = Store::new(state);
+    let pages = [
+        ("artifacts_none", "/dm/c-100-0/artifacts"),
+        ("artifacts_unreadable", "/dm/c-100-1/artifacts"),
+        ("artifacts_missing", "/dm/c-100-9/artifacts"),
+        ("memory", "/dm/c-100-0/memory"),
+        ("memory_block", "/dm/c-100-0/memory?block=0.1"),
+        ("memory_entry", "/dm/c-100-0/memory?entry=2"),
+        ("memory_child", "/dm/c-100-1/memory"),
+        ("memory_missing", "/dm/c-100-9/memory"),
+        ("context_no_trace", "/dm/c-100-0/context?run=fixture-run-0&attempt=1"),
+        ("context_no_attempt", "/dm/c-100-0/context?run=fixture-run-0&attempt=0"),
+        ("context_outside", "/dm/c-100-2/context?run=fixture-run-0&attempt=1"),
+        ("context_missing", "/dm/c-100-9/context?run=fixture-run-0&attempt=1"),
+    ]
+    .map(|(name, target)| (name, "GET", target, "", ""));
+    assert_pinned(changed(&state, &pages));
 }

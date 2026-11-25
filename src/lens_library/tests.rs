@@ -1,4 +1,5 @@
 use super::*;
+use std::io;
 #[test]
 fn gene_editor_shows_its_own_selections_and_resolves_composed_guidance() {
     let mut state = State::default();

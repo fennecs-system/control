@@ -1518,8 +1518,11 @@ fn http_in(
                     }
                     None => format!("/open {}", fields.get("path").map(String::as_str).unwrap_or("")),
                 };
-                crate::chat::send(state, id, &command, "website").map_err(io::Error::other)?;
-                if save(state).is_err() {
+                let effects = crate::chat::send_queued(state, id, &command, "website", crate::store::legacy_tx())
+                    .map_err(io::Error::other)?;
+                let saved = save(state);
+                crate::store::perform(effects.after_held_save(&saved));
+                if saved.is_err() {
                     state.chats[index] = previous;
                     return Err(io::Error::other("Could not save project request"));
                 }

@@ -582,7 +582,7 @@ fn change_access(
 }
 
 /// This route runs only behind the authenticated local-operator HTTP gate.
-pub fn http(stream: &mut std::net::TcpStream, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
+pub fn http(stream: &mut impl std::io::Write, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     if path != "/tools/browser/access" {
         return false;
     }

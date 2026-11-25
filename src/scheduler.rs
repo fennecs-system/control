@@ -190,12 +190,13 @@ pub(crate) fn stamp(attempt: &crate::usage::Attempt) -> AttemptStamp<'_> {
         started_unix: attempt.started_unix,
     }
 }
+pub(crate) const QUEUE_FULL: &str = "Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.";
 #[inline]
 pub fn admit(runtime: &Runtime) -> Result<(), &'static str> {
     if scheduling::has_capacity(runtime.runs.iter()) {
         Ok(())
     } else {
-        Err("Run queue is full (32 pending tasks). Wait for work to finish or cancel a task.")
+        Err(QUEUE_FULL)
     }
 }
 /// Delegated and spawned agents and automatic bot turns run in the background

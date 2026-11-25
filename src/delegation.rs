@@ -1,5 +1,9 @@
 //! Durable, bounded delegation. A parent releases its model slot before its
 //! child is admitted. Results are feedback, never an implicit merge or grant.
+use crate::application::{
+    effects::Effects,
+    runs::{Submission, Tx},
+};
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
 use crate::{State, chat, identity, runtime};
@@ -416,8 +420,7 @@ pub fn reconcile(state: &mut State, save: impl FnOnce(&State) -> std::io::Result
         .position(|c| Some(&c.id) == previous_run.chat_id.as_ref())
         .map(|i| (i, state.chats[i].clone()));
     let notice = state.runtime.notice.clone();
-    let result = advance(state, index);
-    if result.is_err() || save(state).is_err() {
+    let restore = |state: &mut State| {
         state.runtime.runs.truncate(runs_len);
         state.runtime.runs[index] = previous_run;
         state.chats.truncate(chats_len);
@@ -425,11 +428,23 @@ pub fn reconcile(state: &mut State, save: impl FnOnce(&State) -> std::io::Result
             state.chats[i] = chat;
         }
         state.runtime.notice = notice;
-        return result.and(Err("Could not persist delegation transition; no work was dispatched."));
+    };
+    let effects = match advance(state, index, crate::store::legacy_tx()) {
+        Ok(effects) => effects,
+        Err(error) => {
+            restore(state);
+            return Err(error);
+        }
+    };
+    let saved = save(state);
+    crate::store::perform(effects.after_held_save(&saved));
+    if saved.is_err() {
+        restore(state);
+        return Err("Could not persist delegation transition; no work was dispatched.");
     }
     Ok(())
 }
-fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
+fn advance(state: &mut State, index: usize, tx: Tx) -> Result<Effects, &'static str> {
     let parent = state.runtime.runs[index].clone();
     let d = parent.delegation.clone().unwrap();
     identity::authorize(&parent.actor, parent.action)?;
@@ -468,9 +483,9 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         state.runtime.runs[index].status = RunStatus::Blocked;
         state.runtime.runs[index].result =
             "Conversation files changed while delegating. Start a new turn; child outputs remain retained.".into();
-        return Ok(());
+        return Ok(Effects::none());
     }
-    if let Some(child_id) = d.state().child().map(str::to_owned) {
+    let queued = if let Some(child_id) = d.state().child().map(str::to_owned) {
         let child = leaf(state, &child_id)?.clone();
         if child.actor != parent.actor {
             return Err("Delegated child actor mismatch.");
@@ -483,7 +498,14 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             }
         }
         state.runtime.runs[index].status = RunStatus::Continued;
-        state.runtime.enqueue_for("Continue the original task using the delegated feedback. Review findings critically; no child edits were applied.".into(),RunKind::DelegationResult,"delegation",parent.actor.clone(),parent.action)?;
+        let continuation = Submission {
+            objective: "Continue the original task using the delegated feedback. Review findings critically; no child edits were applied.".into(),
+            kind: RunKind::DelegationResult,
+            source: "delegation".into(),
+            actor: parent.actor.clone(),
+            action: parent.action,
+        };
+        let queued = state.runtime.queue(continuation, tx)?;
         let next = state.runtime.runs.last_mut().unwrap();
         next.chat_id = parent.chat_id.clone();
         next.resource_grants = resources;
@@ -525,6 +547,7 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             reply: String::new(),
         });
         session.revision = session.revision.saturating_add(1);
+        queued
     } else {
         budget_for(state, &parent, d.input.role, 0, true)?;
         let resources = if d.input.role == Role::Judge {
@@ -558,13 +581,14 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
         } else if child_chat.project.is_none() {
             child_chat.workspace = Some(checkpoint);
         }
-        state.runtime.enqueue_for(
-            d.input.objective.clone(),
-            RunKind::Delegated,
-            "delegation",
-            parent.actor.clone(),
+        let delegated = Submission {
+            objective: d.input.objective.clone(),
+            kind: RunKind::Delegated,
+            source: "delegation".into(),
+            actor: parent.actor.clone(),
             action,
-        )?;
+        };
+        let queued = state.runtime.queue(delegated, tx)?;
         let root = lineage(&parent);
         let child = state.runtime.runs.last_mut().unwrap();
         child.chat_id = Some(id);
@@ -596,8 +620,9 @@ fn advance(state: &mut State, index: usize) -> Result<(), &'static str> {
             }
         );
         state.chats.iter_mut().find(|c| c.id == chat.id).unwrap().revision += 1;
-    }
-    Ok(())
+        queued
+    };
+    Ok(queued.into())
 }
 pub(crate) fn leaf<'a>(state: &'a State, id: &str) -> Result<&'a runtime::Run, &'static str> {
     let mut id = id;
