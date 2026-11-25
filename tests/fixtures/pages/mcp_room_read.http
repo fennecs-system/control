@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 508
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+{"id":20,"jsonrpc":"2.0","result":{"content":[{"text":"{\"chats\":[{\"id\":\"c-100-0\",\"title\":\"Zulu\"}],\"claims\":[],\"posts\":[{\"author\":\"operator\",\"chat\":null,\"delivery\":\"notify\",\"run\":null,\"text\":\"Ship <it> & tell\"}],\"room\":\"engineering\"}","type":"text"}],"isError":false,"structuredContent":{"data":{"chats":[{"id":"c-100-0","title":"Zulu"}],"claims":[],"posts":[{"author":"operator","chat":null,"delivery":"notify","run":null,"text":"Ship <it> & tell"}],"room":"engineering"}}}}
