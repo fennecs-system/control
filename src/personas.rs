@@ -256,22 +256,29 @@ pub(crate) fn apply_to_root(
     Ok(())
 }
 
-/// Operator tools: `control.personas.list`, `control.persona.read` and
-/// `control.chat.persona`.
-pub(crate) fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
+/// The operator tools that only read the library: `control.personas.list`
+/// and `control.persona.read`.
+pub(crate) fn read(personas: &persona::Library, name: &str, arguments: &Value) -> Result<Value, &'static str> {
     match name {
-        "control.personas.list" => Ok(json!(state.personas.current())),
+        "control.personas.list" => Ok(json!(personas.current())),
         "control.persona.read" => {
             let id = arguments["id"].as_str().ok_or("Missing persona ID.")?;
             let definition = match arguments["revision"].as_u64() {
-                Some(revision) => state.personas.revision(id, revision),
-                None => state.personas.get(id),
+                Some(revision) => personas.revision(id, revision),
+                None => personas.get(id),
             }
             .ok_or("Persona not found.")?;
             Ok(
-                json!({"definition":definition,"revisions":state.personas.history(id).iter().map(|d| d.revision).collect::<Vec<_>>(),"standing":definition.standing.describe()}),
+                json!({"definition":definition,"revisions":personas.history(id).iter().map(|d| d.revision).collect::<Vec<_>>(),"standing":definition.standing.describe()}),
             )
         }
+        _ => Err("Unknown persona tool."),
+    }
+}
+/// Operator tools: [`read`]'s and `control.chat.persona`.
+pub(crate) fn tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
+    match name {
+        "control.personas.list" | "control.persona.read" => read(&state.personas, name, arguments),
         "control.chat.persona" => {
             let chat = arguments["id"]
                 .as_str()

@@ -91,7 +91,11 @@ fn auto_fieldset(policy: &AutoApproval) -> String {
 
 /// The opt-ins form, what is running, recent automatic decisions and the node's pending requests.
 pub(crate) fn render(state: &crate::State) -> String {
-    format!("{}{}", form(), Page::of(state).render())
+    format!(
+        "{}{}",
+        form(),
+        Page::of(state, crate::design::UnixSeconds::now()).render()
+    )
 }
 /// The opt-ins form. It reads `permissions.json` and the Discord access
 /// policy, and no state, so the server renders it before the state lock.
@@ -127,20 +131,23 @@ pub(crate) fn form() -> String {
 /// state lock is released.
 pub(crate) struct Page {
     running: crate::auto_approval::Overview,
-    /// `control.requests.list`'s groups.
-    waiting: serde_json::Value,
+    /// `control.requests.list`'s groups, authorized when rendered.
+    waiting: crate::chat::Waiting,
 }
 impl Page {
-    pub(crate) fn of(state: &crate::State) -> Self {
+    /// Waiting questions' ages count from `now`.
+    pub(crate) fn of(state: &crate::State, now: crate::design::UnixSeconds) -> Self {
         Self {
             running: crate::auto_approval::Overview::of(state),
-            waiting: crate::chat::pending_requests(state),
+            waiting: crate::chat::Waiting::of(state, now),
         }
     }
-    pub(crate) fn render(&self) -> String {
+    /// Reads the Discord policy files when a waiting group's chat has a
+    /// Discord actor, so it runs after the state lock.
+    pub(crate) fn render(self) -> String {
         let mut html = self.running.render();
         let mut items = String::new();
-        for group in self.waiting.as_array().into_iter().flatten() {
+        for group in self.waiting.authorized().as_array().into_iter().flatten() {
             let chat = group["chat_id"].as_str().unwrap_or("");
             let title = crate::escape(group["title"].as_str().unwrap_or(chat));
             for pending in operator::pending(group) {

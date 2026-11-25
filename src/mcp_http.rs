@@ -1,8 +1,11 @@
 //! The operator's `/mcp` endpoint: HTTP framing around `control_mcp`. The body
 //! is parsed once and routed by tool name. GitHub, package and toolbox calls
-//! run without the state lock, so network, Git and compilation work never
-//! blocks other requests; everything else runs under it.
+//! and the tool list run without the state lock, so network, Git and
+//! compilation work never blocks other requests; read-only tools copy what
+//! they answer under it and finish after (`session_http::reads`); everything
+//! else runs under it.
 use crate::State;
+use crate::session_http::reads::{ReadTool, Viewed};
 use crate::store::Store;
 use control_http::Policy;
 use serde_json::Value;
@@ -46,6 +49,21 @@ pub(crate) fn handle(
                 control_http::respond(stream, "400 Bad Request", "text/plain", message.as_bytes(), "", policy)
             }
         };
+        return true;
+    }
+    // A poisoned state still answers 503, as under the lock.
+    if !shared.is_unavailable()
+        && let Some(list) = request.as_ref().and_then(|request| tool_list(method, version, request))
+    {
+        // It shows no state, so it waits for no change to be durable.
+        let _ = control_http::respond(
+            stream,
+            "200 OK",
+            "application/json",
+            list.as_bytes(),
+            "",
+            Policy::Embedded,
+        );
         return true;
     }
     if let Some(call) = request
@@ -96,66 +114,55 @@ fn unlocked(shared: &Store, version: Option<&str>, request: &Value) -> Option<(R
     })
 }
 
-/// An operator MCP call that only reads state and passes every check
-/// `locked` and `control_mcp::serve` make, so its reply is a tool result.
+/// An operator MCP request that passes every check `locked` and
+/// `control_mcp::serve` make before dispatch.
+fn checked(method: &str, version: Option<&str>, request: &Value) -> bool {
+    method == "POST"
+        && version.is_none_or(control_mcp::supported)
+        && !control_mcp::is_notification(request)
+        && control_mcp::is_v2(request)
+}
+/// `tools/list`, which reads no state: the reply `locked` would write.
+fn tool_list(method: &str, version: Option<&str>, request: &Value) -> Option<String> {
+    (checked(method, version, request) && control_mcp::method(request) == control_mcp::Method::ToolsList).then(|| {
+        control_mcp::reply(
+            control_mcp::id(request),
+            control_mcp::tools(crate::tool_registry::http_definitions()),
+        )
+        .to_string()
+    })
+}
+
+/// A checked operator MCP call to a tool that only reads state
+/// (`session_http::reads`), so its reply is a tool result.
 pub(crate) struct ReadCall {
     id: Value,
     tool: ReadTool,
 }
-enum ReadTool {
-    Chats,
-    /// The chat id argument, or why it is refused.
-    Chat(Result<String, &'static str>),
-}
 impl ReadCall {
     fn of(method: &str, version: Option<&str>, request: &Value) -> Option<Self> {
-        let checked = method == "POST"
-            && version.is_none_or(control_mcp::supported)
-            && !control_mcp::is_notification(request)
-            && control_mcp::is_v2(request);
-        let call = control_mcp::call(request).filter(|_| checked)?;
-        let tool = match call.name {
-            "control.chats.list" => ReadTool::Chats,
-            "control.chat.read" => ReadTool::Chat(crate::chat::chat_id(call.arguments).map(str::to_owned)),
-            _ => return None,
-        };
+        let call = control_mcp::call(request).filter(|_| checked(method, version, request))?;
         Some(Self {
             id: control_mcp::id(request).clone(),
-            tool,
+            tool: ReadTool::of(call.name, call.arguments)?,
         })
     }
 }
 /// What a read call answers with, copied out of state.
 pub(crate) struct ReadResult {
     id: Value,
-    data: Result<ReadData, &'static str>,
+    data: Result<Viewed, &'static str>,
 }
-enum ReadData {
-    Chats(crate::chat::Listing),
-    Chat(Value),
-}
-/// The read tools: what they answer is copied under the lock and encoded after it.
+/// The read tools: what they answer is copied under the lock; actors are
+/// authorized, files read and the reply encoded after it.
 const READ_TOOLS: crate::Read<ReadCall, ReadResult> = crate::Read {
     view: |state, ReadCall { id, tool }| ReadResult {
         id,
-        data: match tool {
-            ReadTool::Chats => Ok(ReadData::Chats(crate::chat::Listing::of(state))),
-            ReadTool::Chat(chat) => chat
-                .and_then(|chat| crate::chat::detail(state, &chat))
-                .map(ReadData::Chat),
-        },
+        data: tool.view(state),
     },
     render: |ReadResult { id, data }| {
-        // Plain data with string keys: encoding cannot fail.
-        let raw = |data: ReadData| {
-            match data {
-                ReadData::Chats(listing) => serde_json::value::to_raw_value(&listing),
-                ReadData::Chat(chat) => serde_json::value::to_raw_value(&chat),
-            }
-            .expect("read tool data encodes")
-        };
-        let body = match data {
-            Ok(data) => control_mcp::data_reply(&id, &raw(data)),
+        let body = match data.and_then(Viewed::raw) {
+            Ok(data) => control_mcp::data_reply(&id, &data),
             Err(message) => control_mcp::tool_error(&id, message).to_string(),
         };
         crate::Reply {

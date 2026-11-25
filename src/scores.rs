@@ -383,13 +383,18 @@ fn summary(probe: &Probe) -> Value {
 }
 /// `control.run.scores`: every probe in the team (root chat and descendants)
 /// of `chat`, with its series. Read-only.
+#[cfg(test)]
 pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
+    view(state, chat)?.check(crate::identity::authorize)
+}
+/// [`read`]'s answer copied out of state, shown once the chat's actor is
+/// authorized (after the lock: a Discord actor's policy is read from disk).
+pub fn view(state: &State, chat: &str) -> Result<crate::identity::Unchecked<Value>, &'static str> {
     let session = state
         .chats
         .iter()
         .find(|session| session.id == chat)
         .ok_or("Chat not found.")?;
-    crate::identity::authorize(&session.actor, crate::identity::Action::Task)?;
     let team = crate::chat::Lineage::of(&state.chats).tree(chat);
     let root = team
         .iter()
@@ -410,10 +415,11 @@ pub fn read(state: &State, chat: &str) -> Result<Value, &'static str> {
         .filter(|probe| team.contains(probe.chat.as_str()))
         .map(summary)
         .collect::<Vec<_>>();
-    Ok(
+    Ok(crate::identity::Unchecked::new(
+        session.actor.clone(),
         json!({"root":root,"milestones":milestones(TeamProgress::of(state), chat),"probes":probes,
         "note":"Values are the workload's own untrusted claims; Control does not interpret them."}),
-    )
+    ))
 }
 /// The latest values of this chat's probes, one plain-text summary each.
 pub fn summaries(probes: &[Probe], chat: &str) -> Vec<String> {
