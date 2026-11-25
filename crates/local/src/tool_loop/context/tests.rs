@@ -1,6 +1,10 @@
 use super::*;
 use serde_json::json;
 
+/// The summary target the host gives a compactor with a 512-token output
+/// ceiling (`compaction::target_words(512)` in the root).
+const WORDS: usize = 96;
+
 fn transcript(steps: usize, result: &str, arguments: &str) -> Vec<Value> {
     let mut messages = vec![
         json!({"role":"system","content":"s"}),
@@ -77,7 +81,7 @@ fn a_digest_keeps_call_names_and_result_heads_within_its_bound() {
 }
 
 struct Summaries(Vec<(String, usize)>);
-impl Host for Summaries {
+impl Effects for Summaries {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
         Ok(vec![])
     }
@@ -102,7 +106,7 @@ fn folded_blocks_form_a_summary_tree_and_stay_folded() {
     let messages = transcript(12, &"output\n".repeat(300), "{}");
     let compactor = Compactor {
         input_bytes: 1500,
-        output_tokens: 512,
+        words: WORDS,
     };
     let mut lens = Lens::default();
     let mut host = Summaries(Vec::new());
@@ -129,7 +133,7 @@ fn folded_blocks_form_a_summary_tree_and_stay_folded() {
     assert!(
         host.0
             .iter()
-            .all(|(evidence, words)| evidence.len() <= 1500 && *words == crate::compaction::target_words(512))
+            .all(|(evidence, words)| evidence.len() <= 1500 && *words == WORDS)
     );
     let last = &host.0.last().unwrap().0;
     assert!(
@@ -205,7 +209,7 @@ struct Forgetful {
     summaries: usize,
     retained: Vec<(Block, String, Option<[String; 2]>, usize)>,
 }
-impl Host for Forgetful {
+impl Effects for Forgetful {
     fn tools(&mut self) -> io::Result<Vec<Value>> {
         Ok(vec![])
     }
@@ -250,7 +254,7 @@ fn long_turn(host: &mut Forgetful, steps: usize) -> (Vec<Vec<Value>>, usize) {
     lens.reasoned(1, &format!("The loader is missing, so\n{DECISION}"));
     let compactor = Compactor {
         input_bytes: 1500,
-        output_tokens: 512,
+        words: WORDS,
     };
     let (mut views, mut folds) = (Vec::new(), 0);
     for count in 6..=steps {
