@@ -237,6 +237,9 @@ pub enum Failure {
     Unclassified(&'static str),
     /// The attempt reached its time limit.
     TimedOut(Duration),
+    /// A loop Control runs used all of its model steps without a reply or
+    /// handoff; the host writes a checkpoint for the next turn.
+    StepLimit(usize),
     Cancelled(Cancelled),
     /// The agent asked the operator a design question.
     Waiting,
@@ -271,6 +274,12 @@ pub const WAITING: &str = "Waiting for a design decision.";
 pub const CANCELLED: &str = "Cancelled. The previous published workspace is unchanged.";
 pub const UNFINISHED_TOOL: &str = "The provider ended with an unfinished MCP tool call. Inspect pending requests and service status before retrying: the tool's outcome is unconfirmed. The published checkpoint is unchanged; check recovery evidence for unpublished work.";
 
+/// The message for a turn stopped at its model-step cap.
+fn step_limit_message(steps: usize) -> String {
+    format!(
+        "Local agent reached its {steps}-step limit without a final report or handoff. The published checkpoint is unchanged; Control recorded this turn's last tool calls and workspace as a host checkpoint for the next turn to resume from (local_agent_steps in execution.json sets the limit)."
+    )
+}
 /// The message for a turn stopped at its time limit.
 pub fn timeout_message(limit: Duration) -> String {
     format!(
@@ -288,7 +297,8 @@ impl Failure {
             | Self::Ended(_)
             | Self::UnexpectedTools(_)
             | Self::Unclassified(_)
-            | Self::TimedOut(_) => Status::Failed,
+            | Self::TimedOut(_)
+            | Self::StepLimit(_) => Status::Failed,
             Self::Cancelled(_) => Status::Cancelled,
             Self::Waiting => Status::Waiting,
             Self::Interrupted(_) | Self::UnfinishedTool => Status::Interrupted,
@@ -305,6 +315,7 @@ impl Failure {
             Self::Provider { agent, cause } => cause.message(agent, sign_in),
             Self::Unclassified(text) => (*text).to_owned(),
             Self::TimedOut(limit) => timeout_message(*limit),
+            Self::StepLimit(steps) => step_limit_message(*steps),
             Self::Cancelled(Cancelled::BeforeLaunch(Some(agent))) => format!("Cancelled before {agent} launch."),
             Self::Cancelled(Cancelled::BeforeLaunch(None)) => "Cancelled before launch.".to_owned(),
             Self::Cancelled(Cancelled::Running) => CANCELLED.to_owned(),

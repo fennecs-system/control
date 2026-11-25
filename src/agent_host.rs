@@ -64,6 +64,8 @@ pub(crate) struct Attempted<'a> {
     pub attempt: &'a mut Attempt,
     /// The prepared workspace, canonical.
     pub workspace: &'a Path,
+    /// The chat's compactor, for a loop that compacts inside its turn.
+    pub compactor: Option<crate::model_calls::Endpoint>,
 }
 impl Host for Attempted<'_> {
     fn node(&self) -> &dyn Node {
@@ -109,6 +111,65 @@ impl Host for Attempted<'_> {
     fn observed(&mut self, prompt: String) -> String {
         crate::observe::append(self.bridge, prompt)
     }
+    fn serve(&mut self, nonce: &str, request: serde_json::Value) -> serde_json::Value {
+        let envelope = serde_json::json!({"nonce":nonce,"request":request});
+        match self.bridge {
+            Some((state, run)) => crate::worker_tools::local_rpc(
+                state,
+                run,
+                &envelope,
+                self.workspace,
+                self.attempt.context_trace.is_some(),
+            ),
+            None => control_mcp::error(
+                control_mcp::id(&envelope["request"]),
+                -32603,
+                "Worker tools need a live Control node",
+            ),
+        }
+    }
+    fn observation(&mut self, first: bool) -> Option<String> {
+        self.bridge
+            .and_then(|(state, run)| crate::observe::step(state, run, first))
+    }
+    fn inbox(&mut self) -> Option<String> {
+        // Same transport choice as the CLI mailboxes: managed turns get callbacks.
+        let (state, run) = self.bridge.filter(|_| self.attempt.context_trace.is_some())?;
+        state
+            .write(|state| crate::turn_context::inbox(state, run, crate::storage::save))
+            .ok()
+            .flatten()
+    }
+    fn continues(&self) -> bool {
+        self.bridge.is_none_or(|(state, run)| {
+            state
+                .read(|state| {
+                    let chat = state.runtime.runs.get(run).and_then(|run| run.chat_id.as_deref());
+                    chat.is_some_and(|chat| crate::bots::continuation_enabled(state, chat))
+                })
+                .unwrap_or(true)
+        })
+    }
+    fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String> {
+        let compactor = self.compactor.as_ref().ok_or_else(|| io::Error::other(NO_COMPACTOR))?;
+        crate::model_calls::call(compactor, &crate::compaction::system_within(words), evidence).map(|r| r.text)
+    }
+    fn retain(
+        &mut self,
+        block: control_comonad::Block,
+        text: &str,
+        children: Option<[String; 2]>,
+        sources: Vec<String>,
+    ) -> io::Result<String> {
+        let compactor = self.compactor.as_ref().ok_or_else(|| io::Error::other(NO_COMPACTOR))?;
+        let (state, run) = self
+            .bridge
+            .ok_or_else(|| io::Error::other("Recall needs a live Control node"))?;
+        crate::compaction::turn::retain(state, run, self.id, compactor, block, text, children, sources)
+    }
+    fn reasoned(&mut self, reasoning: &str) {
+        self.attempt.interrupted_reasoning = Some(crate::turn_context::carried_reasoning(reasoning));
+    }
     fn events(&self) -> Arc<dyn Events> {
         Arc::new(Live {
             target: self.bridge.map(|(state, run)| (state.clone(), run.to_owned())),
@@ -149,6 +210,30 @@ impl Events for Live {
     }
 }
 
+const NO_COMPACTOR: &str = "This turn has no compactor";
+
+/// The operator's model-step cap, and whether the attempt resumes a cut-off
+/// turn: the chat holds a host checkpoint, or the run already had an attempt
+/// (the live one is its last).
+pub(crate) fn continuity(bridge: Bridge<'_>) -> (usize, bool) {
+    let default = || crate::scheduler::Limits::default().local_agent_steps;
+    let Some((state, run)) = bridge else {
+        return (default(), false);
+    };
+    state
+        .read(|state| {
+            let current = state.runtime.runs.get(run);
+            let resumed = current
+                .and_then(|r| r.chat_id.as_ref())
+                .and_then(|chat| state.chats.iter().find(|c| &c.id == chat))
+                .and_then(|s| s.continuity.as_ref())
+                .is_some_and(|c| c.interrupted.is_some())
+                || current.is_some_and(|r| r.attempts.len() > 1);
+            (state.runtime.execution.local_agent_steps, resumed)
+        })
+        .unwrap_or_else(|_| (default(), false))
+}
+
 /// A failure as the attempt records it: its status and wording, which names
 /// `sign_in` when the account must sign in again.
 pub(crate) fn status(failure: &Failure, sign_in: &control_agent::SignIn) -> (control_agent::Status, String) {
@@ -177,6 +262,10 @@ pub(crate) fn finish(
     result.map_err(|failure| {
         if let Failure::Provider { cause, .. } = failure {
             attempt.cause = Some(cause);
+        }
+        // The next turn resumes from the host checkpoint this termination writes.
+        if let Failure::StepLimit(_) = failure {
+            attempt.termination = Some(crate::attempt_control::Termination::StepLimit);
         }
         if failure == Failure::UnfinishedTool {
             crate::worker::interrupt_unfinished_tools(bridge, id);

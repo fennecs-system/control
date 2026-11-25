@@ -37,10 +37,42 @@ pub trait Host {
     fn pump(&mut self, mailbox: &Path);
     /// `elapsed` counts from the attempt's admission.
     fn poll(&mut self, elapsed: Duration) -> Control;
+    /// Serves one worker MCP request (`tools/list`, `tools/call`) in process,
+    /// through the same dispatch and fencing as [`Host::pump`], and returns
+    /// its JSON-RPC response. `nonce` keys the request as a mailbox file's name would.
+    fn serve(&mut self, nonce: &str, request: serde_json::Value) -> serde_json::Value;
     /// Stops the attempt's containers; the error is the operator's next step.
     fn stop(&mut self, scope: Stop) -> Result<(), String>;
     /// `prompt` with the chat's declared observation placed last.
     fn observed(&mut self, prompt: String) -> String;
+    /// The chat's declared observation for one request of a loop that rebuilds
+    /// its request every step: the whole block, refreshed when stale without
+    /// blocking on a slow probe; `first` is the turn's first request.
+    fn observation(&mut self, first: bool) -> Option<String>;
+    /// New conversation callbacks, recorded as delivered so each appears once.
+    /// [`Host::pump`] adds them to a CLI's tool results; a loop that builds its
+    /// own requests reads them here.
+    fn inbox(&mut self) -> Option<String>;
+    /// Another turn follows a handoff: the chat is a persistent bot.
+    fn continues(&self) -> bool;
+    /// One bounded summary of untrusted `evidence` in under `words` words, on
+    /// the chat's compactor: the host compaction every backend's history gets,
+    /// for a loop that compacts inside its turn.
+    fn summarize(&mut self, evidence: &str, words: usize) -> io::Result<String>;
+    /// Keeps `block` of this turn's steps as a node of the conversation's
+    /// summary tree, which `control_history_read` reads and searches: `text`
+    /// is its summary, and it has either two retained `children` or one
+    /// original source per step. Returns the node's key.
+    fn retain(
+        &mut self,
+        block: control_comonad::Block,
+        text: &str,
+        children: Option<[String; 2]>,
+        sources: Vec<String>,
+    ) -> io::Result<String>;
+    /// The reasoning a turn was cut off in, carried into the host checkpoint
+    /// the next turn resumes from; never transcript.
+    fn reasoned(&mut self, reasoning: &str);
     /// Where the turn's stream reports what it sees, from another thread.
     fn events(&self) -> Arc<dyn Events>;
     /// Someone waits on this turn's own reply (a chat message, not a wake).

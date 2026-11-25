@@ -185,6 +185,7 @@ name = "control-agent"
 version = "0.1.0"
 dependencies = [
  "control-ai",
+ "control-comonad",
  "control-context",
  "control-effect",
  "control-inject",
@@ -397,7 +398,11 @@ version = "0.1.0"
 dependencies = [
  "control-agent",
  "control-ai",
+ "control-comonad",
+ "control-context",
  "control-isolation",
+ "control-mcp",
+ "reqwest",
  "serde_json",
 ]
 

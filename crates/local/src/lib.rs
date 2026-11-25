@@ -1,14 +1,21 @@
 //! The local backend: an operator-configured OpenAI-compatible endpoint whose
-//! tool loop Control runs itself (`Runs::Control`). This crate holds what that
-//! loop decides without the host: how worker tools become function tools, how
-//! results and notes enter the transcript, the token estimate, adaptive
-//! thinking and per-call metering. The loop and its host stay in the root
-//! for now; docs/CRATE-BOUNDARIES.md lists what still couples them.
+//! tool loop Control runs itself (`Runs::Control`). Its turn is the loop in
+//! [`tool_loop`] bound to the shared `control_agent::Host`, like every other
+//! backend's; the model is reached over the private-endpoint [`transport`].
+//! This crate also holds what the loop decides without the host: how worker
+//! tools become function tools, how results and notes enter the transcript,
+//! the token estimate, adaptive thinking and per-call metering.
 use control_ai::Tokens;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+mod live;
 pub mod thinking;
+pub mod tool_loop;
+pub mod transport;
+
+/// How provenance names a private endpoint reached over [`transport`].
+pub const ADAPTER: &str = "private-endpoint";
 
 /// Conservative token estimate for planning (about 3 UTF-8 bytes per token).
 /// Real tokenizers usually do better; the server still enforces its own limit.
@@ -228,7 +235,12 @@ impl control_agent::Agent for Local {
         true
     }
     fn runs(&self) -> control_agent::Runs<'_> {
-        control_agent::Runs::Control
+        control_agent::Runs::Control(self)
+    }
+}
+impl control_agent::Turns for Local {
+    fn turn(&self, turn: control_agent::Turn<'_>, host: &mut dyn control_agent::Host) -> control_agent::Outcome {
+        live::turn(turn, host)
     }
 }
 const NO_IMAGE: &str = "local endpoints run no worker image";
