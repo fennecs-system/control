@@ -165,29 +165,54 @@ impl Formatter for Lent<'_> {
 /// Serializes `value` as compact JSON, the same bytes `serde_json::to_vec`
 /// writes, with the ranges [`diff`] needs.
 pub fn encode<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
+    let (out, nodes) = SCRATCH.with(|scratch| std::mem::take(&mut *scratch.borrow_mut()));
     let at = Rc::new(Cell::new(0));
     let mut ranges = Ranges {
         at: at.clone(),
-        nodes: Vec::new(),
+        nodes,
         open: Vec::new(),
         key: (0, 0),
     };
     ranges.open((0, 0));
-    let mut writer = Tracked { out: Vec::new(), at };
-    let mut serializer = serde_json::Serializer::with_formatter(&mut writer, Lent(&mut ranges));
-    value.serialize(&mut serializer)?;
-    ranges.close();
-    if u32::try_from(writer.out.len()).is_err() {
-        return Err(serde::ser::Error::custom("documents are limited to 4 GiB"));
+    let mut writer = Tracked { out, at };
+    let serialized = value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut writer,
+        Lent(&mut ranges),
+    ));
+    let encoded = serialized.and_then(|()| {
+        ranges.close();
+        let (bytes, nodes) = (&mut writer.out, &mut ranges.nodes);
+        if u32::try_from(bytes.len()).is_err() {
+            return Err(serde::ser::Error::custom("documents are limited to 4 GiB"));
+        }
+        // A part keeps its encoding until it changes, so exactly sized: a
+        // copy, or for a large one the buffers themselves (no scratch stays big).
+        Ok(if bytes.len() > SCRATCH_KEPT {
+            bytes.shrink_to_fit();
+            nodes.shrink_to_fit();
+            Encoded {
+                bytes: std::mem::take(bytes),
+                nodes: std::mem::take(nodes),
+            }
+        } else {
+            Encoded {
+                bytes: bytes.clone(),
+                nodes: nodes.clone(),
+            }
+        })
+    });
+    writer.out.clear();
+    ranges.nodes.clear();
+    if writer.out.capacity() > 2 * SCRATCH_KEPT {
+        (writer.out, ranges.nodes) = Default::default();
     }
-    // Kept until the value changes (a part's encoding), so without the
-    // slack the buffers grew by.
-    writer.out.shrink_to_fit();
-    ranges.nodes.shrink_to_fit();
-    Ok(Encoded {
-        bytes: writer.out,
-        nodes: ranges.nodes,
-    })
+    SCRATCH.with(|scratch| *scratch.borrow_mut() = (writer.out, ranges.nodes));
+    encoded
+}
+/// Encodings up to this size are built in reused buffers and copied out.
+const SCRATCH_KEPT: usize = 64 << 10;
+thread_local! {
+    static SCRATCH: std::cell::RefCell<(Vec<u8>, Vec<Node>)> = const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
 }
 
 /// What [`encode`] gives for an object whose members (raw JSON keys and
