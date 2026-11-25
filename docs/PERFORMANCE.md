@@ -305,8 +305,9 @@ lock.
 reconciliation with a no-op checkpoint. `profile_idle_and_waiting_room_reconciliation`
 measures an armed, waiting subscription (`CONTROL_ROOM_PROFILE_ROUNDS`, default
 10); the unarmed path is at the measurement floor. Both still scan retained
-runs linearly: about 1 ms and 0.76 ms at 20,001 retained runs on one pinned
-Linux ARM64 CPU.
+runs linearly, but look ids up through the run ledger's index instead of
+hashing every run id per pass: at 20,001 retained runs on Apple Silicon,
+about 0.2–0.3 ms and 55 µs (0.9 ms and 0.6 ms with the per-pass map).
 
 `agent_message::profile::routing_profile` measures the downward message path
 with in-memory construction, result encoding and dispatcher notification, but
