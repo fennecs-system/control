@@ -58,42 +58,56 @@ impl Scoped<'_> {
             .map(str::to_owned)
             .collect()
     }
+    /// Whether this agent may call tool `name` with `arguments`; its team.
+    fn admit(&self, state: &State, name: &str, arguments: &Value) -> io::Result<HashSet<String>> {
+        let team = self.team(state);
+        let write = WRITES.contains(&name);
+        if !write && !READS.contains(&name) {
+            return Err(io::Error::other("Not available to agents."));
+        }
+        if let Some(id) = arguments["id"].as_str() {
+            if !team.contains(id) {
+                return Err(io::Error::other(
+                    "Only chats in your own task (your chat and the chats spawned below it).",
+                ));
+            }
+            if write && id == self.own {
+                return Err(io::Error::other(
+                    "Agents change the DMs they spawned, not their own chat.",
+                ));
+            }
+        }
+        // Only the commands chat_model and chat_cancel build; never a decision.
+        let command = arguments["message"]
+            .as_str()
+            .map(str::trim_start)
+            .filter(|m| m.starts_with('/'));
+        if command.is_some_and(|m| {
+            !["/model", "/cancel"]
+                .iter()
+                .any(|c| m == *c || m.starts_with(&format!("{c} ")))
+        }) {
+            return Err(io::Error::other("Agents send plain text, /model or /cancel only."));
+        }
+        if name == "control.chat.create" && team.len() >= MAX_TEAM {
+            return Err(io::Error::other(format!("This task already has {MAX_TEAM} chats.")));
+        }
+        Ok(team)
+    }
 }
 impl Remote for Scoped<'_> {
+    /// As the operator endpoint's `control.chat.send`, but under the lock
+    /// it copies only the chat's tail, not the detail a server answers with.
+    fn send(&mut self, id: &str, message: &str) -> io::Result<crate::chat::Tail> {
+        let arguments = json!({"id":id,"message":message});
+        self.shared.write(|state| {
+            self.admit(state, "control.chat.send", &arguments)?;
+            crate::session_http::send_with_tail(state, &arguments).map_err(|error| io::Error::other(error.into_owned()))
+        })?
+    }
     fn tool(&mut self, name: &str, arguments: Value) -> io::Result<Value> {
         self.shared.write(|state| {
-            let team = self.team(state);
-            let write = WRITES.contains(&name);
-            if !write && !READS.contains(&name) {
-                return Err(io::Error::other("Not available to agents."));
-            }
-            if let Some(id) = arguments["id"].as_str() {
-                if !team.contains(id) {
-                    return Err(io::Error::other(
-                        "Only chats in your own task (your chat and the chats spawned below it).",
-                    ));
-                }
-                if write && id == self.own {
-                    return Err(io::Error::other(
-                        "Agents change the DMs they spawned, not their own chat.",
-                    ));
-                }
-            }
-            // Only the commands chat_model and chat_cancel build; never a decision.
-            let command = arguments["message"]
-                .as_str()
-                .map(str::trim_start)
-                .filter(|m| m.starts_with('/'));
-            if command.is_some_and(|m| {
-                !["/model", "/cancel"]
-                    .iter()
-                    .any(|c| m == *c || m.starts_with(&format!("{c} ")))
-            }) {
-                return Err(io::Error::other("Agents send plain text, /model or /cancel only."));
-            }
-            if name == "control.chat.create" && team.len() >= MAX_TEAM {
-                return Err(io::Error::other(format!("This task already has {MAX_TEAM} chats.")));
-            }
+            let team = self.admit(state, name, &arguments)?;
             let response = crate::session_http::rpc(
                 state,
                 &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}),

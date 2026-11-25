@@ -368,6 +368,24 @@ pub(crate) fn change_with_save(
         save,
     )
 }
+/// `control.chat.send` as the operator endpoint runs it (saved under the
+/// lock), answering the chat's tail (`chat::Tail`) instead of its detail.
+pub(crate) fn send_with_tail(
+    state: &mut State,
+    arguments: &Value,
+) -> Result<chat::Tail, std::borrow::Cow<'static, str>> {
+    let tx = crate::store::legacy_tx();
+    saved_under_lock(
+        state,
+        "control.chat.send",
+        arguments,
+        |state| {
+            let effects = chat::send_applied(state, arguments, tx)?;
+            Ok((chat::Tail::of(state, chat::chat_id(arguments)?)?, effects))
+        },
+        storage::save,
+    )
+}
 /// Applies tool `name` by `apply` behind its checkpoint (`staged`) and saves
 /// by `save` under the lock, restoring the checkpoint if the save is refused.
 fn saved_under_lock<T>(

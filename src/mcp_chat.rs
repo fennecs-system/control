@@ -30,6 +30,12 @@ pub(crate) trait Remote {
     ) -> io::Result<String> {
         Err(io::Error::other("Decisions are not available here."))
     }
+    /// Sends `message` to chat `id`: what the sender is told. A server
+    /// answers a send with the chat's detail; the tail is read from it.
+    fn send(&mut self, id: &str, message: &str) -> io::Result<crate::chat::Tail> {
+        self.tool("control.chat.send", json!({"id":id,"message":message}))
+            .map(|detail| crate::chat::Tail::of_detail(&detail))
+    }
 }
 impl Remote for Hive {
     fn tool(&mut self, name: &str, arguments: Value) -> io::Result<Value> {
@@ -291,14 +297,6 @@ fn line(row: &Value) -> String {
     )
 }
 /// The latest operator-visible reply in a chat view, after a command.
-fn last_reply(detail: &Value) -> String {
-    detail["messages"]
-        .as_array()
-        .and_then(|m| m.last())
-        .map(|m| text(m, "reply"))
-        .filter(|r| !r.is_empty())
-        .unwrap_or_else(|| "Done.".into())
-}
 /// The chat and its spawned descendants, depth first, from `control.chats.list` rows.
 fn team<'a>(rows: &'a [Value], id: &str) -> Vec<(usize, &'a Value)> {
     let mut out = Vec::new();
@@ -691,19 +689,16 @@ fn chat_create(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let steps = [
         title.map(|title| ("Rename", "control.chat.rename", json!({"id":id,"name":title}))),
         persona.map(|persona| ("Persona", "control.chat.persona", json!({"id":id,"persona":persona}))),
-        model.map(|model| {
-            (
-                "Model",
-                "control.chat.send",
-                json!({"id":id,"message":format!("/model {model}")}),
-            )
-        }),
     ];
     for (what, tool, arguments) in steps.into_iter().flatten() {
-        match remote.tool(tool, arguments) {
-            Ok(detail) if what == "Model" => notes.push(last_reply(&detail)),
-            Ok(_) => {}
-            Err(error) => notes.push(format!("{what} failed: {error}")),
+        if let Err(error) = remote.tool(tool, arguments) {
+            notes.push(format!("{what} failed: {error}"));
+        }
+    }
+    if let Some(model) = model {
+        match remote.send(&id, &format!("/model {model}")) {
+            Ok(sent) => notes.push(sent.reply()),
+            Err(error) => notes.push(format!("Model failed: {error}")),
         }
     }
     Ok(format!(
@@ -743,23 +738,16 @@ fn chat_send(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
             "This chat is waiting on a design question; the operator answers it in Control (chat_requests lists it).",
         ));
     }
-    let detail = remote.tool("control.chat.send", json!({"id":id,"message":message}))?;
-    let count = detail["messages"].as_array().map_or(0, Vec::len);
-    let status = detail["messages"]
-        .as_array()
-        .and_then(|m| m.last())
-        .and_then(|m| m["status"].as_str())
-        .unwrap_or("queued");
+    let sent = remote.send(id, message)?;
     Ok(format!(
-        "Sent to {id} as message #{} [{status}]. Follow it with chat_read.",
-        count.saturating_sub(1)
+        "Sent to {id} as message #{} [{}]. Follow it with chat_read.",
+        sent.messages.saturating_sub(1),
+        sent.status().unwrap_or("queued")
     ))
 }
 
 fn command(remote: &mut impl Remote, id: &str, text: String) -> io::Result<String> {
-    Ok(last_reply(
-        &remote.tool("control.chat.send", json!({"id":id,"message":text}))?,
-    ))
+    Ok(remote.send(id, &text)?.reply())
 }
 fn chat_model(remote: &mut impl Remote, args: &Value) -> io::Result<String> {
     let id = chat_id(args)?;

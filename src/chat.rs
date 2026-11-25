@@ -1208,6 +1208,51 @@ pub fn detail(state: &State, id: &str) -> Result<Value, &'static str> {
         value
     })
 }
+/// What a sender is told of a chat after its send (the chat MCP's
+/// `chat_send`, `chat_model`, `chat_cancel`): its message count and its last
+/// message's status and reply, as `detail` shows them.
+pub(crate) struct Tail {
+    pub(crate) messages: usize,
+    /// The last message's status (absent in a detail without one) and reply.
+    last: Option<(Option<String>, String)>,
+}
+impl Tail {
+    /// Copied from the chat: proportional to one message, not the chat.
+    pub(crate) fn of(state: &State, id: &str) -> Result<Self, &'static str> {
+        let session = viewable(&state.chats, id)?;
+        Ok(Self {
+            messages: session.messages.len(),
+            last: session.messages.last().map(|message| {
+                let run = message.run_id.as_deref().and_then(|run| state.runtime.runs.get(run));
+                let (status, reply) = response_from_run(message, run);
+                (Some(status.as_str().to_owned()), reply.to_owned())
+            }),
+        })
+    }
+    /// Read from a chat's detail, as a server answers a send.
+    pub(crate) fn of_detail(detail: &Value) -> Self {
+        let messages = detail["messages"].as_array();
+        Self {
+            messages: messages.map_or(0, Vec::len),
+            last: messages.and_then(|messages| messages.last()).map(|message| {
+                (
+                    message["status"].as_str().map(str::to_owned),
+                    message["reply"].as_str().unwrap_or("").to_owned(),
+                )
+            }),
+        }
+    }
+    pub(crate) fn status(&self) -> Option<&str> {
+        self.last.as_ref()?.0.as_deref()
+    }
+    /// The last message's reply, or "Done." when it has none.
+    pub(crate) fn reply(self) -> String {
+        self.last
+            .map(|(_, reply)| reply)
+            .filter(|reply| !reply.is_empty())
+            .unwrap_or_else(|| "Done.".into())
+    }
+}
 pub fn list(state: &State) -> Value {
     serde_json::to_value(Listing::of(state)).unwrap_or_default()
 }
