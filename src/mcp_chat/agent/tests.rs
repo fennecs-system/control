@@ -257,7 +257,7 @@ fn agents_sends_without_task_authority_are_refused_as_before() {
     for name in ["chat_model", "chat_cancel"] {
         told.push(
             call(&mut scoped, name, &json!({"id":"c-1-1"}), Approvals::default())
-                .map_or_else(|error| format!("error: {error}"), |told| told),
+                .unwrap_or_else(|error| format!("error: {error}")),
         );
     }
     // No policy file on a test node: every actor but the local operator is refused.
