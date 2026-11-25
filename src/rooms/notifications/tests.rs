@@ -70,14 +70,17 @@ fn watch(state: &mut State, run: &str, wake: bool) {
     call(state, run, "control_room_watch", &json!({"enabled":true,"wake":wake})).unwrap();
 }
 pub(super) fn post(state: &mut State, room: &str, text: &str, chat: Option<String>) {
-    state.collective.posts.push(super::super::Post {
-        room: room.into(),
-        text: text.into(),
-        chat,
-        run: None,
-        key: String::new(),
-        delivery: Default::default(),
-    });
+    state.collective.posts.push(
+        super::super::Post {
+            room: room.into(),
+            text: text.into(),
+            chat,
+            run: None,
+            key: String::new(),
+            delivery: Default::default(),
+        }
+        .into(),
+    );
 }
 fn rpc(name: &str, args: Value) -> Value {
     json!({"nonce":"1-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}})

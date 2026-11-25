@@ -23,7 +23,7 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
         "messages":[], "room":"research"
     }))
     .unwrap()];
-    let query = |allowed, generation, posts: &[Post]| {
+    let query = |allowed, generation, posts: &[Part<Post>]| {
         plan(
             View {
                 runs: &runs,
@@ -45,7 +45,7 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
             |_, _| allowed,
         )
     };
-    let mut posts = vec![
+    let mut posts: Vec<Part<Post>> = [
         Post {
             room: "research".into(),
             text: "Own output".into(),
@@ -62,7 +62,10 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
             key: String::new(),
             delivery: crate::rooms::Delivery::Record,
         },
-    ];
+    ]
+    .into_iter()
+    .map(Part::from)
+    .collect();
     assert_eq!(query(true, "attempt", &posts), vec![(7, Decision::Advance(2))]);
     posts[1].delivery = crate::rooms::Delivery::Notify;
     assert_eq!(query(true, "attempt", &posts), vec![(7, Decision::Queue(0))]);

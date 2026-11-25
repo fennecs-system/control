@@ -103,6 +103,7 @@ mod web_assets;
 mod worker;
 mod worker_profile;
 mod worker_tools;
+use control_journal::snapshot::Part;
 use std::{
     collections::HashMap,
     io::{Read as _, Write},
@@ -110,40 +111,49 @@ use std::{
     sync::Arc,
 };
 
+/// Each field is a `Part` (`runtime` holds its runs as parts): a save encodes
+/// and diffs only the fields, room posts, agent notes and runs borrowed
+/// mutably since the last one.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct State {
-    ports: Vec<ports::Port>,
-    web_grants: Vec<web_access::Grant>,
-    services: Vec<services::Service>,
-    github_publications: Vec<github::Publication>,
-    previews: Vec<previews::Preview>,
-    chats: Vec<chat::Session>,
-    discord_seen: Vec<String>,
+    ports: Part<Vec<ports::Port>>,
+    web_grants: Part<Vec<web_access::Grant>>,
+    services: Part<Vec<services::Service>>,
+    github_publications: Part<Vec<github::Publication>>,
+    previews: Part<Vec<previews::Preview>>,
+    chats: Part<Vec<chat::Session>>,
+    discord_seen: Part<Vec<String>>,
+    /// Split at every save, not kept: archiving a run changes its encoding
+    /// through a shared borrow (`storage::archive`). Its runs are parts.
+    #[serde(serialize_with = "control_journal::snapshot::split_each_save")]
     runtime: runtime::Runtime,
-    collective: collective::Collective,
-    bots: bots::Bots,
-    watches: Vec<watches::Watch>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    scores: Vec<scores::Probe>,
-    observations: observe::Observations,
-    agent_messages: Vec<application::messages::Sent>,
-    documents: Vec<knowledge::Document>,
-    lens_library: control_context::Library,
-    personas: control_context::persona::Library,
-    packages: Vec<packages::Manifest>,
+    collective: Part<collective::Collective>,
+    bots: Part<bots::Bots>,
+    watches: Part<Vec<watches::Watch>>,
+    #[serde(skip_serializing_if = "is_empty")]
+    scores: Part<Vec<scores::Probe>>,
+    observations: Part<observe::Observations>,
+    agent_messages: Part<Vec<application::messages::Sent>>,
+    documents: Part<Vec<knowledge::Document>>,
+    lens_library: Part<control_context::Library>,
+    personas: Part<control_context::persona::Library>,
+    packages: Part<Vec<packages::Manifest>>,
     /// Requests the node's policy approved, newest last and bounded.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    auto_decisions: Vec<auto_approval::Record>,
-    messages: Vec<String>,
-    agents: Vec<String>,
-    note: String,
+    #[serde(skip_serializing_if = "is_empty")]
+    auto_decisions: Part<Vec<auto_approval::Record>>,
+    messages: Part<Vec<String>>,
+    agents: Part<Vec<Part<String>>>,
+    note: Part<String>,
     saved: bool,
+}
+fn is_empty<T>(items: &Part<Vec<T>>) -> bool {
+    items.is_empty()
 }
 impl State {
     fn initial() -> Self {
         let mut state = Self {
-            note: include_str!("../DESIGN.md").to_owned(),
+            note: include_str!("../DESIGN.md").to_owned().into(),
             ..Self::default()
         };
         knowledge::migrate(&mut state);

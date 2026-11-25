@@ -572,7 +572,7 @@ fn change_access(
             issued,
             expires,
         });
-        state.web_grants = retained;
+        *state.web_grants = retained;
     }
     if let Err(error) = save(state) {
         state.web_grants = old;

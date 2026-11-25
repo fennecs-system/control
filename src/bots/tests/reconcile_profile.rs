@@ -36,6 +36,7 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
     }
     for index in 0..128 {
         state.collective.claim_seq += 1;
+        let seq = state.collective.claim_seq;
         state.collective.claims.push(crate::rooms::claims::Claim {
             room: "general".into(),
             key: format!("deliverable-{index}"),
@@ -43,8 +44,8 @@ pub(super) fn large(chats: usize, runs: usize) -> (State, String, Vec<String>) {
             status: crate::rooms::claims::Status::Working,
             blocked_on: None,
             note: String::new(),
-            revision: state.collective.claim_seq,
-            incarnation: state.collective.claim_seq,
+            revision: seq,
+            incarnation: seq,
             abandoned: false,
             blocked_at: 0,
             advanced_at: 0,

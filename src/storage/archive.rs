@@ -131,7 +131,7 @@ impl Pending {
     }
 }
 
-fn write_block(directory: &Path, span: Span, lines: &[&str]) -> io::Result<PathBuf> {
+fn write_block(directory: &Path, span: Span, lines: &[impl AsRef<[u8]>]) -> io::Result<PathBuf> {
     let file = span.file(directory);
     let parent = file.parent().expect("blocks live in a directory");
     fs::create_dir_all(parent)?;
@@ -142,7 +142,7 @@ fn write_block(directory: &Path, span: Span, lines: &[&str]) -> io::Result<PathB
         .truncate(true)
         .open(&temporary)?;
     for line in lines {
-        out.write_all(line.as_bytes())?;
+        out.write_all(line.as_ref())?;
         out.write_all(b"\n")?;
     }
     out.sync_all()?;
@@ -166,9 +166,9 @@ pub(crate) fn step(directory: &Path, state: &State, archive: &mut Archive) -> io
                 .find(|&level| start.trailing_zeros() >= level && (1usize << level) <= remaining.len())
                 .expect("whole base blocks remain");
             let (block, rest) = remaining.split_at(1 << level);
-            let lines: Vec<&str> = block
+            let lines: Vec<_> = block
                 .iter()
-                .map(|&index| state.runtime.runs[index].saved().expect("candidates are saved").get())
+                .map(|&index| state.runtime.runs[index].saved().expect("candidates are saved").bytes())
                 .collect();
             pending
                 .written
@@ -267,8 +267,8 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
         for line in fs::read_to_string(span.file(directory))?.lines() {
             let record: Record = serde_json::from_str(line).map_err(io::Error::other)?;
             if !hot.contains(record.id().as_str()) {
-                let saved = serde_json::value::RawValue::from_string(line.to_owned()).map_err(io::Error::other)?;
-                let run = Run::restored(record, saved, true);
+                let saved = control_journal::snapshot::index(line.as_bytes().to_vec())?;
+                let run = Run::restored(record, control_journal::snapshot::Tree::leaf(saved), true);
                 match at.get(run.id().as_str()) {
                     Some(&index) => archived[index] = run,
                     None => {

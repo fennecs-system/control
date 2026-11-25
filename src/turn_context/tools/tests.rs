@@ -305,14 +305,17 @@ fn fixture() -> (State, String, String) {
     (state, id, generation)
 }
 fn post(state: &mut State, text: &str) {
-    state.collective.posts.push(crate::rooms::Post {
-        room: "general".into(),
-        text: text.into(),
-        chat: Some("peer".into()),
-        run: None,
-        key: String::new(),
-        delivery: Default::default(),
-    });
+    state.collective.posts.push(
+        crate::rooms::Post {
+            room: "general".into(),
+            text: text.into(),
+            chat: Some("peer".into()),
+            run: None,
+            key: String::new(),
+            delivery: Default::default(),
+        }
+        .into(),
+    );
 }
 #[test]
 fn recorded_room_updates_are_readable_without_callback_hints() {

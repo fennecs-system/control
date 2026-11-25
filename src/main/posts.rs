@@ -53,11 +53,14 @@ impl Post {
             }
             Self::Spawn => {
                 if let Some(task) = f.get("objective").filter(|s| !s.trim().is_empty()) {
-                    state.agents.push(format!(
-                        "{} · {}",
-                        task.chars().take(300).collect::<String>(),
-                        f.get("provider").unwrap_or(&"Self-hosted".into())
-                    ));
+                    state.agents.push(
+                        format!(
+                            "{} · {}",
+                            task.chars().take(300).collect::<String>(),
+                            f.get("provider").unwrap_or(&"Self-hosted".into())
+                        )
+                        .into(),
+                    );
                 }
                 Effects::none()
             }

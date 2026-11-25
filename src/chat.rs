@@ -1774,7 +1774,7 @@ impl Checkpoint {
             notice: state.runtime.notice.clone(),
             posts: state.collective.posts.len(),
             watches: state.collective.room_watches.clone(),
-            bots: bots.then(|| state.bots.clone()),
+            bots: bots.then(|| (*state.bots).clone()),
             mailbox_origins: state
                 .runtime
                 .runs
@@ -1811,7 +1811,7 @@ impl Checkpoint {
         }
         state.collective.room_watches = self.watches;
         if let Some(bots) = self.bots {
-            state.bots = bots;
+            *state.bots = bots;
         }
         for (i, baseline) in self.mailbox_origins {
             if let Some(mailbox) = state.runtime.runs[i]

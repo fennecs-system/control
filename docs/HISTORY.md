@@ -75,11 +75,16 @@ A checkpoint does not rewrite `state.json`. It appends what changed:
   splice array. A new chat message is a splice of that message, not the chat; a
   run's status is a set of one string. An unchanged save writes nothing.
   Diffing is a pure function of two encodings; nothing is parsed.
-- **Cached runs.** `Run` is `history::Cached<Record>`: a save serializes a run
-  once and copies its saved bytes until the run is next borrowed mutably (any
-  `&mut` access forgets them), so encoding costs what changed plus a copy of
-  the rest. Debug builds check every save against a fresh, uncached
-  serialization.
+- **Parts.** A save encodes the state as a `snapshot::Tree` of shared parts.
+  Each top-level field, room post, agent note and run is a `snapshot::Part`
+  (`Run` is `history::Cached<Record>`, built on one): it keeps its encoding
+  until it is next borrowed mutably (any `&mut` access forgets it), and
+  `diff_trees` skips parts the previous save shares by pointer. Encoding and
+  diffing then cost what changed, not the state's size; the patch is the one
+  `diff` gives for the joined documents. `runtime` is split again at every
+  save (archiving a run changes its encoding through a shared borrow), which
+  reuses each hot run's part. Debug builds check every save against a fresh
+  serialization and every patch against a diff of the joined documents.
 - **Transactions.** Everything one save changed (a run, its chat, a receipt, a
   watch cursor) is one line, `{"sum":"<fnv-1a>","ops":[…]}`. The line is the
   transaction record and its newline the commit marker. Recovery replays the

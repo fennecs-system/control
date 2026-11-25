@@ -104,11 +104,12 @@ pub(crate) fn configure(state: &mut State, chat: &str, enabled: bool) -> Result<
         if state.collective.room_watches.len() >= MAX_WATCHES {
             return Err("Room subscription limit reached (256 chats).");
         }
+        let cursor = state.collective.posts.len();
         state.collective.room_watches.push(Watch {
             chat: chat.into(),
             actor: session.actor.clone(),
             room: room.into(),
-            cursor: state.collective.posts.len(),
+            cursor,
             wake: None,
             delivered: None,
             listener: None,

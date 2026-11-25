@@ -25,7 +25,11 @@
 use crate::lens::Schema;
 use serde::Serialize;
 use serde_json::{Value, ser::Formatter};
-use std::{cell::Cell, io, path::Path, rc::Rc};
+use std::{borrow::Cow, cell::Cell, io, path::Path, rc::Rc};
+
+mod parts;
+use parts::At;
+pub use parts::{Part, Tree, offer, split, split_each_save};
 
 /// Containers smaller than this are rewritten whole when they change; larger
 /// ones are diffed member by member.
@@ -296,90 +300,95 @@ fn op(out: &mut Vec<u8>, kind: &[u8], at: &[Seg]) {
 /// The edits that turn `old` into `new`, as one JSON array; `None` when the
 /// documents are identical. Pure: neither input changes.
 pub fn diff(old: &Encoded, new: &Encoded) -> Option<Vec<u8>> {
+    edits_between(At::Node(old, 0), At::Node(new, 0))
+}
+/// [`diff`] of two documents held as [`Tree`]s: the same bytes as diffing
+/// their joined encodings, but parts both trees share are skipped by pointer
+/// without being read, so a save costs what changed.
+pub fn diff_trees(old: &Tree, new: &Tree) -> Option<Vec<u8>> {
+    edits_between(old.at(), new.at())
+}
+fn edits_between(old: At<'_>, new: At<'_>) -> Option<Vec<u8>> {
     let mut out = vec![b'['];
     let mut at = Vec::new();
-    node(old, 0, new, 0, &mut at, &mut out);
+    node(old, new, &mut at, &mut out);
     if out.len() == 1 {
         return None;
     }
     out.push(b']');
     Some(out)
 }
-fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out: &mut Vec<u8>) {
-    if old.range(o) == new.range(n) {
+fn node(old: At<'_>, new: At<'_>, at: &mut Vec<Seg>, out: &mut Vec<u8>) {
+    if old.equals(new) {
         return;
     }
     // A value encoded from saved bytes has no recorded members: index those
     // bytes to diff inside it rather than rewrite it whole.
-    let opening = |e: &Encoded, i: usize| e.range(i).first().copied().filter(|b| matches!(b, b'{' | b'['));
-    if opening(old, o).is_some() && opening(old, o) == opening(new, n) {
-        let inside = |e: &Encoded, i: usize| {
-            index(e.range(i).to_vec())
+    let opening = |value: At<'_>| Some(value.first()).filter(|b| matches!(b, b'{' | b'['));
+    if opening(old).is_some() && opening(old) == opening(new) {
+        let inside = |value: At<'_>| {
+            index(value.bytes().into_owned())
                 .ok()
                 .filter(|local| local.container(0).is_some())
         };
-        match (old.container(o), new.container(n)) {
+        match (old.container(), new.container()) {
             (None, Some(_)) => {
-                if let Some(local) = inside(old, o) {
-                    return node(&local, 0, new, n, at, out);
+                if let Some(local) = inside(old) {
+                    return node(At::Node(&local, 0), new, at, out);
                 }
             }
             (Some(_), None) => {
-                if let Some(local) = inside(new, n) {
-                    return node(old, o, &local, 0, at, out);
+                if let Some(local) = inside(new) {
+                    return node(old, At::Node(&local, 0), at, out);
                 }
             }
             (None, None) => {
-                if let (Some(before), Some(after)) = (inside(old, o), inside(new, n)) {
-                    return node(&before, 0, &after, 0, at, out);
+                if let (Some(before), Some(after)) = (inside(old), inside(new)) {
+                    return node(At::Node(&before, 0), At::Node(&after, 0), at, out);
                 }
             }
             _ => {}
         }
     }
-    match (old.container(o), new.container(n)) {
+    match (old.container(), new.container()) {
         (Some(b'{'), Some(b'{')) => {
-            let previous = old.children(o);
+            let previous = old.children();
             let mut seen = vec![false; previous.len()];
             let mut cursor = 0;
-            for child in new.children(n) {
-                let key = new.key(child);
+            for (key, child) in new.children() {
                 // Members usually keep their order; scan from the last match.
                 let found = (cursor..previous.len())
                     .chain(0..cursor)
-                    .find(|&i| old.key(previous[i]) == key);
+                    .find(|&i| previous[i].0 == key);
                 at.push(Seg::Key(key.to_vec()));
                 match found {
                     Some(i) => {
                         seen[i] = true;
                         cursor = i + 1;
-                        node(old, previous[i], new, child, at, out);
+                        node(previous[i].1, child, at, out);
                     }
-                    None => set(out, at, new.range(child)),
+                    None => set(out, at, child),
                 }
                 at.pop();
             }
-            for (&child, _) in previous.iter().zip(&seen).filter(|(_, seen)| !**seen) {
-                at.push(Seg::Key(old.key(child).to_vec()));
+            for ((key, _), _) in previous.iter().zip(&seen).filter(|(_, seen)| !**seen) {
+                at.push(Seg::Key(key.to_vec()));
                 op(out, b"\"r\",", at);
                 out.push(b']');
                 at.pop();
             }
         }
         (Some(b'['), Some(b'[')) => {
-            let (a, b) = (old.children(o), new.children(n));
-            let prefix = a
-                .iter()
-                .zip(&b)
-                .take_while(|&(&x, &y)| old.range(x) == new.range(y))
-                .count();
+            let a: Vec<At<'_>> = old.children().into_iter().map(|(_, child)| child).collect();
+            let b: Vec<At<'_>> = new.children().into_iter().map(|(_, child)| child).collect();
+            let prefix = a.iter().zip(&b).take_while(|&(x, y)| x.equals(*y)).count();
             let limit = a.len().min(b.len()) - prefix;
             let suffix = a
                 .iter()
                 .rev()
                 .zip(b.iter().rev())
                 .take(limit)
-                .take_while(|&(&x, &y)| old.range(x) == new.range(y))
+                .take_while(|&(x, y)| x.equals(*y))
                 .count();
             // Anchor the middles on elements that are byte-identical on both
             // sides, in order; between anchors, pair what remains positionally
@@ -388,15 +397,15 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
             // rewrite of everything that shifted. Edits name positions in the
             // array as already edited, so they apply in order.
             let (a_end, b_end) = (a.len() - suffix, b.len() - suffix);
-            let mut olds: std::collections::HashMap<&[u8], Vec<usize>> = std::collections::HashMap::new();
-            for (i, &child) in a.iter().enumerate().take(a_end).skip(prefix) {
-                olds.entry(old.range(child)).or_default().push(i);
+            let mut olds: std::collections::HashMap<Cow<'_, [u8]>, Vec<usize>> = std::collections::HashMap::new();
+            for (i, child) in a.iter().enumerate().take(a_end).skip(prefix) {
+                olds.entry(child.bytes()).or_default().push(i);
             }
             let mut anchors = Vec::new();
             let mut next = prefix;
-            for (j, &child) in b.iter().enumerate().take(b_end).skip(prefix) {
+            for (j, child) in b.iter().enumerate().take(b_end).skip(prefix) {
                 if let Some(&i) = olds
-                    .get(new.range(child))
+                    .get(&*child.bytes())
                     .and_then(|list| list.iter().find(|&&i| i >= next))
                 {
                     anchors.push((i, j));
@@ -409,40 +418,33 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
                 let paired = (anchor_a - i).min(anchor_b - j);
                 for t in 0..paired {
                     at.push(Seg::Index(j + t));
-                    node(old, a[i + t], new, b[j + t], at, out);
+                    node(a[i + t], b[j + t], at, out);
                     at.pop();
                 }
                 if anchor_a - i != anchor_b - j {
-                    splice(
-                        out,
-                        at,
-                        j + paired,
-                        anchor_a - i - paired,
-                        new,
-                        &b[j + paired..anchor_b],
-                    );
+                    splice(out, at, j + paired, anchor_a - i - paired, &b[j + paired..anchor_b]);
                 }
                 (i, j) = (anchor_a + 1, anchor_b + 1);
             }
         }
-        _ => set(out, at, new.range(n)),
+        _ => set(out, at, new),
     }
 }
-fn splice(out: &mut Vec<u8>, at: &[Seg], position: usize, delete: usize, new: &Encoded, insert: &[usize]) {
+fn splice(out: &mut Vec<u8>, at: &[Seg], position: usize, delete: usize, insert: &[At<'_>]) {
     op(out, b"\"a\",", at);
     out.extend_from_slice(format!(",{position},{delete},[").as_bytes());
-    for (i, &child) in insert.iter().enumerate() {
+    for (i, child) in insert.iter().enumerate() {
         if i > 0 {
             out.push(b',');
         }
-        out.extend_from_slice(new.range(child));
+        child.write(out);
     }
     out.extend_from_slice(b"]]");
 }
-fn set(out: &mut Vec<u8>, at: &[Seg], value: &[u8]) {
+fn set(out: &mut Vec<u8>, at: &[Seg], value: At<'_>) {
     op(out, b"\"s\",", at);
     out.push(b',');
-    out.extend_from_slice(value);
+    value.write(out);
     out.push(b']');
 }
 
@@ -588,11 +590,11 @@ pub fn apply(document: &mut Value, edits: Vec<Edit>) -> io::Result<()> {
 pub fn header(nonce: &str, schema: &Value) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({"snapshot": nonce, "schema": schema})).expect("JSON values serialize")
 }
-/// Snapshot bytes: `encoded` with the nonce and schema as its first members.
-/// `encoded` must be a JSON object.
-pub fn snapshot(encoded: &Encoded, nonce: &str, schema: &Value) -> Vec<u8> {
+/// Snapshot bytes: `document` with the nonce and schema as its first members.
+/// `document` must be a JSON object.
+pub fn snapshot(document: &[u8], nonce: &str, schema: &Value) -> Vec<u8> {
     let mut out = prefix(nonce, schema);
-    let body = &encoded.bytes[1..];
+    let body = &document[1..];
     if body != b"}" {
         out.push(b',');
     }

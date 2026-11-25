@@ -156,7 +156,11 @@ fn a_crash_between_snapshot_and_log_reset_ignores_the_old_log() {
     crate::chat::send(&mut state, &chat, "in the new snapshot", "test").unwrap();
     let encoded = encode(&state, &archived(&scratch.0)).unwrap();
     let schema = serde_json::to_value(schema()).unwrap();
-    write_checkpoint(&scratch.0, &snapshot::snapshot(&encoded, &snapshot::nonce(), &schema)).unwrap();
+    write_checkpoint(
+        &scratch.0,
+        &snapshot::snapshot(&encoded.bytes(), &snapshot::nonce(), &schema),
+    )
+    .unwrap();
     assert_eq!(scratch.lines(), 2);
     assert!(same(&scratch.restart(), &state));
 }
@@ -167,7 +171,7 @@ fn the_log_compacts_once_it_outgrows_the_snapshot() {
     let mut state = State::default();
     scratch.save(&state);
     for i in 0..6 {
-        state.note = format!("{i}").repeat(1 << 20);
+        *state.note = format!("{i}").repeat(1 << 20);
         scratch.save(&state);
     }
     assert!(
@@ -214,7 +218,7 @@ fn a_monolithic_state_json_migrates_and_compaction_keeps_it_readable_by_older_bu
 fn state_from_a_newer_schema_is_read_back_through_its_recorded_lenses() {
     let scratch = Scratch::new("lens");
     let (mut state, _) = with_chat();
-    state.note = "kept".into();
+    *state.note = "kept".into();
     // A hypothetical next version renamed `note` to `notes` and recorded the lens.
     let mut newer = schema();
     newer.version += 1;
@@ -229,7 +233,7 @@ fn state_from_a_newer_schema_is_read_back_through_its_recorded_lenses() {
     let encoded = snapshot::encode(&document).unwrap();
     fs::write(
         scratch.0.join("state.json"),
-        snapshot::snapshot(&encoded, "n", &newer_value),
+        snapshot::snapshot(encoded.bytes(), "n", &newer_value),
     )
     .unwrap();
     // Its log changed `notes`; this build reads it as `note`.
@@ -239,7 +243,7 @@ fn state_from_a_newer_schema_is_read_back_through_its_recorded_lenses() {
     log.push(b'\n');
     fs::write(scratch.0.join(LOG), log).unwrap();
     let restored = scratch.restart();
-    assert_eq!(restored.note, "edited by the newer build");
+    assert_eq!(*restored.note, "edited by the newer build");
     assert_eq!(restored.chats.len(), 1);
 }
 
@@ -263,7 +267,7 @@ fn a_crash_at_every_byte_of_a_multi_entity_save_recovers_before_or_after_it() {
     state.runtime.runs[0].status = RunStatus::Completed;
     crate::chat::send(&mut state, &chat, "a reply and a receipt", "test").unwrap();
     state.runtime.notice = "receipt r-1 recorded".into();
-    state.note = "edited".into();
+    *state.note = "edited".into();
     scratch.save(&state);
     let after = crate::history::persisting(|| serde_json::to_value(&state).unwrap());
     let full = scratch.log();
@@ -310,7 +314,7 @@ fn a_crash_at_every_step_of_compaction_recovers_the_committed_state() {
     let schema = serde_json::to_value(schema()).unwrap();
     let encoded = encode(&state, &archived(&scratch.0)).unwrap();
     let nonce = snapshot::nonce();
-    let next = snapshot::snapshot(&encoded, &nonce, &schema);
+    let next = snapshot::snapshot(&encoded.bytes(), &nonce, &schema);
     let header = snapshot::header(&nonce, &schema);
     let (snapshot_path, log_path, temporary) = (
         scratch.0.join("state.json"),
@@ -438,8 +442,7 @@ fn a_full_disk_fails_saves_cleanly_without_corrupting_state() {
 #[test]
 fn cached_runs_are_reencoded_after_any_mutable_access() {
     let (mut state, chat) = with_chat();
-    let fresh =
-        |state: &State| crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(state).unwrap()));
+    let fresh = |state: &State| crate::history::persisting(|| serde_json::to_vec(state).unwrap());
     let mut previous = encode(&state, &Default::default()).unwrap().bytes().to_vec();
     let changes: [&dyn Fn(&mut State); 5] = [
         &|s| s.runtime.runs[0].status = RunStatus::Completed,
@@ -787,7 +790,7 @@ fn a_fixed_sequence_of_saves_writes_the_same_log_bytes() {
             .replace(&schema, "\"SCHEMA\"")
     };
     let steps: [&dyn Fn(&mut State); 6] = [
-        &|s| s.note = "first".into(),
+        &|s| *s.note = "first".into(),
         &|s| {
             s.messages
                 .extend((0..40).map(|i| format!("message {i:02} of the fixture")))
@@ -797,7 +800,7 @@ fn a_fixed_sequence_of_saves_writes_the_same_log_bytes() {
             s.messages.drain(10..13);
         },
         &|s| {
-            s.agents.push("an agent".into());
+            s.agents.push(String::from("an agent").into());
             s.runtime.notice = "a notice".into();
         },
         &|s| s.discord_seen.extend((0..100).map(|i| format!("seen-{i}"))),
@@ -812,7 +815,7 @@ fn a_fixed_sequence_of_saves_writes_the_same_log_bytes() {
     }
     let before = normalized(scratch.log());
     scratch.compact(&state);
-    state.note = "after compaction".into();
+    *state.note = "after compaction".into();
     state.messages.truncate(7);
     scratch.save(&state);
     let log = format!("{before}{}", normalized(scratch.log()));

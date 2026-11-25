@@ -13,19 +13,19 @@ fn fields(id: &str, title: &str, body: &str, rev: u64) -> HashMap<String, String
 #[test]
 fn legacy_draft_is_preserved_and_migration_is_idempotent() {
     let mut s = State {
-        note: "  Original draft\n[[other]]\n".into(),
+        note: String::from("  Original draft\n[[other]]\n").into(),
         saved: true,
         ..Default::default()
     };
     migrate(&mut s);
     migrate(&mut s);
     assert_eq!(s.documents.len(), 1);
-    assert_eq!(s.documents[0].body, s.note);
+    assert_eq!(s.documents[0].body, *s.note);
     assert_eq!(s.documents[0].revision, 1);
     assert!(s.documents[0].saved_at.is_none());
     let bytes = serde_json::to_vec(&s).unwrap();
     let loaded: State = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(loaded.documents[0].body, s.note);
+    assert_eq!(loaded.documents[0].body, *s.note);
 }
 #[test]
 fn saves_are_durable_or_rolled_back_and_detect_stale_edits() {
