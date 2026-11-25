@@ -41,6 +41,10 @@ cargo test --release --locked --bin control <fixture path> -- --ignored --exact 
   the same filter, then pipe `perf script` through `inferno-collapse-perf` and
   `inferno-flamegraph`. Only an isolated profiling container gets profiling
   privileges. On macOS, `sample` plus Inferno gives the same view.
+- `sample` does not show inlined frames, and release builds inline across the
+  whole crate. `Store::lock` (waiting for the state lock) and `Store::holding`
+  (running code under it) in `src/store.rs` are never inlined, so lock wait
+  and hold time can be read from any profile by those two frames.
 
 Fixtures by subsystem:
 
