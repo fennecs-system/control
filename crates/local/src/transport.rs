@@ -8,7 +8,7 @@ use std::{
 };
 
 /// Encoded response body ceiling, independent of declared output limits.
-pub(super) const BODY_BYTES: usize = 131072;
+pub const BODY_BYTES: usize = 131072;
 const HEAD_BYTES: usize = 16384;
 const POLL: Duration = Duration::from_millis(100);
 
@@ -22,17 +22,12 @@ fn timed_out() -> io::Error {
     )
 }
 
-pub(super) fn post(
-    url: &reqwest::Url,
-    body: &[u8],
-    timeout: Duration,
-    cancel: &dyn Fn() -> bool,
-) -> io::Result<Vec<u8>> {
+pub fn post(url: &reqwest::Url, body: &[u8], timeout: Duration, cancel: &dyn Fn() -> bool) -> io::Result<Vec<u8>> {
     exchange(url, Some(body), timeout, cancel)
 }
 /// One bounded read-only GET (server statistics), with the same framing,
 /// size ceiling and timeout as `post`.
-pub(super) fn get(url: &reqwest::Url, timeout: Duration) -> io::Result<Vec<u8>> {
+pub fn get(url: &reqwest::Url, timeout: Duration) -> io::Result<Vec<u8>> {
     exchange(url, None, timeout, &|| false)
 }
 fn exchange(
@@ -92,7 +87,7 @@ fn exchange(
         }
         if cancel() {
             let _ = stream.shutdown(Shutdown::Both);
-            return Err(super::cancelled());
+            return Err(cancelled());
         }
         if remaining().is_zero() {
             let _ = stream.shutdown(Shutdown::Both);
@@ -255,4 +250,8 @@ fn tls(url: &reqwest::Url, body: Option<&[u8]>, timeout: Duration) -> io::Result
     let mut bytes = Vec::new();
     response.take(BODY_BYTES as u64 + 1).read_to_end(&mut bytes)?;
     accept(status, bytes)
+}
+/// A call stopped by its `cancel` before or while it waited.
+pub fn cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "Model call cancelled; no fallback was used")
 }

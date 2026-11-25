@@ -64,33 +64,43 @@ pub fn read(state: &State, room: &str) -> Value {
     }
     read
 }
+/// The operator room tools: [`lookup`]'s and `control.room.post`.
 pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'static str> {
+    if name != "control.room.post" {
+        return lookup(state, name, args);
+    }
+    let room = room(args)?;
+    let text = args["message"].as_str().unwrap_or("").trim();
+    if text.is_empty() || text.chars().count() > 2000 {
+        return Err("Enter 1–2000 characters.");
+    }
+    state.collective.posts.push(
+        Post {
+            room: room.into(),
+            text: text.into(),
+            chat: None,
+            run: None,
+            key: String::new(),
+            delivery: Delivery::Notify,
+        }
+        .into(),
+    );
+    Ok(json!({"posted":true}))
+}
+/// The operator room tools that only read: `control.rooms.list` and
+/// `control.room.read`.
+pub(crate) fn lookup(state: &State, name: &str, args: &Value) -> Result<Value, &'static str> {
     if name == "control.rooms.list" {
         return Ok(json!(names(state)));
     }
-    let room = args["room"].as_str().filter(|r| valid(r)).ok_or("Unknown room.")?;
+    let room = room(args)?;
     match name {
         "control.room.read" => Ok(read(state, room)),
-        "control.room.post" => {
-            let text = args["message"].as_str().unwrap_or("").trim();
-            if text.is_empty() || text.chars().count() > 2000 {
-                return Err("Enter 1–2000 characters.");
-            }
-            state.collective.posts.push(
-                Post {
-                    room: room.into(),
-                    text: text.into(),
-                    chat: None,
-                    run: None,
-                    key: String::new(),
-                    delivery: Delivery::Notify,
-                }
-                .into(),
-            );
-            Ok(json!({"posted":true}))
-        }
         _ => Err("Unknown room tool."),
     }
+}
+fn room(args: &Value) -> Result<&str, &'static str> {
+    args["room"].as_str().filter(|r| valid(r)).ok_or("Unknown room.")
 }
 pub fn render(state: &State, room: &str) -> String {
     Page::of(state, room).render()

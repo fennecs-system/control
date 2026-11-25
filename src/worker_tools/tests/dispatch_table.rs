@@ -121,7 +121,7 @@ fn a_write_handler_rolls_back_when_its_checkpoint_fails() {
     let run = state.runtime.runs[0].id().to_string();
     let shared = crate::store::Store::new(state);
     let envelope = json!({"nonce":"1-1","request":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"control_project_request","arguments":{"path":"/tmp/control-rollback-project"}}}});
-    let call = kinds::Call::of(&envelope, None);
+    let call = kinds::Call::of(&envelope, None, crate::design::UnixSeconds::now());
     let entry = table::lookup(call.name);
     assert!(matches!(entry.handler, Handler::Write(_)));
     let before = serde_json::to_value(&*shared.guard().unwrap()).unwrap();

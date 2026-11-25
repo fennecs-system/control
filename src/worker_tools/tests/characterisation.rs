@@ -378,7 +378,29 @@ fn case((scenario, conditions): (&str, &[Condition]), label: &str, request: Valu
         None => json!({"request":request}),
     };
     let before = serde_json::to_value(&*fixture.shared.guard().unwrap()).unwrap();
-    let response = dispatch_raw(&fixture.shared, &fixture.run, &envelope, fixture.workspace.as_deref());
+    // The clock reads the attempt's own start, so a time budget always
+    // reads zero seconds spent, however long the table takes.
+    let now = crate::design::UnixSeconds(
+        fixture
+            .shared
+            .read(|state| {
+                state
+                    .runtime
+                    .runs
+                    .get(&fixture.run)
+                    .and_then(|run| run.attempts.last())
+                    .map(|a| a.started_unix)
+            })
+            .unwrap()
+            .unwrap_or_default(),
+    );
+    let response = dispatch_raw_at(
+        &fixture.shared,
+        &fixture.run,
+        &envelope,
+        fixture.workspace.as_deref(),
+        now,
+    );
     let after = serde_json::to_value(&*fixture.shared.guard().unwrap()).unwrap();
     let mut paths = Vec::new();
     changed(&before, &after, "", 0, &mut paths);

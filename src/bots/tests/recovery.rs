@@ -633,7 +633,7 @@ fn time_out_queued(state: &mut State, chat: &str) -> bool {
         .unwrap();
     let run = &mut state.runtime.runs[index];
     run.status = RunStatus::Failed;
-    *run.result = crate::worker::timeout_message(std::time::Duration::from_secs(600));
+    *run.result = control_agent::timeout_message(std::time::Duration::from_secs(600));
     let attempt = run.attempts.last_mut().unwrap();
     attempt.termination = Some(crate::attempt_control::Termination::TimedOut);
     attempt.artifact = None;

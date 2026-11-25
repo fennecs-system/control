@@ -1253,6 +1253,8 @@ impl Tail {
             .unwrap_or_else(|| "Done.".into())
     }
 }
+/// `control.chats.list` (`session_http::reads` answers it).
+#[cfg(test)]
 pub fn list(state: &State) -> Value {
     serde_json::to_value(Listing::of(state)).unwrap_or_default()
 }
@@ -1410,41 +1412,60 @@ fn pending_folders(state: &State, root: &str, actor: &Actor) -> Vec<Value> {
 /// Pending operator decisions across the node, grouped by top-level chat in
 /// the `pending_*` shape of `detail`. Each group is decided in its chat, the
 /// same way as from that chat's own view.
+#[cfg(test)]
 pub fn pending_requests(state: &State) -> Value {
-    let waiting = state
-        .runtime
-        .runs
-        .iter()
-        .filter(|run| {
-            run.status == RunStatus::Waiting && run.question.as_ref().is_some_and(crate::design::Question::pending)
-        })
-        .filter_map(|run| run.chat_id.as_deref());
-    let folders = state
-        .chats
-        .iter()
-        .filter(|s| s.project.as_ref().is_some_and(|p| p.pending))
-        .map(|s| s.id.as_str());
-    let chats = waiting
-        .chain(crate::bots::pending_chats(state))
-        .chain(crate::ports::pending_chats(&state.ports))
-        .chain(crate::intel::pending_chats(state))
-        .chain(crate::knowledge_tools::pending_chats(&state.collective.proposals))
-        .chain(folders);
-    let mut roots = Vec::new();
-    for chat in chats {
-        let root = Lineage::of(&state.chats).team_root(chat);
-        if !roots.contains(&root) {
-            roots.push(root);
+    Waiting::of(state, crate::design::UnixSeconds::now()).authorized()
+}
+/// `pending_requests` copied out of state: every group with something
+/// waiting, each shown only if its chat's actor may run a task. Questions'
+/// ages count from `now`, read before locking; the actors are authorized
+/// after release, since a Discord actor's policy is read from disk.
+pub struct Waiting(Vec<identity::Unchecked<Value>>);
+impl Waiting {
+    pub fn of(state: &State, now: crate::design::UnixSeconds) -> Self {
+        let waiting = state
+            .runtime
+            .runs
+            .iter()
+            .filter(|run| {
+                run.status == RunStatus::Waiting && run.question.as_ref().is_some_and(crate::design::Question::pending)
+            })
+            .filter_map(|run| run.chat_id.as_deref());
+        let folders = state
+            .chats
+            .iter()
+            .filter(|s| s.project.as_ref().is_some_and(|p| p.pending))
+            .map(|s| s.id.as_str());
+        let chats = waiting
+            .chain(crate::bots::pending_chats(state))
+            .chain(crate::ports::pending_chats(&state.ports))
+            .chain(crate::intel::pending_chats(state))
+            .chain(crate::knowledge_tools::pending_chats(&state.collective.proposals))
+            .chain(folders);
+        let mut roots = Vec::new();
+        for chat in chats {
+            let root = Lineage::of(&state.chats).team_root(chat);
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
         }
+        Self(roots.into_iter().filter_map(|id| {
+            let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
+            let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id,now),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id),"pending_folders":pending_folders(state,id,&session.actor),"pending_knowledge":crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id)});
+            ["pending_questions","pending_bots","pending_ports","pending_notices","pending_folders","pending_knowledge"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then(|| identity::Unchecked::new(session.actor.clone(), entry))
+        }).collect())
     }
-    let mut authorize = identity::authorizer();
-    let now = crate::design::UnixSeconds::now();
-    json!(roots.into_iter().filter_map(|id| {
-        let session = state.chats.iter().find(|s| s.id == id && valid_id(&s.id))?;
-        authorize(&session.actor, Action::Task).ok()?;
-        let entry = json!({"chat_id":id,"title":crate::callsigns::name_or_id(&state.chats,id),"pending_questions":crate::design::pending_json(state,id,now),"pending_bots":crate::bots::pending_json(state,id),"pending_ports":crate::ports::pending_json(state,id),"pending_notices":crate::intel::pending_json_tree(state,id),"pending_folders":pending_folders(state,id,&session.actor),"pending_knowledge":crate::knowledge_tools::pending_json(&state.collective.proposals, Lineage::of(&state.chats), id)});
-        ["pending_questions","pending_bots","pending_ports","pending_notices","pending_folders","pending_knowledge"].iter().any(|k| entry[k].as_array().is_some_and(|a| !a.is_empty())).then_some(entry)
-    }).collect::<Vec<_>>())
+    /// The groups whose chat's actor may run a task, as
+    /// `control.requests.list` answers.
+    pub fn authorized(self) -> Value {
+        let mut authorize = identity::authorizer();
+        Value::Array(
+            self.0
+                .into_iter()
+                .filter_map(|group| group.check(&mut authorize).ok())
+                .collect(),
+        )
+    }
 }
 /// The chat page from one consistent read of state.
 pub fn render(state: &State, id: &str) -> Result<String, &'static str> {
@@ -1631,18 +1652,11 @@ pub(crate) fn chat_id(arguments: &Value) -> Result<&str, &'static str> {
         .filter(|s| valid_id(s))
         .ok_or("Invalid chat ID.")
 }
-/// Every chat tool but `control.chat.send`: none queues work.
+/// Every chat tool but `control.chat.send` and the read-only ones
+/// (`session_http::reads`): none queues work.
 pub(crate) fn fixed_tool(state: &mut State, name: &str, arguments: &Value) -> Result<Value, &'static str> {
     let id = || chat_id(arguments);
     match name {
-        "control.chats.list" => Ok(list(state)),
-        "control.requests.list" => Ok(pending_requests(state)),
-        "control.chat.read" => detail(state, id()?),
-        "control.run.scores" => crate::scores::read(state, id()?),
-        "control.services.list" => {
-            crate::services::operator::list(&state.services, &state.chats, id()?, arguments["team"] == true)
-                .map_err(|_| "Chat not found.")
-        }
         "control.services.stop" => {
             let service = match arguments.get("service_id") {
                 None | Some(Value::Null) => None,
@@ -1659,9 +1673,7 @@ pub(crate) fn fixed_tool(state: &mut State, name: &str, arguments: &Value) -> Re
                 })
         }
         "control.intel.brief" => crate::intel::tool(state, arguments),
-        "control.personas.list" | "control.persona.read" | "control.chat.persona" => {
-            crate::personas::tool(state, name, arguments)
-        }
+        "control.chat.persona" => crate::personas::tool(state, name, arguments),
         "control.chat.ask" | "control.chat.withdraw" => crate::design::tool(state, name, arguments),
         "control.chat.rename" => {
             let id = id()?;

@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 412
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+{"id":14,"jsonrpc":"2.0","result":{"content":[{"text":"{\"results\":[{\"admitted\":false,\"excerpt\":\"Notes link [[Plan]] & <more>\",\"id\":\"document:scratchpad\",\"revision\":0,\"title\":\"Scratchpad.md\"}]}","type":"text"}],"isError":false,"structuredContent":{"data":{"results":[{"admitted":false,"excerpt":"Notes link [[Plan]] & <more>","id":"document:scratchpad","revision":0,"title":"Scratchpad.md"}]}}}}

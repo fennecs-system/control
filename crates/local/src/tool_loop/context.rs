@@ -25,7 +25,8 @@
 //!   searches.
 //!
 //! The originals stay in this module's input and in the attempt's activity.
-use super::{Compactor, Host};
+use super::Effects;
+use control_agent::Compactor;
 use control_comonad::{Block, cut};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io, ops::Range};
@@ -417,7 +418,7 @@ impl Lens {
     /// leaf of the conversation's summary tree: its original as the source,
     /// its shrunk rendering as the text. Folded steps are retained by their
     /// node instead. Each step is retained once.
-    pub(super) fn retain_shrunk(&mut self, host: &mut dyn Host, messages: &[Value], upto: usize) {
+    pub(super) fn retain_shrunk<E: Effects + ?Sized>(&mut self, host: &mut E, messages: &[Value], upto: usize) {
         let steps = steps(messages);
         let upto = upto.min(steps.len());
         for index in self.retained..upto {
@@ -441,9 +442,9 @@ impl Lens {
     /// Fold `block` into one node: summarized from its shrunk steps and
     /// folded parts, or from its children's nodes when that does not fit the
     /// compactor. Returns what was done for each node made, oldest first.
-    pub(super) fn fold(
+    pub(super) fn fold<E: Effects + ?Sized>(
         &mut self,
-        host: &mut dyn Host,
+        host: &mut E,
         block: Block,
         messages: &[Value],
         compactor: Compactor,
@@ -479,7 +480,7 @@ impl Lens {
         if !unseen.is_empty() {
             input.push_str(&format!("\nagent (marked in its reasoning): {}", unseen.join("\n")));
         }
-        let words = crate::compaction::target_words(compactor.output_tokens);
+        let words = compactor.words;
         let mut ask = |words: usize| match host.summarize(&input, words) {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => Err(Some(error)),
             Err(error) => Ok(Err(error)),

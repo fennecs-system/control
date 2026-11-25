@@ -180,3 +180,24 @@ fn direct_messages_need_matching_recipient_bindings_and_keep_roles() {
     p.principals[0].user_id = None;
     assert!(p.authorize_with_dms(&actor("1", "101"), Action::Improve, &dms).is_err());
 }
+#[test]
+fn an_unchecked_value_opens_only_for_an_authorized_actor() {
+    let p = policy();
+    let dms = DmBindings {
+        recipients: vec![DmBinding {
+            user_id: "2".parse().unwrap(),
+            channel_id: "100".parse().unwrap(),
+        }],
+    };
+    let authorize = |actor: &Actor, action| p.authorize_with_dms(actor, action, &dms);
+    assert_eq!(Unchecked::new(actor("2"), 7).check(authorize), Ok(7));
+    assert_eq!(
+        Unchecked::new(actor("3"), 7).check(authorize),
+        Err("DM recipient/channel binding does not match")
+    );
+    assert!(Unchecked::new(Actor::Unknown, 7).check(authorize).is_err());
+    assert_eq!(
+        Unchecked::new(Actor::LocalOperator, "local").check(super::authorize),
+        Ok("local")
+    );
+}

@@ -113,6 +113,10 @@ fn canonical(name: &str) -> &str {
         other => other,
     }
 }
+/// The knowledge tools that only read.
+pub fn reads(name: &str) -> bool {
+    matches!(canonical(name), "control.knowledge.search" | "control.knowledge.read")
+}
 pub fn known(name: &str) -> bool {
     matches!(
         canonical(name),

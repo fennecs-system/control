@@ -197,3 +197,33 @@ fn the_rule_rejects_a_backend_depending_on_another_backend_or_the_root() {
         ]
     );
 }
+
+/// Every backend's turn reaches the host only through `control_agent::Host`:
+/// outside tests, the root never drives the local loop or implements its
+/// effects, so no backend has a door into the host the others lack.
+#[test]
+fn the_root_drives_no_backend_loop_directly() {
+    fn sources(directory: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(directory)
+            .expect("source directory is readable")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .flat_map(|path| match path.is_dir() {
+                true if path.file_name().is_some_and(|name| name == "tests") => Vec::new(),
+                true => sources(&path),
+                false => vec![path],
+            })
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .filter(|path| path.file_name().is_some_and(|name| name != "tests.rs"))
+            .collect()
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let doors = sources(&root)
+        .into_iter()
+        .filter(|path| {
+            std::fs::read_to_string(path)
+                .expect("source is readable")
+                .contains("tool_loop")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(doors, Vec::<PathBuf>::new());
+}

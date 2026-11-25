@@ -11,6 +11,8 @@ pub struct LocalHost<'a>(pub &'a crate::store::Store);
 pub struct AttemptCall<'a> {
     pub attempt: AttemptRef<'a>,
     pub host: &'a LocalHost<'a>,
+    /// The clock reading the call is answered at, taken by the dispatcher.
+    pub now: crate::design::UnixSeconds,
 }
 /// Worker tools bound to one attempt. Calls run without the state lock held.
 pub trait AttemptTools: Sync {

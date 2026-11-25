@@ -216,6 +216,34 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<Workspace, &'static st
     }
     Policy::load()?.authorize(actor, action)
 }
+/// A value copied for `actor` that may be used only once `actor` may run a
+/// task. A view copies it under the state lock; `check` reads the Discord
+/// policy files, for an actor other than the local operator, after release.
+#[must_use = "the value may be used only once its actor is authorized"]
+pub struct Unchecked<T> {
+    actor: Actor,
+    value: T,
+}
+impl<T> Unchecked<T> {
+    pub fn new(actor: Actor, value: T) -> Self {
+        Self { actor, value }
+    }
+    /// The same actor's check over what `f` makes of the value.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Unchecked<U> {
+        Unchecked {
+            actor: self.actor,
+            value: f(self.value),
+        }
+    }
+    /// The value, if `authorize` (`authorize`, or one `authorizer` for
+    /// many) lets the actor run a task; otherwise why not.
+    pub fn check(
+        self,
+        authorize: impl FnOnce(&Actor, Action) -> Result<Workspace, &'static str>,
+    ) -> Result<T, &'static str> {
+        authorize(&self.actor, Action::Task).map(|_| self.value)
+    }
+}
 /// Like `authorize` for many actors, reading the policy and DM bindings at most once.
 pub fn authorizer() -> impl FnMut(&Actor, Action) -> Result<Workspace, &'static str> {
     let mut policy = None;
