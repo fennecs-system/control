@@ -197,6 +197,13 @@ state, which on an 18 MB node meant 8–34 GB written per hour of swarm work.
   is held 0.06–0.08 ms per room post or agent note (0.16–0.20 ms when the
   room fields and the runtime were re-encoded with them). A chat message
   spends 0.16–0.22 ms of its hold encoding (0.69–0.80 ms when every chat was).
+- A web chat send applies only the change under the lock and encodes its
+  redirect or composer JSON after the commit driver releases it; it no longer
+  builds the chat's detail, which it threw away. On the seeded node, one
+  client in process, the lock was held 17–23 ms per send to a 10-message DM
+  and 62–68 ms to a 1,000-message one; now 0.35–0.66 ms and 0.78–1.0 ms. What
+  still grows with the chat is encoding the chat itself (one saved part with
+  all its messages, about 0.5 ms at 1,000) and the rollback's copy of it.
   The archive step is skipped while the runtime is unchanged; it scans every
   run (38 µs at 20,000 runs), and so does re-splitting a changed runtime
   (30 µs), on a save that changed a run.
