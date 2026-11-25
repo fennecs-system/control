@@ -103,6 +103,7 @@ mod web_assets;
 mod worker;
 mod worker_profile;
 mod worker_tools;
+use control_journal::snapshot::Part;
 use std::{
     collections::HashMap,
     io::{Read as _, Write},
@@ -110,10 +111,11 @@ use std::{
     sync::Arc,
 };
 
+/// Each field is a `Part` (`runtime` holds its runs as parts): a save encodes
+/// and diffs only the fields, room posts, agent notes and runs borrowed
+/// mutably since the last one.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-/// Each field is a `Part`: a save re-encodes only the fields (and the chats,
-/// room posts, agent notes and runs) borrowed mutably since the last one.
 struct State {
     ports: Part<Vec<ports::Port>>,
     web_grants: Part<Vec<web_access::Grant>>,
@@ -145,7 +147,6 @@ struct State {
     note: Part<String>,
     saved: bool,
 }
-use control_journal::snapshot::Part;
 fn is_empty<T>(items: &Part<Vec<T>>) -> bool {
     items.is_empty()
 }

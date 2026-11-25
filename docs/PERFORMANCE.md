@@ -48,7 +48,7 @@ Fixtures by subsystem:
 | --- | --- |
 | Prompt and tool-schema size | `turn_context::tests::policy_size`, `worker_tools::deferred::tests::a_member_turn_needs_few_lookups` |
 | Context construction | `conversation::tests::continuity_profile`, `conversation::tests::large_observation_profile`, `turn_context::tests::active_context_profile`, `turn_context::tests::trace_persistence_profile` |
-| State saves | `storage::tests::profiling::profile_swarm_hour`, `storage::tests::profile_durable_save_stages`, `storage::tests::profiling::profile_checkpoint_load` |
+| State saves | `storage::tests::profiling::profile_swarm_hour`, `storage::tests::profiling::profile_encode_by_field`, `storage::tests::profile_durable_save_stages`, `storage::tests::profiling::profile_checkpoint_load` |
 | Bot reconciliation | `bots::tests::reconcile_profile`, `bots::tests::recovery`, `bots::tests::requests_profile` |
 | Rooms and messages | `rooms::notifications::tests::profile_room_publication`, `rooms::notifications::tests::profile_idle_and_waiting_room_reconciliation`, `agent_message::profile::routing_profile` |
 | Scheduling and cancellation | `scheduler::qa::scheduling_profile`, `chat::tests::profile_continuation_admission`, `lifecycle::tests::reconcile_profile`, `worker::tests::cancel_profile` |
@@ -191,6 +191,11 @@ state, which on an 18 MB node meant 8–34 GB written per hour of swarm work.
   [HISTORY.md](HISTORY.md)) and diffs only those. Debug builds and tests
   check every save against a fresh serialization and every patch against a
   diff of the whole documents.
+- Under 8 concurrent writers (room post, agent note, gene edit on the seeded
+  18 MB node) the state lock is held 0.19 ms per write, 9% of the time
+  (1.7 ms and 82% when every save re-encoded the whole state).
+  `profile_encode_by_field` reports the whole-state cost per field and the
+  save path's, which must give the same patch.
 - Finished runs move into archive blocks; the hot state keeps the newest 512
   (`storage::archive::RECENT`) plus older resumable or still-referenced runs.
 - Array diffs anchor on byte-identical elements, so removing runs from the
