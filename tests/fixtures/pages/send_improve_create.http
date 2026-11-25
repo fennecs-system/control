@@ -1,0 +1,11 @@
+HTTP/1.1 303 See Other
+Content-Type: text/plain
+Content-Length: (masked)
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+location: /dm/c-(new)
+set-cookie: control_lens=none; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict
+

@@ -334,6 +334,117 @@ fn write_routes_match_their_pinned_bytes() {
     .map(|(name, target, cookie, body)| (name, "POST", target, cookie, body));
     assert_pinned(changed(&state, &pages));
 }
+/// Two DMs, one of 10 messages and one of 1,000 (turns and commands, each
+/// turn finished), and three genes.
+fn sends_fixture() -> State {
+    let mut state = State::default();
+    crate::ui_previews::genes(&mut state, 3);
+    let small = chat::create(&mut state);
+    let large = chat::create(&mut state);
+    for (id, count) in [(&small, 10), (&large, 1000)] {
+        for index in 0..count {
+            if index % 2 == 0 {
+                chat::send(&mut state, id, &format!("Turn <{index}> & more"), "test").unwrap();
+                let run = state.runtime.runs.last_mut().unwrap();
+                run.status = crate::runtime::RunStatus::Completed;
+                *run.result = format!("Done <{index}>.");
+            } else {
+                chat::send(&mut state, id, "/improve off", "test").unwrap();
+            }
+        }
+    }
+    renamed(&state, &[&small, &large])
+}
+/// Hides the ids of the DMs `/dms` posts created, which read the clock and
+/// count the chats this process made, and the length they change.
+fn without_new_chats(response: String) -> String {
+    let mut masked = String::new();
+    let mut rest = response.as_str();
+    while let Some(at) = rest.find("c-") {
+        masked.push_str(&rest[..at]);
+        let tail = &rest[at + 2..];
+        let clock = tail.bytes().take_while(u8::is_ascii_hexdigit).count();
+        rest = if clock == 16 && tail[clock..].starts_with('-') {
+            let count = tail[clock + 1..].bytes().take_while(u8::is_ascii_digit).count();
+            masked.push_str("c-(new)");
+            &tail[clock + 1 + count..]
+        } else {
+            masked.push_str("c-");
+            tail
+        };
+    }
+    masked.push_str(rest);
+    let length = masked
+        .lines()
+        .find(|line| line.starts_with("Content-Length:"))
+        .unwrap_or("")
+        .to_owned();
+    masked.replacen(&length, "Content-Length: (masked)", 1)
+}
+
+/// Chat sends and the other chat writes that answer without the chat's
+/// detail: a turn and commands, as a form and from the composer (JSON), to
+/// a short and a long DM, and their refusals. Each request runs on the
+/// state the ones before it left.
+#[test]
+fn chat_sends_match_their_pinned_bytes() {
+    let state = Store::new(sends_fixture());
+    const JSON: &str = "\r\nAccept: application/json";
+    let mut pages = Vec::new();
+    for (size, id) in [("small", "c-100-0"), ("large", "c-100-1")] {
+        for (what, body) in [
+            ("turn", "message=Pinned+%3Cturn%3E+%26+more"),
+            ("improve_off", "message=%2Fimprove+off"),
+            ("improve_on", "message=%2Fimprove+on"),
+            ("model", "message=%2Fmodel"),
+            ("room", "message=%2Froom"),
+            ("room_research", "message=%2Froom+research"),
+            ("steer_rejected", "message=%2Fsteer"),
+            ("lenses_turn", "message=With+genes&composition=1&lens_gene-0001=on"),
+        ] {
+            for (form, cookie) in [("form", ""), ("json", JSON)] {
+                pages.push((
+                    format!("send_{size}_{what}_{form}"),
+                    format!("/dm/{id}/messages"),
+                    cookie,
+                    body,
+                ));
+            }
+        }
+        pages.push((
+            format!("send_{size}_lenses"),
+            format!("/dm/{id}/lenses"),
+            "",
+            "lens=gene-0002",
+        ));
+    }
+    pages.push((
+        "send_lenses_missing".into(),
+        "/dm/c-100-9/lenses".into(),
+        "",
+        "lens=gene-0002",
+    ));
+    pages.push((
+        "send_lenses_unknown".into(),
+        "/dm/c-100-0/lenses".into(),
+        "",
+        "lens=gene-9999",
+    ));
+    let pages = pages
+        .iter()
+        .map(|(name, target, cookie, body)| (name.as_str(), "POST", target.as_str(), *cookie, *body))
+        .collect::<Vec<_>>();
+    assert_pinned(changed(&state, &pages));
+    // The refusal first: the DM picker on its page names every DM.
+    let created = [
+        ("send_dms_create_rejected", "/dms", "", "message=%2Fsteer"),
+        ("send_dms_create", "/dms", "", "message=First+%3Cturn%3E"),
+        ("send_dms_create_empty", "/dms", "", "message="),
+        ("send_improve_create", "/improve", "", "objective=Improve+%3Cit%3E"),
+    ]
+    .map(|(name, target, cookie, body)| (name, "POST", target, cookie, body));
+    assert_pinned(changed_after(&state, &created, without_new_chats));
+}
 /// One DM with every kind of pending request: a folder, a design question,
 /// a port, a bot and a knowledge proposal.
 fn requests_fixture() -> State {
