@@ -307,7 +307,8 @@ measures an armed, waiting subscription (`CONTROL_ROOM_PROFILE_ROUNDS`, default
 10); the unarmed path is at the measurement floor. Both still scan retained
 runs linearly, but look ids up through the run ledger's index instead of
 hashing every run id per pass: at 20,001 retained runs on Apple Silicon,
-about 0.2–0.3 ms and 55 µs (0.9 ms and 0.6 ms with the per-pass map).
+about 0.15–0.24 ms and 50 µs (0.65–0.72 ms and 0.51–0.64 ms with the per-pass
+map).
 
 `agent_message::profile::routing_profile` measures the downward message path
 with in-memory construction, result encoding and dispatcher notification, but
