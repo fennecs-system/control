@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 371
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+{"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"{\"services\":[{\"chat\":\"c-100-0\",\"command\":\"sleep 300\",\"phase\":\"Running\",\"running_commands\":[],\"service_id\":\"svc-a\"}]}","type":"text"}],"isError":false,"structuredContent":{"data":{"services":[{"chat":"c-100-0","command":"sleep 300","phase":"Running","running_commands":[],"service_id":"svc-a"}]}}}}

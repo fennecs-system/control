@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 516
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+{"id":16,"jsonrpc":"2.0","result":{"content":[{"text":"{\"admitted\":true,\"body\":\"Accepted claim\",\"evidence\":\"Tests\",\"id\":\"claim:1\",\"next_offset\":null,\"revision\":null,\"scope\":\"All\",\"source\":null,\"title\":\"Accepted claim\",\"validity\":\"Never\"}","type":"text"}],"isError":false,"structuredContent":{"data":{"admitted":true,"body":"Accepted claim","evidence":"Tests","id":"claim:1","next_offset":null,"revision":null,"scope":"All","source":null,"title":"Accepted claim","validity":"Never"}}}}

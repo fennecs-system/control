@@ -322,7 +322,8 @@ struct OperatorPage {
     lens: String,
     /// The UTC day that ends the Usage page's activity grid.
     today: u64,
-    /// The time the Models page's cooling accounts count from.
+    /// The time the Models page's cooling accounts and the waiting
+    /// questions' ages count from.
     now: accounts::UnixSeconds,
     /// A page, or the Permissions form, that reads files and no state,
     /// rendered before locking.
@@ -423,7 +424,7 @@ const OPERATOR_PAGES: Read<OperatorPage, Operator> = Read {
         let content = match view {
             "authority" => Content::Authority(
                 unlocked.unwrap_or_default(),
-                permissions_page::Page::of(state),
+                permissions_page::Page::of(state, design::UnixSeconds(now.0)),
                 state.collective.access(),
             ),
             "knowledge-review" => Content::Collective(state.collective.review()),
