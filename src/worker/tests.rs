@@ -586,14 +586,17 @@ fn bot_activation_keeps_the_live_protocol_and_captures_only_the_next_admission()
     // Simulate an already running pre-continuity provider process.
     state.runtime.runs[0].attempts[0].context_trace = None;
     state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
-    state.collective.posts.push(crate::rooms::Post {
-        room: "general".into(),
-        text: "Old room history".into(),
-        chat: Some("peer".into()),
-        run: None,
-        key: "old".into(),
-        delivery: Default::default(),
-    });
+    state.collective.posts.push(
+        crate::rooms::Post {
+            room: "general".into(),
+            text: "Old room history".into(),
+            chat: Some("peer".into()),
+            run: None,
+            key: "old".into(),
+            delivery: Default::default(),
+        }
+        .into(),
+    );
     crate::bots::command(&mut state, &chat, "on").unwrap();
     assert!(state.runtime.runs[0].attempts[0].context_trace.is_none());
     assert!(state.runtime.runs[0].attempts[0].turn_mailbox.is_none());
@@ -785,14 +788,17 @@ fn working_state_and_processed_receipts_publish_with_the_matching_workspace_only
         crate::rooms::ensure_inbox(&mut state, &chat).unwrap();
         checkpoint_next(&mut state, |_| Ok(())).unwrap();
         for i in 0..8 {
-            state.collective.posts.push(crate::rooms::Post {
-                room: "general".into(),
-                text: format!("event {i}"),
-                chat: None,
-                run: None,
-                key: String::new(),
-                delivery: Default::default(),
-            });
+            state.collective.posts.push(
+                crate::rooms::Post {
+                    room: "general".into(),
+                    text: format!("event {i}"),
+                    chat: None,
+                    run: None,
+                    key: String::new(),
+                    delivery: Default::default(),
+                }
+                .into(),
+            );
         }
         state.chats[0].continuity = Some(Box::new(crate::turn_context::Managed::default()));
         let run = &mut state.runtime.runs[0];
@@ -1462,7 +1468,7 @@ fn failed_discord_design_answer_restores_question_and_delivery_checkpoint() {
         .is_ok()
     );
     assert_eq!(state.runtime.runs[0].status, RunStatus::Continued);
-    assert_eq!(state.discord_seen, vec!["fixture-answer"]);
+    assert_eq!(*state.discord_seen, vec!["fixture-answer"]);
 }
 #[test]
 fn failed_discord_bot_commands_leave_no_bot_or_inbox() {
@@ -1640,7 +1646,7 @@ fn failed_discord_cancel_checkpoint_preserves_run_and_retryable_delivery() {
             )
             .is_ok()
         );
-        assert_eq!(state.discord_seen, ["fixture-message"]);
+        assert_eq!(*state.discord_seen, ["fixture-message"]);
         assert_eq!(
             state.runtime.runs[0].status,
             if status == "queued" {

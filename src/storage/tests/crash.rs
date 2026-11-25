@@ -71,7 +71,7 @@ impl Sink for Dying {
 
 /// Save `n` of the child's fixed sequence.
 fn step(state: &mut State, n: usize) {
-    state.note = format!("save {n}");
+    *state.note = format!("save {n}");
     state.messages.push(format!("message {n}"));
 }
 fn record(directory: &Path, name: &str, n: usize) {

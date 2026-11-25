@@ -62,14 +62,18 @@ fn reject_handoff(state: &mut State, index: usize, error: &str) {
     });
 }
 fn post(state: &mut State, chat: Option<&str>, text: &str) {
-    state.collective.posts.push(crate::rooms::Post {
-        room: "general".into(),
-        text: text.into(),
-        chat: chat.map(Into::into),
-        run: None,
-        key: format!("k{}", state.collective.posts.len()),
-        delivery: Default::default(),
-    });
+    let key = format!("k{}", state.collective.posts.len());
+    state.collective.posts.push(
+        crate::rooms::Post {
+            room: "general".into(),
+            text: text.into(),
+            chat: chat.map(Into::into),
+            run: None,
+            key,
+            delivery: Default::default(),
+        }
+        .into(),
+    );
 }
 #[test]
 fn model_selection_does_not_wake_a_bot_but_is_captured_on_its_next_callback() {
@@ -271,7 +275,7 @@ fn publication_precedes_deferred_peer_admission_for_an_ordinary_active_worker() 
                 "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},"lease":[1,u64::MAX],"phase":"Requested"},
             "origin":{"run":"active-run","attempt":"active-attempt"},"actor":{"type":"local_operator"},"command":"true","uid":502,"gid":20
         })).unwrap();
-    owned.services = vec![owned_service];
+    *owned.services = vec![owned_service];
     let own_grant = owned.services[0].grant();
     owned.runtime.runs.last_mut().unwrap().resource_grants = vec![own_grant];
     reconcile_at(&mut owned, 2, |_| Ok(())).unwrap();

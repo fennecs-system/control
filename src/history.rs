@@ -4,7 +4,10 @@
 //! journal, `history/<chat>.jsonl`, and the attempt keeps only that line's
 //! position. Saves then cost live work, not every attempt ever made.
 use crate::usage::{Activity, Attempt};
-use control_journal::{FileJournal, Journal};
+use control_journal::{
+    FileJournal, Journal,
+    snapshot::{Part, Tree},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -236,33 +239,30 @@ pub(crate) fn persisting<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// A value that remembers its saved form. A save serializes it once and then
-/// copies those bytes until the value is next borrowed mutably, so encoding
-/// the state costs what changed rather than everything kept. Any `&mut` access
-/// (field assignment through `DerefMut` included) forgets the bytes, so a
-/// stale encoding cannot be written: the cache is valid by construction, with
-/// no dirty flags to forget. Only saves (`persisting`) use it; every other
-/// serialization (views, APIs) sees the value itself.
+/// A run as a [`Part`]: a save encodes it once and then shares that encoding
+/// until the run is next borrowed mutably, so encoding the state costs what
+/// changed rather than everything kept. Any `&mut` access (field assignment
+/// through `DerefMut` included) forgets it, so a stale encoding cannot be
+/// written: the cache is valid by construction, with no dirty flags to
+/// forget. Every serialization other than a save's split sees the value.
 #[derive(Default)]
 pub(crate) struct Cached<T> {
-    value: T,
-    saved: OnceLock<Box<serde_json::value::RawValue>>,
+    value: Part<T>,
     /// Saved in an archive block (`storage::archive`) and unchanged since: the
-    /// state's own encoding leaves it out. Forgotten with the bytes.
+    /// state's own encoding leaves it out. Forgotten with the encoding.
     archived: std::sync::atomic::AtomicBool,
 }
 impl<T> Cached<T> {
     /// A value read back from `saved`, its exact saved form.
-    pub(crate) fn restored(value: T, saved: Box<serde_json::value::RawValue>, archived: bool) -> Self {
+    pub(crate) fn restored(value: T, saved: Tree, archived: bool) -> Self {
         Self {
-            value,
-            saved: OnceLock::from(saved),
+            value: Part::restored(value, saved),
             archived: archived.into(),
         }
     }
     /// The saved form, when the value is unchanged since it was saved.
-    pub(crate) fn saved(&self) -> Option<&serde_json::value::RawValue> {
-        self.saved.get().map(AsRef::as_ref)
+    pub(crate) fn saved(&self) -> Option<&Tree> {
+        self.value.saved()
     }
     pub(crate) fn archived(&self) -> bool {
         self.archived.load(std::sync::atomic::Ordering::Relaxed)
@@ -270,25 +270,22 @@ impl<T> Cached<T> {
     /// Marks an unchanged value as written to an archive block (or not, to
     /// undo that when the save recording it fails). Changed values never are.
     pub(crate) fn set_archived(&self, archived: bool) {
-        self.archived.store(
-            archived && self.saved.get().is_some(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.archived
+            .store(archived && self.saved().is_some(), std::sync::atomic::Ordering::Relaxed);
     }
     /// Mutable access for an edit that leaves the saved form unchanged, such
     /// as filling journal-backed text back in after loading (the save writes
-    /// the journal position, not the text). Keeps the saved bytes and the
+    /// the journal position, not the text). Keeps the saved form and the
     /// archived mark, which any other `&mut` access forgets: un-archiving every
     /// run at load would put the whole archive back into the next snapshot.
     pub(crate) fn unchanged_mut(&mut self) -> &mut T {
-        &mut self.value
+        self.value.unchanged_mut()
     }
 }
 impl<T> From<T> for Cached<T> {
     fn from(value: T) -> Self {
         Self {
-            value,
-            saved: OnceLock::new(),
+            value: value.into(),
             archived: false.into(),
         }
     }
@@ -297,7 +294,6 @@ impl<T: Clone> Clone for Cached<T> {
     fn clone(&self) -> Self {
         Self {
             value: self.value.clone(),
-            saved: self.saved.clone(),
             archived: self.archived().into(),
         }
     }
@@ -320,38 +316,13 @@ impl<T> std::ops::Deref for Cached<T> {
 }
 impl<T> std::ops::DerefMut for Cached<T> {
     fn deref_mut(&mut self) -> &mut T {
-        self.saved.take();
         *self.archived.get_mut() = false;
         &mut self.value
     }
 }
-thread_local! {
-    /// Tests and debug builds re-serialize everything to check the cache.
-    static UNCACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-/// Runs `f` with every `Cached` value serialized afresh: the oracle the cached
-/// encoding must equal.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
-pub(crate) fn uncached<R>(f: impl FnOnce() -> R) -> R {
-    let previous = UNCACHED.with(|u| u.replace(true));
-    let result = f();
-    UNCACHED.with(|u| u.set(previous));
-    result
-}
 impl<T: Serialize> Serialize for Cached<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if !PERSISTING.with(|p| p.get()) || UNCACHED.with(|u| u.get()) {
-            return self.value.serialize(serializer);
-        }
-        let saved = match self.saved.get() {
-            Some(saved) => saved,
-            None => {
-                let bytes = serde_json::to_string(&self.value).map_err(serde::ser::Error::custom)?;
-                let raw = serde_json::value::RawValue::from_string(bytes).map_err(serde::ser::Error::custom)?;
-                self.saved.get_or_init(|| raw)
-            }
-        };
-        saved.serialize(serializer)
+        self.value.serialize(serializer)
     }
 }
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Cached<T> {

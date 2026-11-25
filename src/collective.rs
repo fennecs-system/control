@@ -4,7 +4,7 @@ use std::collections::HashMap;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Collective {
-    pub posts: Vec<crate::rooms::Post>,
+    pub posts: Vec<control_journal::snapshot::Part<crate::rooms::Post>>,
     pub room_watches: Vec<crate::rooms::Watch>,
     pub(crate) proposals: Vec<Knowledge>,
     requests: Vec<Request>,
@@ -99,14 +99,17 @@ impl Collective {
                 let text = value(f, "message");
                 let channel = value(f, "channel");
                 if !text.is_empty() && text.chars().count() <= 2000 && crate::rooms::valid(&channel) {
-                    self.posts.push(crate::rooms::Post {
-                        room: channel,
-                        text,
-                        chat: None,
-                        run: None,
-                        key: String::new(),
-                        delivery: crate::rooms::Delivery::Notify,
-                    });
+                    self.posts.push(
+                        crate::rooms::Post {
+                            room: channel,
+                            text,
+                            chat: None,
+                            run: None,
+                            key: String::new(),
+                            delivery: crate::rooms::Delivery::Notify,
+                        }
+                        .into(),
+                    );
                 }
                 match value(f, "channel").as_str() {
                     "research" => "/?view=rooms&channel=research",

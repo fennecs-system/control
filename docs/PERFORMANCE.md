@@ -186,9 +186,11 @@ into the `state.json` snapshot only when the log outgrows it (see
 [HISTORY.md](HISTORY.md)). Before this, every save rewrote and synced the whole
 state, which on an 18 MB node meant 8–34 GB written per hour of swarm work.
 
-- `Run` is `history::Cached<Record>`: a save serializes a run once and reuses
-  its bytes until the run is next borrowed mutably. Debug builds and tests check
-  every save against a fresh serialization.
+- A save encodes only the parts borrowed mutably since the last one (each
+  top-level field, room post, agent note and run, see
+  [HISTORY.md](HISTORY.md)) and diffs only those. Debug builds and tests
+  check every save against a fresh serialization and every patch against a
+  diff of the whole documents.
 - Finished runs move into archive blocks; the hot state keeps the newest 512
   (`storage::archive::RECENT`) plus older resumable or still-referenced runs.
 - Array diffs anchor on byte-identical elements, so removing runs from the

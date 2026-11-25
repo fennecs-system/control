@@ -557,8 +557,7 @@ impl Journal {
             control_journal::snapshot::apply(&mut self.document, control_journal::snapshot::edits(&patch)?)?;
             self.patches += 1;
         }
-        let fresh: serde_json::Value =
-            crate::history::uncached(|| crate::history::persisting(|| serde_json::to_value(state))).unwrap();
+        let fresh: serde_json::Value = crate::history::persisting(|| serde_json::to_value(state)).unwrap();
         assert_eq!(self.document, fresh, "the patch reproduces the saved state");
         self.base = encoded;
         Ok(())

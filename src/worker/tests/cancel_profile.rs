@@ -61,14 +61,17 @@ fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
         }
     }
     for index in 0..4_000 {
-        state.collective.posts.push(crate::rooms::Post {
-            room: "general".into(),
-            text: "room traffic ".repeat(16),
-            chat: Some(chats[index % chats.len()].clone()),
-            run: None,
-            key: format!("k{index}"),
-            delivery: Default::default(),
-        });
+        state.collective.posts.push(
+            crate::rooms::Post {
+                room: "general".into(),
+                text: "room traffic ".repeat(16),
+                chat: Some(chats[index % chats.len()].clone()),
+                run: None,
+                key: format!("k{index}"),
+                delivery: Default::default(),
+            }
+            .into(),
+        );
     }
     for chat in &chats[1..=tree] {
         crate::chat::send(&mut state, chat, "Join the game", "test").unwrap();

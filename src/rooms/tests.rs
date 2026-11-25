@@ -165,14 +165,17 @@ fn room_sidebar_scopes_activity_and_keeps_message_chat_links() {
     state.chats[1].title = "Previous findings".into();
     let other = crate::chat::create(&mut state);
     state.chats[2].room = Some("engineering".into());
-    state.collective.posts.push(Post {
-        room: "research".into(),
-        text: "An update <script>".into(),
-        chat: Some(active.clone()),
-        run: Some(state.runtime.runs[0].id().as_str().to_owned()),
-        key: String::new(),
-        delivery: Default::default(),
-    });
+    state.collective.posts.push(
+        Post {
+            room: "research".into(),
+            text: "An update <script>".into(),
+            chat: Some(active.clone()),
+            run: Some(state.runtime.runs[0].id().as_str().to_owned()),
+            key: String::new(),
+            delivery: Default::default(),
+        }
+        .into(),
+    );
     let page = crate::render(&state, "rooms", "none", "research");
     let (_, sidebar) = page.split_once("aria-label='Room details'").unwrap();
     let (participants, links) = sidebar.split_once("<h2>Linked DMs</h2>").unwrap();

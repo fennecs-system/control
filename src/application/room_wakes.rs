@@ -9,6 +9,7 @@ use crate::{
     rooms::Post,
 };
 use control_context::agent_policy::RunKind;
+use control_journal::snapshot::Part;
 use std::collections::{HashMap, HashSet};
 
 const WINDOW: usize = 512;
@@ -16,7 +17,7 @@ const WINDOW: usize = 512;
 pub(crate) struct View<'a> {
     pub runs: &'a [Run],
     pub chats: &'a [Session],
-    pub posts: &'a [Post],
+    pub posts: &'a [Part<Post>],
 }
 
 /// Captured subscription input; contains no mutable watch or global-state handle.

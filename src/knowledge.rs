@@ -22,7 +22,7 @@ pub fn migrate(state: &mut State) -> bool {
             Document {
                 id: "scratchpad".into(),
                 title: "Scratchpad.md".into(),
-                body: state.note.clone(),
+                body: (*state.note).clone(),
                 revision: u64::from(state.saved),
                 saved_at: None,
             },

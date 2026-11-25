@@ -5,6 +5,7 @@
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
 use crate::{State, identity};
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -162,11 +163,12 @@ pub(super) fn call(state: &mut State, run_id: &str, name: &str, args: &Value) ->
         }
         let watch_index = existing.unwrap_or(state.collective.room_watches.len());
         if existing.is_none() {
+            let cursor = state.collective.posts.len();
             state.collective.room_watches.push(Watch {
                 chat: chat.id.clone(),
                 actor: run.actor.clone(),
                 room: room.into(),
-                cursor: state.collective.posts.len(),
+                cursor,
                 wake: None,
                 delivered: None,
                 listener: None,
@@ -186,13 +188,14 @@ pub(super) fn call(state: &mut State, run_id: &str, name: &str, args: &Value) ->
             json!({"watching":true,"cursor":watch.cursor,"wake_armed":watch.wake.is_some(),"delivered_run":watch.delivered}),
         );
     }
+    let collective = &mut *state.collective;
     let watch = existing
-        .map(|i| &mut state.collective.room_watches[i])
+        .map(|i| &mut collective.room_watches[i])
         .ok_or("No active room watch. Use control_room_watch first.")?;
-    if watch.cursor > state.collective.posts.len() {
+    if watch.cursor > collective.posts.len() {
         return Err("Room history changed; subscription cursor cannot be reconciled.");
     }
-    let batch = batch(watch, &state.collective.posts);
+    let batch = batch(watch, &collective.posts);
     if name == "control_room_ack" {
         let cursor = args["through"]
             .as_u64()
@@ -211,7 +214,7 @@ pub(super) fn call(state: &mut State, run_id: &str, name: &str, args: &Value) ->
         .map(|post| json!({"text":post.text,"chat":post.chat,"run":post.run,"delivery":post.delivery}))
         .collect();
     Ok(
-        json!({"room":watch.room,"cursor":watch.cursor,"through":through,"more":through<state.collective.posts.len(),"skipped":0,"posts":posts,"wake_armed":watch.wake.is_some(),"delivered_run":watch.delivered}),
+        json!({"room":watch.room,"cursor":watch.cursor,"through":through,"more":through<collective.posts.len(),"skipped":0,"posts":posts,"wake_armed":watch.wake.is_some(),"delivered_run":watch.delivered}),
     )
 }
 
@@ -219,10 +222,10 @@ struct Batch<'a> {
     through: usize,
     posts: Vec<&'a super::Post>,
 }
-fn batch<'a>(watch: &Watch, history: &'a [super::Post]) -> Batch<'a> {
+fn batch<'a>(watch: &Watch, history: &'a [Part<super::Post>]) -> Batch<'a> {
     batch_from(watch, history, watch.cursor)
 }
-fn batch_from<'a>(watch: &Watch, history: &'a [super::Post], cursor: usize) -> Batch<'a> {
+fn batch_from<'a>(watch: &Watch, history: &'a [Part<super::Post>], cursor: usize) -> Batch<'a> {
     let mut batch = Batch {
         through: cursor,
         posts: Vec::with_capacity(BATCH),

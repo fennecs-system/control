@@ -462,7 +462,7 @@ fn operator_fixture() -> State {
     ] {
         state.collective.action(path, &fields);
     }
-    state.note = "Notes link [[Plan]] & <more>".into();
+    *state.note = "Notes link [[Plan]] & <more>".into();
     crate::knowledge::migrate(&mut state);
     state
 }

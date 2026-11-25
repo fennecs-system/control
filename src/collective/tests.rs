@@ -45,7 +45,7 @@ fn rooms_escape_content_and_separate_channels() {
         &form(&[("channel", "research"), ("message", "<script>oops</script>")]),
     );
     let state = crate::State {
-        collective: c,
+        collective: c.into(),
         ..Default::default()
     };
     assert!(!crate::rooms::render(&state, "general").contains("oops"));
