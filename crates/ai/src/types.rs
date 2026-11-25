@@ -33,6 +33,16 @@ pub struct Usage {
     /// The model the provider says served the attempt, when it says.
     pub model: Option<String>,
 }
+impl Usage {
+    /// How far its token counts can be trusted.
+    pub fn accounting(&self) -> Accounting {
+        match (self.tokens, self.complete) {
+            (None, _) => Accounting::Unknown,
+            (Some(_), true) => Accounting::Reported,
+            (Some(_), false) => Accounting::Partial,
+        }
+    }
+}
 /// The provenance of an attempt's token counts. Missing usage is never zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

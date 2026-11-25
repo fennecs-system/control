@@ -358,6 +358,12 @@ pub fn served(value: &Value) -> Served {
         fingerprint: field("system_fingerprint"),
     }
 }
+/// An endpoint's operator-declared identity (`id`, `model`, `revision`, the
+/// `adapter` that reached it) beside what the server reported about itself.
+pub fn provenance(id: &str, model: &str, revision: &str, adapter: &str, served: &Served) -> Value {
+    json!({"id":id,"model":model,"revision":revision,"adapter":adapter,
+        "served_model":served.model,"runtime_fingerprint":served.fingerprint})
+}
 
 #[cfg(test)]
 mod tests;

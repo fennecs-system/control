@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 1299
+Cache-Control: no-store
+Connection: close
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Content-Security-Policy: default-src 'self'; script-src 'none'; connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'
+
+{"id":3,"jsonrpc":"2.0","result":{"content":[{"text":"{\"definition\":{\"id\":\"lead\",\"lenses\":[\"swarm\"],\"name\":\"Lead\",\"purpose\":\"Steer the team toward the operator's outcome: plan milestones, assign and unblock, decide consequential choices and keep your turns short. Delegate implementation, long work and services to workers; ask the operator only what nobody on the team can decide.\",\"revision\":1,\"standing\":{\"acts\":\"full\",\"answers_to\":\"operator\",\"sees\":\"team\",\"steers\":\"team\"}},\"revisions\":[1],\"standing\":\"sees its own team; steers its descendants and fellow workers; answers to the operator; acts with full worker tools\"}","type":"text"}],"isError":false,"structuredContent":{"data":{"definition":{"id":"lead","lenses":["swarm"],"name":"Lead","purpose":"Steer the team toward the operator's outcome: plan milestones, assign and unblock, decide consequential choices and keep your turns short. Delegate implementation, long work and services to workers; ask the operator only what nobody on the team can decide.","revision":1,"standing":{"acts":"full","answers_to":"operator","sees":"team","steers":"team"}},"revisions":[1],"standing":"sees its own team; steers its descendants and fellow workers; answers to the operator; acts with full worker tools"}}}}

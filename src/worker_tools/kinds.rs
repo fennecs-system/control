@@ -28,9 +28,11 @@ pub(super) struct Call<'a> {
     pub nonce: Option<&'a str>,
     /// The mailbox's workspace, already checked to be the attempt's.
     pub workspace: Option<&'a Path>,
+    /// The clock reading the call is answered at.
+    pub now: crate::design::UnixSeconds,
 }
 impl<'a> Call<'a> {
-    pub(super) fn of(envelope: &'a Value, workspace: Option<&'a Path>) -> Self {
+    pub(super) fn of(envelope: &'a Value, workspace: Option<&'a Path>, now: crate::design::UnixSeconds) -> Self {
         let params = &envelope["request"]["params"];
         Self {
             envelope,
@@ -38,6 +40,7 @@ impl<'a> Call<'a> {
             arguments: &params["arguments"],
             nonce: envelope["nonce"].as_str(),
             workspace,
+            now,
         }
     }
 }
@@ -86,6 +89,7 @@ impl Handler {
                         nonce: call.nonce.unwrap_or(""),
                     },
                     host: &host,
+                    now: call.now,
                 };
                 crate::toolbox::result(tools.call(&cx, call.name, call.arguments))
             }

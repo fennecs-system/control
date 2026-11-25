@@ -352,6 +352,7 @@ fn workers_discover_only_captured_packages_and_read_them_as_evidence() {
                 nonce: "n",
             },
             host: &host,
+            now: crate::design::UnixSeconds::now(),
         };
         Tools.call(&cx, name, &args)
     };

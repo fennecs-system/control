@@ -9,7 +9,7 @@ use control_context::{Audience, tool_for_mcp};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-pub(crate) const SEARCH: &str = "control_tool_search";
+pub(crate) const SEARCH: &str = control_context::TOOL_SEARCH;
 pub(crate) const CALL: &str = "control_call";
 /// Schemas a query returns, and the names one call may request.
 const QUERY_RESULTS: usize = 5;

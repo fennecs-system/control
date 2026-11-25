@@ -148,7 +148,8 @@ keeps the newest such change's mark; `read_response` and `state_response`
 take it with their view (`Store::read_seen`, `write_seen`) and write their
 reply only once it is durable or storage is unavailable (then the change
 stays queued). With nothing in flight this costs an uncontended lock and one atomic load. Other routes
-(MCP, bots, ports, services pages) are not gated yet.
+(MCP tools that change state, bots, ports, services pages) are not gated
+yet; the read-only operator MCP tools are (`session_http::reads`).
 
 A failed save is an error, not a reason to stop. The policy is one function
 (`writer::retry_then_degrade`): a write that leaves the files intact

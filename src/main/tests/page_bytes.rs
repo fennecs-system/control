@@ -42,18 +42,36 @@ fn changed_after(state: &Store, pages: &[(&str, &str, &str, &str, &str)], mask: 
     pages
         .iter()
         .filter_map(|(name, method, target, cookie, body)| {
-            let actual = mask(exchange(state, method, target, cookie, body));
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/pages")
-                .join(format!("{name}.http"));
-            let pinned = std::fs::read_to_string(&path).unwrap_or_default();
-            (actual != pinned).then(|| {
-                let fresh = std::env::temp_dir().join(format!("control-page-{name}.http"));
-                std::fs::write(&fresh, &actual).unwrap();
-                format!("{method} {target}: cp {} {}", fresh.display(), path.display())
-            })
+            unpinned(name, &mask(exchange(state, method, target, cookie, body)))
+                .map(|refresh| format!("{method} {target}: {refresh}"))
         })
         .collect()
+}
+/// The command that refreshes fixture `name` when `actual` differs from it.
+fn unpinned(name: &str, actual: &str) -> Option<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/pages")
+        .join(format!("{name}.http"));
+    let pinned = std::fs::read_to_string(&path).unwrap_or_default();
+    (actual != pinned).then(|| {
+        let fresh = std::env::temp_dir().join(format!("control-page-{name}.http"));
+        std::fs::write(&fresh, actual).unwrap();
+        format!("cp {} {}", fresh.display(), path.display())
+    })
+}
+/// A `tools/call` request body for the operator MCP.
+fn mcp_call(id: &str, name: &str, arguments: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{name}","arguments":{arguments}}}}}"#
+    )
+}
+/// Each `(fixture name, body)` posted to `/mcp`.
+fn mcp_changed(state: &Store, bodies: &[(&str, String)]) -> Vec<String> {
+    let pages = bodies
+        .iter()
+        .map(|(name, body)| (*name, "POST", "/mcp", "", body.as_str()))
+        .collect::<Vec<_>>();
+    changed(state, &pages)
 }
 fn assert_pinned(changed: Vec<String>) {
     assert!(
@@ -181,11 +199,7 @@ fn chat_pages_match_their_pinned_bytes() {
 #[test]
 fn mcp_read_tools_match_their_pinned_bytes() {
     let state = Store::new(fixture());
-    let call = |id: &str, name: &str, arguments: &str| {
-        format!(
-            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{name}","arguments":{arguments}}}}}"#
-        )
-    };
+    let call = mcp_call;
     let bodies = [
         ("mcp_chats_list", call("2", "control.chats.list", "{}")),
         (
@@ -205,11 +219,232 @@ fn mcp_read_tools_match_their_pinned_bytes() {
             call("5", "control.chat.read", r#"{"id":"../x"}"#),
         ),
     ];
-    let pages = bodies
-        .iter()
-        .map(|(name, body)| (*name, "POST", "/mcp", "", body.as_str()))
-        .collect::<Vec<_>>();
-    assert_pinned(changed(&state, &pages));
+    assert_pinned(mcp_changed(&state, &bodies));
+}
+
+/// The rest of the operator MCP's read-only tools and its tool list, on
+/// the operator pages' state: genes, knowledge, room posts and personas.
+#[test]
+fn operator_read_tools_match_their_pinned_bytes() {
+    let state = Store::new(operator_fixture());
+    let call = mcp_call;
+    let bodies = [
+        (
+            "mcp_tools_list",
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_owned(),
+        ),
+        ("mcp_personas_list", call("2", "control.personas.list", "{}")),
+        (
+            "mcp_persona_read",
+            call("3", "control.persona.read", r#"{"id":"lead"}"#),
+        ),
+        (
+            "mcp_persona_read_revision",
+            call("4", "control.persona.read", r#"{"id":"lead","revision":1}"#),
+        ),
+        (
+            "mcp_persona_read_missing",
+            call("5", "control.persona.read", r#"{"id":"nobody"}"#),
+        ),
+        ("mcp_persona_read_no_id", call("6", "control.persona.read", "{}")),
+        ("mcp_lenses_list", call("7", "control.lenses.list", "{}")),
+        ("mcp_lens_read", call("8", "control.lens.read", r#"{"id":"gene-0001"}"#)),
+        (
+            "mcp_lens_read_missing",
+            call("9", "control.lens.read", r#"{"id":"nope"}"#),
+        ),
+        (
+            "mcp_lenses_resolve",
+            call(
+                "10",
+                "control.lenses.resolve",
+                r#"{"lenses":["gene-0001","gene-0002"]}"#,
+            ),
+        ),
+        (
+            "mcp_lenses_resolve_unknown",
+            call("11", "control.lenses.resolve", r#"{"lenses":["nope"]}"#),
+        ),
+        (
+            "mcp_lenses_resolve_invalid",
+            call("12", "control.lenses.resolve", r#"{"lenses":"gene-0001"}"#),
+        ),
+        (
+            "mcp_knowledge_search",
+            call("13", "control.knowledge.search", r#"{"query":"claim"}"#),
+        ),
+        (
+            "mcp_knowledge_search_alias",
+            call("14", "control_knowledge_search", r#"{"query":"notes","limit":2}"#),
+        ),
+        (
+            "mcp_knowledge_search_invalid",
+            call("15", "control.knowledge.search", r#"{"query":""}"#),
+        ),
+        (
+            "mcp_knowledge_read_claim",
+            call("16", "control.knowledge.read", r#"{"id":"claim:1"}"#),
+        ),
+        (
+            "mcp_knowledge_read_document",
+            call(
+                "17",
+                "control.knowledge.read",
+                r#"{"id":"document:scratchpad","offset":3,"limit":5}"#,
+            ),
+        ),
+        (
+            "mcp_knowledge_read_missing",
+            call("18", "control.knowledge.read", r#"{"id":"claim:9"}"#),
+        ),
+        ("mcp_rooms_list", call("19", "control.rooms.list", "{}")),
+        (
+            "mcp_room_read",
+            call("20", "control.room.read", r#"{"room":"engineering"}"#),
+        ),
+        (
+            "mcp_room_read_unknown",
+            call("21", "control.room.read", r#"{"room":"nowhere"}"#),
+        ),
+        (
+            "mcp_run_scores",
+            call("22", "control.run.scores", r#"{"id":"c-100-1"}"#),
+        ),
+        (
+            "mcp_run_scores_missing",
+            call("23", "control.run.scores", r#"{"id":"c-100-9"}"#),
+        ),
+        (
+            "mcp_run_scores_invalid",
+            call("24", "control.run.scores", r#"{"id":"../x"}"#),
+        ),
+    ];
+    assert_pinned(mcp_changed(&state, &bodies));
+}
+
+/// `control.artifacts.list` and `control.artifact.read` as far as they read
+/// no files: the published outputs' files live outside the fixture.
+#[test]
+fn artifact_tools_match_their_pinned_bytes() {
+    let mut state = fixture();
+    // A published output whose manifest is not on disk.
+    state.runtime.runs[3].attempts = vec![crate::usage::Attempt {
+        artifact: Some("a-missing".into()),
+        ..Default::default()
+    }];
+    let state = Store::new(state);
+    let call = mcp_call;
+    let bodies = [
+        (
+            "mcp_artifacts_none",
+            call("1", "control.artifacts.list", r#"{"id":"c-100-0"}"#),
+        ),
+        (
+            "mcp_artifacts_unreadable",
+            call("2", "control.artifacts.list", r#"{"id":"c-100-1"}"#),
+        ),
+        (
+            "mcp_artifacts_missing",
+            call("3", "control.artifacts.list", r#"{"id":"c-100-9"}"#),
+        ),
+        (
+            "mcp_artifacts_invalid",
+            call("4", "control.artifacts.list", r#"{"id":"c-100-0","extra":1}"#),
+        ),
+        (
+            "mcp_artifact_read_foreign",
+            call(
+                "5",
+                "control.artifact.read",
+                r#"{"id":"c-100-0","artifact":"a-missing","path":"x"}"#,
+            ),
+        ),
+        (
+            "mcp_artifact_read_unreadable",
+            call(
+                "6",
+                "control.artifact.read",
+                r#"{"id":"c-100-1","artifact":"a-missing","path":"x"}"#,
+            ),
+        ),
+    ];
+    assert_pinned(mcp_changed(&state, &bodies));
+}
+
+/// The chat MCP bridge's `Remote`, reaching the operator MCP through the
+/// whole HTTP handler as `Hive` does over loopback.
+struct Http<'a>(&'a Store);
+impl crate::mcp_chat::Remote for Http<'_> {
+    fn tool(&mut self, name: &str, arguments: serde_json::Value) -> std::io::Result<serde_json::Value> {
+        let body = mcp_call("1", name, &arguments.to_string());
+        let response = exchange(self.0, "POST", "/mcp", "", &body);
+        let (_, body) = response.split_once("\r\n\r\n").unwrap();
+        let result = serde_json::from_str::<serde_json::Value>(body).unwrap()["result"].take();
+        if result["isError"] == true {
+            return Err(std::io::Error::other(
+                result["content"][0]["text"].as_str().unwrap().to_owned(),
+            ));
+        }
+        Ok(result["structuredContent"]["data"].clone())
+    }
+}
+
+/// `control.requests.list` and `control.services.list` with every kind of
+/// request and a live service, and the chat MCP's `chat_requests` and
+/// `chat_team`, which read them. A Discord DM's folder request is left out:
+/// the test node authorizes no Discord principal.
+#[test]
+fn request_tools_match_their_pinned_bytes() {
+    let mut state = requests_fixture();
+    let mut discord = state.chats[0].clone();
+    discord.id = "c-100-5".into();
+    discord.actor = identity::Actor::DiscordDm {
+        user_id: "7".parse().unwrap(),
+        channel_id: "8".parse().unwrap(),
+    };
+    discord.project = Some(serde_json::from_value(serde_json::json!({"request":"req-5","path":"/srv/discord","grant":null,"head":null,"pending":true,"name":"discord"})).unwrap());
+    state.chats.push(discord);
+    let state = Store::new(state);
+    let call = mcp_call;
+    let bodies = [
+        ("mcp_requests_list", call("1", "control.requests.list", "{}")),
+        (
+            "mcp_services_list",
+            call("2", "control.services.list", r#"{"id":"c-100-0"}"#),
+        ),
+        (
+            "mcp_services_list_team",
+            call("3", "control.services.list", r#"{"id":"c-100-0","team":true}"#),
+        ),
+        (
+            "mcp_services_list_discord",
+            call("4", "control.services.list", r#"{"id":"c-100-5"}"#),
+        ),
+        (
+            "mcp_services_list_missing",
+            call("5", "control.services.list", r#"{"id":"c-100-9"}"#),
+        ),
+        (
+            "mcp_services_list_invalid",
+            call("6", "control.services.list", r#"{"id":"../x"}"#),
+        ),
+    ];
+    let mut changed = mcp_changed(&state, &bodies);
+    let bridge = |name: &str| {
+        let text = crate::mcp_chat::call(
+            &mut Http(&state),
+            name,
+            &serde_json::json!({"id":"c-100-0"}),
+            control::permissions::Approvals::default(),
+        );
+        format!("{text:?}\n")
+    };
+    changed.extend(
+        [("chat_requests", "chat_mcp_requests"), ("chat_team", "chat_mcp_team")]
+            .into_iter()
+            .filter_map(|(tool, name)| unpinned(name, &bridge(tool)).map(|refresh| format!("{tool}: {refresh}"))),
+    );
+    assert_pinned(changed);
 }
 
 /// The Bots page: live bots under a steering chat, a running agent, dead
