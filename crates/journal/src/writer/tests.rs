@@ -279,3 +279,56 @@ fn the_policy_retries_a_blip_then_degrades_with_capped_backoff_and_halts_only_wh
     assert_eq!(verdict(&not_replaced, 5), Verdict::Degrade(Duration::from_secs(1)));
     assert_eq!(verdict(&not_replaced, 1000), Verdict::Degrade(PROBE_MAX));
 }
+
+#[test]
+fn a_mark_waits_for_its_released_record() {
+    let (fake, entered, open) = gated();
+    let writer = Writer::new(fake, quick);
+    let ticket = writer.submit(line("seen")).unwrap();
+    let mark = ticket.mark();
+    assert!(!mark.durable());
+    let reader = {
+        let mark = mark.clone();
+        // A reader that finds nobody writing leads the commit itself.
+        std::thread::spawn(move || mark.wait())
+    };
+    entered.recv().unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(!reader.is_finished(), "the record is not durable yet");
+    open.send(()).unwrap();
+    reader.join().unwrap();
+    assert!(mark.durable());
+    ticket.wait().unwrap();
+}
+
+#[test]
+fn a_mark_does_not_wait_for_a_disk_that_is_degraded() {
+    let writer = Writer::new(
+        Fake {
+            failures: u32::MAX,
+            ..Fake::default()
+        },
+        quick,
+    );
+    let ticket = writer.submit(line("kept")).unwrap();
+    let mark = ticket.mark();
+    assert!(matches!(ticket.wait(), Err(Unsaved::NotYet(_))));
+    mark.wait();
+    assert!(!mark.durable(), "kept, written once storage recovers");
+}
+
+#[test]
+fn an_unchanged_save_marks_only_released_records() {
+    let (fake, entered, open) = gated();
+    let writer = Writer::new(fake, quick);
+    // A held record can still be refused and rolled back: nothing a reader
+    // saw depends on it.
+    let held = writer.submit_held(line("held")).unwrap();
+    let unchanged = writer.submit(None).unwrap();
+    assert!(unchanged.mark().durable());
+    let leader = std::thread::spawn(move || held.wait().is_ok());
+    entered.recv().unwrap();
+    open.send(()).unwrap();
+    assert!(leader.join().unwrap());
+    unchanged.wait().unwrap();
+}

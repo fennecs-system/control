@@ -3,13 +3,13 @@
 //! containers whose identity was verified first.
 use super::*;
 use crate::store::Store;
-use std::{collections::HashSet, net::TcpStream, time::Instant};
+use std::{collections::HashSet, time::Instant};
 
 const RECENT_STOPPED: usize = 5;
 const PROCESSES: usize = 20;
 const BUDGET: Duration = Duration::from_secs(3);
 
-pub fn http(stream: &mut TcpStream, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
+pub fn http(stream: &mut impl std::io::Write, shared: &Store, method: &str, path: &str, body: &[u8]) -> bool {
     if path == "/tools/services/live" {
         let body = if method == "GET" {
             live(shared)

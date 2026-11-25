@@ -1,9 +1,6 @@
 use crate::{State, escape};
 use control_context::{Audience, Definition, DocumentInput, Resolved};
-use std::{
-    collections::HashMap,
-    io::{self, Write},
-};
+use std::{collections::HashMap, io::Write};
 
 pub fn inputs(documents: &[crate::knowledge::Document]) -> Vec<DocumentInput> {
     documents
@@ -178,11 +175,24 @@ pub fn draft(fields: &HashMap<String, String>) -> Definition {
             .collect(),
     }
 }
+/// `apply` saved under the lock by `persist`, rolled back if it fails; the
+/// server releases the lock first (`http`).
+#[cfg(test)]
 pub(crate) fn save_with(
     state: &mut State,
-    mut draft: Definition,
-    persist: impl FnOnce(&State) -> io::Result<()>,
+    draft: Definition,
+    persist: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<Definition, String> {
+    let (draft, previous) = apply(state, draft)?;
+    if persist(state).is_err() {
+        state.lens_library = previous;
+        return Err("Could not save to disk. Your edit is below.".into());
+    }
+    Ok(draft)
+}
+/// Validates `draft` and puts it in the library. Returns it with the library
+/// it replaced, which the caller restores if its save is refused.
+fn apply(state: &mut State, mut draft: Definition) -> Result<(Definition, control_context::Library), String> {
     if state.lens_library.get(&draft.id).map_or(0, |d| d.revision) != draft.revision {
         return Err(
             "This gene changed in another tab. Your edit is below; open the latest revision before merging.".into(),
@@ -210,11 +220,7 @@ pub(crate) fn save_with(
         )?;
     }
     let previous = std::mem::replace(&mut state.lens_library, candidate);
-    if persist(state).is_err() {
-        state.lens_library = previous;
-        return Err("Could not save to disk. Your edit is below.".into());
-    }
-    Ok(draft)
+    Ok((draft, previous))
 }
 /// The current genes' ids and names, alternating, for a picker rendered
 /// later by [`choices`].
@@ -503,35 +509,15 @@ pub(crate) fn http(stream: &mut impl Write, state: &crate::Store, method: &str, 
     if path != "/dna/save" || method != "POST" {
         return false;
     }
-    /// What the locked part decided.
-    enum Staged {
-        /// Where to send the browser once durable, and the save to wait for.
-        Saving(String, crate::storage::Saving),
-        Conflict(String),
-        NotSaved(String),
-    }
+    use crate::store::{Applied, Commit};
     let draft = draft(&crate::fields(&String::from_utf8_lossy(body)));
-    let staged = state.write(|state| {
-        // Refused before the edit is applied while storage cannot take it.
-        if let crate::storage::Health::Degraded(unavailable) = crate::storage::health() {
-            return Staged::NotSaved(unavailable.to_string());
-        }
-        let mut saving = None;
-        match save_with(state, draft.clone(), |state| {
-            saving = Some(crate::storage::submit(state)?);
-            Ok(())
-        }) {
-            Ok(saved) => saving.map_or_else(
-                || Staged::NotSaved("not saved".into()),
-                |saving| {
-                    Staged::Saving(
-                        format!("Location: /dna?id={}&saved={}\r\n", saved.id, saved.revision),
-                        saving,
-                    )
-                },
-            ),
-            Err(error) => Staged::Conflict(render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false)),
-        }
+    let committed = state.commit(|state, _| match apply(state, draft.clone()) {
+        Ok((saved, previous)) => Ok(Applied {
+            answer: format!("Location: /dna?id={}&saved={}\r\n", saved.id, saved.revision),
+            effects: crate::application::effects::Effects::none(),
+            undo: move |state: &mut State| state.lens_library = previous,
+        }),
+        Err(error) => Err(render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false)),
     });
     let mut response = Vec::new();
     let not_saved = |response: &mut Vec<u8>, message: &str| {
@@ -544,21 +530,22 @@ pub(crate) fn http(stream: &mut impl Write, state: &crate::Store, method: &str, 
             control_http::Policy::Page,
         );
     };
-    match staged {
-        Ok(Staged::Saving(location, saving)) => match saving.wait() {
-            Ok(()) => {
-                let _ = control_http::respond(
-                    &mut response,
-                    "303 See Other",
-                    "text/plain",
-                    b"",
-                    &location,
-                    control_http::Policy::Page,
-                );
-            }
-            Err(error) => not_saved(&mut response, &error.to_string()),
-        },
-        Ok(Staged::Conflict(html)) => {
+    match committed {
+        Ok(Commit::Saved(location)) => {
+            let _ = control_http::respond(
+                &mut response,
+                "303 See Other",
+                "text/plain",
+                b"",
+                &location,
+                control_http::Policy::Page,
+            );
+        }
+        Ok(Commit::NotYet(_, unsaved)) => not_saved(&mut response, &unsaved.to_string()),
+        // Refused before the edit was applied, or undone before anyone saw it.
+        Ok(Commit::NotSaved(error)) => not_saved(&mut response, &error.to_string()),
+        Ok(Commit::Refused(html, seen)) => {
+            seen.wait();
             let _ = control_http::respond(
                 &mut response,
                 "409 Conflict",
@@ -568,7 +555,6 @@ pub(crate) fn http(stream: &mut impl Write, state: &crate::Store, method: &str, 
                 control_http::Policy::Page,
             );
         }
-        Ok(Staged::NotSaved(message)) => not_saved(&mut response, &message),
         Err(_) => crate::unavailable(&mut response),
     }
     let _ = stream.write_all(&response);

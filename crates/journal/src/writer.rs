@@ -19,7 +19,10 @@
 //! they staged under are refused instead, and their callers roll back.
 use std::{
     fmt, io,
-    sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -268,11 +271,17 @@ struct Queue {
     prober: Option<JoinHandle<()>>,
     halted: Option<Halted>,
     stale: bool,
+    /// The last record queued by a caller that released its lock first:
+    /// the newest change others may see before it is durable.
+    visible: u64,
     closing: bool,
 }
 
 struct Shared {
     queue: Mutex<Queue>,
+    /// `Queue::settled`, readable without the lock: a reply checks it on
+    /// every request and waits only while a record it may show is in flight.
+    durable: AtomicU64,
     /// Signalled whenever records settle, the files come free or the state
     /// changes; waiters, the prober and a closing writer wait on it.
     changed: Condvar,
@@ -315,7 +324,7 @@ impl Shared {
             let fault = match written {
                 Ok((written, log)) => {
                     failures = 0;
-                    settle(&mut queue, &mut taken, written, log);
+                    settle(self, &mut queue, &mut taken, written, log);
                     continue;
                 }
                 Err(fault) => fault,
@@ -350,7 +359,7 @@ impl Shared {
     }
 }
 /// Marks the first `written` of `taken` durable.
-fn settle(queue: &mut Queue, taken: &mut Vec<Entry>, written: usize, log: Log) {
+fn settle(shared: &Shared, queue: &mut Queue, taken: &mut Vec<Entry>, written: usize, log: Log) {
     if let Log::Broken(error) = log {
         eprintln!(
             "state.log: could not start the log after a compaction ({error}); the next save rewrites the whole snapshot"
@@ -359,6 +368,7 @@ fn settle(queue: &mut Queue, taken: &mut Vec<Entry>, written: usize, log: Log) {
     }
     if let Some(last) = taken.drain(..written).next_back() {
         queue.settled = last.seq;
+        shared.durable.store(last.seq, Ordering::Release);
     }
 }
 fn refusal(queue: &Queue, seq: u64) -> Option<io::Error> {
@@ -412,7 +422,7 @@ fn prober(shared: &Shared, mut failures: u32, mut pause: Duration) {
         let done = match written {
             Ok((written, log)) => {
                 failures = 0;
-                settle(&mut queue, &mut taken, written, log);
+                settle(shared, &mut queue, &mut taken, written, log);
                 // What is left after a compaction goes at once.
                 pause = Duration::ZERO;
                 taken.is_empty()
@@ -453,6 +463,9 @@ fn prober(shared: &Shared, mut failures: u32, mut pause: Duration) {
 #[must_use = "a save is acknowledged only after its ticket resolves"]
 pub struct Ticket {
     seq: u64,
+    /// What a reader of this change waits for: never a held record, which
+    /// may be refused (an unchanged save shares the last record's number).
+    visible: u64,
     shared: Arc<Shared>,
 }
 impl Ticket {
@@ -474,7 +487,44 @@ impl Ticket {
             }
         })
     }
+    /// What a reply that may show this change (or an earlier released one)
+    /// waits on before it is written.
+    pub fn mark(&self) -> Mark {
+        Mark {
+            seq: self.visible,
+            shared: self.shared.clone(),
+        }
+    }
 }
+
+/// A released record others may already see. A reply that showed its change
+/// waits on the mark first, so nobody is told of a change a crash could
+/// still take back. Held records need none: their callers keep their lock
+/// until the record is durable or rolled back.
+#[derive(Clone)]
+pub struct Mark {
+    seq: u64,
+    shared: Arc<Shared>,
+}
+impl Mark {
+    /// Whether the record is durable: one atomic load, no lock.
+    pub fn durable(&self) -> bool {
+        self.shared.durable.load(Ordering::Acquire) >= self.seq
+    }
+    /// Waits until the record is durable, leading a commit when nobody is
+    /// writing. While the writer is degraded (the record stays queued and is
+    /// written on recovery) or halted (Control stops) it returns at once: a
+    /// reply never waits for a disk that does not recover.
+    pub fn wait(&self) {
+        if self.durable() {
+            return;
+        }
+        let seq = self.seq;
+        self.shared
+            .wait(|queue| (queue.settled >= seq || queue.degraded.is_some() || queue.halted.is_some()).then_some(()));
+    }
+}
+
 /// A record whose caller waits under the lock it staged under, and so can
 /// roll back if the record is refused.
 #[must_use = "a save is acknowledged only after it resolves"]
@@ -520,9 +570,11 @@ impl Writer {
                     prober: None,
                     halted: None,
                     stale: false,
+                    visible: 0,
                     closing: false,
                 }),
                 changed: Condvar::new(),
+                durable: AtomicU64::new(0),
             }),
         }
     }
@@ -539,22 +591,24 @@ impl Writer {
     /// others see its change before waiting; `None` (nothing changed) waits
     /// for those earlier records only.
     pub fn submit(&self, record: Option<Record>) -> Result<Ticket, Submit> {
-        let seq = self.enqueue(record, Rollback::Impossible)?;
+        let (seq, visible) = self.enqueue(record, Rollback::Impossible)?;
         Ok(Ticket {
             seq,
+            visible,
             shared: self.shared.clone(),
         })
     }
     /// [`submit`](Self::submit) for a caller that waits under the lock it
     /// staged under and rolls back if the record is refused.
     pub fn submit_held(&self, record: Option<Record>) -> Result<Held, Submit> {
-        let seq = self.enqueue(record, Rollback::Possible)?;
+        let (seq, _) = self.enqueue(record, Rollback::Possible)?;
         Ok(Held {
             seq,
             shared: self.shared.clone(),
         })
     }
-    fn enqueue(&self, record: Option<Record>, rollback: Rollback) -> Result<u64, Submit> {
+    /// The record's sequence number and the newest released one after it.
+    fn enqueue(&self, record: Option<Record>, rollback: Rollback) -> Result<(u64, u64), Submit> {
         let mut queue = self.shared.lock();
         if let Some(halted) = &queue.halted {
             return Err(Submit::Halted(halted.clone()));
@@ -566,7 +620,7 @@ impl Writer {
             return if queue.stale {
                 Err(Submit::Stale)
             } else {
-                Ok(queue.last)
+                Ok((queue.last, queue.visible))
             };
         };
         queue.stale = match (&record, queue.stale) {
@@ -576,8 +630,11 @@ impl Writer {
         };
         queue.last += 1;
         let seq = queue.last;
+        if rollback == Rollback::Impossible {
+            queue.visible = seq;
+        }
         queue.pending.push(Entry { seq, record, rollback });
-        Ok(seq)
+        Ok((seq, queue.visible))
     }
 }
 

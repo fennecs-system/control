@@ -88,6 +88,8 @@ mod spawning;
 mod storage;
 mod store;
 use store::Store;
+#[path = "main/posts.rs"]
+mod posts;
 #[cfg(test)]
 mod test_support;
 mod texts;
@@ -707,8 +709,10 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         );
         return;
     }
+    // Routes below read state their own way: replies wait for released changes.
+    let mut gated = store::Gated::new(&mut stream, &state);
     if compaction::http(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -717,53 +721,29 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     ) {
         return;
     }
-    if providers::live_http(&mut stream, &state, method, path) {
+    if providers::live_http(&mut gated, &state, method, path) {
         return;
     }
-    if ports::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if ports::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if bots::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if bots::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if channel_settings::http(&mut stream, method, path, &data[header_end..header_end + length]) {
+    if channel_settings::http(&mut gated, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if permissions_page::http(&mut stream, method, path, &data[header_end..header_end + length]) {
+    if permissions_page::http(&mut gated, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if services::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if services::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
-    if web_access::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if web_access::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
     if mcp_http::handle(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -772,17 +752,11 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
     ) {
         return;
     }
-    if github::http(
-        &mut stream,
-        &state,
-        method,
-        path,
-        &data[header_end..header_end + length],
-    ) {
+    if github::http(&mut gated, &state, method, path, &data[header_end..header_end + length]) {
         return;
     }
     if projects::http(
-        &mut stream,
+        &mut gated,
         &state,
         method,
         path,
@@ -859,6 +833,21 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
         &state,
         method,
         path,
+        &data[header_end..header_end + length],
+    ) {
+        return;
+    }
+    if let Some(post) = posts::Post::of(method, path) {
+        posts::respond(&mut stream, &state, post, &data[header_end..header_end + length]);
+        return;
+    }
+    if session_http::messages(
+        &mut stream,
+        &state,
+        method,
+        path,
+        &header,
+        query.get("lens").map(String::as_str),
         &data[header_end..header_end + length],
     ) {
         return;
@@ -958,25 +947,15 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
             };
             let location = match path {
                 // POST /chat and /improve are handled by session_http.
-                "/task" | "/retry-run" | "/cancel-run" => state.runtime.action(path, &f),
-                "/room" | "/propose" | "/review" | "/request" | "/decide" => state.collective.action(path, &f),
+                "/cancel-run" => state.runtime.action(path, &f),
+                "/propose" | "/review" | "/request" | "/decide" => state.collective.action(path, &f),
                 "/room-claim-release" => {
                     rooms::claims::operator_action(state, &f);
                     "/?view=rooms"
                 }
-                "/spawn" => {
-                    if let Some(task) = f.get("objective").filter(|s| !s.trim().is_empty()) {
-                        state.agents.push(format!(
-                            "{} · {}",
-                            task.chars().take(300).collect::<String>(),
-                            f.get("provider").unwrap_or(&"Self-hosted".into())
-                        ));
-                    }
-                    "/?view=agents"
-                }
                 _ => "/",
             };
-            let thread_location = matches!(path, "/room" | "/room-claim-release")
+            let thread_location = (path == "/room-claim-release")
                 .then(|| f.get("channel"))
                 .flatten()
                 .filter(|room| rooms::valid(room))
@@ -1046,8 +1025,11 @@ fn handle(mut stream: TcpStream, state: Store, access: Arc<access::Access>) {
 // Routes that change state run here; routes that only read it use `Read`.
 fn state_response(stream: &mut impl Write, state: &Store, respond: impl FnOnce(&mut Vec<u8>, &mut State)) {
     let mut response = Vec::new();
-    if state.write(|state| respond(&mut response, state)).is_err() {
-        unavailable(&mut response);
+    match state.write_seen(|state| respond(&mut response, state)) {
+        // The reply may show a change another request let others see before
+        // it was durable: it goes out once that change is.
+        Ok(((), seen)) => seen.wait(),
+        Err(_) => unavailable(&mut response),
     }
     let _ = stream.write_all(&response);
 }
@@ -1101,11 +1083,13 @@ impl<Q, V: 'static> Read<Q, V> {
 #[inline(never)]
 pub(crate) fn read_response<Q, V: 'static>(stream: &mut impl Write, state: &Store, route: &Read<Q, V>, request: Q) {
     // The guard is dropped as soon as the view is copied.
-    let view = state.read(|state| (route.view)(state, request));
+    let view = state.read_seen(|state| (route.view)(state, request));
     let mut response = Vec::new();
     match view {
-        Ok(view) => {
+        Ok((view, seen)) => {
             let _ = (route.render)(view).write(&mut response);
+            // Rendering first overlaps the wait for a change the view showed.
+            seen.wait();
         }
         Err(_) => unavailable(&mut response),
     }
@@ -1408,3 +1392,6 @@ mod ui_previews;
 #[cfg(test)]
 #[path = "main/tests/page_bytes.rs"]
 mod page_bytes;
+#[cfg(test)]
+#[path = "main/tests/write_release.rs"]
+mod write_release;

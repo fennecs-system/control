@@ -1,5 +1,9 @@
 //! Nonblocking admission of a bounded batch. Source is a captured immutable
 //! baseline; a running parent never lends its writable workspace to children.
+use crate::application::{
+    effects::Effects,
+    runs::{Submission, Tx},
+};
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
 use crate::{
@@ -486,11 +490,16 @@ pub fn request(
         };
         state.runtime.runs[index].spawns.push(batch);
         let batch_index = state.runtime.runs[index].spawns.len() - 1;
-        if let Err(message) = materialize(state, index, batch_index) {
-            state.runtime.runs[index].spawns.pop();
-            return Err(message);
-        }
-        if save(state).is_err() {
+        let effects = match materialize(state, index, batch_index, crate::store::legacy_tx()) {
+            Ok(effects) => effects,
+            Err(message) => {
+                state.runtime.runs[index].spawns.pop();
+                return Err(message);
+            }
+        };
+        let saved = save(state);
+        crate::store::perform(effects.after_held_save(&saved));
+        if saved.is_err() {
             state.runtime.runs[index].spawns.pop();
             return Err("Could not persist spawned agents; no child was admitted.");
         }
@@ -510,11 +519,13 @@ pub fn request(
     result.map_err(Into::into)
 }
 
-fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<(), &'static str> {
+/// Queues the batch's pending children; returns the wake to release once
+/// the save holding them is durable.
+fn materialize(state: &mut State, index: usize, batch_index: usize, tx: Tx) -> Result<Effects, &'static str> {
     let parent_id = state.runtime.runs[index].id().as_str().to_owned();
     let batch = &state.runtime.runs[index].spawns[batch_index];
     if batch.cancelled || batch.pending() == 0 {
-        return Ok(());
+        return Ok(Effects::none());
     }
     let seed = batch.seed.clone().ok_or("Spawn batch has no frozen source seed.")?;
     let offset = batch.children.len();
@@ -540,6 +551,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         .take(capacity)
         .cloned()
         .collect::<Vec<_>>();
+    let mut effects = Effects::none();
     for objective in objectives {
         crate::scheduler::admit(&state.runtime)?;
         let child_id = chat::create(state);
@@ -559,13 +571,14 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         } else if seed.project.is_none() {
             child.workspace = seed.baseline.clone();
         }
-        state.runtime.enqueue_for(
-            objective.clone(),
-            RunKind::Spawned,
-            "agent-spawn",
-            seed.actor.clone(),
-            seed.action,
-        )?;
+        let spawned = Submission {
+            objective: objective.clone(),
+            kind: RunKind::Spawned,
+            source: "agent-spawn".into(),
+            actor: seed.actor.clone(),
+            action: seed.action,
+        };
+        effects = effects.and(state.runtime.queue(spawned, tx)?);
         let run = state.runtime.runs.last_mut().unwrap();
         run.chat_id = Some(child_id.clone());
         run.resource_grants = seed.resource_grants.clone();
@@ -592,7 +605,7 @@ fn materialize(state: &mut State, index: usize, batch_index: usize) -> Result<()
         });
         state.runtime.runs[index].spawns[batch_index].children.push(child_run);
     }
-    Ok(())
+    Ok(effects)
 }
 
 fn fenced(state: &State, index: usize, batch_index: usize, authorized: bool) -> bool {
@@ -765,11 +778,19 @@ fn transact_batch(
         cancel.then(|| runtime::RunStatusCheckpoint::capture(&state.runtime, |run| ids.contains(run.id().as_str())));
     let result = if cancel {
         cancel_owned(state, index, batch_index, &ids);
-        Ok(())
+        Ok(Effects::none())
     } else {
-        materialize(state, index, batch_index)
+        materialize(state, index, batch_index, crate::store::legacy_tx())
     };
-    if result.is_err() || save(state).is_err() {
+    let saved = match result {
+        Ok(effects) => {
+            let saved = save(state);
+            crate::store::perform(effects.after_held_save(&saved));
+            saved.map_err(|_| "Could not persist spawn backlog transition; no work dispatched.")
+        }
+        Err(message) => Err(message),
+    };
+    if let Err(message) = saved {
         state.runtime.runs.truncate(sizes.0);
         state.chats.truncate(sizes.1);
         state.runtime.runs[index].spawns[batch_index]
@@ -783,7 +804,7 @@ fn transact_batch(
             statuses.restore(&mut state.runtime);
         }
         state.runtime.notice = notice;
-        return result.and(Err("Could not persist spawn backlog transition; no work dispatched."));
+        return Err(message);
     }
     Ok(())
 }

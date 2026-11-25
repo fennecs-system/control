@@ -3,6 +3,7 @@
 //! ownership until their atomic commit boundaries have been extracted.
 pub(crate) mod approval_resume;
 pub(crate) mod conversations;
+pub(crate) mod effects;
 pub(crate) mod messages;
 pub(crate) mod runs;
 pub(crate) mod status_text;

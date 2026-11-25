@@ -130,8 +130,25 @@ queued before it); callers arriving meanwhile are written by the next leader.
 There is no writer thread. The bytes on disk are those
 the synchronous path wrote (`storage::tests::log` pins them). `storage::save`
 waits for its ticket under the mutex, so its callers see no change.
-`storage::submit` returns before durability for callers that release the
-mutex first and then wait; `POST /dna/save` is the only one so far.
+`storage::submit` returns before durability; only the store's driver
+(`Store::commit`) calls it. The driver locks, refuses at once while storage
+is unavailable, takes the clock reading (`Tx`), applies the operation, stages
+the save, unlocks, waits, and only then releases the operation's effects
+(`application::effects::Effects`, today the dispatcher wake of a queued run)
+with the writer's `Durable` proof. A save refused while the lock is still
+held is undone by the operation's own undo. Converted so far: `POST
+/dna/save`, `/task`, `/retry-run`, `/room`, `/spawn` and chat send (`POST
+/dm/{id}/messages`). Runs enter the queue only through `runs::admit` (pure,
+clock and ids from `Tx`) and `Runs::queue`, whose `Queued` must become an
+effect; legacy drivers that still save under the lock release it with
+`Effects::after_held_save`, so no wake precedes a save.
+
+A change the driver released is visible before it is durable. The store
+keeps the newest such change's mark; `read_response` and `state_response`
+take it with their view (`Store::read_seen`, `write_seen`) and write their
+reply only once it is durable or storage is unavailable (then the change
+stays queued). With nothing in flight this costs an uncontended lock and one atomic load. Other routes
+(MCP, bots, ports, services pages) are not gated yet.
 
 A failed save is an error, not a reason to stop. The policy is one function
 (`writer::retry_then_degrade`): a write that leaves the files intact
@@ -140,7 +157,7 @@ about 1.5 seconds, then the writer is degraded (`writer::Health::Degraded`,
 read with `storage::health`). While degraded, new saves are refused with
 "storage unavailable: <cause>; not saved": `storage::save` refuses before its
 archive step, but its callers have already changed memory and roll back as
-for any `NotReplaced`; `POST /dna/save` checks before applying the edit.
+for any `NotReplaced`; `Store::commit` checks before applying the change.
 Reads go on. A save whose caller still waits under the mutex is refused and
 rolled back rather than kept; a save already visible to others
 (`storage::submit`) stays queued, its caller is told it is not saved yet, and

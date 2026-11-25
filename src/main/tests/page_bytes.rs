@@ -278,6 +278,62 @@ fn dms_landing_matches_its_pinned_bytes() {
     assert_pinned(changed(&state, &pages));
 }
 
+/// The write routes that release the state lock before waiting for the disk
+/// answer with the bytes they did while waiting under it: redirects, the
+/// JSON composer reply and the rejected pages. Each request runs on the state
+/// the ones before it left.
+#[test]
+fn write_routes_match_their_pinned_bytes() {
+    let state = Store::new(fixture());
+    // The composer asks for JSON; the header rides after the cookie line.
+    const JSON: &str = "\r\nAccept: application/json";
+    let pages = [
+        ("write_task", "/task", "", "objective=Pinned+%3Ctask%3E+%26+more"),
+        ("write_task_empty", "/task", "", "objective="),
+        ("write_retry_run", "/retry-run", "", "id=fixture-run-1"),
+        ("write_retry_missing", "/retry-run", "", "id=fixture-run-9"),
+        (
+            "write_room",
+            "/room",
+            "",
+            "channel=research&message=Pinned+room+%3Cpost%3E",
+        ),
+        ("write_room_rejected", "/room", "", "channel=nowhere&message=Lost"),
+        (
+            "write_spawn",
+            "/spawn",
+            "",
+            "objective=Pinned+spawn&provider=Self-hosted",
+        ),
+        (
+            "write_chat_send",
+            "/dm/c-100-2/messages",
+            "",
+            "message=Pinned+%3Cmessage%3E",
+        ),
+        (
+            "write_chat_send_json",
+            "/dm/c-100-2/messages",
+            JSON,
+            "message=Pinned+json",
+        ),
+        (
+            "write_chat_send_rejected",
+            "/dm/c-100-2/messages",
+            "",
+            "message=%2Fsteer",
+        ),
+        (
+            "write_chat_send_rejected_json",
+            "/dm/c-100-2/messages",
+            JSON,
+            "message=%2Fsteer",
+        ),
+        ("write_chat_send_missing", "/dm/c-100-9/messages", "", "message=Nobody"),
+    ]
+    .map(|(name, target, cookie, body)| (name, "POST", target, cookie, body));
+    assert_pinned(changed(&state, &pages));
+}
 /// One DM with every kind of pending request: a folder, a design question,
 /// a port, a bot and a knowledge proposal.
 fn requests_fixture() -> State {

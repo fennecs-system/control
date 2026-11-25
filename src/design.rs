@@ -1,5 +1,9 @@
 //! Durable design decisions. Asking yields execution; answering queues a fresh
 //! attempt from an immutable checkpoint, never grants additional authority.
+use crate::application::{
+    effects::Effects,
+    runs::{Submission, Tx},
+};
 use crate::runtime::RunKind;
 use crate::runtime::RunStatus;
 use crate::store::Store;
@@ -719,6 +723,8 @@ fn outcome(question: &Question) -> Option<String> {
         )),
     }
 }
+/// `answer_queued` for tests, which run no dispatcher to wake.
+#[cfg(test)]
 pub fn answer(
     state: &mut State,
     chat_id: &str,
@@ -726,6 +732,18 @@ pub fn answer(
     text: &str,
     source: &str,
 ) -> Result<(), &'static str> {
+    answer_queued(state, chat_id, question_id, text, source, Tx::at(crate::ids::stamp())).map(|_| ())
+}
+/// Answers a pending question by queueing its continuation; returns the
+/// wake to release once the save holding it is durable.
+pub(crate) fn answer_queued(
+    state: &mut State,
+    chat_id: &str,
+    question_id: Option<&str>,
+    text: &str,
+    source: &str,
+    tx: Tx,
+) -> Result<Effects, &'static str> {
     let target = question_id
         .map(|question| answer_target(state, chat_id, question).map(str::to_owned))
         .transpose()?;
@@ -771,7 +789,7 @@ pub fn answer(
             reply: format!("Decision recorded for {}.", run.question.as_ref().unwrap().id),
         });
         session.revision = session.revision.saturating_add(1);
-        return Ok(());
+        return Ok(Effects::none());
     }
     let attempt = run
         .attempts
@@ -833,14 +851,21 @@ pub fn answer(
     // Replacing the waiting run with its continuation keeps admission bounded.
     state.runtime.runs[index].status = RunStatus::Continued;
     let notice = state.runtime.notice.clone();
-    if let Err(error) = state
-        .runtime
-        .enqueue_for(answer.clone(), RunKind::DesignAnswer, source, actor, action)
-    {
-        state.runtime.runs[index].status = RunStatus::Waiting;
-        state.runtime.notice = notice;
-        return Err(error);
-    }
+    let submission = Submission {
+        objective: answer.clone(),
+        kind: RunKind::DesignAnswer,
+        source: source.into(),
+        actor,
+        action,
+    };
+    let queued = match state.runtime.queue(submission, tx) {
+        Ok(queued) => queued,
+        Err(refusal) => {
+            state.runtime.runs[index].status = RunStatus::Waiting;
+            state.runtime.notice = notice;
+            return Err(refusal.message());
+        }
+    };
     let next = state.runtime.runs.last_mut().unwrap();
     next.target = target;
     next.resource_grants = resources;
@@ -864,7 +889,7 @@ pub fn answer(
         reply: String::new(),
     });
     session.revision = session.revision.saturating_add(1);
-    Ok(())
+    Ok(queued.into())
 }
 
 pub fn discord_chat(state: &State, incoming: &crate::discord::Incoming) -> String {
