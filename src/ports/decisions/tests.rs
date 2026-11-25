@@ -122,7 +122,7 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
     continuation.kind = RunKind::DesignAnswer;
     continuation.persona = Some(crate::delegation::lineage(&state.runtime.runs[0]));
     state.runtime.runs[0].status = RunStatus::Continued;
-    state.runtime.runs[0].question = Some(crate::design::Question {
+    state.runtime.runs[0].question = Some(Box::new(crate::design::Question {
         id: "q-route".into(),
         generation: "attempt-a".into(),
         nonce: "route".into(),
@@ -136,7 +136,7 @@ fn request_from_answered_design_continuation_wakes_the_original_conversation() {
             asked_at: None,
         },
         continuation: Some(continuation.id().as_str().to_owned()),
-    });
+    }));
     state.ports[0].origin_run = continuation.id().as_str().to_owned();
     state.runtime.runs.push(continuation);
     advance(&mut state, |_| Ok(())).unwrap();

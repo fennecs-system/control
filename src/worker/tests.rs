@@ -2134,7 +2134,7 @@ fn a_cut_off_turn_leaves_a_host_checkpoint_the_next_turn_resumes_from() {
     attempt.activity.clear();
     attempt.termination = Some(Termination::TimedOut);
     attempt.elapsed_ms = 1_200_000;
-    attempt.recovery = Some(crate::recovery::Candidate {
+    attempt.recovery = Some(Box::new(crate::recovery::Candidate {
         generation: generation.clone(),
         base: None,
         project: None,
@@ -2143,7 +2143,7 @@ fn a_cut_off_turn_leaves_a_host_checkpoint_the_next_turn_resumes_from() {
         captured: true,
         error: None,
         draft: None,
-    });
+    }));
     let timed_out = Err((control_agent::Status::Failed, "Timed out after 1200 s".into()));
     // A failed save leaves no note behind: it is part of the finish transaction.
     assert!(

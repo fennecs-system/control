@@ -71,7 +71,7 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
             run.chat_id = (draw() % 4 != 0).then(|| format!("chat-{}", draw() % 4));
             run.queue_order = draw() % 8;
             if draw() % 3 == 0 {
-                run.question = Some(crate::design::Question {
+                run.question = Some(Box::new(crate::design::Question {
                     id: "q".into(),
                     generation: "g".into(),
                     nonce: "n".into(),
@@ -89,10 +89,10 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
                         crate::design::Status::Pending { asked_at: None }
                     },
                     continuation: None,
-                });
+                }));
             }
             if draw() % 5 == 0 {
-                run.delegation = Some(crate::delegation::Delegation {
+                run.delegation = Some(Box::new(crate::delegation::Delegation {
                     input: crate::delegation::Input {
                         model: None,
                         objective: "Review".into(),
@@ -107,7 +107,7 @@ fn adapter_matches_original_scheduler_over_mixed_saved_states() {
                     },
                     child: None,
                     continuation: None,
-                });
+                }));
             }
             // Optimized adapter queries must agree with the typed defaults.
             use control_core::scheduling::RunView;
@@ -173,7 +173,7 @@ fn scheduling_profile() {
         if workload == "waiting" {
             for run in runtime.runs.iter_mut().take(8) {
                 run.status = RunStatus::Waiting;
-                run.question = Some(crate::design::Question {
+                run.question = Some(Box::new(crate::design::Question {
                     id: "q".into(),
                     nonce: "n".into(),
                     generation: "g".into(),
@@ -184,7 +184,7 @@ fn scheduling_profile() {
                     },
                     status: crate::design::Status::Pending { asked_at: None },
                     continuation: None,
-                });
+                }));
             }
         }
         if workload == "admission-open" {

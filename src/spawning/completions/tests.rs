@@ -130,7 +130,7 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
     next.status = RunStatus::Running;
     let next_id = next.id().as_str().to_owned();
     state.runtime.runs[1].status = RunStatus::Continued;
-    state.runtime.runs[1].question = Some(crate::design::Question {
+    state.runtime.runs[1].question = Some(Box::new(crate::design::Question {
         id: "fixture-question".into(),
         generation: "fixture-generation".into(),
         nonce: "fixture-nonce".into(),
@@ -144,7 +144,7 @@ fn child_continuations_finish_before_notification_and_cannot_cross_scope() {
             asked_at: None,
         },
         continuation: Some(next_id),
-    });
+    }));
     reconcile(&mut state, |_| panic!("Active continuation must not notify")).unwrap();
     state.runtime.runs[2].status = RunStatus::Failed;
     state.runtime.runs[2].actor = identity::Actor::Unknown;

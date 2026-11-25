@@ -19,7 +19,7 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
     runtime.runs[0].status = RunStatus::Completed;
     assert_eq!(next(&runtime), Some(1));
     runtime.runs[0].status = RunStatus::Waiting;
-    runtime.runs[0].question = Some(crate::design::Question {
+    runtime.runs[0].question = Some(Box::new(crate::design::Question {
         id: "q".into(),
         nonce: "n".into(),
         generation: "g".into(),
@@ -30,14 +30,14 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
         },
         status: crate::design::Status::Pending { asked_at: None },
         continuation: None,
-    });
+    }));
     assert_eq!(
         next(&runtime),
         Some(3),
         "Paused questions reserve their chat, not a model slot"
     );
     runtime.runs[0].question = None;
-    runtime.runs[0].delegation = Some(crate::delegation::Delegation {
+    runtime.runs[0].delegation = Some(Box::new(crate::delegation::Delegation {
         input: crate::delegation::Input {
             model: None,
             objective: "Inspect".into(),
@@ -52,7 +52,7 @@ fn slots_overlap_chats_but_never_reorder_or_overlap_a_conversation() {
         },
         child: Some("b".into()),
         continuation: None,
-    });
+    }));
     assert_eq!(
         next(&runtime),
         Some(3),

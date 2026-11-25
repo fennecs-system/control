@@ -80,13 +80,15 @@ pub struct Attempt {
     pub local_timeout_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub termination: Option<crate::attempt_control::Termination>,
+    // `recovery` and `github_source` are boxed: rare and large, and every
+    // finished run keeps its attempts in memory.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub recovery: Option<crate::recovery::Candidate>,
+    pub recovery: Option<Box<crate::recovery::Candidate>>,
     #[serde(skip_serializing_if = "crate::history::Spilled::is_unset")]
     pub turn_mailbox: crate::history::Spilled<Option<Box<control_context::turn_mailbox::Mailbox>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_trace: Option<Box<crate::turn_context::TraceRef>>,
-    pub github_source: Option<crate::github::Source>,
+    pub github_source: Option<Box<crate::github::Source>>,
     pub command_jobs: Vec<crate::command_jobs::Job>,
     pub review_only: bool,
     pub project: Option<String>,

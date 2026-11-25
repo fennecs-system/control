@@ -115,7 +115,7 @@ pub fn capture(isolation: &dyn control_isolation::Isolation, bridge: Option<(&St
         Ok(()) => candidate.captured = true,
         Err(error) => candidate.error = Some(error.to_string()),
     }
-    attempt.recovery = Some(candidate);
+    attempt.recovery = Some(Box::new(candidate));
 }
 
 /// Restart reconciliation supplies stopped writers before new admissions. No
@@ -183,7 +183,7 @@ fn candidates<'a>(state: &'a State, run: &crate::runtime::Run) -> Vec<&'a Candid
         .iter()
         .filter(|r| r.chat_id == run.chat_id && r.actor == run.actor && r.action == run.action)
         .flat_map(|r| &r.attempts)
-        .filter_map(|a| a.recovery.as_ref())
+        .filter_map(|a| a.recovery.as_deref())
         .collect()
 }
 pub fn prompt(state: &State, run: &crate::runtime::Run) -> String {

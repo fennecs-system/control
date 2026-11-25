@@ -57,7 +57,7 @@ pub use crate::application::runs::{Run, RunStatus};
 // Pending transitions change status/result and possibly a design answer. Keep
 // rollback bounded, without cloning attempts or completed conversation history.
 pub(crate) struct RunStatusCheckpoint {
-    runs: Vec<(String, RunStatus, String, Option<crate::design::Question>)>,
+    runs: Vec<(String, RunStatus, String, Option<Box<crate::design::Question>>)>,
     notice: String,
 }
 impl RunStatusCheckpoint {

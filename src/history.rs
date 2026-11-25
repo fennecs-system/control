@@ -398,7 +398,7 @@ struct Text<'a> {
     objective: Cow<'a, str>,
     result: Cow<'a, str>,
     context: Cow<'a, Option<control_context::Resolved>>,
-    continuation: Cow<'a, Option<crate::design::Continuation>>,
+    continuation: Cow<'a, Option<Box<crate::design::Continuation>>>,
 }
 /// Fills journal-backed run text back in after loading. Only in-memory text
 /// changes, never the saved form, so archived runs stay archived.
@@ -462,7 +462,7 @@ pub(crate) fn archive_run(run: &mut crate::runtime::Run) -> io::Result<Archived>
         objective: &'a str,
         result: &'a str,
         context: &'a Option<control_context::Resolved>,
-        continuation: &'a Option<crate::design::Continuation>,
+        continuation: &'a Option<Box<crate::design::Continuation>>,
         turn_mailbox: &'a Option<Box<control_context::turn_mailbox::Mailbox>>,
     }
     let index = run.attempts.len().saturating_sub(1);

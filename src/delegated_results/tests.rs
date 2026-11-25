@@ -64,7 +64,7 @@ pub(crate) fn fixture() -> State {
         status: crate::usage::AttemptStatus::Waiting,
         ..Attempt::default()
     });
-    parent.delegation = Some(Delegation {
+    parent.delegation = Some(Box::new(Delegation {
         input: Task {
             model: None,
             objective: "Implement child task".into(),
@@ -79,7 +79,7 @@ pub(crate) fn fixture() -> State {
         },
         child: Some("child".into()),
         continuation: Some("resumed".into()),
-    });
+    }));
     let mut child = parent.clone();
     child = child.with_id("child");
     child.kind = RunKind::Delegated;

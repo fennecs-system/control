@@ -141,7 +141,7 @@ fn fixture(conditions: &[Condition]) -> Fixture {
             }
             Pausing => {
                 let run = &mut state.runtime.runs[0];
-                run.delegation = Some(crate::delegation::Delegation {
+                run.delegation = Some(Box::new(crate::delegation::Delegation {
                     input: crate::delegation::Input {
                         model: None,
                         objective: "Inspect".into(),
@@ -156,7 +156,7 @@ fn fixture(conditions: &[Condition]) -> Fixture {
                     },
                     child: None,
                     continuation: None,
-                });
+                }));
             }
             DesignPending | DesignEarlier => {
                 crate::design::tests::ask_without_io(&mut state, &id, "nonce-1", crate::design::tests::input())

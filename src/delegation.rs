@@ -381,14 +381,14 @@ pub(crate) fn request_with_save(
     budget(state, run, input.role)?;
     let target = crate::providers::selection::resolve(&state.runtime, &run.target, input.model.as_deref())?;
     let previous = state.runtime.runs[index].delegation.clone();
-    state.runtime.runs[index].delegation = Some(Delegation {
+    state.runtime.runs[index].delegation = Some(Box::new(Delegation {
         input,
         nonce: nonce.into(),
         generation,
         target,
         child: None,
         continuation: None,
-    });
+    }));
     if save(state).is_err() {
         state.runtime.runs[index].delegation = previous;
         return Err("Could not persist delegation; no child was admitted.".into());
@@ -513,7 +513,7 @@ fn advance(state: &mut State, index: usize, tx: Tx) -> Result<Effects, &'static 
         next.context = parent.context.clone();
         next.lenses = parent.lenses.clone();
         next.persona = Some(lineage(&parent));
-        *next.continuation = Some(crate::design::Continuation {
+        *next.continuation = Some(Box::new(crate::design::Continuation {
             checkpoint,
             published_parent: baseline,
             project_base: attempt.project_base.clone(),
@@ -527,7 +527,7 @@ fn advance(state: &mut State, index: usize, tx: Tx) -> Result<Effects, &'static 
                 options: Vec::new(),
                 recommended: None,
             },
-        });
+        }));
         let next_id = next.id().as_str().to_owned();
         state.runtime.runs[index].delegation.as_mut().unwrap().continuation = Some(next_id.clone());
         *state.runtime.runs[index].result = format!(
