@@ -620,6 +620,22 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
     let Some(chat) = state.chats.iter().find(|chat| chat.id == chat_id) else {
         return vec![];
     };
+    // Most chats wait on no question; only then is it worth working out
+    // which chats' questions this one sees (a scan of the runs per turn).
+    let waiting: Vec<&runtime::Run> = state
+        .runtime
+        .runs
+        .iter()
+        .filter(|run| {
+            run.status == RunStatus::Waiting
+                && run.question.as_ref().is_some_and(Question::pending)
+                && run.actor == chat.actor
+        })
+        .collect();
+    if waiting.is_empty() {
+        return waiting;
+    }
+    let lineage = crate::chat::Lineage::of(&state.chats);
     let mut visible = std::collections::HashSet::new();
     for run in state
         .runtime
@@ -632,19 +648,11 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
             visible.extend(children);
         }
     }
-    state
-        .runtime
-        .runs
-        .iter()
+    waiting
+        .into_iter()
         .filter(|run| {
-            (visible.contains(run.id().as_str())
-                || run
-                    .chat_id
-                    .as_deref()
-                    .is_some_and(|chat| crate::chat::Lineage::of(&state.chats).within(chat, chat_id)))
-                && run.actor == chat.actor
-                && run.status == RunStatus::Waiting
-                && run.question.as_ref().is_some_and(Question::pending)
+            visible.contains(run.id().as_str())
+                || run.chat_id.as_deref().is_some_and(|chat| lineage.within(chat, chat_id))
         })
         .collect()
 }
