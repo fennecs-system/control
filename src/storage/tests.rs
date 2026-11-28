@@ -344,8 +344,10 @@ fn profile_durable_save_stages() {
                     let stage = (round + offset) % 4;
                     let start = Instant::now();
                     match stage {
+                        // What a save serializes: the tree of parts (saved
+                        // just before, so what an unchanged state costs).
                         0 => {
-                            black_box(crate::history::persisting(|| serde_json::to_vec(black_box(&state))).unwrap());
+                            black_box(super::encode(black_box(&state), &archived(&directory)).unwrap());
                         }
                         1 => {
                             use std::io::{Seek, SeekFrom};

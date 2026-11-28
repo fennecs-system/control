@@ -1,7 +1,10 @@
 //! Borrowed one-shot room callback admission. The host supplies authorization
 //! and retains exclusive ownership while interpreting the resulting plans.
 //! A minimal borrowed-view example lives in room_wakes/tests.rs.
-use super::{conversations::Session, runs::Run};
+use super::{
+    conversations::Session,
+    runs::{Run, Runs},
+};
 use crate::delegation::DelegationState;
 use crate::runtime::RunStatus;
 use crate::{
@@ -15,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 const WINDOW: usize = 512;
 
 pub(crate) struct View<'a> {
-    pub runs: &'a [Run],
+    pub runs: &'a Runs,
     pub chats: &'a [Part<Session>],
     pub posts: &'a [Part<Post>],
 }
@@ -40,7 +43,7 @@ pub(crate) fn normal_task(run: &Run) -> bool {
 
 /// Follow only durable continuation receipts, never shared-root guesses or
 /// independent spawned children. Every edge retains the parent's scope.
-pub(crate) fn continuation_leaf(history: &[Run], origin: usize, runs: &HashMap<&str, usize>) -> Option<usize> {
+pub(crate) fn continuation_leaf(history: &Runs, origin: usize) -> Option<usize> {
     if history[origin].status != RunStatus::Continued {
         return Some(origin);
     }
@@ -80,7 +83,7 @@ pub(crate) fn continuation_leaf(history: &[Run], origin: usize, runs: &HashMap<&
             (Some(edge), None) | (None, Some(edge)) => edge,
             _ => return None,
         };
-        let next_index = *runs.get(id)?;
+        let next_index = history.position(id)?;
         let next = &history[next_index];
         let lineage = crate::delegation::lineage(run);
         if next.kind!=kind || next.continuation.is_none() || next.chat_id!=run.chat_id
@@ -110,17 +113,12 @@ pub(crate) enum Decision {
 /// Plans are valid only for this exclusively borrowed snapshot. Do not retain
 /// their positional indices across mutation or suspension. Authority, queue
 /// capacity, durable writes and dispatcher effects remain the driver's job.
+/// Runs are found through the ledger's id index: a pass hashes no run ids.
 pub(crate) fn plan<'a>(
     view: View<'_>,
     watches: impl Iterator<Item = (usize, WakeRef<'a>)>,
     mut authorized: impl FnMut(&Actor, Action) -> bool,
 ) -> Vec<(usize, Decision)> {
-    let runs: HashMap<_, _> = view
-        .runs
-        .iter()
-        .enumerate()
-        .map(|(i, run)| (run.id().as_str(), i))
-        .collect();
     let busy: HashSet<_> = view
         .runs
         .iter()
@@ -140,7 +138,7 @@ pub(crate) fn plan<'a>(
     watches
         .map(|(i, watch)| {
             let decision = (|| {
-                let Some(&origin_index) = runs.get(watch.origin) else {
+                let Some(origin_index) = view.runs.position(watch.origin) else {
                     return Decision::Disarm;
                 };
                 let origin = &view.runs[origin_index];
@@ -157,7 +155,7 @@ pub(crate) fn plan<'a>(
                 {
                     return Decision::Disarm;
                 }
-                let Some(leaf_index) = continuation_leaf(view.runs, origin_index, &runs) else {
+                let Some(leaf_index) = continuation_leaf(view.runs, origin_index) else {
                     return Decision::Disarm;
                 };
                 let leaf = &view.runs[leaf_index];

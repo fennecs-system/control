@@ -322,10 +322,22 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Part<T> {
     }
 }
 
+/// What a part does when it is serialized.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Serializes its value: every serialization but a save's split.
+    Plain,
+    /// [`split`] asks a member whether it is a part; the first part to
+    /// serialize answers with its tree, so nothing nested answers in its place.
+    Asking,
+    /// [`split`] encodes a value whole on the chance it holds no part; the
+    /// first part met stops that encoding.
+    Trial,
+    /// A trial met a part.
+    Stopped,
+}
 thread_local! {
-    /// Set while [`split`] asks a member whether it is a part; the first
-    /// part to serialize takes it, so nothing nested answers in its place.
-    static ASKING: Cell<bool> = const { Cell::new(false) };
+    static MODE: Cell<Mode> = const { Cell::new(Mode::Plain) };
     static OFFERED: RefCell<Option<Tree>> = const { RefCell::new(None) };
 }
 
@@ -336,8 +348,13 @@ pub fn offer<S: Serializer>(
     serializer: S,
     tree: impl FnOnce() -> serde_json::Result<Tree>,
 ) -> Result<Result<S::Ok, S::Error>, S> {
-    if !ASKING.with(|asking| asking.replace(false)) {
-        return Err(serializer);
+    match MODE.with(|mode| mode.get()) {
+        Mode::Plain => return Err(serializer),
+        Mode::Trial | Mode::Stopped => {
+            MODE.with(|mode| mode.set(Mode::Stopped));
+            return Ok(Err(ser::Error::custom("a part")));
+        }
+        Mode::Asking => MODE.with(|mode| mode.set(Mode::Plain)),
     }
     Ok(match tree() {
         Ok(tree) => {
@@ -363,18 +380,33 @@ pub fn split<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Tree> {
     if let Some(tree) = offered(value) {
         return Ok(tree);
     }
+    if let Some(encoded) = whole(value)? {
+        #[cfg(debug_assertions)]
+        fresh::record(encoded.bytes().len());
+        return Ok(Tree::leaf(encoded));
+    }
     match value.serialize(Splitter) {
         Ok(Some(tree)) => Ok(tree),
         _ => fresh(value).map(Tree::leaf),
     }
 }
 
+/// `value` encoded in one pass when it holds no part (most values: a run, a
+/// chat, a post), so encoding it cold costs one serialization. `None` when
+/// a part stopped it, early: parts sit near the top of what holds them.
+fn whole<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Option<Encoded>> {
+    let outer = MODE.with(|mode| mode.replace(Mode::Trial));
+    let encoded = encode(value);
+    let stopped = MODE.with(|mode| mode.replace(outer)) == Mode::Stopped;
+    if stopped { Ok(None) } else { encoded.map(Some) }
+}
+
 /// The tree `value` offers, if it is a part.
 fn offered<T: Serialize + ?Sized>(value: &T) -> Option<Tree> {
     OFFERED.with(|offered| offered.borrow_mut().take());
-    ASKING.with(|asking| asking.set(true));
+    MODE.with(|mode| mode.set(Mode::Asking));
     let answered = value.serialize(Asker);
-    ASKING.with(|asking| asking.set(false));
+    MODE.with(|mode| mode.set(Mode::Plain));
     let tree = OFFERED.with(|offered| offered.borrow_mut().take());
     answered.ok().and(tree)
 }
