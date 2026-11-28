@@ -1,18 +1,24 @@
 use crate::escape;
+use control_journal::snapshot::Part;
 use std::collections::HashMap;
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Collective {
-    pub posts: Vec<crate::rooms::Post>,
-    pub room_watches: Vec<crate::rooms::Watch>,
-    pub(crate) proposals: Vec<Knowledge>,
-    requests: Vec<Request>,
-    pub notice: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) claims: Vec<crate::rooms::claims::Claim>,
+    /// Each field is a part (but the one counter), and each post: a room
+    /// post re-encodes only itself.
+    pub posts: Vec<Part<crate::rooms::Post>>,
+    pub room_watches: Part<Vec<crate::rooms::Watch>>,
+    pub(crate) proposals: Part<Vec<Knowledge>>,
+    requests: Part<Vec<Request>>,
+    pub notice: Part<String>,
+    #[serde(default, skip_serializing_if = "is_empty")]
+    pub(crate) claims: Part<Vec<crate::rooms::claims::Claim>>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) claim_seq: u64,
+}
+fn is_empty<T>(items: &Part<Vec<T>>) -> bool {
+    items.is_empty()
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
@@ -93,20 +99,27 @@ fn heading(kicker: &str, title: &str, description: &str) -> String {
 }
 impl Collective {
     pub fn action(&mut self, path: &str, f: &HashMap<String, String>) -> &'static str {
-        self.notice.clear();
+        // Only through a mutable borrow when there is a notice to clear: any
+        // borrow forgets the notice's saved encoding.
+        if !self.notice.is_empty() {
+            self.notice.clear();
+        }
         match path {
             "/room" => {
                 let text = value(f, "message");
                 let channel = value(f, "channel");
                 if !text.is_empty() && text.chars().count() <= 2000 && crate::rooms::valid(&channel) {
-                    self.posts.push(crate::rooms::Post {
-                        room: channel,
-                        text,
-                        chat: None,
-                        run: None,
-                        key: String::new(),
-                        delivery: crate::rooms::Delivery::Notify,
-                    });
+                    self.posts.push(
+                        crate::rooms::Post {
+                            room: channel,
+                            text,
+                            chat: None,
+                            run: None,
+                            key: String::new(),
+                            delivery: crate::rooms::Delivery::Notify,
+                        }
+                        .into(),
+                    );
                 }
                 match value(f, "channel").as_str() {
                     "research" => "/?view=rooms&channel=research",
@@ -129,7 +142,7 @@ impl Collective {
                     || validity.chars().count() > 300
                     || self.proposals.len() >= crate::knowledge_tools::MAX_PROPOSALS
                 {
-                    self.notice =
+                    *self.notice =
                         "A proposal needs a claim of at most 280 characters, evidence, scope, and a recheck condition."
                             .into();
                 } else if self
@@ -137,7 +150,7 @@ impl Collective {
                     .iter()
                     .any(|p| p.status.is_standing() && p.claim.to_lowercase() == claim.to_lowercase())
                 {
-                    self.notice = "That claim already exists. Review the existing record instead.".into();
+                    *self.notice = "That claim already exists. Review the existing record instead.".into();
                 } else {
                     self.proposals.push(Knowledge {
                         claim,
@@ -227,12 +240,12 @@ impl Collective {
         ))
     }
     pub(crate) fn access(&self) -> Page {
-        self.with(Kind::Access(self.requests.clone()))
+        self.with(Kind::Access((*self.requests).clone()))
     }
     fn with(&self, kind: Kind) -> Page {
         Page {
             kind,
-            notice: self.notice.clone(),
+            notice: (*self.notice).clone(),
         }
     }
 }

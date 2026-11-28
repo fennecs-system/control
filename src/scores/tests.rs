@@ -115,7 +115,7 @@ fn milestones_count_completed_turns_and_done_claims_across_the_team() {
         run("r4", &outsider, "completed"),
     ]
     .into();
-    state.collective.claims = vec![
+    *state.collective.claims = vec![
         claim(&member, "done"),
         claim(&root, "working"),
         claim(&outsider, "done"),
@@ -132,7 +132,7 @@ fn milestones_count_completed_turns_and_done_claims_across_the_team() {
 #[test]
 fn probes_sample_on_schedule_and_on_milestones_and_record_failures() {
     let (mut state, root, member) = team();
-    state.scores = vec![probe(&root, "score")];
+    *state.scores = vec![probe(&root, "score")];
     assert!(due(&state, 1_100).is_empty(), "not due and no milestone");
     state.runtime.runs.push(run("r1", &member, "completed"));
     assert!(due(&state, 1_010).is_empty(), "milestones are rate limited");
@@ -197,7 +197,7 @@ fn the_operator_reads_every_probe_in_the_team_and_the_chat_view_shows_the_latest
     );
     let mut worker = probe(&member, "<items>");
     worker.error = "The probe exited with status 1 <b>".into();
-    state.scores = vec![lead, worker, probe(&outsider, "elsewhere")];
+    *state.scores = vec![lead, worker, probe(&outsider, "elsewhere")];
     let read_root = read(&state, &member).unwrap();
     assert_eq!(read_root["root"], root.as_str());
     let names = read_root["probes"]
@@ -301,7 +301,7 @@ fn declarations_are_validated_before_any_service_runs() {
 #[test]
 fn a_probe_samples_only_the_generation_it_was_declared_with() {
     let (mut state, root, _) = team();
-    state.scores = vec![probe(&root, "score")];
+    *state.scores = vec![probe(&root, "score")];
     let service = |generation: u64| {
         serde_json::from_value::<crate::services::Service>(json!({
         "resource":{"id":"svc-gone","owner":{"node":"node-a","chat":root},"generation":generation,

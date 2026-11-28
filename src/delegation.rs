@@ -333,7 +333,7 @@ pub(crate) fn request_with_save(
     id: &str,
     nonce: &str,
     input: Input,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Value, std::borrow::Cow<'static, str>> {
     if input.objective.trim().is_empty()
         || input.objective.chars().count() > 2000
@@ -400,7 +400,7 @@ pub(crate) fn request_with_save(
 
 /// One transaction per pass. Re-running after a crash cannot create another
 /// child/continuation because their IDs are saved with the state transition.
-pub fn reconcile(state: &mut State, save: impl FnOnce(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+pub fn reconcile(state: &mut State, save: impl FnOnce(&mut State) -> std::io::Result<()>) -> Result<(), &'static str> {
     let Some(index) = state.runtime.runs.iter().position(|r| {
         r.status == RunStatus::Waiting
             && r.delegation.as_ref().is_some_and(|d| match d.state() {

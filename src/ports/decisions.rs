@@ -77,7 +77,7 @@ fn target<'a>(state: &'a State, port: &Port) -> Option<&'a crate::runtime::Run> 
     Some(root)
 }
 
-pub(super) fn advance(state: &mut State, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<()> {
+pub(super) fn advance(state: &mut State, save: impl FnOnce(&mut State) -> io::Result<()>) -> io::Result<()> {
     advance_with_wake(state, save, crate::worker::wake)
 }
 
@@ -107,7 +107,7 @@ fn obsolete(state: &State, port: &Port, time: u64) -> bool {
 
 fn advance_with_wake(
     state: &mut State,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
     wake: impl FnOnce(),
 ) -> io::Result<()> {
     // Retire undeliverable decisions now instead of keeping them for a later

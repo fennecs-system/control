@@ -1,4 +1,5 @@
 //! Global navigation stays independent of the selected chat context.
+use control_journal::snapshot::Part;
 const PRIMARY: &[(&str, &str, &str, &str)] = &[
     ("session", "/dms", "⌁", "DMs"),
     ("agents", "/?view=agents", "⌁", "Bots"),
@@ -105,7 +106,7 @@ struct Row {
     current: bool,
 }
 impl Picker {
-    pub fn of(chats: &[crate::chat::Session], active: &str) -> Self {
+    pub fn of(chats: &[Part<crate::chat::Session>], active: &str) -> Self {
         use std::collections::{HashMap, HashSet};
         let entries = crate::conversations::ordered(chats);
         let callsigns = crate::callsigns::all(chats);

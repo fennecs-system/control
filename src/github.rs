@@ -7,6 +7,7 @@ use crate::{
     identity::{Action, Actor},
     usage::Attempt,
 };
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -358,7 +359,7 @@ fn validate_input(input: &Input) -> io::Result<()> {
     Ok(())
 }
 fn selected(
-    chats: &[crate::chat::Session],
+    chats: &[Part<crate::chat::Session>],
     runs: &crate::runtime::Runs,
     chat: &str,
     input: &Input,
@@ -783,7 +784,7 @@ pub fn open(shared: &Store, chat: &str, input: Input) -> io::Result<Value> {
                 body: input.body,
             };
             state.github_publications.push(publication.clone());
-            if crate::storage::save(&state).is_err() {
+            if crate::storage::save(&mut state).is_err() {
                 state.github_publications.pop();
                 return Err(io::Error::other("Could not save publication intent"));
             }

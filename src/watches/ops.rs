@@ -121,7 +121,7 @@ fn retire(watches: &mut Vec<Watch>, chat: &str, protected: impl Fn(&str) -> bool
     retired
 }
 
-fn arm_saved(state: &mut State, chat: &str, save: impl FnOnce(&State) -> io::Result<()>) -> io::Result<bool> {
+fn arm_saved(state: &mut State, chat: &str, save: impl FnOnce(&mut State) -> io::Result<()>) -> io::Result<bool> {
     let bots = state.bots.clone();
     let notice = state.runtime.notice.clone();
     let pending = Pending::capture(&state.watches, chat);
@@ -274,7 +274,7 @@ pub(super) fn execute(shared: &Store, attempt: &AttemptRef<'_>, call: WatchCall)
             } else {
                 Ok(false)
             }
-            .and_then(|armed| crate::storage::save(&state).map(|()| armed));
+            .and_then(|armed| crate::storage::save(&mut state).map(|()| armed));
             let armed = match saved {
                 Ok(armed) => armed,
                 Err(error) => {

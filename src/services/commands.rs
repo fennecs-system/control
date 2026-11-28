@@ -690,7 +690,7 @@ fn admit(
     nonce: &str,
     node: &NodeId,
     input: Input,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let digest = hash(&serde_json::to_vec(&(&input.command, input.timeout_seconds)).map_err(fail)?);
     let work = Work {
@@ -750,7 +750,7 @@ pub(super) fn admit_work(
     nonce: &str,
     node: &NodeId,
     work: Work,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     valid_nonce(nonce)?;
     if !(1..=1800).contains(&work.timeout_seconds) {
@@ -1400,7 +1400,7 @@ fn execute(shared: Store, service: Service, execution: Execution) {
         true,
     );
 }
-pub(super) fn recover(shared: &Store, save: impl Fn(&State) -> io::Result<()>) -> io::Result<()> {
+pub(super) fn recover(shared: &Store, save: impl Fn(&mut State) -> io::Result<()>) -> io::Result<()> {
     shared.write(|state| -> io::Result<()> {
         for index in 0..state.services.len() {
             if !state.services[index]

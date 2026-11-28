@@ -7,6 +7,7 @@
 //! stable and old state needs no migration. Renames are stored on the chat and
 //! do not move other chats' callsigns.
 use crate::chat::Session;
+use control_journal::snapshot::Part;
 use std::borrow::Cow;
 
 /// The NATO phonetic alphabet, then colours.
@@ -97,7 +98,7 @@ fn assign<'a>(ids: impl Iterator<Item = &'a str>, words: &[&str], recent: usize,
 }
 
 /// Every chat's callsign, indexed like `chats`.
-pub fn all(chats: &[Session]) -> Vec<Callsign> {
+pub fn all(chats: &[Part<Session>]) -> Vec<Callsign> {
     let mut all = Vec::with_capacity(chats.len());
     assign(chats.iter().map(|chat| chat.id.as_str()), WORDS, RECENT, |callsign| {
         all.push(callsign)
@@ -111,7 +112,7 @@ pub fn label(chat: &Session, callsign: Callsign) -> Cow<'_, str> {
 }
 
 /// The shown name of chat `id`; derives only the callsigns before it.
-pub fn name<'a>(chats: &'a [Session], id: &str) -> Option<Cow<'a, str>> {
+pub fn name<'a>(chats: &'a [Part<Session>], id: &str) -> Option<Cow<'a, str>> {
     let index = chats.iter().position(|chat| chat.id == id)?;
     if let Some(name) = chats[index].name.as_deref() {
         return Some(Cow::Borrowed(name));
@@ -127,7 +128,7 @@ pub fn name<'a>(chats: &'a [Session], id: &str) -> Option<Cow<'a, str>> {
 }
 
 /// [`name`], or the ID when the chat is missing.
-pub fn name_or_id<'a>(chats: &'a [Session], id: &'a str) -> Cow<'a, str> {
+pub fn name_or_id<'a>(chats: &'a [Part<Session>], id: &'a str) -> Cow<'a, str> {
     name(chats, id).unwrap_or(Cow::Borrowed(id))
 }
 

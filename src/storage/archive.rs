@@ -21,6 +21,7 @@
 //! a merge replaced are deleted only after the merge's save commits.
 use crate::State;
 use crate::application::runs::{Record, Run};
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -58,11 +59,14 @@ impl Archive {
     }
 }
 
+fn unused(archive: &&Part<Archive>) -> bool {
+    archive.is_empty()
+}
 /// What the state saves: the state and its archive block list.
 #[derive(Serialize)]
 pub(crate) struct Saved<'a> {
-    #[serde(rename = "_archive", skip_serializing_if = "Archive::is_empty")]
-    pub archive: &'a Archive,
+    #[serde(rename = "_archive", skip_serializing_if = "unused")]
+    pub archive: &'a Part<Archive>,
     #[serde(flatten)]
     pub state: &'a State,
 }
@@ -121,7 +125,7 @@ impl Pending {
         }
     }
     /// The save failed: the runs are hot again and new blocks are unreferenced.
-    pub(crate) fn undo(self, state: &State) {
+    pub(crate) fn undo(self, state: &mut State) {
         for index in self.marked {
             state.runtime.runs[index].set_archived(false);
         }
@@ -131,7 +135,7 @@ impl Pending {
     }
 }
 
-fn write_block(directory: &Path, span: Span, lines: &[&str]) -> io::Result<PathBuf> {
+fn write_block(directory: &Path, span: Span, lines: &[impl AsRef<[u8]>]) -> io::Result<PathBuf> {
     let file = span.file(directory);
     let parent = file.parent().expect("blocks live in a directory");
     fs::create_dir_all(parent)?;
@@ -142,7 +146,7 @@ fn write_block(directory: &Path, span: Span, lines: &[&str]) -> io::Result<PathB
         .truncate(true)
         .open(&temporary)?;
     for line in lines {
-        out.write_all(line.as_bytes())?;
+        out.write_all(line.as_ref())?;
         out.write_all(b"\n")?;
     }
     out.sync_all()?;
@@ -152,9 +156,11 @@ fn write_block(directory: &Path, span: Span, lines: &[&str]) -> io::Result<PathB
 }
 
 /// Moves whole blocks of candidates into the archive and merges equal
-/// neighbours. Marks the moved runs archived; the caller saves the state and
-/// then commits or undoes the returned change.
-pub(crate) fn step(directory: &Path, state: &State, archive: &mut Archive) -> io::Result<Pending> {
+/// neighbours. Marks the moved runs archived, a change to the state's
+/// encoding made through `&mut` like any other (so `runtime` is re-split only
+/// when it moves something); the caller saves the state and then commits or
+/// undoes the returned change.
+pub(crate) fn step(directory: &Path, state: &mut State, archive: &mut Part<Archive>) -> io::Result<Pending> {
     let mut pending = Pending::default();
     let candidates = candidates(state);
     let mut remaining = &candidates[..candidates.len() >> BASE << BASE];
@@ -166,9 +172,9 @@ pub(crate) fn step(directory: &Path, state: &State, archive: &mut Archive) -> io
                 .find(|&level| start.trailing_zeros() >= level && (1usize << level) <= remaining.len())
                 .expect("whole base blocks remain");
             let (block, rest) = remaining.split_at(1 << level);
-            let lines: Vec<&str> = block
+            let lines: Vec<_> = block
                 .iter()
-                .map(|&index| state.runtime.runs[index].saved().expect("candidates are saved").get())
+                .map(|&index| state.runtime.runs[index].saved().expect("candidates are saved").bytes())
                 .collect();
             pending
                 .written
@@ -193,7 +199,7 @@ pub(crate) fn step(directory: &Path, state: &State, archive: &mut Archive) -> io
     }
 }
 
-fn merge(directory: &Path, state: &State, archive: &mut Archive, pending: &mut Pending) -> io::Result<()> {
+fn merge(directory: &Path, state: &State, archive: &mut Part<Archive>, pending: &mut Pending) -> io::Result<()> {
     while let [.., left, right] = archive.blocks[..]
         && left.level == right.level
         && left.start % (2 << left.level) == 0
@@ -231,8 +237,9 @@ fn merge(directory: &Path, state: &State, archive: &mut Archive, pending: &mut P
         let lines: Vec<&str> = lines.iter().flatten().map(String::as_str).collect();
         pending.written.push(write_block(directory, parent, &lines)?);
         pending.replaced.extend([left.file(directory), right.file(directory)]);
-        archive.blocks.truncate(archive.blocks.len() - 2);
-        archive.blocks.push(parent);
+        let blocks = &mut archive.blocks;
+        blocks.truncate(blocks.len() - 2);
+        blocks.push(parent);
     }
     Ok(())
 }
@@ -267,8 +274,10 @@ pub(crate) fn load(directory: &Path, state: &mut State, archive: &Archive) -> io
         for line in fs::read_to_string(span.file(directory))?.lines() {
             let record: Record = serde_json::from_str(line).map_err(io::Error::other)?;
             if !hot.contains(record.id().as_str()) {
-                let saved = serde_json::value::RawValue::from_string(line.to_owned()).map_err(io::Error::other)?;
-                let run = Run::restored(record, saved, true);
+                // Kept, not indexed: an archived run is left out of the state's
+                // encoding, so its members are never diffed.
+                let saved = control_journal::snapshot::kept(line.as_bytes().to_vec())?;
+                let run = Run::restored(record, control_journal::snapshot::Tree::leaf(saved), true);
                 match at.get(run.id().as_str()) {
                     Some(&index) => archived[index] = run,
                     None => {

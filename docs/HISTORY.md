@@ -75,11 +75,21 @@ A checkpoint does not rewrite `state.json`. It appends what changed:
   splice array. A new chat message is a splice of that message, not the chat; a
   run's status is a set of one string. An unchanged save writes nothing.
   Diffing is a pure function of two encodings; nothing is parsed.
-- **Cached runs.** `Run` is `history::Cached<Record>`: a save serializes a run
-  once and copies its saved bytes until the run is next borrowed mutably (any
-  `&mut` access forgets them), so encoding costs what changed plus a copy of
-  the rest. Debug builds check every save against a fresh, uncached
-  serialization.
+- **Parts.** A save encodes the state as a `snapshot::Tree` of shared parts.
+  Each top-level field, chat, room post, agent note and run is a
+  `snapshot::Part` (`Run` is `history::Cached<Record>`, built on one), as are
+  the room fields beside the posts and the archive block list: it keeps its
+  encoding until it is next borrowed mutably (any `&mut` access forgets it),
+  and `diff_trees` skips parts the previous save shares by pointer. Encoding
+  and diffing then cost what changed, not the state's size; the patch is the
+  one `diff` gives for the joined documents. An object with no parts inside is
+  encoded member by member once and joined. Archiving a run is a mutation
+  through the save's `&mut State` like any other, so `runtime` is re-split
+  only when it changed. Debug builds check every save against a fresh
+  serialization and every patch against a diff of the joined documents, and
+  record what each save encoded afresh (`snapshot::fresh`):
+  `storage::tests::fresh` checks that each kind of write re-encodes only what
+  it changed.
 - **Transactions.** Everything one save changed (a run, its chat, a receipt, a
   watch cursor) is one line, `{"sum":"<fnv-1a>","ops":[…]}`. The line is the
   transaction record and its newline the commit marker. Recovery replays the

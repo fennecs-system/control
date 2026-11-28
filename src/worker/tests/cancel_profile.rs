@@ -61,14 +61,17 @@ fn node(unrelated: usize, runs: usize, tree: usize) -> (State, String) {
         }
     }
     for index in 0..4_000 {
-        state.collective.posts.push(crate::rooms::Post {
-            room: "general".into(),
-            text: "room traffic ".repeat(16),
-            chat: Some(chats[index % chats.len()].clone()),
-            run: None,
-            key: format!("k{index}"),
-            delivery: Default::default(),
-        });
+        state.collective.posts.push(
+            crate::rooms::Post {
+                room: "general".into(),
+                text: "room traffic ".repeat(16),
+                chat: Some(chats[index % chats.len()].clone()),
+                run: None,
+                key: format!("k{index}"),
+                delivery: Default::default(),
+            }
+            .into(),
+        );
     }
     for chat in &chats[1..=tree] {
         crate::chat::send(&mut state, chat, "Join the game", "test").unwrap();
@@ -103,8 +106,8 @@ fn live_cancel_all_profile() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(120);
-    let (initial, root) = node(unrelated, 48, 6);
-    storage::save(&initial).unwrap();
+    let (mut initial, root) = node(unrelated, 48, 6);
+    storage::save(&mut initial).unwrap();
     let bytes = fs::metadata(crate::config::state("state.json").unwrap()).unwrap().len();
     let state = crate::store::Store::new(initial);
     let threads = start_with(state.clone(), crate::engine::isolation(), execute);

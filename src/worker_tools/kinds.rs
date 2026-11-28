@@ -14,7 +14,7 @@ use std::{borrow::Cow, path::Path};
 /// A refusal the model reads as a failed tool result.
 pub(super) type Refusal = Cow<'static, str>;
 /// The checkpoint interpreter a write persists through.
-pub(super) type Save = fn(&State) -> std::io::Result<()>;
+pub(super) type Save = fn(&mut State) -> std::io::Result<()>;
 pub(super) type Shared = Store;
 
 /// One `tools/call` request after the protocol and authority checks. It

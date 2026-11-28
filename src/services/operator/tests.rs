@@ -52,7 +52,12 @@ fn operator_lists_and_stops_only_the_chat_or_team_services() {
 }
 
 /// `list` with its actor authorized, as the operator MCP answers.
-fn listed(services: &[Service], sessions: &[crate::chat::Session], id: &str, team: bool) -> io::Result<Value> {
+fn listed(
+    services: &[Service],
+    sessions: &[control_journal::snapshot::Part<crate::chat::Session>],
+    id: &str,
+    team: bool,
+) -> io::Result<Value> {
     list(services, sessions, id, team)?
         .check(identity::authorize)
         .map_err(fail)

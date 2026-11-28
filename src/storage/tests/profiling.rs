@@ -10,7 +10,7 @@ fn profile_checkpoint_load() {
     let directory = crate::config::state_directory().unwrap();
     fs::create_dir_all(&directory).unwrap();
     assert!(!directory.join("state.json").exists(), "use a fresh scratch directory");
-    save(&State::initial()).unwrap();
+    save(&mut State::initial()).unwrap();
     // Each load is a process start: the saving process (this one) has let go of
     // its exclusively locked state.log. Since saves append to that log, a load
     // while this process still holds it waits and fails as "open elsewhere".
@@ -113,10 +113,16 @@ fn profile_swarm_hour() {
         "{}",
         serde_json::json!({"case": "monolithic_parse", "state_bytes": data.len(), "ms": start.elapsed().as_secs_f64() * 1e3})
     );
-    let (mut plain, mut ranged, mut cached, mut compared, mut indexed) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    let base = crate::history::persisting(|| snapshot::encode(&initial)).unwrap();
-    let fresh = |f: &dyn Fn()| crate::history::uncached(|| crate::history::persisting(f));
+    // Whole-document encodings (`to_vec`, `encode_with_ranges`), then what a
+    // save does: the tree of parts on a state just read (`encode_cold`, as at
+    // the first save after a start) and on one saved before and unchanged
+    // since (`encode_cached`, every later save), and its diff.
+    let (mut plain, mut ranged, mut cold, mut cached, mut compared, mut indexed) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let archive = Part::default();
+    let base = encode(&initial, &archive).unwrap();
+    let joined = base.bytes().into_owned();
+    let fresh = |f: &dyn Fn()| crate::history::persisting(f);
     for _ in 0..21 {
         let start = Instant::now();
         fresh(&|| drop(black_box(serde_json::to_vec(&initial).unwrap())));
@@ -124,19 +130,24 @@ fn profile_swarm_hour() {
         let start = Instant::now();
         fresh(&|| drop(black_box(snapshot::encode(&initial).unwrap())));
         ranged.push(start.elapsed().as_nanos());
+        let read: State = serde_json::from_slice(&data).unwrap();
         let start = Instant::now();
-        let encoded = black_box(crate::history::persisting(|| snapshot::encode(&initial)).unwrap());
+        black_box(encode(black_box(&read), &archive).unwrap());
+        cold.push(start.elapsed().as_nanos());
+        drop(read);
+        let start = Instant::now();
+        let encoded = black_box(encode(black_box(&initial), &archive).unwrap());
         cached.push(start.elapsed().as_nanos());
         let start = Instant::now();
-        black_box(snapshot::index(encoded.bytes().to_vec()).unwrap());
+        black_box(snapshot::index(joined.clone()).unwrap());
         indexed.push(start.elapsed().as_nanos());
         let start = Instant::now();
-        black_box(snapshot::diff(&base, &encoded));
+        black_box(edits(&base, &encoded));
         compared.push(start.elapsed().as_nanos());
     }
     println!(
         "{}",
-        serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "encode_cached": quantiles(&mut cached), "index_bytes": quantiles(&mut indexed), "diff_unchanged": quantiles(&mut compared)})
+        serde_json::json!({"case": "encode_stages", "to_vec": quantiles(&mut plain), "encode_with_ranges": quantiles(&mut ranged), "encode_cold": quantiles(&mut cold), "encode_cached": quantiles(&mut cached), "index_bytes": quantiles(&mut indexed), "diff_unchanged": quantiles(&mut compared)})
     );
     let mut by_size: Vec<usize> = (0..initial.chats.len()).collect();
     by_size.sort_by_key(|&i| std::cmp::Reverse(initial.chats[i].messages.len()));
@@ -163,8 +174,8 @@ fn profile_swarm_hour() {
         if mode != "before" {
             // The first save fills the run cache, the second moves finished runs to blocks.
             let start = Instant::now();
-            checkpoint_in(&directory, &state).unwrap();
-            checkpoint_in(&directory, &state).unwrap();
+            checkpoint_in(&directory, &mut state).unwrap();
+            checkpoint_in(&directory, &mut state).unwrap();
             let archived_runs = state.runtime.runs.iter().filter(|run| run.archived()).count();
             println!(
                 "{}",
@@ -182,13 +193,11 @@ fn profile_swarm_hour() {
             let start = Instant::now();
             if mode == "before" {
                 // The old path: a fresh serialization (no cached runs) and a full rewrite.
-                let bytes =
-                    crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(black_box(&state))))
-                        .unwrap();
+                let bytes = crate::history::persisting(|| serde_json::to_vec(black_box(&state))).unwrap();
                 write_checkpoint(&directory, &bytes).unwrap();
                 written += bytes.len() as u64;
             } else {
-                checkpoint_in(&directory, black_box(&state)).unwrap();
+                checkpoint_in(&directory, black_box(&mut state)).unwrap();
             }
             latencies.push(start.elapsed().as_nanos());
             if mode != "before" {
@@ -254,5 +263,157 @@ fn profile_swarm_hour() {
         );
         println!("{}", serde_json::json!({"case": "crash_recovery_torn_tail", "ms": ms}));
         published().lock().unwrap().remove(&directory);
+    }
+}
+
+/// What a save costs under the end-to-end write mix (a room post, an agent
+/// note and a gene edit per round) on the seeded history fixture: the whole
+/// state encoded and diffed (as before parts) against the save path's tree
+/// of parts, which must give the same patch; then, per top-level field, bytes,
+/// a fresh encode and diff, and how often the field changed.
+#[test]
+#[ignore = "release benchmark: CONTROL_PROFILE_DIR=<scratch dir>; optional CONTROL_PROFILE_SAVES (default 3000); no models"]
+fn profile_encode_by_field() {
+    use std::{hint::black_box, time::Instant};
+    let root = PathBuf::from(std::env::var("CONTROL_PROFILE_DIR").expect("a scratch directory"));
+    let saves: usize = std::env::var("CONTROL_PROFILE_SAVES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3000);
+    let directory = root.join("by-field");
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir_all(&directory).unwrap();
+    let mut state = crate::performance::history_fixture(1000, 20_000);
+    for run in state.runtime.runs.iter_mut() {
+        run.emitted = Some(run.status.clone());
+    }
+    // As after a server start: finished runs leave for archive blocks.
+    persist(&directory, encode(&state, &archived(&directory)).unwrap(), true).unwrap();
+    checkpoint_in(&directory, &mut state).unwrap();
+    checkpoint_in(&directory, &mut state).unwrap();
+    macro_rules! fields {
+        ($($field:ident),*) => {
+            fn parts(state: &State) -> Vec<(&'static str, snapshot::Encoded)> {
+                crate::history::persisting(|| vec![$((stringify!($field), snapshot::encode(&state.$field).unwrap())),*])
+            }
+            fn part(state: &State, index: usize) -> snapshot::Encoded {
+                let mut i = 0;
+                $(
+                    if i == index {
+                        return crate::history::persisting(|| snapshot::encode(&state.$field).unwrap());
+                    }
+                    i += 1;
+                )*
+                let _ = i;
+                unreachable!()
+            }
+        };
+    }
+    fields!(
+        ports,
+        web_grants,
+        services,
+        github_publications,
+        previews,
+        chats,
+        discord_seen,
+        runtime,
+        collective,
+        bots,
+        watches,
+        scores,
+        observations,
+        agent_messages,
+        documents,
+        lens_library,
+        personas,
+        packages,
+        auto_decisions,
+        messages,
+        agents,
+        note,
+        saved
+    );
+    let mut previous = parts(&state);
+    let n = previous.len();
+    let (mut encode_ns, mut diff_ns, mut changed) = (vec![0u128; n], vec![0u128; n], vec![0usize; n]);
+    // The whole state encoded and diffed on every save (before parts), and
+    // the save path: the tree of parts and its diff.
+    let flat = |state: &State| {
+        let archive = archived(&directory);
+        crate::history::persisting(|| {
+            snapshot::encode(&archive::Saved {
+                archive: &archive,
+                state,
+            })
+        })
+        .unwrap()
+    };
+    let mut base = flat(&state);
+    let mut tree = encode(&state, &archived(&directory)).unwrap();
+    let (mut whole_encode, mut whole_diff, mut tree_encode, mut tree_diff) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let start_bytes = base.bytes().len();
+    for step in 0..saves {
+        let f: HashMap<String, String> = [
+            ("channel", "research".to_owned()),
+            ("message", format!("perf write {step}")),
+            ("objective", format!("perf write {step}")),
+            ("provider", "Self-hosted".to_owned()),
+            ("id", format!("perf-{}", step / 3)),
+            ("name", format!("Perf {}", step / 3)),
+            ("instructions", "Written by the write mix".to_owned()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        match step % 3 {
+            0 => drop(state.collective.action("/room", &f)),
+            1 => state.agents.push(format!("{} · Self-hosted", f["objective"]).into()),
+            _ if state.lens_library.definitions.len() < 128 => {
+                state.lens_library.definitions.push(crate::lens_library::draft(&f))
+            }
+            _ => drop(state.collective.action("/room", &f)),
+        }
+        let start = Instant::now();
+        let next = black_box(encode(&state, &archived(&directory)).unwrap());
+        tree_encode.push(start.elapsed().as_nanos());
+        let start = Instant::now();
+        let edits = black_box(edits(&tree, &next));
+        tree_diff.push(start.elapsed().as_nanos());
+        tree = next;
+        let start = Instant::now();
+        let encoded = black_box(flat(&state));
+        whole_encode.push(start.elapsed().as_nanos());
+        let start = Instant::now();
+        assert_eq!(black_box(snapshot::diff(&base, &encoded)), edits);
+        whole_diff.push(start.elapsed().as_nanos());
+        base = encoded;
+        for (i, (_, old)) in previous.iter_mut().enumerate() {
+            let start = Instant::now();
+            let new = black_box(part(&state, i));
+            encode_ns[i] += start.elapsed().as_nanos();
+            let start = Instant::now();
+            let patch = black_box(snapshot::diff(old, &new));
+            diff_ns[i] += start.elapsed().as_nanos();
+            changed[i] += usize::from(patch.is_some());
+            *old = new;
+        }
+    }
+    println!(
+        "{}",
+        serde_json::json!({"case": "encode_by_field", "saves": saves, "state_bytes_start": start_bytes, "state_bytes_end": base.bytes().len(),
+            "whole_encode": quantiles(&mut whole_encode), "whole_diff": quantiles(&mut whole_diff),
+            "parts_encode": quantiles(&mut tree_encode), "parts_diff": quantiles(&mut tree_diff)})
+    );
+    println!("field\tbytes_end\tencode_us_per_save\tdiff_us_per_save\tchanged_saves");
+    for (i, (name, encoded)) in previous.iter().enumerate() {
+        println!(
+            "{name}\t{}\t{:.1}\t{:.1}\t{}",
+            encoded.bytes().len(),
+            encode_ns[i] as f64 / saves as f64 / 1e3,
+            diff_ns[i] as f64 / saves as f64 / 1e3,
+            changed[i]
+        );
     }
 }

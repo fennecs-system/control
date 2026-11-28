@@ -11,9 +11,10 @@ struct InFlight<'a> {
 }
 fn edit(state: &mut State, watch: usize) -> operation::Edit<'_> {
     let watch = &mut state.collective.room_watches[watch];
+    let runtime = &mut *state.runtime;
     operation::Edit {
-        runs: &mut state.runtime.runs,
-        notice: &mut state.runtime.notice,
+        runs: &mut runtime.runs,
+        notice: &mut runtime.notice,
         chats: &mut state.chats,
         wake: &mut watch.wake,
         delivered: &mut watch.delivered,
@@ -56,7 +57,7 @@ pub(super) fn publish(
     state: &mut State,
     watch: usize,
     change: operation::Change,
-    mut save: impl FnMut(&State) -> std::io::Result<()>,
+    mut save: impl FnMut(&mut State) -> std::io::Result<()>,
     wake: impl FnOnce(),
 ) -> Result<(), &'static str> {
     let queued = matches!(change, operation::Change::Queue(_));

@@ -1450,7 +1450,7 @@ fn queue(state: &mut State, request: &Request, tx: Tx) -> Result<Effects, &'stat
 /// Runs in the existing worker supervisor. Feeds new room posts, finished bot
 /// turns and the current time to the supervisor, records its turn requests and
 /// queues them, then saves everything in one checkpoint.
-pub fn reconcile(state: &mut State, save: impl FnMut(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+pub fn reconcile(state: &mut State, save: impl FnMut(&mut State) -> std::io::Result<()>) -> Result<(), &'static str> {
     reconcile_at(state, now_ms(), save)
 }
 
@@ -1639,7 +1639,7 @@ fn park(state: &mut State, chat: &str, seconds: u64, now: u64, effects: &mut Vec
 fn reconcile_at(
     state: &mut State,
     now: u64,
-    save: impl FnMut(&State) -> std::io::Result<()>,
+    save: impl FnMut(&mut State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     reconcile_with_wake_at(state, now, save, crate::worker::wake)
 }
@@ -1647,7 +1647,7 @@ fn reconcile_at(
 fn reconcile_with_wake_at(
     state: &mut State,
     now: u64,
-    mut save: impl FnMut(&State) -> std::io::Result<()>,
+    mut save: impl FnMut(&mut State) -> std::io::Result<()>,
     wake: impl FnOnce(),
 ) -> Result<(), &'static str> {
     // Salience debounces end on this pass (at least every two seconds) even
@@ -2267,7 +2267,7 @@ fn handle(
     state: &mut State,
     attempt: &AttemptRef<'_>,
     call: BotCall,
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     handle_with(state, attempt, call, save, &AutoApproval::default())
 }
@@ -2275,7 +2275,7 @@ fn handle_with(
     state: &mut State,
     attempt: &AttemptRef<'_>,
     call: BotCall,
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
     policy: &AutoApproval,
 ) -> io::Result<Value> {
     let run = state
@@ -2838,7 +2838,7 @@ fn http_with_save(
     method: &str,
     path: &str,
     body: &[u8],
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
 ) -> bool {
     if path != "/tools/bots" {
         return false;

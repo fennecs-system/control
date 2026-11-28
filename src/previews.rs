@@ -280,7 +280,7 @@ pub fn start(shared: &Store, run_id: &str, input: Input) -> io::Result<Value> {
             .position(|p| p.id == id)
             .map(|index| state.previews.remove(index));
         state.previews.push(preview.clone());
-        if crate::storage::save(&state).is_err() {
+        if crate::storage::save(&mut state).is_err() {
             state.previews.pop();
             if let Some(previous) = previous {
                 state.previews.push(previous);
@@ -325,7 +325,7 @@ fn checkpoint_launch(
     preview: &Preview,
     launched: bool,
     stopping: bool,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     let active = state.runtime.runs.get(run_id).is_some_and(|r| {
         r.status == RunStatus::Running

@@ -276,7 +276,7 @@ pub fn request(
     generation: &str,
     nonce: &str,
     mut input: Input,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Value, std::borrow::Cow<'static, str>> {
     if input.objectives.is_empty()
         || input
@@ -746,7 +746,7 @@ fn transact_batch(
     index: usize,
     batch_index: usize,
     cancel: bool,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     let sizes = (state.runtime.runs.len(), state.chats.len());
     let children = state.runtime.runs[index].spawns[batch_index].children.len();
@@ -811,7 +811,7 @@ fn transact_batch(
 
 /// Called at the existing dispatch boundary; queue capacity and model slots stay
 /// separate. One bounded batch transaction per pass, with no external effects.
-pub fn reconcile(state: &mut State, save: impl FnOnce(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+pub fn reconcile(state: &mut State, save: impl FnOnce(&mut State) -> std::io::Result<()>) -> Result<(), &'static str> {
     // Most retained runs never spawned: find the parents in one pass and let
     // both stages walk only those.
     let parents = parents(&state.runtime.runs);
@@ -859,7 +859,7 @@ pub fn manage(
     caller: &str,
     name: &str,
     args: &Value,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     let input: Management =
         serde_json::from_value(args.clone()).map_err(|_| "Expected batch ID and optional status page offset/limit.")?;

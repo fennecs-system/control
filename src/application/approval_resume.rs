@@ -4,6 +4,7 @@ use super::conversations::{Message, Session};
 use super::runs::Run;
 use crate::runtime::RunStatus;
 use control_context::agent_policy::{MessageSpeaker, RunKind};
+use control_journal::snapshot::Part;
 
 /// Chat note headings for operator decisions. Notes stored before messages
 /// recorded a speaker are recognised by these exact headings.
@@ -26,7 +27,7 @@ pub(crate) enum Outcome {
 pub(crate) struct Edit<'a> {
     pub runs: &'a mut crate::application::runs::Runs,
     pub notice: &'a mut String,
-    pub chats: &'a mut [Session],
+    pub chats: &'a mut [Part<Session>],
 }
 
 /// Publish an already-admitted continuation and its note over borrowed records.

@@ -104,11 +104,12 @@ pub(crate) fn configure(state: &mut State, chat: &str, enabled: bool) -> Result<
         if state.collective.room_watches.len() >= MAX_WATCHES {
             return Err("Room subscription limit reached (256 chats).");
         }
+        let cursor = state.collective.posts.len();
         state.collective.room_watches.push(Watch {
             chat: chat.into(),
             actor: session.actor.clone(),
             room: room.into(),
-            cursor: state.collective.posts.len(),
+            cursor,
             wake: None,
             delivered: None,
             listener: None,
@@ -198,7 +199,7 @@ fn plans(state: &State, now: u64) -> Vec<(usize, Plan)> {
 pub(super) fn reconcile(
     state: &mut State,
     now: u64,
-    save: &mut impl FnMut(&State) -> Result<(), std::io::Error>,
+    save: &mut impl FnMut(&mut State) -> Result<(), std::io::Error>,
 ) -> Result<(), &'static str> {
     for (index, plan) in plans(state, now) {
         let previous = state.collective.room_watches[index].clone();

@@ -153,7 +153,7 @@ pub(crate) fn capture(
 pub(crate) fn save_with(
     state: &mut State,
     mut draft: Definition,
-    persist: impl FnOnce(&State) -> io::Result<()>,
+    persist: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> Result<Definition, String> {
     if state.personas.get(&draft.id).map_or(0, |d| d.revision) != draft.revision {
         return Err(

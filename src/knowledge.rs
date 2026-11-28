@@ -22,8 +22,8 @@ pub fn migrate(state: &mut State) -> bool {
             Document {
                 id: "scratchpad".into(),
                 title: "Scratchpad.md".into(),
-                body: state.note.clone(),
-                revision: u64::from(state.saved),
+                body: (*state.note).clone(),
+                revision: u64::from(*state.saved),
                 saved_at: None,
             },
         );
@@ -56,7 +56,7 @@ fn edges(docs: &[Document]) -> BTreeSet<(usize, usize)> {
 fn save_with(
     state: &mut State,
     fields: &HashMap<String, String>,
-    persist: impl FnOnce(&State) -> io::Result<()>,
+    persist: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> Result<String, &'static str> {
     let id = fields.get("id").map(String::as_str).unwrap_or("");
     let title = fields.get("title").map(|s| s.trim()).unwrap_or("");

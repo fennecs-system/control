@@ -8,7 +8,7 @@ pub use control_journal::writer::Health;
 use control_journal::{
     FileJournal, Journal,
     lens::{self, Schema},
-    snapshot::{self, Encoded},
+    snapshot::{self, Part, Tree},
     writer::{self, Durable, Failure, Log, Mark, Record, Sink, Submit, Ticket, Unsaved, Writer},
 };
 use std::{
@@ -103,7 +103,7 @@ pub fn load() -> io::Result<State> {
     // compacts: replayed logs, older schemas and migrations all end here.
     let adopted = published.is_some_and(|published| adopt(&directory, published));
     if changed || !adopted {
-        save(&state)?;
+        save(&mut state)?;
     }
     Ok(state)
 }
@@ -118,7 +118,7 @@ const LOG_MINIMUM: usize = 4 << 20;
 struct Published {
     writer: Writer,
     log_bytes: usize,
-    base: Option<Encoded>,
+    base: Option<Tree>,
 }
 /// Keyed by state directory: one in a server, several in tests.
 fn published() -> &'static Mutex<HashMap<PathBuf, Published>> {
@@ -210,7 +210,7 @@ fn recover(directory: &Path, data: Vec<u8>) -> io::Result<(State, Option<Recover
     archives()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .insert(directory.to_owned(), archived);
+        .insert(directory.to_owned(), archived.into());
     Ok((
         state,
         Some(Recovered {
@@ -250,7 +250,7 @@ fn adopt(directory: &Path, recovered: Recovered) -> bool {
         Published {
             writer,
             log_bytes,
-            base: Some(encoded),
+            base: Some(Tree::leaf(encoded)),
         },
     );
     true
@@ -305,7 +305,7 @@ fn interrupt_active(state: &mut State) -> bool {
     }
     changed
 }
-pub fn save(state: &State) -> io::Result<()> {
+pub fn save(state: &mut State) -> io::Result<()> {
     legacy_result(checkpoint(state))
 }
 
@@ -377,39 +377,76 @@ fn legacy_result<T>(result: Result<T, CheckpointError>) -> io::Result<T> {
 // rather than erase an unconfirmed outcome into a rollback-safe error.
 pub use control_journal::writer::Fault as CheckpointError;
 
-/// The state's saved encoding. Finished runs reuse their saved bytes
-/// (`history::Cached`), so this costs what changed plus a copy of the rest.
-/// Debug builds and tests check every encoding against a fresh, uncached
-/// serialization: the cache can only change the cost, never the bytes.
-/// Archived runs are left out; `archive` lists their blocks.
-fn encode(state: &State, archive: &archive::Archive) -> serde_json::Result<Encoded> {
+/// The state's saved encoding as a tree of parts (`snapshot::Part`): each
+/// top-level field, chat, room post and run keeps its encoding until it is
+/// next borrowed mutably, so this costs what changed, not the state's size.
+/// Debug builds and tests check every encoding against a fresh serialization
+/// (and `edits` every patch against a diff of the joined documents): the
+/// parts can only change the cost, never the bytes. Archived runs are left
+/// out; `archive` lists their blocks.
+fn encode(state: &State, archive: &Part<archive::Archive>) -> serde_json::Result<Tree> {
     let saved = archive::Saved { archive, state };
-    let encoded = crate::history::persisting(|| snapshot::encode(&saved))?;
+    let tree = crate::history::persisting(|| snapshot::split(&saved))?;
     #[cfg(debug_assertions)]
     {
-        let fresh = crate::history::uncached(|| crate::history::persisting(|| serde_json::to_vec(&saved)))?;
+        let fresh = crate::history::persisting(|| serde_json::to_vec(&saved))?;
         assert!(
-            fresh == encoded.bytes(),
-            "the cached state encoding differs from a fresh one"
+            fresh[..] == tree.bytes()[..],
+            "the state's parts differ from a fresh encoding"
         );
     }
-    Ok(encoded)
+    Ok(tree)
+}
+
+/// The edits from `base` to `tree`, reading only the parts they do not share.
+fn edits(base: &Tree, tree: &Tree) -> Option<Vec<u8>> {
+    let patch = snapshot::diff_trees(base, tree);
+    #[cfg(debug_assertions)]
+    {
+        let joined = |tree: &Tree| snapshot::index(tree.bytes().into_owned()).expect("trees join to JSON");
+        assert!(
+            patch == snapshot::diff(&joined(base), &joined(tree)),
+            "the patch differs from a diff of the whole documents"
+        );
+    }
+    patch
 }
 
 /// The archive blocks the state in `directory` references, by directory like
 /// `published` but never dropped on a failed save: the runs marked archived in
 /// memory are only in those blocks.
-fn archives() -> &'static Mutex<HashMap<PathBuf, archive::Archive>> {
-    static ARCHIVES: OnceLock<Mutex<HashMap<PathBuf, archive::Archive>>> = OnceLock::new();
+fn archives() -> &'static Mutex<HashMap<PathBuf, Part<archive::Archive>>> {
+    static ARCHIVES: OnceLock<Mutex<HashMap<PathBuf, Part<archive::Archive>>>> = OnceLock::new();
     ARCHIVES.get_or_init(Mutex::default)
 }
-fn archived(directory: &Path) -> archive::Archive {
+/// A copy that shares the kept list's encoding (made here, once per change),
+/// so a save that drops its copy does not leave the next to encode it again.
+fn archived(directory: &Path) -> Part<archive::Archive> {
     archives()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(directory)
-        .cloned()
+        .map(|archive| {
+            let _ = snapshot::split(archive);
+            archive.clone()
+        })
         .unwrap_or_default()
+}
+
+/// Per state directory, the runtime's encoding when the last archive step
+/// found nothing to move. What a step moves depends only on the runtime, so
+/// while the runtime keeps that encoding the step is skipped instead of
+/// scanning every run again.
+fn settled() -> &'static Mutex<HashMap<PathBuf, Tree>> {
+    static SETTLED: OnceLock<Mutex<HashMap<PathBuf, Tree>>> = OnceLock::new();
+    SETTLED.get_or_init(Mutex::default)
+}
+fn settled_in(directory: &Path, runtime: &Tree) -> bool {
+    settled()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(directory)
+        .is_some_and(|settled| settled.same(runtime))
 }
 
 /// Synchronous, phase-aware checkpoint boundary. Success includes file and
@@ -428,7 +465,7 @@ fn archived(directory: &Path) -> archive::Archive {
 /// Finished runs far from the focus move to archive blocks first
 /// (`storage::archive`); the blocks are durable before this save, which
 /// commits them, references them.
-pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
+pub fn checkpoint(state: &mut State) -> Result<(), CheckpointError> {
     let directory =
         crate::config::state_directory().map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))?;
     checkpoint_in(&directory, state)?;
@@ -436,14 +473,19 @@ pub fn checkpoint(state: &State) -> Result<(), CheckpointError> {
     crate::live_updates::notify();
     Ok(())
 }
-fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError> {
+fn checkpoint_in(directory: &Path, state: &mut State) -> Result<(), CheckpointError> {
     // Refused before the archive step moves anything; the caller rolls back.
     if let Health::Degraded(unavailable) = health_in(directory) {
         return Err(CheckpointError::NotReplaced(unavailable.into()));
     }
     let directory = directory.to_owned();
     let mut archive = archived(&directory);
-    let pending = archive::step(&directory, state, &mut archive).map_err(CheckpointError::NotReplaced)?;
+    let before = state.runtime.saved().cloned();
+    let pending = if before.as_ref().is_some_and(|runtime| settled_in(&directory, runtime)) {
+        archive::Pending::default()
+    } else {
+        archive::step(&directory, state, &mut archive).map_err(CheckpointError::NotReplaced)?
+    };
     let saved = encode(state, &archive)
         .map_err(|error| CheckpointError::NotReplaced(io::Error::other(error)))
         .and_then(|encoded| persist(&directory, encoded, false));
@@ -452,7 +494,14 @@ fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError>
             archives()
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .insert(directory, archive);
+                .insert(directory.clone(), archive);
+            // Nothing moved, and every hot run was saved when the step looked.
+            if let Some(runtime) = before.filter(|before| state.runtime.saved().is_some_and(|now| now.same(before))) {
+                settled()
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(directory, runtime);
+            }
             pending.commit();
         }
         Err(CheckpointError::NotReplaced(error)) => {
@@ -467,7 +516,7 @@ fn checkpoint_in(directory: &Path, state: &State) -> Result<(), CheckpointError>
 
 /// Persists `encoded` in `directory` and waits for it under the caller's lock,
 /// which lets a refused save roll back.
-fn persist(directory: &Path, encoded: Encoded, compact: bool) -> Result<(), CheckpointError> {
+fn persist(directory: &Path, encoded: Tree, compact: bool) -> Result<(), CheckpointError> {
     match stage(directory, encoded, compact, Writer::submit_held)?.wait() {
         Ok(_) => Ok(()),
         Err(Failure::Refused(error)) => Err(CheckpointError::NotReplaced(error)),
@@ -507,7 +556,7 @@ fn refused(refusal: Submit) -> CheckpointError {
 /// save diffs against this one whether or not it is durable yet.
 fn stage<T>(
     directory: &Path,
-    encoded: Encoded,
+    encoded: Tree,
     compact: bool,
     submit: fn(&Writer, Option<Record>) -> Result<T, Submit>,
 ) -> Result<T, CheckpointError> {
@@ -516,10 +565,10 @@ fn stage<T>(
         && let Some(current) = all.get_mut(directory)
         && let Some(base) = &current.base
     {
-        let patch = snapshot::diff(base, &encoded);
+        let patch = edits(base, &encoded);
         let outgrown = patch
             .as_ref()
-            .is_some_and(|patch| current.log_bytes + patch.len() >= base.bytes().len().max(LOG_MINIMUM));
+            .is_some_and(|patch| current.log_bytes + patch.len() >= base.len().max(LOG_MINIMUM));
         if !outgrown {
             let line = patch.map(|patch| snapshot::commit(&patch));
             let bytes = line.as_ref().map_or(0, |line| line.len() + 1);
@@ -542,7 +591,7 @@ fn stage<T>(
     let header = snapshot::header(&nonce, &schema);
     let log_bytes = header.len() + 1;
     let record = Record::Compact {
-        snapshot: snapshot::snapshot(&encoded, &nonce, &schema),
+        snapshot: snapshot::snapshot(&encoded.bytes(), &nonce, &schema),
         header,
     };
     let current = match all.entry(directory.to_owned()) {

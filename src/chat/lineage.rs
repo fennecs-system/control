@@ -1,15 +1,16 @@
 //! Where a chat sits in its task tree, from parent links alone.
 use super::Session;
+use control_journal::snapshot::Part;
 use std::collections::{HashMap, HashSet};
 
 /// Read-only parent links of every chat. A function holding only this can
 /// answer lineage questions but cannot reach or change the rest of `State`.
 #[derive(Clone, Copy)]
 pub(crate) struct Lineage<'a> {
-    chats: &'a [Session],
+    chats: &'a [Part<Session>],
 }
 impl<'a> Lineage<'a> {
-    pub(crate) fn of(chats: &'a [Session]) -> Self {
+    pub(crate) fn of(chats: &'a [Part<Session>]) -> Self {
         Self { chats }
     }
     /// Whether `chat` is `ancestor` or was spawned from it, directly or through children.

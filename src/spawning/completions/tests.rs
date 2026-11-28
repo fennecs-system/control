@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::RunStatus;
 /// The completion stage over every parent, as `spawning::reconcile` runs it.
-fn reconcile(state: &mut State, save: impl FnOnce(&State) -> std::io::Result<()>) -> Result<(), &'static str> {
+fn reconcile(state: &mut State, save: impl FnOnce(&mut State) -> std::io::Result<()>) -> Result<(), &'static str> {
     let parents = super::super::parents(&state.runtime.runs);
     super::reconcile(state, &parents, save)
 }

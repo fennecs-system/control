@@ -208,7 +208,7 @@ fn snapshots_carry_their_name_and_schema_and_are_recognised() {
     let schema = json!({"version": 1, "lenses": [[]]});
     for document in [json!({}), state(1, 2)] {
         let encoded = encode(&document).unwrap();
-        let bytes = snapshot(&encoded, "n1", &schema);
+        let bytes = snapshot(encoded.bytes(), "n1", &schema);
         assert_eq!(
             base(&bytes, "n1", &schema),
             Some(encoded.clone()),
@@ -250,7 +250,7 @@ fn readers_see_snapshot_plus_log_without_owning_either() {
     new["chats"][1]["messages"].as_array_mut().unwrap().push(message(9));
     let (a, b) = (encode(&old).unwrap(), encode(&new).unwrap());
     let schema_value = serde_json::to_value(&schema).unwrap();
-    std::fs::write(&snap, snapshot(&a, "n", &schema_value)).unwrap();
+    std::fs::write(&snap, snapshot(a.bytes(), "n", &schema_value)).unwrap();
     let mut text = header("n", &schema_value);
     text.push(b'\n');
     text.extend(commit(&diff(&a, &b).unwrap()));
@@ -258,7 +258,7 @@ fn readers_see_snapshot_plus_log_without_owning_either() {
     std::fs::write(&log, &text).unwrap();
     assert_eq!(read(&snap, &log, &schema, read_file).unwrap(), Some(new));
     // A log of another snapshot is obsolete: the snapshot already holds it.
-    std::fs::write(&snap, snapshot(&a, "m", &schema_value)).unwrap();
+    std::fs::write(&snap, snapshot(a.bytes(), "m", &schema_value)).unwrap();
     assert_eq!(read(&snap, &log, &schema, read_file).unwrap(), Some(old));
     std::fs::remove_dir_all(&dir).unwrap();
 }

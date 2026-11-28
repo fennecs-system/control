@@ -74,14 +74,17 @@ pub fn tool(state: &mut State, name: &str, args: &Value) -> Result<Value, &'stat
     if text.is_empty() || text.chars().count() > 2000 {
         return Err("Enter 1–2000 characters.");
     }
-    state.collective.posts.push(Post {
-        room: room.into(),
-        text: text.into(),
-        chat: None,
-        run: None,
-        key: String::new(),
-        delivery: Delivery::Notify,
-    });
+    state.collective.posts.push(
+        Post {
+            room: room.into(),
+            text: text.into(),
+            chat: None,
+            run: None,
+            key: String::new(),
+            delivery: Delivery::Notify,
+        }
+        .into(),
+    );
     Ok(json!({"posted":true}))
 }
 /// The operator room tools that only read: `control.rooms.list` and
@@ -443,14 +446,17 @@ pub fn worker_rpc(state: &mut State, run: &str, envelope: &Value) -> Value {
                             }
                         }
                         if !state.collective.posts.iter().any(|p| p.key == key) {
-                            state.collective.posts.push(Post {
-                                room: room.clone(),
-                                text,
-                                chat: Some(chat),
-                                run: Some(run),
-                                key: key.clone(),
-                                delivery,
-                            });
+                            state.collective.posts.push(
+                                Post {
+                                    room: room.clone(),
+                                    text,
+                                    chat: Some(chat),
+                                    run: Some(run),
+                                    key: key.clone(),
+                                    delivery,
+                                }
+                                .into(),
+                            );
                         }
                         let stored = state.collective.posts.iter().find(|p| p.key == key).unwrap();
                         json!({"posted":true,"room":room,"delivery":stored.delivery})
@@ -473,7 +479,7 @@ pub fn checkpoint(
     state: &mut State,
     run_id: &str,
     envelope: &Value,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Value {
     let post_count = state.collective.posts.len();
     let Some(run_index) = state.runtime.runs.position(run_id) else {

@@ -25,7 +25,13 @@
 use crate::lens::Schema;
 use serde::Serialize;
 use serde_json::{Value, ser::Formatter};
-use std::{cell::Cell, io, path::Path, rc::Rc};
+use std::{borrow::Cow, cell::Cell, io, path::Path, rc::Rc};
+
+mod parts;
+use parts::At;
+#[cfg(debug_assertions)]
+pub use parts::fresh;
+pub use parts::{Part, Tree, offer, split, split_each_save};
 
 /// Containers smaller than this are rewritten whole when they change; larger
 /// ones are diffed member by member.
@@ -159,24 +165,122 @@ impl Formatter for Lent<'_> {
 /// Serializes `value` as compact JSON, the same bytes `serde_json::to_vec`
 /// writes, with the ranges [`diff`] needs.
 pub fn encode<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Encoded> {
+    let (out, nodes) = SCRATCH.with(|scratch| std::mem::take(&mut *scratch.borrow_mut()));
     let at = Rc::new(Cell::new(0));
     let mut ranges = Ranges {
         at: at.clone(),
-        nodes: Vec::new(),
+        nodes,
         open: Vec::new(),
         key: (0, 0),
     };
     ranges.open((0, 0));
-    let mut writer = Tracked { out: Vec::new(), at };
-    let mut serializer = serde_json::Serializer::with_formatter(&mut writer, Lent(&mut ranges));
-    value.serialize(&mut serializer)?;
-    ranges.close();
-    if u32::try_from(writer.out.len()).is_err() {
+    let mut writer = Tracked { out, at };
+    let serialized = value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut writer,
+        Lent(&mut ranges),
+    ));
+    let encoded = serialized.and_then(|()| {
+        ranges.close();
+        let (bytes, nodes) = (&mut writer.out, &mut ranges.nodes);
+        if u32::try_from(bytes.len()).is_err() {
+            return Err(serde::ser::Error::custom("documents are limited to 4 GiB"));
+        }
+        // A part keeps its encoding until it changes, so exactly sized: a
+        // copy, or for a large one the buffers themselves (no scratch stays big).
+        Ok(if bytes.len() > SCRATCH_KEPT {
+            bytes.shrink_to_fit();
+            nodes.shrink_to_fit();
+            Encoded {
+                bytes: std::mem::take(bytes),
+                nodes: std::mem::take(nodes),
+            }
+        } else {
+            Encoded {
+                bytes: bytes.clone(),
+                nodes: nodes.clone(),
+            }
+        })
+    });
+    writer.out.clear();
+    ranges.nodes.clear();
+    if writer.out.capacity() > 2 * SCRATCH_KEPT {
+        (writer.out, ranges.nodes) = Default::default();
+    }
+    SCRATCH.with(|scratch| *scratch.borrow_mut() = (writer.out, ranges.nodes));
+    encoded
+}
+/// Encodings up to this size are built in reused buffers and copied out.
+const SCRATCH_KEPT: usize = 64 << 10;
+thread_local! {
+    static SCRATCH: std::cell::RefCell<(Vec<u8>, Vec<Node>)> = const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
+/// What [`encode`] gives for an object whose members (raw JSON keys and
+/// encoded values) were encoded one by one: their bytes joined and their
+/// ranges moved, so nothing is serialized twice.
+fn object(members: Vec<(Box<[u8]>, Encoded)>) -> serde_json::Result<Encoded> {
+    let length = 1 + members
+        .iter()
+        .map(|(key, value)| key.len() + 1 + value.bytes.len() + 1)
+        .sum::<usize>()
+        .max(1);
+    if u32::try_from(length).is_err() {
         return Err(serde::ser::Error::custom("documents are limited to 4 GiB"));
     }
+    let mut bytes = Vec::with_capacity(length);
+    let mut nodes = vec![Node {
+        start: 0,
+        end: 0,
+        key: (0, 0),
+        subtree_end: 0,
+    }];
+    bytes.push(b'{');
+    for (i, (key, value)) in members.into_iter().enumerate() {
+        if i > 0 {
+            bytes.push(b',');
+        }
+        let named = (bytes.len() as u32, (bytes.len() + key.len()) as u32);
+        bytes.extend_from_slice(&key);
+        bytes.push(b':');
+        let (offset, base) = (bytes.len() as u32, nodes.len() as u32);
+        bytes.extend_from_slice(&value.bytes);
+        // An array element's key is the empty (0, 0) wherever it is.
+        let moved = |key: (u32, u32)| {
+            if key == (0, 0) {
+                key
+            } else {
+                (key.0 + offset, key.1 + offset)
+            }
+        };
+        nodes.extend(value.nodes.iter().enumerate().map(|(j, node)| Node {
+            start: node.start + offset,
+            end: node.end + offset,
+            key: if j == 0 { named } else { moved(node.key) },
+            subtree_end: node.subtree_end + base,
+        }));
+    }
+    bytes.push(b'}');
+    if bytes.len() < SEGMENT {
+        nodes.truncate(1);
+    }
+    nodes[0].end = bytes.len() as u32;
+    nodes[0].subtree_end = nodes.len() as u32;
+    Ok(Encoded { bytes, nodes })
+}
+
+/// One compact JSON value kept as is, without the ranges of its members: an
+/// encoding only held (its bytes saved elsewhere), never diffed member by
+/// member. Diffed, it is one value. `bytes` must be one valid JSON value.
+pub fn kept(bytes: Vec<u8>) -> io::Result<Encoded> {
+    let end = u32::try_from(bytes.len()).map_err(|_| invalid("documents are limited to 4 GiB"))?;
     Ok(Encoded {
-        bytes: writer.out,
-        nodes: ranges.nodes,
+        bytes,
+        nodes: vec![Node {
+            start: 0,
+            end,
+            key: (0, 0),
+            subtree_end: 1,
+        }],
     })
 }
 
@@ -201,6 +305,7 @@ pub fn index(bytes: Vec<u8>) -> io::Result<Encoded> {
     }
     ranges.at.set(end);
     ranges.close();
+    ranges.nodes.shrink_to_fit();
     Ok(Encoded {
         bytes,
         nodes: ranges.nodes,
@@ -296,90 +401,95 @@ fn op(out: &mut Vec<u8>, kind: &[u8], at: &[Seg]) {
 /// The edits that turn `old` into `new`, as one JSON array; `None` when the
 /// documents are identical. Pure: neither input changes.
 pub fn diff(old: &Encoded, new: &Encoded) -> Option<Vec<u8>> {
+    edits_between(At::Node(old, 0), At::Node(new, 0))
+}
+/// [`diff`] of two documents held as [`Tree`]s: the same bytes as diffing
+/// their joined encodings, but parts both trees share are skipped by pointer
+/// without being read, so a save costs what changed.
+pub fn diff_trees(old: &Tree, new: &Tree) -> Option<Vec<u8>> {
+    edits_between(old.at(), new.at())
+}
+fn edits_between(old: At<'_>, new: At<'_>) -> Option<Vec<u8>> {
     let mut out = vec![b'['];
     let mut at = Vec::new();
-    node(old, 0, new, 0, &mut at, &mut out);
+    node(old, new, &mut at, &mut out);
     if out.len() == 1 {
         return None;
     }
     out.push(b']');
     Some(out)
 }
-fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out: &mut Vec<u8>) {
-    if old.range(o) == new.range(n) {
+fn node(old: At<'_>, new: At<'_>, at: &mut Vec<Seg>, out: &mut Vec<u8>) {
+    if old.equals(new) {
         return;
     }
     // A value encoded from saved bytes has no recorded members: index those
     // bytes to diff inside it rather than rewrite it whole.
-    let opening = |e: &Encoded, i: usize| e.range(i).first().copied().filter(|b| matches!(b, b'{' | b'['));
-    if opening(old, o).is_some() && opening(old, o) == opening(new, n) {
-        let inside = |e: &Encoded, i: usize| {
-            index(e.range(i).to_vec())
+    let opening = |value: At<'_>| Some(value.first()).filter(|b| matches!(b, b'{' | b'['));
+    if opening(old).is_some() && opening(old) == opening(new) {
+        let inside = |value: At<'_>| {
+            index(value.bytes().into_owned())
                 .ok()
                 .filter(|local| local.container(0).is_some())
         };
-        match (old.container(o), new.container(n)) {
+        match (old.container(), new.container()) {
             (None, Some(_)) => {
-                if let Some(local) = inside(old, o) {
-                    return node(&local, 0, new, n, at, out);
+                if let Some(local) = inside(old) {
+                    return node(At::Node(&local, 0), new, at, out);
                 }
             }
             (Some(_), None) => {
-                if let Some(local) = inside(new, n) {
-                    return node(old, o, &local, 0, at, out);
+                if let Some(local) = inside(new) {
+                    return node(old, At::Node(&local, 0), at, out);
                 }
             }
             (None, None) => {
-                if let (Some(before), Some(after)) = (inside(old, o), inside(new, n)) {
-                    return node(&before, 0, &after, 0, at, out);
+                if let (Some(before), Some(after)) = (inside(old), inside(new)) {
+                    return node(At::Node(&before, 0), At::Node(&after, 0), at, out);
                 }
             }
             _ => {}
         }
     }
-    match (old.container(o), new.container(n)) {
+    match (old.container(), new.container()) {
         (Some(b'{'), Some(b'{')) => {
-            let previous = old.children(o);
+            let previous = old.children();
             let mut seen = vec![false; previous.len()];
             let mut cursor = 0;
-            for child in new.children(n) {
-                let key = new.key(child);
+            for (key, child) in new.children() {
                 // Members usually keep their order; scan from the last match.
                 let found = (cursor..previous.len())
                     .chain(0..cursor)
-                    .find(|&i| old.key(previous[i]) == key);
+                    .find(|&i| previous[i].0 == key);
                 at.push(Seg::Key(key.to_vec()));
                 match found {
                     Some(i) => {
                         seen[i] = true;
                         cursor = i + 1;
-                        node(old, previous[i], new, child, at, out);
+                        node(previous[i].1, child, at, out);
                     }
-                    None => set(out, at, new.range(child)),
+                    None => set(out, at, child),
                 }
                 at.pop();
             }
-            for (&child, _) in previous.iter().zip(&seen).filter(|(_, seen)| !**seen) {
-                at.push(Seg::Key(old.key(child).to_vec()));
+            for ((key, _), _) in previous.iter().zip(&seen).filter(|(_, seen)| !**seen) {
+                at.push(Seg::Key(key.to_vec()));
                 op(out, b"\"r\",", at);
                 out.push(b']');
                 at.pop();
             }
         }
         (Some(b'['), Some(b'[')) => {
-            let (a, b) = (old.children(o), new.children(n));
-            let prefix = a
-                .iter()
-                .zip(&b)
-                .take_while(|&(&x, &y)| old.range(x) == new.range(y))
-                .count();
+            let a: Vec<At<'_>> = old.children().into_iter().map(|(_, child)| child).collect();
+            let b: Vec<At<'_>> = new.children().into_iter().map(|(_, child)| child).collect();
+            let prefix = a.iter().zip(&b).take_while(|&(x, y)| x.equals(*y)).count();
             let limit = a.len().min(b.len()) - prefix;
             let suffix = a
                 .iter()
                 .rev()
                 .zip(b.iter().rev())
                 .take(limit)
-                .take_while(|&(&x, &y)| old.range(x) == new.range(y))
+                .take_while(|&(x, y)| x.equals(*y))
                 .count();
             // Anchor the middles on elements that are byte-identical on both
             // sides, in order; between anchors, pair what remains positionally
@@ -388,15 +498,15 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
             // rewrite of everything that shifted. Edits name positions in the
             // array as already edited, so they apply in order.
             let (a_end, b_end) = (a.len() - suffix, b.len() - suffix);
-            let mut olds: std::collections::HashMap<&[u8], Vec<usize>> = std::collections::HashMap::new();
-            for (i, &child) in a.iter().enumerate().take(a_end).skip(prefix) {
-                olds.entry(old.range(child)).or_default().push(i);
+            let mut olds: std::collections::HashMap<Cow<'_, [u8]>, Vec<usize>> = std::collections::HashMap::new();
+            for (i, child) in a.iter().enumerate().take(a_end).skip(prefix) {
+                olds.entry(child.bytes()).or_default().push(i);
             }
             let mut anchors = Vec::new();
             let mut next = prefix;
-            for (j, &child) in b.iter().enumerate().take(b_end).skip(prefix) {
+            for (j, child) in b.iter().enumerate().take(b_end).skip(prefix) {
                 if let Some(&i) = olds
-                    .get(new.range(child))
+                    .get(&*child.bytes())
                     .and_then(|list| list.iter().find(|&&i| i >= next))
                 {
                     anchors.push((i, j));
@@ -409,40 +519,33 @@ fn node(old: &Encoded, o: usize, new: &Encoded, n: usize, at: &mut Vec<Seg>, out
                 let paired = (anchor_a - i).min(anchor_b - j);
                 for t in 0..paired {
                     at.push(Seg::Index(j + t));
-                    node(old, a[i + t], new, b[j + t], at, out);
+                    node(a[i + t], b[j + t], at, out);
                     at.pop();
                 }
                 if anchor_a - i != anchor_b - j {
-                    splice(
-                        out,
-                        at,
-                        j + paired,
-                        anchor_a - i - paired,
-                        new,
-                        &b[j + paired..anchor_b],
-                    );
+                    splice(out, at, j + paired, anchor_a - i - paired, &b[j + paired..anchor_b]);
                 }
                 (i, j) = (anchor_a + 1, anchor_b + 1);
             }
         }
-        _ => set(out, at, new.range(n)),
+        _ => set(out, at, new),
     }
 }
-fn splice(out: &mut Vec<u8>, at: &[Seg], position: usize, delete: usize, new: &Encoded, insert: &[usize]) {
+fn splice(out: &mut Vec<u8>, at: &[Seg], position: usize, delete: usize, insert: &[At<'_>]) {
     op(out, b"\"a\",", at);
     out.extend_from_slice(format!(",{position},{delete},[").as_bytes());
-    for (i, &child) in insert.iter().enumerate() {
+    for (i, child) in insert.iter().enumerate() {
         if i > 0 {
             out.push(b',');
         }
-        out.extend_from_slice(new.range(child));
+        child.write(out);
     }
     out.extend_from_slice(b"]]");
 }
-fn set(out: &mut Vec<u8>, at: &[Seg], value: &[u8]) {
+fn set(out: &mut Vec<u8>, at: &[Seg], value: At<'_>) {
     op(out, b"\"s\",", at);
     out.push(b',');
-    out.extend_from_slice(value);
+    value.write(out);
     out.push(b']');
 }
 
@@ -588,11 +691,11 @@ pub fn apply(document: &mut Value, edits: Vec<Edit>) -> io::Result<()> {
 pub fn header(nonce: &str, schema: &Value) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({"snapshot": nonce, "schema": schema})).expect("JSON values serialize")
 }
-/// Snapshot bytes: `encoded` with the nonce and schema as its first members.
-/// `encoded` must be a JSON object.
-pub fn snapshot(encoded: &Encoded, nonce: &str, schema: &Value) -> Vec<u8> {
+/// Snapshot bytes: `document` with the nonce and schema as its first members.
+/// `document` must be a JSON object.
+pub fn snapshot(document: &[u8], nonce: &str, schema: &Value) -> Vec<u8> {
     let mut out = prefix(nonce, schema);
-    let body = &encoded.bytes[1..];
+    let body = &document[1..];
     if body != b"}" {
         out.push(b',');
     }

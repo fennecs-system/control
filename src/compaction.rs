@@ -6,6 +6,7 @@ use crate::{
     conversation::{Compactor, Conversation, Item, Window},
 };
 use control_comonad::{Block, cut};
+use control_journal::snapshot::Part;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io, sync::Arc};
 
@@ -741,7 +742,11 @@ fn recent_bytes(conversation: &Conversation<'_>, current: usize, budget: usize) 
     }
 }
 
-pub fn status(runtime: &crate::runtime::Runtime, chats: &[crate::chat::Session], chat: &str) -> serde_json::Value {
+pub fn status(
+    runtime: &crate::runtime::Runtime,
+    chats: &[Part<crate::chat::Session>],
+    chat: &str,
+) -> serde_json::Value {
     let memory = &runtime.compaction;
     let view = memory.views.get(chat);
     let session = chats.iter().find(|c| c.id == chat);

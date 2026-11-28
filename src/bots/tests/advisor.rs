@@ -80,7 +80,7 @@ fn facts(run: &crate::runtime::Run) -> Vec<Facts> {
         })
         .collect()
 }
-fn ok(_: &State) -> io::Result<()> {
+fn ok(_: &mut State) -> io::Result<()> {
     Ok(())
 }
 fn finish(state: &mut State, chat: &str) {

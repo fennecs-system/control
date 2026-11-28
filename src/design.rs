@@ -341,7 +341,7 @@ pub(crate) fn ask_with_save(
     id: &str,
     nonce: &str,
     input: Input,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Value, &'static str> {
     validate_input(&input)?;
     if nonce.is_empty() || nonce.len() > 128 || !nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {

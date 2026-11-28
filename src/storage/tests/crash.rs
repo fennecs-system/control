@@ -71,7 +71,7 @@ impl Sink for Dying {
 
 /// Save `n` of the child's fixed sequence.
 fn step(state: &mut State, n: usize) {
-    state.note = format!("save {n}");
+    *state.note = format!("save {n}");
     state.messages.push(format!("message {n}"));
 }
 fn record(directory: &Path, name: &str, n: usize) {
@@ -97,7 +97,7 @@ fn recorded(directory: &Path, name: &str) -> usize {
 /// callers do, so the dying append holds a batch.
 fn child(directory: &Path, crash: Crash, released: bool) {
     let mut state = State::default();
-    checkpoint_in(directory, &state).unwrap();
+    checkpoint_in(directory, &mut state).unwrap();
     {
         let mut all = published().lock().unwrap();
         let Published {
@@ -143,7 +143,7 @@ fn child(directory: &Path, crash: Crash, released: bool) {
         } else {
             step(&mut state, round + 1);
             record(directory, "applied", round + 1);
-            checkpoint_in(directory, &state).unwrap();
+            checkpoint_in(directory, &mut state).unwrap();
             record(directory, "acknowledged", round + 1);
         }
     }

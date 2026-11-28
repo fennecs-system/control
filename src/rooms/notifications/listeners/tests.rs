@@ -118,7 +118,7 @@ fn failed_checkpoint_rolls_back_delivery_and_pause() {
     let (mut state, chat) = listen_fixture();
     post(&mut state, "research", "hello", None);
     let before = serde_json::to_value(&state).unwrap();
-    let fail = &mut |_: &State| Err(std::io::Error::other("save failure"));
+    let fail = &mut |_: &mut State| Err(std::io::Error::other("save failure"));
     assert!(reconcile(&mut state, 100, fail).is_err());
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
     state.runtime.runs[0].status = RunStatus::Failed;

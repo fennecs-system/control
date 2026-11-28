@@ -2,6 +2,7 @@
 use crate::runtime::RunStatus;
 use crate::store::Store;
 use crate::{State, identity::Actor};
+use control_journal::snapshot::Part;
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
@@ -377,7 +378,7 @@ fn fetch(
     unreachable!()
 }
 fn permitted(
-    chats: &[crate::chat::Session],
+    chats: &[Part<crate::chat::Session>],
     grants: &[Grant],
     chat: &str,
     actor: &Actor,
@@ -524,7 +525,7 @@ fn change_access(
     state: &mut State,
     fields: &std::collections::HashMap<String, String>,
     issued: u64,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<()> {
     let old = state.web_grants.clone();
     if let Some(id) = fields.get("revoke") {
@@ -572,7 +573,7 @@ fn change_access(
             issued,
             expires,
         });
-        state.web_grants = retained;
+        *state.web_grants = retained;
     }
     if let Err(error) = save(state) {
         state.web_grants = old;

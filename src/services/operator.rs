@@ -3,10 +3,15 @@
 //! Served by the session MCP endpoint (`control.services.list`/`.stop`), which
 //! only the local operator reaches; worker attempts use their own service tools.
 use super::*;
+use control_journal::snapshot::Part;
 
 /// The chat and, with `team`, every chat spawned from it, for the named
 /// chat's actor. The named chat must exist.
-fn chats(sessions: &[crate::chat::Session], id: &str, team: bool) -> io::Result<identity::Unchecked<Vec<String>>> {
+fn chats(
+    sessions: &[Part<crate::chat::Session>],
+    id: &str,
+    team: bool,
+) -> io::Result<identity::Unchecked<Vec<String>>> {
     let session = sessions
         .iter()
         .find(|session| session.id == id)
@@ -32,7 +37,7 @@ fn row(service: &Service) -> Value {
 /// read from disk).
 pub(crate) fn list(
     services: &[Service],
-    sessions: &[crate::chat::Session],
+    sessions: &[Part<crate::chat::Session>],
     id: &str,
     team: bool,
 ) -> io::Result<identity::Unchecked<Value>> {
@@ -51,7 +56,7 @@ pub(crate) fn stop(
     id: &str,
     team: bool,
     service: Option<&str>,
-    save: impl Fn(&State) -> io::Result<()>,
+    save: impl Fn(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let chats = chats(&state.chats, id, team)?
         .check(identity::authorize)

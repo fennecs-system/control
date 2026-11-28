@@ -4,7 +4,7 @@ use super::advisor::turn;
 use super::*;
 use crate::runtime::RunStatus;
 
-fn ok(_: &State) -> io::Result<()> {
+fn ok(_: &mut State) -> io::Result<()> {
     Ok(())
 }
 /// An operator-owned observer tree with the antibody lens and its judge child.
@@ -56,8 +56,9 @@ pub(super) fn service(state: &mut State, owner: &str, run: &str, commands: &[(&s
         "id":format!("exec-{}-{index}", state.services.len()),"digest":"d","run":run,"attempt":"a","command":command,"timeout_seconds":60,
         "status":"completed","output":"","truncated":false,"exit_code":code,"diagnostic":""
     })).collect::<Vec<_>>();
+    let id = format!("svc-{}", state.services.len());
     state.services.push(serde_json::from_value(json!({
-        "resource":{"id":format!("svc-{}", state.services.len()),"owner":{"node":"node-a","chat":owner},"generation":1,
+        "resource":{"id":id,"owner":{"node":"node-a","chat":owner},"generation":1,
             "image":format!("sha256:{}", "a".repeat(64)),"scope":{"network":"Offline","storage":"PrivateMemory"},"lease":[1,u64::MAX],"phase":"Requested"},
         "origin":{"run":run,"attempt":"a0"},"actor":{"type":"local_operator"},"command":"true","uid":502,"gid":20,"executions":executions
     })).unwrap());

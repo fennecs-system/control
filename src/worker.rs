@@ -214,7 +214,7 @@ fn start_with(state: Store, isolation: &'static dyn Isolation, execute: Execute)
                                             format!("Could not prepare Control input: {error}").into(),
                                         ),
                                     );
-                                    if storage::save(&s).is_err() {
+                                    if storage::save(&mut s).is_err() {
                                         s.runtime.runs[index].status = previous.0;
                                         s.runtime.runs[index].result = previous.1;
                                     }
@@ -420,7 +420,7 @@ fn commit(
     mut attempt: crate::usage::Attempt,
     mut outcome: Result<String, (control_agent::Status, String)>,
     stopping: bool,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<(), ()> {
     let Some(run) = s.runtime.runs.get(id) else {
         return Ok(());
@@ -697,7 +697,10 @@ fn commit(
     Ok(())
 }
 #[cfg(test)]
-pub(crate) fn checkpoint_next(state: &mut State, save: impl FnOnce(&State) -> std::io::Result<()>) -> Option<usize> {
+pub(crate) fn checkpoint_next(
+    state: &mut State,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
+) -> Option<usize> {
     let index = crate::scheduler::next_in(state)?;
     let (captured, wake) = if crate::turn_context::managed(state, &state.runtime.runs[index]) {
         let plan = crate::turn_context::PlannedContext::prepare(state, index).ok()?;
@@ -713,7 +716,7 @@ fn checkpoint_prepared(
     state: &mut State,
     captured: Option<crate::turn_context::TraceRef>,
     wake: Option<control_context::turn_mailbox::Delivery>,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Option<usize> {
     if crate::shutdown::requested() {
         return None;
@@ -1020,7 +1023,7 @@ fn ingest_discord(state: &Store, notified: &mut std::collections::HashSet<String
             Err(reason) => {
                 // Deterministic refusal: retrying cannot succeed. Record it as seen and tell the sender.
                 s.discord_seen.push(message_id);
-                if storage::save(&s).is_err() {
+                if storage::save(&mut s).is_err() {
                     s.discord_seen.pop();
                     continue;
                 }
@@ -1047,7 +1050,7 @@ fn receive_with_save<E: Into<crate::application::effects::Effects>>(
     id: &str,
     message_id: String,
     receive: impl FnOnce(&mut State) -> Result<E, &'static str>,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     let checkpoint = crate::chat::Checkpoint::capture(state, &std::iter::once(id).collect());
     let seen = state.discord_seen.len();

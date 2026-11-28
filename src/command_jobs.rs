@@ -272,7 +272,7 @@ fn start(shared: &Store, run: &str, generation: &str, nonce: &str, input: Input)
         exit_code: None,
     };
     attempt.command_jobs.push(job.clone());
-    if let Err(e) = crate::storage::save(&state) {
+    if let Err(e) = crate::storage::save(&mut state) {
         current(&mut state, run, generation)?.command_jobs.pop();
         return Err(e);
     }

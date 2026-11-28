@@ -4,7 +4,7 @@ use super::*;
 fn page_assembly_preserves_literal_template_and_demo_text_in_documents() {
     let text = "{{tools}} DEMO AGENTS 3 sources · 2 tools {{title}} {{lens}} {{content}}";
     let mut state = State {
-        note: text.into(),
+        note: String::from(text).into(),
         ..Default::default()
     };
     knowledge::migrate(&mut state);

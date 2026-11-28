@@ -190,7 +190,7 @@ fn send_message(
     lens: &str,
     header: &str,
     fields: &std::collections::HashMap<String, String>,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) {
     let reply = match send_change(state, id, lens, header, fields, crate::store::legacy_tx()) {
         Sent::Answered(reply) => reply,
@@ -338,7 +338,7 @@ pub(crate) fn change_with_save(
     state: &mut State,
     name: &str,
     arguments: &Value,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Value, std::borrow::Cow<'static, str>> {
     let (value, effects, checkpoint) = change_staged(state, name, arguments, crate::store::legacy_tx())?;
     let saved = save(state);
@@ -411,7 +411,7 @@ fn change_staged(
 fn transact(
     state: &mut State,
     operation: impl FnOnce(&mut State) -> Result<(Value, Effects), std::borrow::Cow<'static, str>>,
-    save: impl FnOnce(&State) -> std::io::Result<()>,
+    save: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Value, std::borrow::Cow<'static, str>> {
     let checkpoint = chat::Checkpoint::capture(state, &std::collections::HashSet::new());
     let (value, effects) = match operation(state) {

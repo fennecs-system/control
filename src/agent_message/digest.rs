@@ -99,7 +99,7 @@ fn overdue(state: &State, now_ms: u64) -> Vec<usize> {
 pub(crate) fn reconcile(
     state: &mut State,
     now_ms: u64,
-    save: &mut impl FnMut(&State) -> std::io::Result<()>,
+    save: &mut impl FnMut(&mut State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     let overdue = overdue(state, now_ms);
     if overdue.is_empty() {
@@ -147,7 +147,7 @@ pub(crate) fn reconcile(
 /// a failed save leaves the turns queued.
 pub(crate) fn settle(
     state: &mut State,
-    save: &mut impl FnMut(&State) -> std::io::Result<()>,
+    save: &mut impl FnMut(&mut State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     let settled = state
         .runtime

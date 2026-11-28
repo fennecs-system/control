@@ -4,6 +4,7 @@ use crate::{
     chat::{Session, valid_id},
     identity::{self, Action},
 };
+use control_journal::snapshot::Part;
 use std::collections::HashMap;
 
 pub struct Entry<'a> {
@@ -13,7 +14,7 @@ pub struct Entry<'a> {
     pub parent: Option<&'a str>,
     pub depth: usize,
 }
-pub fn ordered(chats: &[Session]) -> Vec<Entry<'_>> {
+pub fn ordered(chats: &[Part<Session>]) -> Vec<Entry<'_>> {
     let mut authorize = identity::authorizer();
     let (positions, visible): (Vec<_>, Vec<_>) = chats
         .iter()

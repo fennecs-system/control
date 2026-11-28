@@ -658,7 +658,7 @@ impl Drop for Held {
         HELD.1.notify_all();
     }
 }
-fn no_save(_: &State) -> io::Result<()> {
+fn no_save(_: &mut State) -> io::Result<()> {
     Ok(())
 }
 fn exchange(shared: &Store, method: &str, path: &str, query: &str, body: &str, save: Save) -> String {
@@ -1333,7 +1333,7 @@ fn dismissal_from_the_page_names_its_request_and_never_breaks_the_page() {
     assert!(late.starts_with("HTTP/1.1 400"), "{late}");
     assert!(importing(&id).is_none() && shared.guard().unwrap().chats[0].project.is_none());
 }
-fn failed_save(_: &State) -> io::Result<()> {
+fn failed_save(_: &mut State) -> io::Result<()> {
     Err(io::Error::other("disk full"))
 }
 /// The copy cannot be cancelled: once approved, a request imports to the end.

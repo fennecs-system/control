@@ -81,7 +81,7 @@ fn fifteen_turn_conversations_workload() {
             run.attempts.push(attempt);
             // As commit does when a run finishes.
             measure(&mut stages[1], || crate::history::archive_run(run)).unwrap();
-            measure(&mut stages[2], || crate::storage::save(&state)).unwrap();
+            measure(&mut stages[2], || crate::storage::save(&mut state)).unwrap();
             for (stage, page) in ["transcript", ""].into_iter().enumerate() {
                 out.clear();
                 let target = if page.is_empty() {
@@ -308,7 +308,7 @@ fn browser_fixture(long_messages_only: bool) {
     let (ports, _, port_chat) = crate::ports::tests::pending_fixture();
     initial.services.extend(ports.services);
     initial.ports.extend(ports.ports);
-    initial.runtime.runs.extend(ports.runtime.runs.into_vec());
+    initial.runtime.runs.extend(ports.runtime.into_inner().runs.into_vec());
     initial.chats.extend(ports.chats);
     // Retained asynchronous service output uses a different path from
     // provider Activity events. Exercise both through the real WASM poller.

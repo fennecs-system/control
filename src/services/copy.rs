@@ -586,7 +586,7 @@ pub(super) fn request_with(
     node: &NodeId,
     input: Input,
     workspace: impl FnOnce(&str) -> io::Result<PathBuf>,
-    save: impl FnOnce(&State) -> io::Result<()>,
+    save: impl FnOnce(&mut State) -> io::Result<()>,
 ) -> io::Result<Value> {
     let (run, generation, nonce) = (attempt.run, attempt.generation, attempt.nonce);
     let transfer = Transfer::new(&input.from, &input.to)?;

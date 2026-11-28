@@ -635,28 +635,34 @@ fn late_grants_survive_design_answers_inserted_before_the_grant_turn() {
             "listener" => {
                 restored.chats.iter_mut().find(|chat| chat.id == child).unwrap().room = Some("general".into());
                 crate::rooms::listen(&mut restored, &child, true).unwrap();
-                restored.collective.posts.push(crate::rooms::Post {
-                    room: "general".into(),
-                    text: "New evidence".into(),
-                    chat: None,
-                    run: None,
-                    key: "test-post".into(),
-                    delivery: Default::default(),
-                });
+                restored.collective.posts.push(
+                    crate::rooms::Post {
+                        room: "general".into(),
+                        text: "New evidence".into(),
+                        chat: None,
+                        run: None,
+                        key: "test-post".into(),
+                        delivery: Default::default(),
+                    }
+                    .into(),
+                );
                 crate::rooms::reconcile(&mut restored, |_| Ok(())).unwrap();
                 assert_eq!(restored.runtime.runs.last().unwrap().kind, RunKind::RoomNotification);
             }
             _ => {
                 restored.chats.iter_mut().find(|chat| chat.id == child).unwrap().room = Some("general".into());
                 crate::bots::command(&mut restored, &child, "on").unwrap();
-                restored.collective.posts.push(crate::rooms::Post {
-                    room: "general".into(),
-                    text: "New evidence".into(),
-                    chat: None,
-                    run: None,
-                    key: "test-post".into(),
-                    delivery: Default::default(),
-                });
+                restored.collective.posts.push(
+                    crate::rooms::Post {
+                        room: "general".into(),
+                        text: "New evidence".into(),
+                        chat: None,
+                        run: None,
+                        key: "test-post".into(),
+                        delivery: Default::default(),
+                    }
+                    .into(),
+                );
                 crate::bots::reconcile(&mut restored, |_| Ok(())).unwrap();
                 assert_eq!(restored.runtime.runs.last().unwrap().kind, RunKind::BotWake);
             }

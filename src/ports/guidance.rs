@@ -4,6 +4,7 @@
 //! a hint when a command fails to reach a host one of its requests names.
 //! Text only; it grants and changes nothing.
 use super::*;
+use control_journal::snapshot::Part;
 
 impl Port {
     /// How a process in the service reaches this route once approved.
@@ -61,7 +62,7 @@ fn related(runs: &crate::runtime::Runs, port: &Port, chat: &str, actor: &Actor) 
 #[derive(Clone, Copy)]
 pub(crate) struct Requests<'a> {
     ports: &'a [Port],
-    chats: &'a [crate::chat::Session],
+    chats: &'a [Part<crate::chat::Session>],
     runs: &'a crate::runtime::Runs,
 }
 impl<'a> Requests<'a> {

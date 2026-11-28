@@ -1,4 +1,5 @@
 //! Operator-managed model selection; unsupported adapters never silently fall back.
+use control_journal::snapshot::Part;
 use std::collections::HashMap;
 
 /// A model choice: a catalogue entry, or what a chat selected for its future
@@ -680,7 +681,7 @@ fn merge_duplicates(
     renamed
 }
 /// Repoint chat selections of retired local names at their merged entry.
-pub(crate) fn repoint(chats: &mut [crate::chat::Session], renamed: &[(String, String)]) -> bool {
+pub(crate) fn repoint(chats: &mut [Part<crate::chat::Session>], renamed: &[(String, String)]) -> bool {
     let mut changed = false;
     for model in chats
         .iter_mut()

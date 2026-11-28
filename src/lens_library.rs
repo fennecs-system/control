@@ -181,11 +181,11 @@ pub fn draft(fields: &HashMap<String, String>) -> Definition {
 pub(crate) fn save_with(
     state: &mut State,
     draft: Definition,
-    persist: impl FnOnce(&State) -> std::io::Result<()>,
+    persist: impl FnOnce(&mut State) -> std::io::Result<()>,
 ) -> Result<Definition, String> {
     let (draft, previous) = apply(state, draft)?;
     if persist(state).is_err() {
-        state.lens_library = previous;
+        *state.lens_library = previous;
         return Err("Could not save to disk. Your edit is below.".into());
     }
     Ok(draft)
@@ -207,7 +207,7 @@ fn apply(state: &mut State, mut draft: Definition) -> Result<(Definition, contro
     draft.tools.dedup();
     draft.packages.sort();
     draft.packages.dedup();
-    let mut candidate = state.lens_library.clone();
+    let mut candidate = (*state.lens_library).clone();
     candidate.definitions.push(draft.clone());
     candidate.validate(&inputs(&state.documents))?;
     // Validation checks package syntax only; the edited lens must also resolve
@@ -219,7 +219,7 @@ fn apply(state: &mut State, mut draft: Definition) -> Result<(Definition, contro
             &crate::packages::inputs(&state.packages),
         )?;
     }
-    let previous = std::mem::replace(&mut state.lens_library, candidate);
+    let previous = std::mem::replace(&mut *state.lens_library, candidate);
     Ok((draft, previous))
 }
 /// The current genes' ids and names, alternating, for a picker rendered
@@ -515,7 +515,7 @@ pub(crate) fn http(stream: &mut impl Write, state: &crate::Store, method: &str, 
         Ok((saved, previous)) => Ok(Applied {
             answer: format!("Location: /dna?id={}&saved={}\r\n", saved.id, saved.revision),
             effects: crate::application::effects::Effects::none(),
-            undo: move |state: &mut State| state.lens_library = previous,
+            undo: move |state: &mut State| *state.lens_library = previous,
         }),
         Err(error) => Err(render(Sources::of(state), &draft.id, Some(&draft), Some(&error), false)),
     });
