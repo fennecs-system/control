@@ -123,8 +123,17 @@ impl Store {
         }))
     }
 
+    // `lock` and `holding` are never inlined: profiles and the perf harness
+    // find the wait for the state lock and the time it is held by these frames.
+    #[inline(never)]
     fn lock(&self) -> Result<MutexGuard<'_, State>, Unavailable> {
         self.0.state.lock().map_err(|_| Unavailable)
+    }
+
+    /// Run `work` with the state lock held.
+    #[inline(never)]
+    fn holding<T>(&self, work: impl FnOnce(&mut State) -> T) -> Result<T, Unavailable> {
+        self.lock().map(|mut state| work(&mut state))
     }
 
     /// The newest released change, if it is not durable yet. With the state
@@ -138,23 +147,23 @@ impl Store {
 
     /// Run `view` with shared access and return what it copied out.
     pub(crate) fn read<T>(&self, view: impl FnOnce(&State) -> T) -> Result<T, Unavailable> {
-        self.lock().map(|state| view(&state))
+        self.holding(|state| view(state))
     }
 
     /// `read`, with what a reply built from the copy waits for.
     pub(crate) fn read_seen<T>(&self, view: impl FnOnce(&State) -> T) -> Result<(T, Seen), Unavailable> {
-        self.lock().map(|state| (view(&state), self.pending()))
+        self.holding(|state| (view(state), self.pending()))
     }
 
     /// Run `change` with exclusive access and return its result.
     pub(crate) fn write<T>(&self, change: impl FnOnce(&mut State) -> T) -> Result<T, Unavailable> {
-        self.lock().map(|mut state| change(&mut state))
+        self.holding(change)
     }
 
     /// `write`, with what a reply built inside it waits for: a save made
     /// under the lock is durable already, a change `commit` released may not be.
     pub(crate) fn write_seen<T>(&self, change: impl FnOnce(&mut State) -> T) -> Result<(T, Seen), Unavailable> {
-        self.lock().map(|mut state| (change(&mut state), self.pending()))
+        self.holding(|state| (change(state), self.pending()))
     }
 
     /// Lock; refuse at once while storage cannot take saves; read the clock
@@ -178,26 +187,33 @@ impl Store {
         submit: impl FnOnce(&State, Staging) -> std::io::Result<crate::storage::Saving>,
         wake: impl FnOnce(),
     ) -> Result<Commit<T, R>, Unavailable> {
-        let mut state = self.lock()?;
-        match crate::storage::health() {
-            crate::storage::Health::Ready => {}
-            crate::storage::Health::Degraded(unavailable) => return Ok(Commit::NotSaved(unavailable.into())),
-            crate::storage::Health::Halted(halted) => return Ok(Commit::NotSaved(halted.into())),
-        }
-        let Applied { answer, effects, undo } = match operation(&mut state, Tx::at(crate::ids::stamp())) {
-            Ok(applied) => applied,
-            Err(refusal) => return Ok(Commit::Refused(refusal, self.pending())),
-        };
-        let saving = match submit(&state, Staging(())) {
-            Ok(saving) => saving,
-            Err(error) => {
-                undo(&mut state);
-                effects.forgo();
-                return Ok(Commit::NotSaved(error));
+        // Err: how the commit ended while the lock was still held.
+        let staged = self.holding(|state| {
+            match crate::storage::health() {
+                crate::storage::Health::Ready => {}
+                crate::storage::Health::Degraded(unavailable) => return Err(Commit::NotSaved(unavailable.into())),
+                crate::storage::Health::Halted(halted) => return Err(Commit::NotSaved(halted.into())),
             }
+            let Applied { answer, effects, undo } = match operation(state, Tx::at(crate::ids::stamp())) {
+                Ok(applied) => applied,
+                Err(refusal) => return Err(Commit::Refused(refusal, self.pending())),
+            };
+            match submit(state, Staging(())) {
+                Ok(saving) => {
+                    *self.0.seen.lock().unwrap_or_else(PoisonError::into_inner) = Some(saving.mark());
+                    Ok((answer, effects, saving))
+                }
+                Err(error) => {
+                    undo(state);
+                    effects.forgo();
+                    Err(Commit::NotSaved(error))
+                }
+            }
+        })?;
+        let (answer, effects, saving) = match staged {
+            Ok(staged) => staged,
+            Err(ended) => return Ok(ended),
         };
-        *self.0.seen.lock().unwrap_or_else(PoisonError::into_inner) = Some(saving.mark());
-        drop(state);
         Ok(match saving.wait() {
             Ok(durable) => {
                 if effects.release(&durable).wake {

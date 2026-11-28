@@ -51,11 +51,13 @@ fn ready<'a>(state: &'a State, parent: &runtime::Run, batch: &Batch) -> Result<V
 
 pub(super) fn reconcile(
     state: &mut State,
+    parents: &[usize],
     save: impl FnOnce(&State) -> std::io::Result<()>,
 ) -> Result<(), &'static str> {
     let mut authorize = identity::authorizer();
     let mut candidate = None;
-    for (index, parent) in state.runtime.runs.iter().enumerate() {
+    for &index in parents {
+        let parent = &state.runtime.runs[index];
         for (batch_index, batch) in parent.spawns.iter().enumerate() {
             // An advisor is a standing observer, not a result: its batch
             // announces nothing and must not hold up the workers' completions.

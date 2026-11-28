@@ -70,3 +70,12 @@ exclude = ["web"]
 
 [workspace.package]
 edition = "2024"
+
+# One code unit per crate in release builds. With the default sixteen, the
+# compiler can only inline within a unit, and unrelated edits move code between
+# units, so hot paths changed speed from build to build (a history scan ran at
+# 3.3 ms or 4.4 ms; the Bots page swung 15%). One unit makes inlining
+# consistent and the binary a fifth smaller. Crates still build in parallel
+# with each other; the cost is a slower build of each large crate.
+[profile.release]
+codegen-units = 1
