@@ -812,9 +812,13 @@ fn transact_batch(
 /// Called at the existing dispatch boundary; queue capacity and model slots stay
 /// separate. One bounded batch transaction per pass, with no external effects.
 pub fn reconcile(state: &mut State, save: impl FnOnce(&mut State) -> std::io::Result<()>) -> Result<(), &'static str> {
+    // Most retained runs never spawned: find the parents in one pass and let
+    // both stages walk only those.
+    let parents = parents(&state.runtime.runs);
     let mut authorize = identity::authorizer();
     let mut capacity = None;
-    let candidate = state.runtime.runs.iter().enumerate().find_map(|(index, run)| {
+    let candidate = parents.iter().find_map(|&index| {
+        let run = &state.runtime.runs[index];
         run.spawns.iter().enumerate().find_map(|(batch_index, batch)| {
             if batch.pending() == 0 {
                 return None;
@@ -830,8 +834,17 @@ pub fn reconcile(state: &mut State, save: impl FnOnce(&mut State) -> std::io::Re
     if let Some((index, batch_index, cancel)) = candidate {
         transact_batch(state, index, batch_index, cancel, save)
     } else {
-        completions::reconcile(state, save)
+        completions::reconcile(state, &parents, save)
     }
+}
+
+/// Positions of the runs that have spawn batches, in ledger order.
+fn parents(runs: &[runtime::Run]) -> Vec<usize> {
+    runs.iter()
+        .enumerate()
+        .filter(|(_, run)| !run.spawns.is_empty())
+        .map(|(index, _)| index)
+        .collect()
 }
 
 #[derive(Deserialize)]

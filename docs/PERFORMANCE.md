@@ -41,6 +41,10 @@ cargo test --release --locked --bin control <fixture path> -- --ignored --exact 
   the same filter, then pipe `perf script` through `inferno-collapse-perf` and
   `inferno-flamegraph`. Only an isolated profiling container gets profiling
   privileges. On macOS, `sample` plus Inferno gives the same view.
+- `sample` does not show inlined frames, and release builds inline across the
+  whole crate. `Store::lock` (waiting for the state lock) and `Store::holding`
+  (running code under it) in `src/store.rs` are never inlined, so lock wait
+  and hold time can be read from any profile by those two frames.
 
 Fixtures by subsystem:
 
@@ -317,8 +321,10 @@ lock.
 reconciliation with a no-op checkpoint. `profile_idle_and_waiting_room_reconciliation`
 measures an armed, waiting subscription (`CONTROL_ROOM_PROFILE_ROUNDS`, default
 10); the unarmed path is at the measurement floor. Both still scan retained
-runs linearly: about 1 ms and 0.76 ms at 20,001 retained runs on one pinned
-Linux ARM64 CPU.
+runs linearly, but look ids up through the run ledger's index instead of
+hashing every run id per pass: at 20,001 retained runs on Apple Silicon,
+about 0.15–0.24 ms and 50 µs (0.65–0.72 ms and 0.51–0.64 ms with the per-pass
+map).
 
 `agent_message::profile::routing_profile` measures the downward message path
 with in-memory construction, result encoding and dispatcher notification, but

@@ -242,8 +242,8 @@ fn batch_from<'a>(watch: &Watch, history: &'a [Part<super::Post>], cursor: usize
     batch
 }
 
-pub(crate) fn continuation_leaf(state: &State, origin: usize, runs: &HashMap<&str, usize>) -> Option<usize> {
-    room_wakes::continuation_leaf(&state.runtime.runs, origin, runs)
+pub(crate) fn continuation_leaf(state: &State, origin: usize) -> Option<usize> {
+    room_wakes::continuation_leaf(&state.runtime.runs, origin)
 }
 
 /// Gives an agent's chat a durable room inbox from the current position. Idempotent;

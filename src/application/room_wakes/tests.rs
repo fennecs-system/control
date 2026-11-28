@@ -17,7 +17,7 @@ fn borrowed_admission_requires_authority_generation_and_actionable_peer_evidence
         workspace_id: Some("attempt".into()),
         ..Default::default()
     });
-    let runs = [origin];
+    let runs = Runs::from(vec![origin]);
     let chats = [serde_json::from_value::<Part<Session>>(serde_json::json!({
         "id":"chat", "actor":Actor::LocalOperator, "title":"Work",
         "messages":[], "room":"research"
