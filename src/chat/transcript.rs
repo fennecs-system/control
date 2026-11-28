@@ -146,7 +146,7 @@ pub fn transcript(state: &State, id: &str) -> Result<Transcript, &'static str> {
                 });
             let body = match question {
                 Some(_) if *run_status == RunStatus::Waiting => Body::Decision,
-                Some(question) => Body::Question(Box::new(question.clone())),
+                Some(question) => Body::Question(question.clone()),
                 None => reply
                     .strip_prefix("Agent conversation: ")
                     .and_then(crate::url_names::dm_route)

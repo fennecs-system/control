@@ -461,14 +461,14 @@ fn answer_question(state: &mut State, index: usize) -> usize {
     let attempt = run.attempts.last_mut().unwrap();
     attempt.status = crate::usage::AttemptStatus::Waiting;
     attempt.artifact = Some(format!("checkpoint-{generation}"));
-    run.question = Some(crate::design::Question {
+    run.question = Some(Box::new(crate::design::Question {
         id: format!("question-{generation}").into(),
         nonce: "question".into(),
         generation,
         input: crate::design::tests::input(),
         status: crate::design::Status::Pending { asked_at: None },
         continuation: None,
-    });
+    }));
     let chat = run.chat_id.clone().unwrap();
     crate::design::answer(state, &chat, None, "1", "test").unwrap();
     state.runtime.runs.len() - 1
@@ -482,7 +482,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
     parent.status = RunStatus::Waiting;
     parent.attempts[0].status = crate::usage::AttemptStatus::Waiting;
     parent.attempts[0].artifact = Some("parent-checkpoint".into());
-    parent.delegation = Some(crate::delegation::Delegation {
+    parent.delegation = Some(Box::new(crate::delegation::Delegation {
         input: crate::delegation::Input {
             model: None,
             objective: "Inspect source".into(),
@@ -497,7 +497,7 @@ fn watch_survives_real_delegation_and_design_continuations_without_rearming() {
         },
         child: None,
         continuation: None,
-    });
+    }));
     crate::delegation::reconcile(&mut state, |_| Ok(())).unwrap();
     post(&mut state, "research", "Assign the next task", None);
     reconcile(&mut state, |_| panic!("child is still working")).unwrap();
@@ -561,7 +561,7 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
             5 => {
                 let target = state.runtime.runs[first].id().as_str().to_owned();
                 state.runtime.runs[leaf].status = RunStatus::Continued;
-                state.runtime.runs[leaf].question = Some(crate::design::Question {
+                state.runtime.runs[leaf].question = Some(Box::new(crate::design::Question {
                     id: "cycle".into(),
                     nonce: "cycle".into(),
                     generation: "third-attempt".into(),
@@ -571,7 +571,7 @@ fn continued_watch_rejects_cancelled_retried_cross_scope_and_cyclic_receipts() {
                         asked_at: None,
                     },
                     continuation: Some(target),
-                });
+                }));
             }
             6 => {
                 let chat = state.chats[0].id.clone();

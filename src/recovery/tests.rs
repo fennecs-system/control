@@ -98,7 +98,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
     crate::worker::checkpoint_next(&mut state, |_| Ok(())).unwrap();
     let id = state.runtime.runs[0].id().as_str().to_owned();
     let generation = state.runtime.runs[0].attempts[0].workspace_id.clone().unwrap();
-    state.runtime.runs[0].attempts[0].recovery = Some(Candidate {
+    state.runtime.runs[0].attempts[0].recovery = Some(Box::new(Candidate {
         generation: "old".into(),
         base: Some("different-base".into()),
         project: None,
@@ -107,11 +107,11 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
         captured: true,
         error: None,
         draft: None,
-    });
+    }));
     let foreign = crate::chat::create(&mut state);
     crate::chat::send(&mut state, &foreign, "Other work", "test").unwrap();
     state.runtime.runs[1].attempts.push(Attempt {
-        recovery: Some(Candidate {
+        recovery: Some(Box::new(Candidate {
             generation: "foreign".into(),
             base: None,
             project: None,
@@ -120,7 +120,7 @@ fn recovery_tool_never_crosses_chat_scope_or_restores_a_changed_base() {
             captured: false,
             error: None,
             draft: None,
-        }),
+        })),
         ..Default::default()
     });
     let shared = crate::store::Store::new(state);

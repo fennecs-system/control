@@ -384,7 +384,7 @@ pub(crate) fn ask_with_save(
     let id = question.id.clone();
     let previous = state.runtime.runs[index].question.clone();
     let revision = state.chats[chat_index].revision;
-    state.runtime.runs[index].question = Some(question);
+    state.runtime.runs[index].question = Some(Box::new(question));
     state.chats[chat_index].revision = revision.saturating_add(1);
     if save(state).is_err() {
         state.runtime.runs[index].question = previous;
@@ -497,7 +497,7 @@ pub fn ask_operator(
     run.status = RunStatus::Waiting;
     run.chat_id = Some(chat_id.clone());
     *run.result = summary(&question);
-    run.question = Some(question);
+    run.question = Some(Box::new(question));
     state.runtime.runs.push(run);
     chat::touch(state, &chat_id);
     let session = state.chats.iter_mut().find(|c| c.id == chat_id).unwrap();
@@ -584,7 +584,7 @@ pub fn withdraw(
     let note = outcome(&withdrawn).unwrap_or_default();
     let run = &mut state.runtime.runs[index];
     *run.result = summary(&withdrawn);
-    run.question = Some(withdrawn);
+    run.question = Some(Box::new(withdrawn));
     if let Some(chat_id) = chat_id {
         chat::touch(state, &chat_id);
         if let Some(session) = state.chats.iter_mut().find(|c| c.id == chat_id) {
@@ -644,7 +644,7 @@ pub fn pending<'a>(state: &'a State, chat_id: &str) -> Vec<&'a runtime::Run> {
                     .is_some_and(|chat| crate::chat::Lineage::of(&state.chats).within(chat, chat_id)))
                 && run.actor == chat.actor
                 && run.status == RunStatus::Waiting
-                && run.question.as_ref().is_some_and(Question::pending)
+                && run.question.as_deref().is_some_and(Question::pending)
         })
         .collect()
 }
@@ -778,7 +778,7 @@ pub(crate) fn answer_queued(
         // Nothing resumes from an operator-side question; the answer stays in the DM.
         let index = state.runtime.runs.position(run.id()).unwrap();
         let run = &mut state.runtime.runs[index];
-        run.question = Some(answered);
+        run.question = Some(Box::new(answered));
         run.status = RunStatus::Completed;
         *run.result = summary(run.question.as_ref().unwrap());
         let session = &mut state.chats[session_index];
@@ -874,12 +874,12 @@ pub(crate) fn answer_queued(
     next.lenses = lenses;
     next.chat_id = Some(chat_id.into());
     next.queue_order = queue_order;
-    *next.continuation = Some(continuation);
+    *next.continuation = Some(Box::new(continuation));
     let next_id = next.id().as_str().to_owned();
-    state.runtime.runs[index].question = Some(Question {
+    state.runtime.runs[index].question = Some(Box::new(Question {
         continuation: Some(next_id.clone()),
         ..answered
-    });
+    }));
     *state.runtime.runs[index].result = summary(state.runtime.runs[index].question.as_ref().unwrap());
     let session = &mut state.chats[session_index];
     session.messages.push(chat::Message {

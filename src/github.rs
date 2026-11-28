@@ -179,7 +179,7 @@ pub fn cli(args: &[String]) -> io::Result<()> {
     );
     Ok(())
 }
-pub fn inherit(runs: &crate::runtime::Runs, parent: Option<&str>) -> Option<Source> {
+pub fn inherit(runs: &crate::runtime::Runs, parent: Option<&str>) -> Option<Box<Source>> {
     let parent = parent?;
     runs.iter()
         .filter(|r| r.action == Action::Improve)
@@ -206,12 +206,12 @@ pub fn prepare(attempt: &mut Attempt, baseline: &Path) -> io::Result<()> {
     let commit = verify_source(&config.source_root, &paths, |path| {
         crate::artifacts::read(&manifest, path)
     })?;
-    attempt.github_source = Some(Source {
+    attempt.github_source = Some(Box::new(Source {
         repository: config.repository,
         source_root: config.source_root,
         commit,
         baseline: id,
-    });
+    }));
     Ok(())
 }
 // This Git process only inspects the operator-bound checkout, never agent files.

@@ -410,7 +410,7 @@ fn parent_waits_for_child_design_and_delegation_continuations() {
         let next_id = next.id().as_str().to_owned();
         s.runtime.runs[1].status = RunStatus::Continued;
         if design {
-            s.runtime.runs[1].question = Some(crate::design::Question {
+            s.runtime.runs[1].question = Some(Box::new(crate::design::Question {
                 id: "q".into(),
                 generation: "g".into(),
                 nonce: "n".into(),
@@ -424,7 +424,7 @@ fn parent_waits_for_child_design_and_delegation_continuations() {
                     asked_at: None,
                 },
                 continuation: Some(next_id),
-            });
+            }));
         } else {
             let mut delegated = s.runtime.runs[0].delegation.clone().unwrap();
             delegated.continuation = Some(next_id);

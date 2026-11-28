@@ -229,7 +229,7 @@ fn operator_views() {
             .enumerate()
         {
             run.status = RunStatus::Waiting;
-            run.question = Some(crate::design::Question {
+            run.question = Some(Box::new(crate::design::Question {
                 id: format!("q-{index}").into(),
                 generation: format!("g-{index}"),
                 nonce: format!("n-{index}"),
@@ -239,7 +239,7 @@ fn operator_views() {
                 .unwrap(),
                 status: crate::design::Status::Pending { asked_at: None },
                 continuation: None,
-            });
+            }));
         }
         let workloads: [(&str, &View); 6] = [
             ("web_chat_page", &|s| chat::render(s, "benchmark-chat").unwrap().len()),

@@ -261,11 +261,11 @@ fn cumulative_turn_keeps_original_source_without_recapturing_host() {
         baseline: "original-verified-baseline".into(),
     };
     let mut attempt = Attempt {
-        github_source: Some(source.clone()),
+        github_source: Some(Box::new(source.clone())),
         ..Default::default()
     };
     prepare(&mut attempt, Path::new("/deliberately-unavailable-later-baseline")).unwrap();
-    assert_eq!(attempt.github_source, Some(source));
+    assert_eq!(attempt.github_source.as_deref(), Some(&source));
 }
 #[test]
 fn source_capture_rejects_dirty_untracked_ignored_and_stale_snapshot_inputs() {
@@ -356,12 +356,12 @@ fn only_completed_same_chat_improvements_can_be_published() {
     run.attempts.push(Attempt {
         status: crate::usage::AttemptStatus::Completed,
         artifact: Some("a-fixture".into()),
-        github_source: Some(Source {
+        github_source: Some(Box::new(Source {
             repository: "example/project".into(),
             source_root: "/fixture".into(),
             commit: BASE.into(),
             baseline: "original".into(),
-        }),
+        })),
         ..Default::default()
     });
     let input = Input {

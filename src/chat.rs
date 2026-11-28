@@ -1375,7 +1375,8 @@ impl Waiting {
             .runs
             .iter()
             .filter(|run| {
-                run.status == RunStatus::Waiting && run.question.as_ref().is_some_and(crate::design::Question::pending)
+                run.status == RunStatus::Waiting
+                    && run.question.as_deref().is_some_and(crate::design::Question::pending)
             })
             .filter_map(|run| run.chat_id.as_deref());
         let folders = state
@@ -1534,7 +1535,12 @@ impl Requests {
             .collect();
         let questions = crate::design::pending(state, id)
             .into_iter()
-            .filter_map(|run| Some((run.question.clone()?, run.chat_id.clone().unwrap_or_default())))
+            .filter_map(|run| {
+                Some((
+                    run.question.as_deref().cloned()?,
+                    run.chat_id.clone().unwrap_or_default(),
+                ))
+            })
             .collect();
         Ok(Self {
             id: id.to_owned(),

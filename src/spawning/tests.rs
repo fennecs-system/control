@@ -366,7 +366,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
         ..Default::default()
     });
     s.runtime.runs[1].status = RunStatus::Continued;
-    s.runtime.runs[1].delegation = Some(delegation::Delegation {
+    s.runtime.runs[1].delegation = Some(Box::new(delegation::Delegation {
         input: delegation::Input {
             model: None,
             objective: "Review".into(),
@@ -381,7 +381,7 @@ fn batch_cancel_follows_retained_continuations_and_fences_their_backlog() {
         },
         child: Some("completed-review".into()),
         continuation: Some(next.id().as_str().to_owned()),
-    });
+    }));
     s.runtime.runs.push(next);
     request(
         &mut s,

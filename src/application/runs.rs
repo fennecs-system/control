@@ -140,12 +140,14 @@ pub struct Record {
     pub emitted: Option<RunStatus>,
     #[serde(default)]
     pub persona: Option<crate::delegation::Persona>,
+    // The rare large parts are boxed: every run carries its fields inline in
+    // the ledger, so an unset 200-byte field costs 200 bytes per run.
     #[serde(default)]
-    pub delegation: Option<crate::delegation::Delegation>,
+    pub delegation: Option<Box<crate::delegation::Delegation>>,
     #[serde(default)]
-    pub question: Option<crate::design::Question>,
+    pub question: Option<Box<crate::design::Question>>,
     #[serde(default)]
-    pub continuation: crate::history::Spilled<Option<crate::design::Continuation>>,
+    pub continuation: crate::history::Spilled<Option<Box<crate::design::Continuation>>>,
     /// Backend, captured account and model, saved as the flat `backend`,
     /// `account` and `model` fields of older records.
     #[serde(flatten)]
@@ -158,7 +160,7 @@ pub struct Record {
     pub lenses: Option<Vec<String>>,
     #[serde(default)]
     pub chat_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "exact")]
     pub attempts: Vec<crate::usage::Attempt>,
     #[serde(default)]
     pub actor: Actor,
@@ -172,6 +174,14 @@ pub struct Record {
     pub status: RunStatus,
     pub source: String,
     pub result: crate::history::Spilled<String>,
+}
+/// Reads a list at its length. Serde grows a list it cannot size in advance to
+/// at least four elements, and most finished runs keep one attempt for life.
+fn exact<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Vec<T>, D::Error> {
+    Vec::deserialize(deserializer).map(|mut list: Vec<T>| {
+        list.shrink_to_fit();
+        list
+    })
 }
 /// A run's input, independent of clock, authorization, storage and wakeups.
 /// Drivers authorize/admit it before publishing the constructed run.

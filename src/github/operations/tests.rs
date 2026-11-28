@@ -198,7 +198,7 @@ fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
         "later writes must recheck the handoff fence"
     );
     state.runtime.runs[0].attempts[0].turn_mailbox = None.into();
-    state.runtime.runs[0].question = Some(crate::design::Question {
+    state.runtime.runs[0].question = Some(Box::new(crate::design::Question {
         id: "question".into(),
         generation: "generation".into(),
         nonce: "fixture".into(),
@@ -209,7 +209,7 @@ fn write_authority_is_lost_when_a_handoff_or_decision_is_staged() {
         },
         status: crate::design::Status::Pending { asked_at: None },
         continuation: None,
-    });
+    }));
     assert!(authorize_write(&state, caller).is_err());
     state.runtime.runs[0].question.as_mut().unwrap().status = crate::design::Status::Answered {
         answer: "First".into(),

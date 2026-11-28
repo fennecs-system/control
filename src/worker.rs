@@ -586,7 +586,7 @@ fn commit(
         Err((status, message)) => (
             RunStatus::from(status),
             if status == control_agent::Status::Waiting {
-                r.question.as_ref().map(crate::design::summary).unwrap_or(message)
+                r.question.as_deref().map(crate::design::summary).unwrap_or(message)
             } else {
                 message
             },

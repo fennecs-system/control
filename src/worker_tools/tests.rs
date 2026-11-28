@@ -595,7 +595,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
         workspace_id: Some("pause-generation".into()),
         ..Default::default()
     });
-    run.delegation = Some(crate::delegation::Delegation {
+    run.delegation = Some(Box::new(crate::delegation::Delegation {
         input: crate::delegation::Input {
             model: None,
             objective: "Inspect".into(),
@@ -610,7 +610,7 @@ fn delegated_pause_fences_command_writers_and_github_before_dispatch() {
         },
         child: None,
         continuation: None,
-    });
+    }));
     let id = run.id().to_string();
     let shared = crate::store::Store::new(state);
     for (name, args) in [
